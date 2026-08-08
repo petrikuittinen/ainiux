@@ -425,11 +425,12 @@ std::string reduce_stub(const std::string& tool_name,
         content << "Arguments: "
                 << (arguments_json.empty() ? std::string("{}") : arguments_json)
                 << "\n";
-    } else if (tool_name == "read_symbol" || tool_name == "get_skeleton" ||
-               tool_name == "search_symbol") {
+    } else if (tool_name == "read_symbol" || tool_name == "file_outline" ||
+               tool_name == "get_skeleton" || tool_name == "search_symbol") {
         content << "Target: " << symbol_location_hint(arguments_json, result_json)
                 << "\n";
-    } else if (tool_name == "search_text" || tool_name == "find_tests" ||
+    } else if (tool_name == "grep" || tool_name == "search_text" ||
+               tool_name == "find" || tool_name == "find_tests" ||
                tool_name == "inspect_code_task") {
         content << "Arguments: " << args_preview(arguments_json, 200) << "\n";
         const std::string hits = search_hit_paths(result_json, 12);
@@ -552,8 +553,11 @@ bool is_read_tool(const std::string& name) {
 }
 
 bool is_explore_tool(const std::string& name) {
-    return name == "search_text" || name == "list_directory" || name == "glob" ||
-           name == "project_overview" || name == "index_status";
+    // Include legacy names so historical transcripts still collapse explore runs.
+    return name == "grep" || name == "search_text" || name == "find" ||
+           name == "list_dir" || name == "list_directory" || name == "glob" ||
+           name == "index_overview" || name == "project_overview" ||
+           name == "index_status";
 }
 
 bool is_digest_tool(const std::string& name) {
@@ -671,16 +675,19 @@ long long estimate_transcript_tokens(
 }
 
 ToolCompactionTier tool_compaction_tier(const std::string& tool_name) {
+    // Prune: include removed/legacy names so old sessions still compact.
     if (tool_name == "index_status" || tool_name == "index_update" ||
-        tool_name == "index_rebuild" || tool_name == "list_directory" ||
-        tool_name == "glob" || tool_name == "project_overview")
+        tool_name == "index_rebuild" || tool_name == "list_dir" ||
+        tool_name == "list_directory" || tool_name == "glob" ||
+        tool_name == "index_overview" || tool_name == "project_overview")
         return ToolCompactionTier::Prune;
     if (tool_name == "read_file" || tool_name == "read_many" ||
-        tool_name == "read_symbol" || tool_name == "get_skeleton" ||
-        tool_name == "search_symbol" || tool_name == "search_text" ||
-        tool_name == "grep" || tool_name == "find" ||
-        tool_name == "find_tests" || tool_name == "inspect_code_task" ||
-        tool_name == "fetch_url" || tool_name == "search_web")
+        tool_name == "read_symbol" || tool_name == "file_outline" ||
+        tool_name == "get_skeleton" || tool_name == "search_symbol" ||
+        tool_name == "grep" || tool_name == "search_text" ||
+        tool_name == "find" || tool_name == "find_tests" ||
+        tool_name == "inspect_code_task" || tool_name == "fetch_url" ||
+        tool_name == "web_search" || tool_name == "search_web")
         return ToolCompactionTier::Stub;
     if (tool_name == "edit_file" || tool_name == "write_file" ||
         tool_name == "str_replace" || tool_name == "apply_patch" ||
@@ -1314,8 +1321,8 @@ std::string compaction_summary_schema_prompt(const std::string& user_preamble) {
            "omitted bodies.\n"
            "Preserve the user's language and never reproduce credentials or secrets.\n"
            "Reloadable tool policy: do not treat read_file, read_many, read_symbol, "
-           "get_skeleton, search_text/search_symbol, find_tests, inspect_code_task, "
-           "fetch_url, or search_web results as vital durable content. Bodies can be "
+           "file_outline, grep/search_symbol, fetch_url, or web_search results as "
+           "vital durable content. Bodies can be "
            "reloaded from the workspace, index, or network. At most note that a path "
            "or query was used. Never paste source code, file dumps, search match text, "
            "or long tool result bodies into any section.\n"

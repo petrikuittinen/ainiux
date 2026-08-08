@@ -4,13 +4,25 @@ Ainiux configuration is a small TOML-like format, not full TOML. Unknown keys, i
 
 ## Layering
 
-Ainiux loads the installed defaults from the selected prefix's
-`share/ainiux/` directory, then the user files below
-`$XDG_CONFIG_HOME/ainiux/` (normally `~/.config/ainiux/`), and finally command-line
-options. Later values override earlier values by key. Ainiux deliberately has no
+Ainiux loads installed defaults from the first existing `share/ainiux/` copy it
+finds, then the user files below `$XDG_CONFIG_HOME/ainiux/` (normally
+`~/.config/ainiux/`), and finally command-line options. Later values override
+earlier values by key. Share lookup order is: an in-tree development
+`config/` file when present, then `share/ainiux/` beside the executable, then `$XDG_DATA_HOME/ainiux/` or
+`~/.local/share/ainiux/` (for `install.sh --user`), then
+`/usr/local/share/ainiux/`, then `/usr/share/ainiux/`, and finally the
+build-time embedded catalog when no file exists. Ainiux deliberately has no
 `/etc/xdg` system layer; this keeps upgrades from leaving stale administrator
-copies of experimental defaults in the active configuration path. `--no-config`
+copies of experimental defaults in the active configuration path. Older installs
+that still have `/etc/xdg/ainiux` can remove it; `scripts/install.sh` and
+`scripts/uninstall.sh` clean that directory when present. `--no-config`
 skips the user files. `--help` and `--version` do not load configuration.
+`--debug` prints which configuration paths were loaded, missing, or skipped.
+
+On Windows, `HOME` is initialized from `USERPROFILE` when absent, so the same
+`$HOME/.config/ainiux` and `$HOME/.ainiux` layout applies. Portable packages also
+look for bundled defaults under `share/ainiux/` beside `ainiux.exe` before the
+system-prefix fallbacks.
 
 Bundled templates live in `config/` and are installed by `make install`:
 

@@ -452,14 +452,14 @@ int ainiux_main(int argc, char** argv) {
         if (!temperature_advisory.empty() && !options.quiet) {
             std::cerr << "Warning: " << temperature_advisory << ".\n";
         }
-        std::optional<ainiux::editor::AiContinueContext> ai_continue;
-        if (!editor_context.profile.offline) {
-            ainiux::editor::AiContinueContext configured;
-            configured.request = std::move(editor_context);
-            configured.settings = ainiux::editor::ai_continue_settings(options);
-            configured.assist_config = options.editor_assist_config;
-            ai_continue = std::move(configured);
-        }
+        // Always seed ai_continue, including offline/provider-none startups.
+        // Dropping it previously discarded model_catalog; a later /provider
+        // switch then had no models.conf reasoning options for Ctrl+T.
+        ainiux::editor::AiContinueContext configured;
+        configured.request = std::move(editor_context);
+        configured.settings = ainiux::editor::ai_continue_settings(options);
+        configured.assist_config = options.editor_assist_config;
+        std::optional<ainiux::editor::AiContinueContext> ai_continue = std::move(configured);
         return ainiux::app::run_interactive(
             interactive_session_from_editor_startup(options, std::move(ai_continue)));
     }

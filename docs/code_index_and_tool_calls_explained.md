@@ -19,7 +19,7 @@ This is a navigation aid for humans and agents optimizing the index. User-facing
 
 Older schemas that stored `refs` and `symbol_scores` are **dropped** on migration to the current lightweight schema.
 
-CLI entry points: `--index-code`, `--print-index`, `--clear-index`, and agent tools `index_status` / `index_update` / `index_rebuild`. Agent can run with `--disable-indexing` so the index is never probed or touched.
+CLI entry points: `--index-code`, `--print-index`, `--clear-index`, Index lifecycle is CLI/mutation-driven (no agent `index_*` tools). Agent can run with `--disable-indexing` so the index is never probed or touched.
 
 ---
 
@@ -113,9 +113,9 @@ In-memory `Symbol` / `IndexedSymbol` types in `index.hpp` match this payload.
 | Mode | Index behavior |
 | --- | --- |
 | **Agent / Run / Plan, indexing on** (`IndexAccessMode::LazyHints`) | Short-lived read-only SQLite queries per tool; mutation overlay merges recent writes until a refresh generation completes. |
-| **Agent with `--disable-indexing` / create_without_index** | Index-only tools are **hidden** (or return `indexing_disabled`). `glob` uses live discovery; `search_text` prefers `rg` then live built-in scan. Project reads use the live filesystem. |
-| **Security review** (`MutationPolicy::Disabled`, snapshot authorization) | Eager completed snapshot; many path tools are **authorization-bound** to indexed files. Mutations off. `search_text` still prefers `rg` but post-filters to indexed paths. |
-| **Lazy query failure for `glob` / `search_text` only** | Falls back to `index::discover_source_files()` for the eligible set (same rules as indexing, no SQLite). `search_text` may still use `rg` against that live set. |
+| **Agent with `--disable-indexing` / create_without_index** | Index-only tools are **hidden** (or return `indexing_disabled`). `glob` uses live discovery; `grep` prefers `rg` then live built-in scan. Project reads use the live filesystem. |
+| **Security review** (`MutationPolicy::Disabled`, snapshot authorization) | Eager completed snapshot; many path tools are **authorization-bound** to indexed files. Mutations off. `grep` still prefers `rg` but post-filters to indexed paths. |
+| **Lazy query failure for `glob` / `grep` only** | Falls back to `index::discover_source_files()` for the eligible set (same rules as indexing, no SQLite). `grep` may still use `rg` against that live set. |
 
 Security-review and Agent share tool *names* but not always the same path authorization model for reads and `run_command`.
 
@@ -146,7 +146,7 @@ On failure, `ok` is false and `error` is `{ "code": "...", "message": "..." }`. 
 
 Hidden when indexing is disabled. **No live fallback** for the symbol/meta features themselves.
 
-#### `project_overview`
+#### `index_overview` (silent execute alias: `project_overview`)
 
 | | |
 | --- | --- |
@@ -164,7 +164,7 @@ Hidden when indexing is disabled. **No live fallback** for the symbol/meta featu
 | **Fallback** | None |
 | **Returns** | Array of `{ id, path, kind, name (qualified), signature, line_start, line_end, importance }` |
 
-#### `get_skeleton`
+#### `file_outline` (silent execute alias: `get_skeleton`)
 
 | | |
 | --- | --- |
@@ -182,51 +182,6 @@ Hidden when indexing is disabled. **No live fallback** for the symbol/meta featu
 | **Fallback** | None for lookup; content always from disk after id resolve |
 | **Returns** | `{ symbol_id, path, line_start, line_end, content, file_hash, range_hash, importance }` |
 
-#### `find_tests`
-
-| | |
-| --- | --- |
-| **Params** | `path` and/or `symbol_id` (at least one), `max_results` (default 20, max 100) |
-| **Uses index** | Indexed files + symbols; naming/path heuristics |
-| **Fallback** | None |
-| **Returns** | `{ tests: [{ path, symbol_id?, qualified_name?, confidence }], commands: [...], path?, symbol_id? }` |
-
-#### `inspect_code_task`
-
-| | |
-| --- | --- |
-| **Params** | `query` (required), `max_symbols` (def 20, max 100), `max_files` (def 20, max 100), `include_skeletons` (def false), `include_tests` (def true), `max_bytes` (def 32768, max 262144) |
-| **Uses index** | Ranked symbols + file path scoring + optional skeletons/tests from index |
-| **Fallback** | None |
-| **Returns** | `{ query, likely_symbols[], likely_files[], suggested_reads[], skeletons[], likely_tests[] }` |
-
-#### `index_status`
-
-| | |
-| --- | --- |
-| **Params** | `check_filesystem` (def true), `max_changed_files` (def 50, max 500) |
-| **Uses index** | DB path, counts, `updated_at`; optional freshness walk |
-| **Fallback** | None (tool hidden if indexing off) |
-| **Returns** | `{ index_exists, path, files_indexed, symbols_indexed, last_updated, workspace, fresh, changed_files: [{ path, change }] }` |
-
-#### `index_update`
-
-| | |
-| --- | --- |
-| **Params** | `paths` (optional string[], max 200), `force` (def false) |
-| **Uses index** | Writes / incrementally refreshes `.ainiux-pr/index.sqlite` |
-| **Fallback** | N/A (mutating the index) |
-| **Returns** | `{ discovered, indexed, unchanged, skipped, removed, symbols, elapsed_ms, files_indexed, symbols_indexed, last_updated, force, paths }` |
-
-#### `index_rebuild` (agent session only; Act)
-
-| | |
-| --- | --- |
-| **Params** | `confirm` (required `true`) |
-| **Uses index** | Clears DB then full force refresh |
-| **Fallback** | Plan → `policy_denied` |
-| **Returns** | `{ cleared_files, discovered, indexed, symbols, elapsed_ms, files_indexed, symbols_indexed, last_updated }` |
-
 #### `edit_file` op `replace_symbol` (only when indexing on)
 
 | | |
@@ -238,7 +193,7 @@ Hidden when indexing is disabled. **No live fallback** for the symbol/meta featu
 
 ---
 
-### 5.B Path search: `glob` and `search_text`
+### 5.B Path search: `glob` and `grep`
 
 Same discovery eligibility as the indexer (editor language set, ignore rules, size caps). These tools do **not** use the symbol table for matching.
 
@@ -251,7 +206,7 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 | **Without / lazy fail** | `index::discover_source_files()` then same glob match |
 | **Returns** | Array of path strings |
 
-#### `search_text` (aliases: `grep`, `find`)
+#### `grep` (silent execute aliases: `search_text`, `find`)
 
 | | |
 | --- | --- |
@@ -268,7 +223,7 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 
 ### 5.C Live filesystem first (index optional / secondary)
 
-#### `list_directory`
+#### `list_dir` (silent execute alias: `list_directory`)
 
 | | |
 | --- | --- |
@@ -312,7 +267,7 @@ These operate on the live filesystem in Act/Plan. If indexing is enabled they re
 | --- | --- |
 | `run_command` | Argv exec (no shell). Security-review may **filter stdout paths** to the indexed set; agent uses validated live project paths. |
 | `git_status`, `git_diff` | Git CLI only |
-| `fetch_url`, `search_web` | Network (when allowed); unrelated to the code index |
+| `fetch_url`, `web_search` | Network (when allowed); unrelated to the code index |
 
 ---
 
@@ -320,17 +275,14 @@ These operate on the live filesystem in Act/Plan. If indexing is enabled they re
 
 | Tool | When index exists | If index missing / disabled |
 | --- | --- | --- |
-| `project_overview` | SQLite totals + symbols | **Unavailable** |
+| `index_overview` | SQLite totals + symbols | **Unavailable** |
 | `search_symbol` | Ranked definitions | **Unavailable** |
-| `get_skeleton` | Definitions for file | **Unavailable** |
+| `file_outline` | Definitions for file | **Unavailable** |
 | `read_symbol` | Id → range; content from disk | **Unavailable** |
-| `find_tests` | Heuristics on index | **Unavailable** |
-| `inspect_code_task` | Ranked files/symbols | **Unavailable** |
-| `index_status` / `index_update` / `index_rebuild` | Meta / refresh | **Unavailable** |
 | `edit_file.replace_symbol` | Id → lines | **Op removed / error** |
 | `glob` | Indexed path list | **Live `discover_source_files`** |
-| `search_text` / `grep` / `find` | `rg` if present → else builtin over indexed candidates | `rg` if present → else builtin over live discovery |
-| `list_directory` | Annotates `indexed` only | **Same readdir** |
+| `grep` (+ silent `search_text`/`find`) | `rg` if present → else builtin over indexed candidates | `rg` if present → else builtin over live discovery |
+| `list_dir` | Annotates `indexed` only | **Same readdir** |
 | `read_file` / `read_many` | Security-review: index auth; Agent: live | **Agent: live FS** |
 | Writes / non-RO command | Refresh / overlay side effects | No index side effects |
 
@@ -338,11 +290,11 @@ These operate on the live filesystem in Act/Plan. If indexing is enabled they re
 
 ## 7. Optimization notes
 
-1. **Symbol search is not SQL-indexed ranking** — `search_symbol` and `inspect_code_task` score definitions in process (lexical tiers + importance tie-break), not via FTS or pushed-down `WHERE name = ?` ranking.
-2. **`search_text` never searches the symbol table** — eligible paths only; string matching is `rg` (preferred) or a built-in full-file scan of those candidates.
+1. **Symbol search is not SQL-indexed ranking** — `search_symbol` scores definitions in process (lexical tiers + importance tie-break), not via FTS or pushed-down `WHERE name = ?` ranking.
+2. **`grep` never searches the symbol table** — eligible paths only; string matching is `rg` (preferred) or a built-in full-file scan of those candidates.
 3. **`rg` is the big win for common agent loops** — multi-file rare needles drop from hundreds of ms (builtin open/scan) to tens of ms when `rg` is installed. Keep the builtin path first-class for hosts without `rg`.
-4. **Lazy agent path** loads only what each tool needs (e.g. `get_skeleton` symbols for one path; `search_symbol` a ranked slice), but ranking still walks many rows.
-5. **Dual discovery code paths** — indexed snapshot vs `discover_source_files()` share eligibility rules; changing one should keep the other consistent (including `search_text` post-filters).
+4. **Lazy agent path** loads only what each tool needs (e.g. `file_outline` symbols for one path; `search_symbol` a ranked slice), but ranking still walks many rows.
+5. **Dual discovery code paths** — indexed snapshot vs `discover_source_files()` share eligibility rules; changing one should keep the other consistent (including `grep` post-filters).
 6. **Security-review vs agent** is the sharp edge for `read_*` and `run_command` path scope — same tool name, different authorization model.
 7. **Static `importance` is cheap declaration metadata**, not a graph measure; graph tables were intentionally removed in the v1.1 lightweight schema.
 

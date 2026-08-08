@@ -9,11 +9,11 @@
 ## Smarter local agent and code index (v1.1)
 
 - Tune static symbol importance and lexical task ranking on larger multilingual projects.
-- Enrich `search_text` with the enclosing indexed symbol where cheap.
+- Enrich `grep` with the enclosing indexed symbol where cheap.
 - Add command-generated/rename/removal stress coverage and tune coalescing/shutdown behavior on larger repositories.
 - Benchmark index startup, incremental refresh, memory use, model rounds, tool calls, full-file reads, time to first useful edit, and final correctness.
 - Benchmark and design lazy SQLite-backed Agent symbol queries before replacing the eager in-memory snapshot; preserve security-review snapshot authorization and atomic refresh publication.
-- Keep `glob`, `search_text`/`grep`, targeted reads, compiler output, and tests as verification/fallback paths. The index remains a hint.
+- Keep `glob`, `grep`, targeted reads, compiler output, and tests as verification/fallback paths. The index remains a hint.
 - Do not rewrite the built-in agent prompt in this milestone; the user will specify a separate prompt-optimization pass for small local models.
 - `/goal` (session completion condition + `goal_met`) is implemented for interactive agent. Still reserve `/loop` and sub-agents until separately specified.
 - Continue agent cleanup: load the agent transcript as the sole TUI source of truth, reduce chat-session coupling, strengthen editor↔agent handoff, and retain security-review as strictly read-only.
@@ -30,7 +30,7 @@
 
 - Keyless search uses DuckDuckGo HTML (Instant Answer secondary). DDG may rate-limit or show bot challenges after rapid queries; Google HTML scrape was removed (JS-only shells).
 - **Later:** evaluate a more reliable free/casual web search provider (or optional lightweight local proxy) without requiring paid APIs for everyday use. Keep optional Tavily/Exa/Firecrawl/Searxng for power users.
-- Agent `search_web` returns at most **3** results; tool text steers the model to fetch only the top few URLs. Search result URLs are truncated when extremely long.
+- Agent `web_search` returns at most **3** results; tool text steers the model to fetch only the top few URLs. Search result URLs are truncated when extremely long.
 - Fetch converts ISO-8859-1 / Windows-1252 pages to UTF-8 so tool results stay valid JSON for local model servers; JSON string escape also refuses raw ill-formed UTF-8 bytes.
 - Agent `fetch_url` is Markdown/plain-text only (no raw HTML to the model); HTML→MD strips scripts/styles.
 

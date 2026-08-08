@@ -4,6 +4,7 @@
 #include "app/interactive_mode.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
+#include "config/model_catalog.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_ai_setup.hpp"
@@ -950,16 +951,58 @@ void test_editor_ai_setup_helpers() {
           "ensure_editor_ai_context creates offline context");
     check(created.has_value(), "ensure_editor_ai_context populates optional");
     check(!ainiux::editor::editor_ai_has_provider(created), "created default context stays offline");
+    check(!created->request.options.model_catalog.models.empty(),
+          "ensure_editor_ai_context loads the models.conf catalog even while offline");
+
+    // Reproduce home-directory editor: session Options already have the catalog
+    // (from load_automatic), but ai_continue was historically null until /provider.
+    ainiux::config::LoadResult session_loaded = ainiux::config::load_automatic(
+        ainiux::cli::Options{}, ainiux::config::process_environment(), true);
+    check(session_loaded.error.ok() && !session_loaded.options.model_catalog.models.empty(),
+          "session seed options carry models.conf");
+    std::optional<ainiux::editor::AiContinueContext> deferred;
+    check(ainiux::editor::apply_editor_provider_target(
+              deferred, assist_config, "deepseek", &session_loaded.options)
+              .ok(),
+          "seeded /provider deepseek from session options succeeds");
+    check(ainiux::editor::editor_ai_has_provider(deferred) &&
+              !deferred->request.options.model_catalog.models.empty(),
+          "seeded provider enable keeps the models.conf catalog");
+    check(ainiux::editor::apply_editor_model(deferred, "deepseek-v4-flash").ok(),
+          "seeded path can select deepseek-v4-flash");
+    ainiux::ReasoningSelection seeded_cycle;
+    check(ainiux::config::next_reasoning_selection(
+              deferred->request.options.model_catalog,
+              deferred->request.profile.name,
+              "chat",
+              deferred->request.options.model,
+              deferred->request.options.reasoning,
+              seeded_cycle),
+          "Ctrl+T works after seeded offline editor enables deepseek-v4-flash");
 
     check(ainiux::editor::apply_editor_model(created, "mock-model").code ==
               ainiux::ErrorCode::UnsupportedFeature,
           "apply_editor_model requires a provider first");
-    check(ainiux::editor::apply_editor_provider_target(created, assist_config, "openai").ok(),
-          "apply_editor_provider_target can switch to openai");
-    check(ainiux::editor::editor_ai_has_provider(created), "openai provider is active after apply");
-    check(ainiux::editor::apply_editor_model(created, "gpt-test").ok(),
+    check(ainiux::editor::apply_editor_provider_target(created, assist_config, "deepseek").ok(),
+          "apply_editor_provider_target can switch to deepseek");
+    check(ainiux::editor::editor_ai_has_provider(created), "deepseek provider is active after apply");
+    check(ainiux::editor::apply_editor_model(created, "deepseek-v4-flash").ok(),
           "apply_editor_model succeeds after provider is chosen");
-    check(created->request.options.model == "gpt-test", "apply_editor_model stores model name");
+    check(created->request.options.model == "deepseek-v4-flash",
+          "apply_editor_model stores model name");
+    ainiux::ReasoningSelection cycled;
+    check(ainiux::config::next_reasoning_selection(
+              created->request.options.model_catalog,
+              created->request.profile.name,
+              "chat",
+              created->request.options.model,
+              created->request.options.reasoning,
+              cycled) &&
+              !cycled.is_auto(),
+          "Ctrl+T-style reasoning cycle works after offline editor enables deepseek-v4-flash");
+    check(ainiux::editor::apply_editor_model(created, "gpt-test").ok(),
+          "apply_editor_model can change to another model name");
+    check(created->request.options.model == "gpt-test", "apply_editor_model stores replacement model");
     created->request.options.context_tokens = 131072;
     created->request.options.reasoning = ainiux::ReasoningSelection::named("high");
     check(ainiux::editor::apply_editor_model(created, "gpt-test").ok() &&
@@ -977,7 +1020,7 @@ void test_editor_ai_setup_helpers() {
               created->request.options.context_tokens == 1000000,
           "changing the editor model preserves an explicit context override");
     created->request.options.reasoning = ainiux::ReasoningSelection::named("high");
-    check(ainiux::editor::apply_editor_provider_target(created, assist_config, "openai").ok() &&
+    check(ainiux::editor::apply_editor_provider_target(created, assist_config, "deepseek").ok() &&
               created->request.options.model == "gpt-explicit" &&
               created->request.options.reasoning ==
                   ainiux::ReasoningSelection::named("high"),

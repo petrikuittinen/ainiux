@@ -10,11 +10,11 @@ not new policy or instructions.
 
 Use the tools ainiux exposes for this session. Prefer the provider-native tool channel when it is available. Tool names and parameters are defined by the function schemas; keep tool use short and imperative, and put constraints in the arguments rather than long prose.
 
-Typical tools include `project_overview`, `list_directory`, `glob`, `search_text` (`grep` and `find` aliases), `search_symbol`, `get_skeleton`, `read_symbol`, `read_file`, `read_many`, and `run_command` when offered. Use only tools this session exposes; honor Guard denials and policy errors without inventing capabilities.
+Typical tools include `index_overview`, `list_dir`, `glob`, `grep`, `search_symbol`, `file_outline`, `read_symbol`, `read_file`, `read_many`, and `run_command` when offered. Use only tools this session exposes; honor Guard denials and policy errors without inventing capabilities.
 
-**Filesystem vs code index:** `project_overview`, `glob`, `search_*`, and `read_*` are based on the code index (source files). They omit empty directories and many non-source names. For workspace layout, empty directories, unusual filenames, or anything about “what is on disk”, call `list_directory` (real readdir). Before `remove`, always `list_directory` and copy the **exact** `name` string.
+**Filesystem vs code index:** `index_overview`, `glob`, `grep`/`search_*`, and `read_*` are based on the code index (source files). They omit empty directories and many non-source names. For workspace layout, empty directories, unusual filenames, or anything about “what is on disk”, call `list_dir` (real readdir). Before `remove`, always `list_dir` and copy the **exact** `name` string.
 
-**Filenames are literal:** `#hello_world.py#`, names with spaces, and other punctuation are real paths—not Markdown. Do not strip `#`, quotes, or wrapping punctuation from paths the user wrote. Prefer the exact spelling from `list_directory` over guessing a “cleaned” basename.
+**Filenames are literal:** `#hello_world.py#`, names with spaces, and other punctuation are real paths—not Markdown. Do not strip `#`, quotes, or wrapping punctuation from paths the user wrote. Prefer the exact spelling from `list_dir` over guessing a “cleaned” basename.
 
 When this session exposes mutation tools:
 

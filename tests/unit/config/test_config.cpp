@@ -1024,6 +1024,25 @@ void test_config_user_path_resolution() {
           "relative XDG_CONFIG_HOME falls back to HOME for themes");
     check(ainiux::config::bundled_config_paths().front() == "config/ainiux.conf",
           "installed defaults begin with the development bundled config path");
+    const std::vector<std::string> models_paths = ainiux::config::bundled_models_paths();
+    check(models_paths.size() >= 4 && models_paths[0] == "config/models.conf",
+          "models.conf search begins with the development template");
+    bool has_user_local = false;
+    bool has_usr_local = false;
+    for (const std::string& path : models_paths) {
+        if (path == "/usr/local/share/ainiux/models.conf") {
+            has_usr_local = true;
+        }
+        if (path.find("/.local/share/ainiux/models.conf") != std::string::npos) {
+            has_user_local = true;
+        }
+    }
+    check(has_usr_local, "models.conf search includes /usr/local/share/ainiux/models.conf");
+    // When HOME is absolute, ~/.local/share is listed for install.sh --user.
+    if (const char* home = std::getenv("HOME"); home != nullptr && home[0] == '/') {
+        check(has_user_local,
+              "models.conf search includes the user-local share path for PREFIX=~/.local");
+    }
 }
 
 void test_themes_config() {

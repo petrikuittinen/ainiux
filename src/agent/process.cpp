@@ -451,7 +451,7 @@ Error enforce_inspection_policy(std::vector<std::string>& args) {
         std::size_t operands = 0;
         for (std::size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "-R" || args[i] == "--recursive")
-                return {ErrorCode::BadArgs, "recursive ls is not allowed; use list_directory or find"};
+                return {ErrorCode::BadArgs, "recursive ls is not allowed; use list_dir or grep"};
             if (!args[i].empty() && args[i].front() == '-' && args[i] != "-1" && args[i] != "--")
                 return {ErrorCode::BadArgs, "ls only permits the -1 option in security review mode"};
             if (args[i].empty() || args[i].front() != '-') ++operands;

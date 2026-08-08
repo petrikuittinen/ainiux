@@ -118,7 +118,7 @@ void test_read_tools_and_policy() {
           "search_text returns a structured invalid-regex error");
     result = tools.execute("grep", R"({"query":"helper","glob":"src/**","context":1})");
     check(result_ok(result) && result.find("src/main.cpp") != std::string::npos,
-          "grep alias routes to bounded search_text");
+          "grep routes to bounded content search");
     result = tools.execute("search_symbol", R"({"query":"help"})");
     check(result_ok(result) && result.find("helper") != std::string::npos,
           "search_symbol ranks prefix matches from indexed symbol rows");
@@ -246,8 +246,8 @@ void test_prompts_and_report() {
     std::string word;
     while (words >> word) ++word_count;
     check(error.ok() && security_system == prompts.master + "\n" + prompts.security &&
-              security_system.size() == 7270 &&
-              ainiux::agent::index::content_hash(security_system) == "18f13a7ba7ff2097" &&
+              security_system.size() == 7214 &&
+              ainiux::agent::index::content_hash(security_system) == "5b830225ee16a198" &&
               prompts.security.find("submit_security_review") != std::string::npos &&
               prompts.security.find("EXPECTED_COVERAGE") != std::string::npos &&
               prompts.security.find("Review the supplied source batch") != std::string::npos &&

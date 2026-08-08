@@ -53,11 +53,15 @@ on Windows. The package and native acceptance policy are documented in
 
 The canonical TOML-alike defaults live in `config/ainiux.conf` and the companion
 specialized documents. `make install` installs them below the selected prefix's
-`share/ainiux/` directory, where upgrades replace the shipped defaults. Ainiux
-then applies optional user files below `~/.config/ainiux/` (or
-`$XDG_CONFIG_HOME/ainiux/`) and finally CLI options. There is deliberately no
-`/etc/xdg` layer: this experimental, self-managed application should not leave
-stale administrator-owned copies of its evolving defaults in the active path.
+`share/ainiux/` directory, where upgrades replace the shipped defaults. Runtime
+share lookup also considers `$XDG_DATA_HOME/ainiux` and `~/.local/share/ainiux`
+so `scripts/install.sh --user` (PREFIX=`~/.local`) is found without relying on a
+stale system copy under `/usr/local/share`. Ainiux then applies optional user
+files below `~/.config/ainiux/` (or `$XDG_CONFIG_HOME/ainiux/`) and finally CLI
+options. There is deliberately no `/etc/xdg` layer: this experimental,
+self-managed application should not leave stale administrator-owned copies of
+its evolving defaults in the active path. Install and uninstall scripts remove a
+legacy `/etc/xdg/ainiux` directory when present.
 
 `src/config/` owns the dependency-free parser, schema mapper, and automatic layer loader. It reads regular files with a 1 MiB default cap and produces an owned map keyed by fully qualified setting name. Boolean, signed 64-bit integer, finite float, quoted string, and bare string values remain typed, and every entry retains its source path and byte-based line/column location. Parsing validates UTF-8 and rejects duplicate keys or malformed syntax without returning a partially populated document.
 
@@ -280,7 +284,7 @@ v0.88 adds a separate `src/search/` module for explicit web search. Search is ne
 
 Provider selection is client-side and independent from LLM provider profiles. Configured API providers are tried when credentials or base URLs exist: Tavily, Firecrawl, Exa, and Searxng. `provider = auto` tries those first, then free **DuckDuckGo HTML** (`html.duckduckgo.com`) for ordinary top results; DuckDuckGo Instant Answer is a secondary keyless fallback for entity-style queries when the HTML SERP fails. Results are capped by `web_search.max_results` (default 3), overridable through `--max-web-search-results` or `MAXIMUM_WEB_SEARCH_RESULTS`.
 
-The module reuses the existing libcurl HTTP wrapper. Google HTML scraping was removed: modern Google search pages return JavaScript-only shells to non-browser clients, so free Google SERP access is not reliable without a browser stack or a paid API. DuckDuckGo HTML is the supported keyless path (title, URL, snippet). Result URLs longer than 512 bytes are truncated (prefer dropping query/fragment). Agent-mode `search_web` hard-caps at 3 results so models do not fetch large SERPs. URL fetch sends a desktop Firefox User-Agent plus browser-like Accept/Sec-Fetch headers. A more reliable free search provider remains open work (see TODO.md).
+The module reuses the existing libcurl HTTP wrapper. Google HTML scraping was removed: modern Google search pages return JavaScript-only shells to non-browser clients, so free Google SERP access is not reliable without a browser stack or a paid API. DuckDuckGo HTML is the supported keyless path (title, URL, snippet). Result URLs longer than 512 bytes are truncated (prefer dropping query/fragment). Agent-mode `web_search` hard-caps at 3 results so models do not fetch large SERPs. URL fetch sends a desktop Firefox User-Agent plus browser-like Accept/Sec-Fetch headers. A more reliable free search provider remains open work (see TODO.md).
 
 Agent `fetch_url` always converts HTML to Markdown (or keeps `text/plain`) via `fetch_text` + `src/html/`. Raw HTML is never returned in tool results: full pages carry scripts/styles/hidden markup (prompt-injection risk) and waste tokens. CLI `--fetch-url` may still print HTML for local export. Legacy `extract_text=false` is ignored if a model still sends it. Tool `max_bytes` caps the **Markdown output** the model sees; the raw download uses a larger ceiling so HTML→MD is not aborted on bloated pages. HTTP redirects are followed (bounded) with the same private-address socket checks on each hop—trailing-slash 301s from WordPress-style hosts are common and previously failed as bare “HTTP 301”.
 
@@ -341,3 +345,25 @@ File-backed editor buffers use `src/editor/file_session.*` to canonicalize ident
 Lock metadata uses a bounded, versioned, hex-encoded line format so arbitrary canonical path bytes cannot alter its structure. Automatic stale recovery is deliberately limited to a valid same-host owner whose PID is proven absent with `kill(pid, 0)`. Cleanup names only `owner` and the lock directory and restores owner metadata if an unexpected entry prevents `rmdir`; recursive deletion is forbidden. Because locks are advisory, a separate fingerprint check protects saves from external modification, inode replacement, and deletion, and overwrite confirmation is valid only for the fingerprint observed by that prompt.
 
 The ENOSPC fault launcher preserves the ordinary `posix_io_mock.so` preload for normal binaries. For sanitizer binaries it detects the ASan dependency, resolves the compiler's runtime, and places that runtime first in `LD_PRELOAD`; an unresolved sanitizer runtime is an explicit unsupported-toolchain failure. The aggregate `test` target invokes integration tests only after unit and fault tests complete, including under parallel make.
+
+## Compact native agent tool schemas (v1.17+)
+
+Native tool definitions are sent on every tool-capable model request and were
+exceeding ~4k tokens for a full Act session. The registry was slimmed by:
+
+1. **Removing unused tools** from the advertised set: `index_status`,
+   `index_update`, `index_rebuild`, `find_tests`, `inspect_code_task` (index
+   lifecycle remains CLI/mutation-driven).
+2. **Renaming for industry alignment** (Claude Code / OpenCode / OpenAI / Hermes):
+   - `search_text` → **`grep`** (primary; drop duplicate `find` schema)
+   - `search_web` → **`web_search`**
+   - `list_directory` → **`list_dir`**
+   - `project_overview` → **`index_overview`**
+   - `get_skeleton` → **`file_outline`**
+   - Keep `fetch_url`, `attach_image`, `edit_file`, `apply_patch`, `run_command`
+3. **Compacting tool descriptions** while preserving wire schemas and critical
+   compatibility cues for `edit_file` (flat ops), `apply_patch` (Codex markers),
+   and `run_command` (shell-free argv).
+4. **Silent execute-time aliases** for old names so prior transcripts and
+   habit-trained models still work without paying schema tokens.
+

@@ -106,7 +106,7 @@ struct SessionIndexReportResult {
 struct SessionRuntimeOptions {
     std::string workspace = ".";
     AgentTaskMode task_mode = AgentTaskMode::Act;
-    bool allow_network = true;  // fetch_url / search_web in agent mode
+    bool allow_network = true;  // fetch_url / web_search in agent mode
     bool interactive = false;  // turn-cap can return needs_user_continue
     bool enable_session_db = true;
     bool enable_agent_log = true;

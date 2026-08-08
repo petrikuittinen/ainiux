@@ -14,10 +14,16 @@ bool editor_ai_ready(const std::optional<AiContinueContext>& context);
 std::string editor_no_provider_message();
 std::string editor_no_model_message();
 std::string editor_startup_status(const std::optional<AiContinueContext>& context);
-Error ensure_editor_ai_context(std::optional<AiContinueContext>& context, const EditorAssistConfig& assist_config);
+// Create offline AI context when missing. Optional seed_options (typically the
+// interactive session's already-loaded Options) preserve model_catalog from
+// startup so a late /provider switch still has models.conf reasoning choices.
+Error ensure_editor_ai_context(std::optional<AiContinueContext>& context,
+                               const EditorAssistConfig& assist_config,
+                               const cli::Options* seed_options = nullptr);
 Error apply_editor_provider_target(std::optional<AiContinueContext>& context,
                                   const EditorAssistConfig& assist_config,
-                                  const std::string& target);
+                                  const std::string& target,
+                                  const cli::Options* seed_options = nullptr);
 Error apply_editor_model(std::optional<AiContinueContext>& context, const std::string& model);
 
 }  // namespace ainiux::editor

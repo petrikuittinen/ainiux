@@ -87,7 +87,7 @@ Error run_command(const std::string& command,
                   CommandPolicy policy = CommandPolicy::InspectionOnly);
 // Direct argv execution without shell tokenization. Same fixed PATH, Guard, and
 // policy checks as run_command. Prefer this when arguments may contain spaces
-// or quotes (e.g. search_text ripgrep backend).
+// or quotes (e.g. grep ripgrep backend).
 Error run_argv(std::vector<std::string> arguments,
                const ProcessOptions& options,
                ProcessResult& result,

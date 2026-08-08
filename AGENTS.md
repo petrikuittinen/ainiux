@@ -240,7 +240,7 @@ When extending v1.1:
 - Extend `src/agent/index/`; do not create a parallel index or use the user chat database.
 - Keep lightweight lexical definition scanners and avoid compiler-grade parsers or new language-server dependencies.
 - Keep full-name, exact-component, and component-prefix relevance ahead of importance; preserve deterministic ties and multi-token coverage.
-- Require the model and tools to verify indexed locations against current source before editing. Preserve `glob`, `search_text`/`grep`, `read_file`, compiler, and test fallbacks.
+- Require the model and tools to verify indexed locations against current source before editing. Preserve `glob`, `grep`, `read_file`, compiler, and test fallbacks.
 - Native mutations must immediately update the live touched-file snapshot. Persist affected definitions through a cancellable coalescing job; potentially mutating commands trigger an incremental check; task completion performs a full-tree freshness pass that reparses only changed files.
 - Publish snapshots atomically. Cancellation or failure preserves the previous completed database state.
 - Full/multi-file discovery and scanning use `floor(online_cores × 0.80)`, bounded by available work and with at least one worker when work exists. Zero work uses zero workers, and a single-file scan runs inline without creating a scanner worker thread.

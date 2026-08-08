@@ -1267,8 +1267,18 @@ app::EditorRunResult run_editor(const std::string& path,
                              "' is not listed in models.conf. Proceed? y/n: ");
     };
 
+    auto editor_options_seed = [&]() -> const cli::Options* {
+        // Session options already include the models.conf catalog from startup.
+        // Seeding prevents a deferred /provider enable from rebuilding AI context
+        // with an empty catalog (Ctrl+T: "No reasoning options for this model").
+        if (interactive != nullptr) return &interactive->context.options;
+        if (ai_continue.has_value()) return &ai_continue->request.options;
+        return nullptr;
+    };
+
     auto apply_provider_selection = [&](const std::string& target) {
-        Error apply_error = apply_editor_provider_target(ai_continue, assist_config, target);
+        Error apply_error =
+            apply_editor_provider_target(ai_continue, assist_config, target, editor_options_seed());
         if (!apply_error.ok()) {
             minibuffer_message(minibuffer, apply_error.message);
             return;
@@ -1328,7 +1338,8 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             return;
         }
-        Error ensure_error = ensure_editor_ai_context(ai_continue, assist_config);
+        Error ensure_error =
+            ensure_editor_ai_context(ai_continue, assist_config, editor_options_seed());
         if (!ensure_error.ok()) {
             minibuffer_message(minibuffer, ensure_error.message);
             return;

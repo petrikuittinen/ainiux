@@ -269,10 +269,10 @@ void test_permission_modes_and_native_path_tools() {
     check(json_ok(renamed) && fs::exists(temp_parent / "nested" / "to.txt"),
           "rename_path renames an external temp file without copy fallback");
     const std::string listed = smart.execute(
-        "list_directory",
+        "list_dir",
         "{\"path\":" + json_string((temp_parent / "nested").string()) + "}");
     check(json_ok(listed) && listed.find("to.txt") != std::string::npos,
-          "list_directory supports an exact external directory under temp");
+          "list_dir supports an exact external directory under temp");
     const std::string smart_command =
         smart.execute("run_command", R"({"command":"pwd"})");
     check(json_ok(smart_command),
@@ -1049,7 +1049,7 @@ void test_remove_tool() {
     fs::remove_all(workspace, ec);
 }
 
-void test_list_directory_filesystem() {
+void test_list_dir_filesystem() {
     const std::string workspace = write_temp_workspace("listdir");
     // Empty nested dirs (parent is non-empty only because of the child dir).
     fs::create_directories(fs::path(workspace) / "you_can_remove_me" / "del_me");
@@ -1058,8 +1058,8 @@ void test_list_directory_filesystem() {
     write_text(fs::path(workspace) / "notes.txt", "not indexed as code if unknown? may be skipped\n");
     agent::ReadToolRegistry tools = make_registry(workspace, false);
 
-    const std::string root = tools.execute("list_directory", R"JSON({"path":"."})JSON");
-    check(json_ok(root), "list_directory root succeeds: " + root);
+    const std::string root = tools.execute("list_dir", R"JSON({"path":"."})JSON");
+    check(json_ok(root), "list_dir root succeeds: " + root);
     check(json_array_contains_string_field(root, "name", "you_can_remove_me") ||
               root.find("you_can_remove_me") != std::string::npos,
           "lists non-indexed empty-parent directory: " + root);
@@ -1070,7 +1070,7 @@ void test_list_directory_filesystem() {
 
     // Parent dir is not empty (has del_me); del_me itself is empty.
     const std::string nested =
-        tools.execute("list_directory", R"JSON({"path":"you_can_remove_me"})JSON");
+        tools.execute("list_dir", R"JSON({"path":"you_can_remove_me"})JSON");
     check(json_ok(nested) && nested.find("del_me") != std::string::npos,
           "lists nested directory entry: " + nested);
     check(nested.find("\"empty\":true") != std::string::npos ||
@@ -1078,7 +1078,7 @@ void test_list_directory_filesystem() {
           "marks empty child directory: " + nested);
 
     const std::string empty_leaf =
-        tools.execute("list_directory", R"JSON({"path":"you_can_remove_me/del_me"})JSON");
+        tools.execute("list_dir", R"JSON({"path":"you_can_remove_me/del_me"})JSON");
     check(json_ok(empty_leaf), "list empty directory succeeds: " + empty_leaf);
 
     std::error_code ec;
@@ -1289,7 +1289,7 @@ void test_index_refresh_drops_completed_prepare_cancellation() {
           "later index generation ignores the completed prepare-job token: " +
               refresh_error.message);
     const std::string search = tools.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"main","glob":"src/*.cpp","max_results":10})JSON");
     check(json_ok(search),
           "snapshot search remains usable after prepare-job cancellation: " +
@@ -1323,25 +1323,25 @@ void test_indexing_disabled_registry_is_strict_and_live() {
     bool has_read = false;
     bool has_edit = false;
     bool has_glob = false;
-    bool has_search = false;
     bool has_grep = false;
+    bool has_search_text = false;
     bool has_find = false;
     bool has_index_tool = false;
     bool advertises_replace_symbol = false;
     for (const provider::FunctionDefinition& definition :
          tools.definitions()) {
-        has_list = has_list || definition.name == "list_directory";
+        has_list = has_list || definition.name == "list_dir";
         has_read = has_read || definition.name == "read_file";
         has_edit = has_edit || definition.name == "edit_file";
         has_glob = has_glob || definition.name == "glob";
-        has_search = has_search || definition.name == "search_text";
         has_grep = has_grep || definition.name == "grep";
+        has_search_text = has_search_text || definition.name == "search_text";
         has_find = has_find || definition.name == "find";
         has_index_tool =
-            has_index_tool || definition.name == "project_overview" ||
+            has_index_tool || definition.name == "index_overview" ||
             definition.name == "search_symbol" ||
-            definition.name == "index_status" ||
-            definition.name == "inspect_code_task";
+            definition.name == "file_outline" ||
+            definition.name == "read_symbol";
         if (definition.name == "edit_file")
             advertises_replace_symbol =
                 definition.description.find("replace_symbol") !=
@@ -1349,12 +1349,12 @@ void test_indexing_disabled_registry_is_strict_and_live() {
                 definition.parameters_json.find("replace_symbol") !=
                     std::string::npos;
     }
-    check(has_list && has_read && has_edit && has_glob && has_search &&
-              has_grep && has_find && !has_index_tool &&
+    check(has_list && has_read && has_edit && has_glob && has_grep &&
+              !has_search_text && !has_find && !has_index_tool &&
               !advertises_replace_symbol,
           "indexing-off definitions retain live search/edit tools and hide index tools");
     check(json_ok(tools.execute(
-              "list_directory", R"JSON({"path":"src"})JSON")) &&
+              "list_dir", R"JSON({"path":"src"})JSON")) &&
               json_ok(tools.execute(
                   "read_file", R"JSON({"path":"src/hello.cpp"})JSON")),
           "indexing-off registry retains live directory and exact-path reads");
@@ -1367,7 +1367,7 @@ void test_indexing_disabled_registry_is_strict_and_live() {
           "indexing-off glob discovers eligible live files and honors ignores: " +
               live_glob);
     const std::string live_search = tools.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"needle","case_sensitive":false,"glob":"src/*.py","context":1})JSON");
     check(json_ok(live_search) &&
               live_search.find("src/live.py") != std::string::npos &&
@@ -1379,19 +1379,19 @@ void test_indexing_disabled_registry_is_strict_and_live() {
         R"JSON({"query":"Live(Marker|Missing)","regex":true,"glob":"src/*.py"})JSON");
     check(json_ok(regex_search) &&
               regex_search.find("LiveMarker") != std::string::npos,
-          "indexing-off grep alias retains regex behavior: " +
+          "indexing-off grep retains regex behavior: " +
               regex_search);
     const std::string inferred_regex_search = tools.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"LiveMarker|MissingMarker","path":"src/live.py"})JSON");
     check(json_ok(inferred_regex_search) &&
               inferred_regex_search.find("LiveMarker") != std::string::npos &&
               inferred_regex_search.find("regex=true inferred") !=
                   std::string::npos,
-          "search_text infers alternation only when regex is omitted and honors exact path: " +
+          "grep infers alternation only when regex is omitted and honors exact path: " +
               inferred_regex_search);
     const std::string explicit_literal_search = tools.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"LiveMarker|MissingMarker","regex":false,"path":"src/live.py"})JSON");
     check(json_ok(explicit_literal_search) &&
               explicit_literal_search.find("\"data\":[]") != std::string::npos &&
@@ -1408,34 +1408,34 @@ void test_indexing_disabled_registry_is_strict_and_live() {
           "grep accepts pattern as an unambiguous query alias: " +
               pattern_alias_search);
     const std::string logical_or_search = tools.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"||","path":"src/live.py"})JSON");
     check(json_ok(logical_or_search) &&
               logical_or_search.find("regex=true inferred") ==
                   std::string::npos,
-          "search_text does not infer alternation for a logical-or token: " +
+          "grep does not infer alternation for a logical-or token: " +
               logical_or_search);
     check(!json_ok(tools.execute(
-              "search_text",
+              "grep",
               R"JSON({"query":"Needle","path":"src/live.py","glob":"*.py"})JSON")),
-          "search_text rejects ambiguous exact-path and glob filters");
+          "grep rejects ambiguous exact-path and glob filters");
     const std::string repaired_glob_search = tools.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"Needle","glob": *.py,"max_results":5})JSON");
     check(json_ok(repaired_glob_search) &&
               repaired_glob_search.find("Needle") != std::string::npos,
-          "search_text repairs an unquoted path-like glob value: " +
+          "grep repairs an unquoted path-like glob value: " +
               repaired_glob_search);
     check(!json_ok(tools.execute(
-              "search_text", R"JSON({"query":"(","regex":true})JSON")),
+              "grep", R"JSON({"query":"(","regex":true})JSON")),
           "indexing-off search returns structured invalid-regex errors");
     check(json_ok(tools.execute(
               "edit_file",
               R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"return 0","new_text":"return 7"}]})JSON")),
           "indexing-off registry retains ordinary edits");
-    check(json_ok(tools.execute("search_text",
+    check(json_ok(tools.execute("grep",
                                 R"JSON({"query":"return 7","glob":"src/hello.cpp"})JSON")) &&
-              !json_ok(tools.execute("project_overview", "{}")) &&
+              !json_ok(tools.execute("index_overview", "{}")) &&
               !json_ok(tools.execute(
                   "edit_file",
                   R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_symbol","symbol_id":1,"replacement":"x"}]})JSON")),
@@ -1452,17 +1452,17 @@ void test_indexing_disabled_registry_is_strict_and_live() {
               tools.enable_persistent_index(index_options,
                                             std::move(enabled_snapshot)).ok(),
           "live registry can enable a completed persistent index in place");
-    bool has_index_status = false;
+    bool has_index_overview = false;
     bool has_replace_symbol = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
-        has_index_status =
-            has_index_status || definition.name == "index_status";
+        has_index_overview =
+            has_index_overview || definition.name == "index_overview";
         if (definition.name != "edit_file") continue;
         has_replace_symbol =
             definition.parameters_json.find("replace_symbol") !=
             std::string::npos;
     }
-    check(tools.indexing_enabled() && has_index_status &&
+    check(tools.indexing_enabled() && has_index_overview &&
               has_replace_symbol,
           "in-place index enablement immediately publishes index-aware tool schemas");
 
@@ -1648,34 +1648,82 @@ void test_read_many_preference_limits_and_serialization() {
     fs::remove_all(workspace, ec);
 }
 
-void test_index_status_and_update() {
+void test_removed_index_and_macro_tools_not_advertised() {
     const std::string workspace = write_temp_workspace("index-tools");
     agent::ReadToolRegistry tools = make_registry(workspace, true);
 
-    const std::string status = tools.execute("index_status", R"JSON({"check_filesystem":true})JSON");
-    check(json_ok(status), "index_status succeeds: " + status);
-    check(json_data_string(status, "path").find("index.sqlite") != std::string::npos,
-          "index_status reports index path");
+    bool saw_removed = false;
+    bool saw_grep = false;
+    bool saw_search_text = false;
+    bool saw_find = false;
+    bool saw_list_dir = false;
+    bool saw_list_directory = false;
+    bool saw_index_overview = false;
+    bool saw_file_outline = false;
+    std::size_t schema_chars = 0;
+    for (const provider::FunctionDefinition& def : tools.definitions()) {
+        schema_chars += def.name.size() + def.description.size() + def.parameters_json.size();
+        if (def.name == "index_status" || def.name == "index_update" ||
+            def.name == "index_rebuild" || def.name == "find_tests" ||
+            def.name == "inspect_code_task")
+            saw_removed = true;
+        if (def.name == "grep") saw_grep = true;
+        if (def.name == "search_text") saw_search_text = true;
+        if (def.name == "find") saw_find = true;
+        if (def.name == "list_dir") saw_list_dir = true;
+        if (def.name == "list_directory") saw_list_directory = true;
+        if (def.name == "index_overview") saw_index_overview = true;
+        if (def.name == "file_outline") saw_file_outline = true;
+        if (def.name == "edit_file") {
+            check(def.parameters_json.find("replace_range") != std::string::npos &&
+                      def.description.find("Flat ops") != std::string::npos,
+                  "edit_file schema keeps flat-op compatibility cues");
+        }
+        if (def.name == "apply_patch") {
+            check(def.description.find("*** Begin Patch") != std::string::npos,
+                  "apply_patch description keeps Codex markers");
+        }
+        if (def.name == "run_command") {
+            check(def.description.find("without a real shell") != std::string::npos ||
+                      def.description.find("without a shell") != std::string::npos,
+                  "run_command description keeps shell-free guidance");
+        }
+    }
+    check(!saw_removed && saw_grep && !saw_search_text && !saw_find &&
+              saw_list_dir && !saw_list_directory && saw_index_overview &&
+              saw_file_outline,
+          "definitions drop removed tools, advertise canonical names only");
+    // Full Act definitions without network should stay well under historical ~4k-token
+    // footprint (rough char/4 proxy). Budget leaves headroom for small schema growth.
+    check(schema_chars / 4 < 2800,
+          "native tool schema footprint stays compact: chars=" +
+              std::to_string(schema_chars) + " ~tokens=" +
+              std::to_string(schema_chars / 4));
 
-    write_text(fs::path(workspace) / "src" / "hello.cpp", "int main() { return 1; }\n");
-    const std::string update =
-        tools.execute("index_update", R"JSON({"paths":["src/hello.cpp"],"force":true})JSON");
-    check(json_ok(update), "index_update force path succeeds: " + update);
+    // Silent execute aliases for renames still work.
+    check(json_ok(tools.execute("search_text", R"JSON({"query":"main","max_results":3})JSON")),
+          "silent search_text alias still executes as grep");
+    check(json_ok(tools.execute("list_directory", R"JSON({"path":"."})JSON")),
+          "silent list_directory alias still executes as list_dir");
+    check(json_ok(tools.execute("project_overview", "{}")),
+          "silent project_overview alias still executes as index_overview");
+    check(json_ok(tools.execute("get_skeleton", R"JSON({"path":"src/hello.cpp"})JSON")) ||
+              !json_error_code(tools.execute("get_skeleton",
+                                             R"JSON({"path":"src/hello.cpp"})JSON"))
+                   .empty(),
+          "silent get_skeleton alias is accepted (may fail only on missing path shape)");
 
-    const std::string rebuild_denied =
-        tools.execute("index_rebuild", R"JSON({"confirm":false})JSON");
-    check(!json_ok(rebuild_denied), "index_rebuild requires confirm");
-
-    const std::string rebuild = tools.execute("index_rebuild", R"JSON({"confirm":true})JSON");
-    check(json_ok(rebuild), "index_rebuild confirm succeeds: " + rebuild);
-
-    agent::ReadToolRegistry review = make_registry(workspace, false);
-    const std::string review_rebuild =
-        review.execute("index_rebuild", R"JSON({"confirm":true})JSON");
-    check(!json_ok(review_rebuild), "read-only registry hides index_rebuild");
-    check(json_error_code(review_rebuild) == "unknown_tool" ||
-              json_error_code(review_rebuild) == "policy_denied",
-          "index_rebuild denied in review: " + review_rebuild);
+    // Removed tools are hard-rejected.
+    check(!json_ok(tools.execute("index_status", "{}")),
+          "index_status is removed");
+    check(!json_ok(tools.execute("index_update", R"JSON({"force":true})JSON")),
+          "index_update is removed");
+    check(!json_ok(tools.execute("index_rebuild", R"JSON({"confirm":true})JSON")),
+          "index_rebuild is removed");
+    check(!json_ok(tools.execute("find_tests", R"JSON({"path":"src/hello.cpp"})JSON")),
+          "find_tests is removed");
+    check(!json_ok(tools.execute("inspect_code_task", R"JSON({"query":"x"})JSON")),
+          "inspect_code_task is removed");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -1687,24 +1735,17 @@ void test_lazy_index_tools_and_touched_overlay() {
                "int alpha() { return 1; }\n");
     agent::ReadToolRegistry tools = make_lazy_registry(workspace);
 
-    check(json_ok(tools.execute("project_overview", "{}")) &&
+    check(json_ok(tools.execute("index_overview", "{}")) &&
               json_ok(tools.execute(
                   "glob", R"JSON({"pattern":"src/*.cpp"})JSON")) &&
               json_ok(tools.execute(
-                  "search_text", R"JSON({"query":"alpha"})JSON")) &&
+                  "grep", R"JSON({"query":"alpha"})JSON")) &&
               json_ok(tools.execute(
                   "search_symbol", R"JSON({"query":"alpha"})JSON")) &&
               json_ok(tools.execute(
-                  "get_skeleton",
-                  R"JSON({"path":"src/symbols.cpp"})JSON")) &&
-              json_ok(tools.execute(
-                  "inspect_code_task",
-                  R"JSON({"query":"alpha symbol"})JSON")) &&
-              json_ok(tools.execute(
-                  "find_tests",
-                  R"JSON({"path":"src/symbols.cpp"})JSON")) &&
-              json_ok(tools.execute("index_status", "{}")),
-          "lazy Agent queries cover overview, files, symbols, skeletons, tests, and totals");
+                  "file_outline",
+                  R"JSON({"path":"src/symbols.cpp"})JSON")),
+          "lazy Agent queries cover overview, files, symbols, and outlines");
 
     const std::string write = tools.execute(
         "write_file",
@@ -1727,76 +1768,6 @@ void test_lazy_index_tools_and_touched_overlay() {
           "touched-path removal overlay hides persisted rows immediately");
     check(tools.refresh_persistent_index(false).ok(),
           "lazy removal revision flushes and clears its overlay");
-
-    std::error_code ec;
-    fs::remove_all(workspace, ec);
-}
-
-void test_inspect_and_find_tests() {
-    const std::string workspace = write_temp_workspace("inspect");
-    write_text(fs::path(workspace) / "src" / "agent_loop.cpp",
-               "void helper() {}\n"
-               "void run_agent_loop() { helper(); }\n");
-    std::error_code mkdir_ec;
-    fs::create_directories(fs::path(workspace) / "tests", mkdir_ec);
-    write_text(fs::path(workspace) / "tests" / "test_agent_loop.cpp",
-               "void test_agent_loop_runs() {}\n");
-    agent::ReadToolRegistry tools = make_registry(workspace, true);
-
-    const std::string inspect =
-        tools.execute("inspect_code_task", R"JSON({"query":"agent loop","max_files":5})JSON");
-    check(json_ok(inspect), "inspect_code_task succeeds: " + inspect);
-
-    const std::string tests =
-        tools.execute("find_tests", R"JSON({"path":"src/agent_loop.cpp"})JSON");
-    check(json_ok(tests), "find_tests succeeds: " + tests);
-
-    const std::string helper_search =
-        tools.execute("search_symbol", R"JSON({"query":"helper"})JSON");
-    check(helper_search.find("\"importance\"") != std::string::npos,
-          "search_symbol returns static importance");
-    const json::ParseResult helper_parsed = json::parse(helper_search);
-    long long helper_id = 0;
-    long long run_id = 0;
-    if (helper_parsed.error.ok() && helper_parsed.value.get("data") != nullptr &&
-        helper_parsed.value.get("data")->is_array()) {
-        for (const json::Value& hit :
-             helper_parsed.value.get("data")->array) {
-            const json::Value* id = hit.get("id");
-            const json::Value* name = hit.get("name");
-            if (id != nullptr && id->type == json::Value::Type::Number &&
-                name != nullptr && name->is_string() &&
-                name->string == "helper")
-                helper_id = static_cast<long long>(id->number);
-        }
-    }
-    const std::string run_search =
-        tools.execute("search_symbol", R"JSON({"query":"run_agent_loop"})JSON");
-    const json::ParseResult run_parsed = json::parse(run_search);
-    if (run_parsed.error.ok() && run_parsed.value.get("data") != nullptr &&
-        run_parsed.value.get("data")->is_array() &&
-        !run_parsed.value.get("data")->array.empty()) {
-        const json::Value* id =
-            run_parsed.value.get("data")->array.front().get("id");
-        if (id != nullptr && id->type == json::Value::Type::Number)
-            run_id = static_cast<long long>(id->number);
-    }
-    check(helper_id > 0 && run_id > 0,
-          "inspect fixture symbols have ids");
-    const std::string helper_read = tools.execute(
-        "read_symbol",
-        "{\"symbol_id\":" + std::to_string(helper_id) + "}");
-    check(json_ok(helper_read) &&
-              helper_read.find("\"importance\"") != std::string::npos &&
-              helper_read.find("caller_count") == std::string::npos,
-          "read_symbol returns importance without graph fields");
-    check(!json_ok(tools.execute(
-              "find_callers",
-              "{\"symbol_id\":" + std::to_string(helper_id) + "}")) &&
-              !json_ok(tools.execute(
-                  "find_callees",
-                  "{\"symbol_id\":" + std::to_string(run_id) + "}")),
-          "removed graph tools are unavailable");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -1870,10 +1841,10 @@ void test_git_and_network_tools_policy() {
         check(!json_ok(fetch_legacy), "fetch_url with extract_text=false still policy-safe");
 
         const std::string search =
-            net_tools.execute("search_web", R"JSON({"term":"ainiux agent"})JSON");
+            net_tools.execute("web_search", R"JSON({"term":"ainiux agent"})JSON");
         // May succeed via keyless providers or fail unavailable — must not crash.
         check(json_ok(search) || !json_error_code(search).empty(),
-              "search_web returns structured result: " + search);
+              "web_search returns structured result: " + search);
     }
 
     agent::ReadToolRegistry review = make_registry(workspace, false);
@@ -1881,25 +1852,28 @@ void test_git_and_network_tools_policy() {
         review.execute("fetch_url", R"JSON({"url":"https://example.com/"})JSON");
     check(!json_ok(no_fetch), "review registry does not expose fetch_url");
     const std::string no_search =
-        review.execute("search_web", R"JSON({"term":"x"})JSON");
-    check(!json_ok(no_search), "review registry does not expose search_web");
+        review.execute("web_search", R"JSON({"term":"x"})JSON");
+    check(!json_ok(no_search), "review registry does not expose web_search");
 
-    // Schema list includes new tools in agent mode.
+    // Schema list includes git tools and compact index overview in agent mode.
     bool saw_git = false;
-    bool saw_index = false;
-    bool saw_inspect = false;
+    bool saw_index_overview = false;
+    bool saw_removed = false;
     for (const provider::FunctionDefinition& def : tools.definitions()) {
         if (def.name == "git_status" || def.name == "git_diff") saw_git = true;
-        if (def.name == "index_status" || def.name == "index_update") saw_index = true;
-        if (def.name == "inspect_code_task" || def.name == "find_tests") saw_inspect = true;
+        if (def.name == "index_overview") saw_index_overview = true;
+        if (def.name == "index_status" || def.name == "inspect_code_task" ||
+            def.name == "find_tests")
+            saw_removed = true;
     }
-    check(saw_git && saw_index && saw_inspect, "agent definitions include new tools");
+    check(saw_git && saw_index_overview && !saw_removed,
+          "agent definitions include git/index_overview and omit removed tools");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
 }
 
-void test_search_text_uses_rg_when_available_else_builtin() {
+void test_grep_uses_rg_when_available_else_builtin() {
     const std::string workspace = write_temp_workspace("search-backend");
     write_text(fs::path(workspace) / "src" / "needle.cpp",
                "int alpha_marker = 1;\n"
@@ -1924,25 +1898,25 @@ void test_search_text_uses_rg_when_available_else_builtin() {
           "search backend registry creates");
 
     const std::string result = tools.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"gamma_unique_xyz","max_results":10,"context":1})JSON");
     check(json_ok(result) &&
               result.find("src/needle.cpp") != std::string::npos &&
               result.find("gamma_unique_xyz") != std::string::npos,
-          "search_text finds the rare needle: " + result);
+          "grep finds the rare needle: " + result);
     check(result.find("\"search_backend\"") != std::string::npos,
-          "search_text reports search_backend metadata: " + result);
+          "grep reports search_backend metadata: " + result);
     if (agent::ripgrep_available()) {
         check(result.find("\"search_backend\":\"rg\"") != std::string::npos ||
                   result.find("\"search_backend\": \"rg\"") != std::string::npos,
-              "search_text uses rg backend when ripgrep is on the fixed PATH: " +
+              "grep uses rg backend when ripgrep is on the fixed PATH: " +
                   result);
         // Context lines should be present when context>0.
         check(result.find("\"context\"") != std::string::npos,
-              "rg search_text includes context when requested: " + result);
+              "rg grep includes context when requested: " + result);
     } else {
         check(result.find("builtin") != std::string::npos,
-              "search_text falls back to builtin when rg is absent: " + result);
+              "grep falls back to builtin when rg is absent: " + result);
     }
 
     // Live / no-index path must still work (rg or builtin_live).
@@ -1955,12 +1929,12 @@ void test_search_text_uses_rg_when_available_else_builtin() {
               .ok(),
           "live registry for search backend");
     const std::string live_result = live.execute(
-        "search_text",
+        "grep",
         R"JSON({"query":"delta_marker","glob":"src/*.cpp","max_results":5})JSON");
     check(json_ok(live_result) &&
               live_result.find("src/other.cpp") != std::string::npos &&
               live_result.find("delta_marker") != std::string::npos,
-          "indexing-off search_text still works with rg/builtin: " + live_result);
+          "indexing-off grep still works with rg/builtin: " + live_result);
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -2084,8 +2058,8 @@ void test_plan_document_mutation_policy() {
         if (definition.name == "remove") saw_remove = true;
         if (definition.name == "index_rebuild") saw_rebuild = true;
     }
-    check(saw_edit && saw_remove && saw_rebuild,
-          "Plan definitions expose the stable agent superset while policy denies Act-only tools");
+    check(saw_edit && saw_remove && !saw_rebuild,
+          "Plan definitions expose edit/remove tools and omit removed index_rebuild");
     fs::remove_all(workspace, ec);
 }
 
@@ -2248,17 +2222,16 @@ void run_all() {
     test_edit_file_ops();
     test_str_replace_fuzzy_whitespace_and_indent();
     test_remove_tool();
-    test_list_directory_filesystem();
+    test_list_dir_filesystem();
     test_smart_act_native_tools_accept_unindexed_project_paths();
     test_agent_command_output_keeps_unindexed_project_paths();
     test_replace_symbol();
     test_index_refresh_drops_completed_prepare_cancellation();
     test_indexing_disabled_registry_is_strict_and_live();
-    test_search_text_uses_rg_when_available_else_builtin();
+    test_grep_uses_rg_when_available_else_builtin();
     test_read_many_preference_limits_and_serialization();
-    test_index_status_and_update();
+    test_removed_index_and_macro_tools_not_advertised();
     test_lazy_index_tools_and_touched_overlay();
-    test_inspect_and_find_tests();
     test_git_and_network_tools_policy();
     test_plan_document_mutation_policy();
     test_goal_met_tool_hooks();

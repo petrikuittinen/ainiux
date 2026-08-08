@@ -972,7 +972,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
 
     // Capture cancellation/interrupted by value. index_options_ lives inside tools for
     // the whole session; a [&] lambda here used to dangle after prepare() returned and
-    // segfault during project_overview → check_freshness (stack-use-after-scope).
+    // segfault during index_overview → check_freshness (stack-use-after-scope).
     const runtime::CancellationToken cancel_copy = cancellation;
     const std::function<bool()> interrupted_copy = std::move(interrupted);
     auto interrupted_fn = [this, cancel_copy, interrupted_copy]() {

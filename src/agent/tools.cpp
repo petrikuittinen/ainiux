@@ -235,6 +235,17 @@ bool get_size(const json::Value& object, const std::string& key, std::size_t fal
     return true;
 }
 
+// Map silent legacy aliases to advertised canonical tool names. Old names stay
+// executable (zero schema cost) so prior transcripts and habit-trained models work.
+std::string canonical_native_tool_name(const std::string& name) {
+    if (name == "search_text" || name == "find") return "grep";
+    if (name == "list_directory") return "list_dir";
+    if (name == "project_overview") return "index_overview";
+    if (name == "get_skeleton") return "file_outline";
+    if (name == "search_web") return "web_search";
+    return name;
+}
+
 std::string schema(const std::string& properties, const std::string& required = "") {
     return "{\"type\":\"object\",\"properties\":{" + properties + "},\"required\":[" + required +
            "],\"additionalProperties\":false}";
@@ -2116,7 +2127,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                 if (i) message += ", ";
                 message += suggestions[i];
             }
-            message += "? Filenames may include literal # characters—use list_directory and the exact name.";
+            message += "? Filenames may include literal # characters—use list_dir and the exact name.";
         }
         return {ErrorCode::FileRead, message};
     }
@@ -2164,7 +2175,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                 "ambiguous remove: both \"" + basename +
                     "\" and a #…# sibling exist. If you intend the plain name, re-call remove with "
                     "confirm=true. If the user named a #wrapped# file, use that exact path "
-                    "(list_directory first). Do not strip # from filenames."};
+                    "(list_dir first). Do not strip # from filenames."};
     }
     if (has_hash_wrapped_sibling(parent, basename)) {
         warnings.push_back(
@@ -3290,66 +3301,55 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},"
         "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}";
     std::vector<provider::FunctionDefinition> tools = {
-        {"project_overview",
-         "Summarize the code index (languages, indexed files, symbols hints, freshness). "
-         "This is NOT a full filesystem listing—empty directories and non-source files are omitted. "
-         "Use list_directory for the real workspace tree.",
+        {"index_overview",
+         "Summarize the code index (languages, file counts, freshness). Not a full "
+         "filesystem listing—use list_dir for on-disk layout.",
          schema("")},
-        {"list_directory",
-         "List real filesystem entries in a workspace-relative directory (files, empty dirs, "
-         "non-source names). Names are literal (may include #, spaces). Index-only tools miss "
-         "empty directories and non-code files—prefer this for layout questions and before remove.",
+        {"list_dir",
+         "List real filesystem entries in a workspace-relative directory (literal names, "
+         "including empty dirs and non-source files). Prefer before remove.",
          schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
-        {"glob", "Match eligible workspace source paths using *, ?, **, and brace alternatives.", schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
-        {"search_text",
-         "Search eligible workspace UTF-8 source files. Uses system ripgrep (rg) when present on "
-         "the fixed tool PATH for speed; otherwise scans via the code index when available, else "
-         "live source discovery. query is literal unless regex=true; an unescaped | infers regex "
-         "only when regex is omitted. Use path for one exact file or glob for a wildcard set "
-         "(not both). pattern is accepted as a compatibility alias for query.",
+        {"glob",
+         "Match eligible workspace source paths (*, ?, **, braces).",
+         schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
+        {"grep",
+         "Search workspace UTF-8 sources (rg when available, else index/live scan). "
+         "query is literal unless regex=true; unescaped | infers regex only when regex is "
+         "omitted. path=one file or glob=wildcards (not both). pattern aliases query.",
          schema(search_fields, "\"query\"")},
-        {"grep", "Alias for search_text; use query (pattern is accepted as an alias), path for one exact file, or glob for wildcard files.", schema(search_fields, "\"query\"")},
-        {"find", "Validated alias for search_text; use query (pattern is accepted as an alias), path for one exact file, or glob for wildcard files.", schema(search_fields, "\"query\"")},
-        {"search_symbol", "Rank indexed symbol names by lexical match, then static declaration importance.", schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
-        {"get_skeleton", "Return ordered indexed declarations, signatures, ranges, and documentation for one file.", schema(path, "\"path\"")},
-        {"read_symbol", "Fingerprint-verify and read the actual indexed source range for a symbol id.", schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
+        {"search_symbol",
+         "Rank indexed symbols by lexical match, then static importance.",
+         schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
+        {"file_outline",
+         "Indexed declarations, signatures, ranges, and docs for one file.",
+         schema(path, "\"path\"")},
+        {"read_symbol",
+         "Verify and read the indexed source range for a symbol_id.",
+         schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
         {"read_many",
          !agent_session
-             ? "Preferred file reader whenever two or more independent paths or ranges are "
-               "known, including when native parallel tool calls are available. Reads 1–100 "
-               "indexed bounded line ranges with per-item limits, line numbers, and hashes "
-               "under one aggregate byte cap."
-             : "Preferred file reader whenever two or more independent paths or ranges are "
-               "known, including when native parallel tool calls are available. Reads 1–100 "
-               "exact-path live files with per-item limits, line numbers, and hashes under one "
-               "aggregate byte cap; project files do not need to be indexed.",
+             ? "Preferred file reader for two or more known paths/ranges (including when "
+               "native parallel tool calls are available). Batch-read 1–100 indexed ranges "
+               "with line numbers and hashes under one byte cap."
+             : "Preferred file reader for two or more known paths/ranges (including when "
+               "native parallel tool calls are available). Batch-read 1–100 live exact-path "
+               "files with line numbers and hashes under one byte cap.",
          schema("\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,\"items\":" + schema(range, "\"path\"") + "},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
         {"read_file",
          !agent_session
-             ? "Single-target fallback: fingerprint-verify and read one bounded indexed UTF-8 "
-               "line range with hashes and line numbers. Do not issue multiple parallel "
-               "read_file calls when the known reads can be batched with read_many."
-             : "Single-target fallback: read one exact-path regular UTF-8 file in the live "
-               "project filesystem; the file does not need to be indexed. Returns bounded "
-               "line-numbered text and hashes. Do not issue multiple parallel read_file calls "
-               "when the known reads can be batched with read_many. PNG/JPEG/GIF images are "
-               "not readable as text—do not use Python/PIL; call attach_image when pixel "
-               "content is required (or ask the user to /attach). Exact outside-project paths "
-               "follow the active interactive permission mode; headless Ask decisions are denied.",
+             ? "Single-target fallback: read one bounded indexed UTF-8 range with hashes/"
+               "line numbers. Do not issue multiple parallel read_file calls when read_many "
+               "can batch the known reads."
+             : "Single-target fallback: read one exact-path live UTF-8 file (need not be "
+               "indexed). Do not issue multiple parallel read_file calls when read_many can "
+               "batch. PNG/JPEG/GIF are not text—use attach_image for pixels.",
          schema(range, "\"path\"")},
         {"run_command",
          agent_session
-             ? "Run a workspace command without a real shell (argv exec). Prefer a bare system "
-               "name from the fixed PATH (`ls`, `python3`, `make`); use `command -v NAME` to "
-               "test install. Project scripts are first-class: `./server.sh start`, bare "
-               "`server.sh` under the project cwd/root, or `bash server.sh …` / "
-               "`sh ./script.sh` (script-file form). Free-form `bash -c` / `sh -c` is denied "
-               "in Confirm/Smart. Act uses Guard; Plan only conservatively vetted read-only "
-               "argv forms. Smart auto-runs vetted project-contained read-only commands and "
-               "asks for others; Confirm asks for every command; Yolo skips prompts and hard "
-               "Guard denials at user risk. Still shell-free: no unquoted pipes/redirects/"
-               "chaining; quoted payload may contain ';' (e.g. python3 -c \"a; b\"). Prefer "
-               "native tools and dedicated Git tools."
+             ? "Run one workspace command without a real shell (argv exec). Bare PATH names "
+               "(`make`, `python3`) or project scripts (`./script.sh`, `bash script.sh`). "
+               "No unquoted pipes/redirects/chaining. Act uses Guard; Plan allows vetted "
+               "read-only forms. Prefer native filesystem/Git tools when available."
              : "Run one read-only inspection command without a shell "
                "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
@@ -3357,52 +3357,17 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     std::string(agent_session ? "120000" : "10000") + "}",
                 "\"command\"")},
         {"git_status",
-         "Compact git status for the workspace (short form with branch by default). "
-         "Uses the git CLI; not libgit2. Prefer this over run_command for status.",
+         "Compact git status (short + branch by default). Prefer over run_command.",
          schema("\"short\":{\"type\":\"boolean\"},\"include_branch\":{\"type\":\"boolean\"}")},
         {"git_diff",
-         "Bounded git diff for the workspace (optional path, --cached, --stat). "
-         "Uses the git CLI with pager/external-diff disabled.",
+         "Bounded git diff (optional path, --cached, --stat).",
          schema("\"path\":{\"type\":\"string\"},\"cached\":{\"type\":\"boolean\"},"
                 "\"stat\":{\"type\":\"boolean\"},"
                 "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":524288}")},
-        {"index_status",
-         "Report .ainiux-pr/index.sqlite state (file/symbol counts, freshness, optional "
-         "changed-path sample).",
-         schema("\"check_filesystem\":{\"type\":\"boolean\"},"
-                "\"max_changed_files\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":500}")},
-        {"index_update",
-         "Incrementally refresh the code index for changed files (or only listed paths). "
-         "force=true rescans even when size/mtime look unchanged.",
-         schema("\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"maxItems\":200},"
-                "\"force\":{\"type\":\"boolean\"}")},
-        {"find_tests",
-         "Heuristically find likely tests for a path or symbol (naming/path conventions).",
-         schema("\"path\":{\"type\":\"string\"},\"symbol_id\":{\"type\":\"integer\",\"minimum\":1},"
-                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100}")},
-        {"inspect_code_task",
-         "Macro-tool: rank likely files/symbols/tests for a natural-language coding task "
-         "from the index (no network).",
-         schema("\"query\":{\"type\":\"string\"},"
-                "\"max_symbols\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},"
-                "\"max_files\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100},"
-                "\"include_skeletons\":{\"type\":\"boolean\"},"
-                "\"include_tests\":{\"type\":\"boolean\"},"
-                "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}",
-                "\"query\"")},
     };
-    if (agent_session) {
-        tools.push_back(
-            {"index_rebuild",
-             "Act-only full rebuild of .ainiux-pr/index.sqlite (recovery/debugging). Requires "
-             "confirm=true; Plan returns policy_denied.",
-             schema("\"confirm\":{\"type\":\"boolean\"}", "\"confirm\"")});
-    }
     if (!indexing_enabled_) {
         static const std::set<std::string> hidden = {
-            "project_overview", "search_symbol", "get_skeleton", "read_symbol",
-            "index_status", "index_update", "index_rebuild",
-            "find_tests", "inspect_code_task"};
+            "index_overview", "search_symbol", "file_outline", "read_symbol"};
         tools.erase(
             std::remove_if(
                 tools.begin(), tools.end(),
@@ -3414,19 +3379,16 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     if (allow_network_) {
         tools.push_back(
             {"fetch_url",
-             "Fetch one http(s) URL and return UTF-8 Markdown (or plain text). Never returns raw "
-             "HTML/CSS/JS—scripts, styles, and comments are stripped to reduce tokens and "
-             "prompt-injection risk. max_bytes caps the returned Markdown size (not raw HTML). "
-             "Prefer the top 1–3 search hits only. Private/loopback blocked unless configured.",
+             "Fetch one http(s) URL as UTF-8 Markdown/text (never raw HTML). Private/"
+             "loopback blocked unless configured. Prefer top search hits only.",
              schema("\"url\":{\"type\":\"string\"},"
                     "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8388608},"
                     "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000}",
                     "\"url\"")});
         tools.push_back(
-            {"search_web",
-             "Web search (API providers when configured, else free DuckDuckGo HTML). Returns "
-             "title/URL/snippet for at most 3 results by default—use those top hits only; do not "
-             "fetch every URL. Returns web_search_unavailable when no provider can run.",
+            {"web_search",
+             "Web search (configured API providers, else DuckDuckGo). At most 3 results "
+             "(title/URL/snippet). Returns web_search_unavailable when none can run.",
              schema("\"term\":{\"type\":\"string\"},"
                     "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3},"
                     "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
@@ -3438,34 +3400,26 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         // whether or not a session goal is currently active.
         tools.push_back(
             {"goal_met",
-             "Call ONLY when the active session goal condition is verifiably satisfied by "
-             "evidence already present in the conversation or tool results. Do not call "
-             "optimistically. Requires non-empty evidence (command output, file state, test "
-             "result, etc.). Rejected when no goal is active.",
+             "Call only when the active session goal is verifiably satisfied. Requires "
+             "non-empty evidence. Rejected when no goal is active.",
              schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")});
         tools.push_back(
             {"attach_image",
-             "Attach one local PNG/JPEG/GIF for vision on the next model round of this turn. "
-             "Use when you need pixel content (screenshots, meters, UI mockups). Do not use "
-             "Python/PIL or shell tools to open images. Do not attach images proactively for "
-             "every path you see—only when vision is required. Request-local only (not stored "
-             "in the project). Per-turn limits apply (default up to 4 images). Requires a "
-             "vision-capable Chat Completions model.",
+             "Attach one local PNG/JPEG/GIF for vision on the next model round of this turn "
+             "(request-local, not stored). Vision-capable Chat Completions model required; "
+             "per-turn limits apply.",
              schema(path, "\"path\"")});
     }
     if (allow_mutations()) {
         tools.push_back(
             {"edit_file",
-             "Preferred in-file edit (not for deleting whole files—use remove). Flat ops "
-             "only—set type/op and fields on the op object (do not nest empty "
-             "replace_range/create_file/… shells). Ops: "
-             "insert_at (add before a 1-based line; e.g. "
-             "{\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
-             "replace_range (rewrite line spans; include full old text in "
-             "replacement when substituting), delete_range, replace_text (exact then fuzzy), "
-             + std::string(indexing_enabled_ ? "replace_symbol, " : "") +
-             "create_file (alone). Omit expected_hash unless taken from a fresh read_file "
-             "range_hash. Line ops apply bottom-to-top.",
+             "Preferred in-file edit (not whole-file delete—use remove). Flat ops only—"
+             "set type/op on the op object (do not nest empty replace_range/… shells). "
+             "Ops: insert_at (e.g. {\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
+             "replace_range, delete_range, replace_text"
+             + std::string(indexing_enabled_ ? ", replace_symbol" : "") +
+             ", create_file (alone). Omit expected_hash unless from a fresh read. "
+             "Line ops apply bottom-to-top.",
              schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
@@ -3474,9 +3428,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"ops\"")});
         tools.push_back(
             {"write_file",
-             "Create or overwrite a UTF-8 file. Outside-project paths require one-shot "
-             "interactive user approval in Act mode and receive no project history backup. "
-             "Prefer edit_file.replace_range for project edits.",
+             "Create or overwrite a UTF-8 file. Prefer edit_file for project edits.",
              schema(path + ",\"content\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"},"
@@ -3484,25 +3436,18 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"content\"")});
         tools.push_back(
             {"create_directory",
-             "Act-only creation of one exact-path directory. parents=true also creates missing "
-             "parents. Plan returns policy_denied. Native paths may be outside the project "
-             "subject to the active permission mode.",
+             "Act-only mkdir; parents=true creates missing parents. Plan: policy_denied.",
              schema(path + ",\"parents\":{\"type\":\"boolean\"}", "\"path\"")});
         tools.push_back(
             {"rename_path",
-             "Act-only rename of an exact-path file or directory. Plan returns policy_denied. "
-             "The destination must not exist; cross-filesystem failures are reported and never "
-             "converted into copy/delete.",
+             "Act-only rename; destination must not exist. Plan: policy_denied.",
              schema("\"source\":{\"type\":\"string\"},"
                     "\"destination\":{\"type\":\"string\"}",
                     "\"source\",\"destination\"")});
         tools.push_back(
             {"str_replace",
-             "Text replacement in one exact-path UTF-8 file (exact, then optional fuzzy "
-             "whitespace/indent). External edits follow the active permission mode and have no "
-             "project history/index entry. "
-             "Prefer edit_file when possible. Fails on 0 matches or ambiguous multi-match without "
-             "replace_all or line_range_hint.",
+             "Exact (then optional fuzzy) text replace in one file. Prefer edit_file. "
+             "Fails on 0 or ambiguous multi-match without replace_all/line_range_hint.",
              schema(path + ",\"old_text\":{\"type\":\"string\"},\"new_text\":{\"type\":\"string\"},"
                            "\"replace_all\":{\"type\":\"boolean\"},"
                            "\"fuzzy\":{\"type\":\"boolean\"},"
@@ -3513,23 +3458,17 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"path\",\"old_text\",\"new_text\"")});
         tools.push_back(
             {"remove",
-             "Act-only deletion of an exact-path file or empty directory (recursive=true for "
-             "non-empty dirs); Plan returns policy_denied. Use the exact filename from "
-             "list_directory—do not strip # or other "
-             "punctuation. When both name and #name# exist, plain name requires confirm=true. "
-             "Database files (*.sqlite/*.db) are refused in headless mode. Prefer remove over "
-             "edit_file for deleting files.",
+             "Act-only delete file or empty dir (recursive=true for non-empty). Use exact "
+             "name from list_dir. Plan: policy_denied. Prefer over edit_file for deletes.",
              schema(path + ",\"recursive\":{\"type\":\"boolean\"},"
                            "\"confirm\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"}",
                     "\"path\"")});
         tools.push_back(
             {"apply_patch",
-             "Apply an OpenAI/Codex-style multi-file patch. Prefer edit_file or str_replace "
-             "for simple single-file edits. Hunk context must match the file; use unique "
-             "surrounding lines (not only a bare '}' or 'return 0;'). Optional "
-             "@@ -line,count headers disambiguate. Multi-hunk patches apply top-to-bottom "
-             "with sequential anchoring. Preferred form (patch or diff or input):\n"
+             "OpenAI/Codex multi-file patch (prefer edit_file/str_replace for simple "
+             "single-file edits). Hunk context must match; @@ -line,count helps. "
+             "Args: patch|diff|input. fuzzy=true default. Preferred form:\n"
              "*** Begin Patch\n"
              "*** Update File: path\n"
              "@@\n"
@@ -3537,8 +3476,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              "-old\n"
              "+new\n"
              "*** End Patch\n"
-             "Also accepts bare *** Update/Add/Delete File sections without Begin/End "
-             "(common with local models). fuzzy=true default.",
+             "Bare *** Update/Add/Delete File sections without Begin/End are also accepted.",
              schema("\"patch\":{\"type\":\"string\"},"
                     "\"input\":{\"type\":\"string\"},"
                     "\"diff\":{\"type\":\"string\"},"
@@ -3850,26 +3788,27 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                       runtime::CancellationToken cancellation) const {
     if (cancellation.cancelled()) return tool_error_result("cancelled", "tool call cancelled");
 
-    // Stage 7: exact alias mapping first, then case/snake-camel repair against
-    // the registry. grep/find remain explicit aliases of search_text.
-    std::string name = requested_name;
-    if (name == "grep" || name == "find") name = "search_text";
-    else {
+    // Stage 7: silent legacy aliases first (not advertised), then case/snake-camel
+    // repair against the registry (+ legacy names so typo repair still works).
+    std::string name = canonical_native_tool_name(requested_name);
+    {
         std::vector<std::string> known;
-        known.reserve(16);
+        known.reserve(24);
         for (const provider::FunctionDefinition& definition : definitions())
             known.push_back(definition.name);
+        // Legacy names remain repair targets but are not in definitions().
+        known.push_back("search_text");
+        known.push_back("find");
+        known.push_back("list_directory");
+        known.push_back("project_overview");
+        known.push_back("get_skeleton");
+        known.push_back("search_web");
         const std::string repaired = repair_tool_name(requested_name, known);
-        if (!repaired.empty()) {
-            name = repaired;
-            if (name == "grep" || name == "find") name = "search_text";
-        }
+        if (!repaired.empty()) name = canonical_native_tool_name(repaired);
     }
     if (!indexing_enabled_) {
         static const std::set<std::string> disabled = {
-            "project_overview", "search_symbol", "get_skeleton", "read_symbol",
-            "index_status", "index_update", "index_rebuild", "find_tests",
-            "inspect_code_task"};
+            "index_overview", "search_symbol", "file_outline", "read_symbol"};
         if (disabled.find(name) != disabled.end())
             return tool_error_result(
                 "indexing_disabled",
@@ -3905,9 +3844,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     std::string validation_error;
     bool lazy_live_fallback = false;
     static const std::set<std::string> snapshot_tools = {
-        "project_overview", "glob",          "search_text",
-        "search_symbol",    "get_skeleton",  "read_symbol",
-        "find_tests", "inspect_code_task", "index_status", "edit_file"};
+        "index_overview", "glob",         "grep",
+        "search_symbol",  "file_outline", "read_symbol",
+        "edit_file"};
     if (snapshot_tools.find(name) != snapshot_tools.end()) {
         if (index_access_mode_ == IndexAccessMode::LazyHints &&
             index_refresh_) {
@@ -3941,16 +3880,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         snapshot_.language_totals.clear();
         snapshot_.updated_at = 0;
         const bool need_files =
-            name == "project_overview" || name == "glob" ||
-            name == "search_text" || name == "get_skeleton" ||
-            name == "find_tests" || name == "inspect_code_task" ||
-            name == "index_status" || name == "edit_file";
+            name == "index_overview" || name == "glob" || name == "grep" ||
+            name == "file_outline" || name == "edit_file";
         Error query_error = ok_error();
         if (need_files)
             query_error =
                 index::query_files(query_options, snapshot_.files);
         if (query_error.ok() &&
-            (name == "project_overview" || name == "index_status")) {
+            name == "index_overview") {
             index::QueryTotals totals;
             query_error = index::query_totals(query_options, totals);
             if (query_error.ok()) {
@@ -3958,7 +3895,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 snapshot_.language_totals = std::move(totals.languages);
             }
         }
-        if (query_error.ok() && name == "get_skeleton") {
+        if (query_error.ok() && name == "file_outline") {
             std::string path;
             if (get_string(args, "path", path, true, validation_error))
                 query_error = index::query_symbols(
@@ -3980,24 +3917,13 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (query_error.ok() && found)
                     snapshot_.symbols.push_back(std::move(symbol));
             }
-        } else if (query_error.ok() &&
-                   (name == "search_symbol" ||
-                    name == "inspect_code_task")) {
+        } else if (query_error.ok() && name == "search_symbol") {
             std::string query;
-            std::size_t maximum = name == "search_symbol" ? 50 : 20;
+            std::size_t maximum = 50;
             (void)get_string(args, "query", query, true,
                              validation_error);
-            if (name == "search_symbol")
-                (void)get_size(args, "max_results", 50, 200, maximum,
-                               validation_error);
-            else {
-                std::size_t files_maximum = 20;
-                (void)get_size(args, "max_symbols", 20, 100, maximum,
-                               validation_error);
-                (void)get_size(args, "max_files", 20, 100,
-                               files_maximum, validation_error);
-                maximum = std::max(maximum, files_maximum) * 4;
-            }
+            (void)get_size(args, "max_results", 50, 200, maximum,
+                           validation_error);
             std::vector<index::OwnedRankedSymbol> ranked;
             query_error = index::query_ranked_symbols(
                 query_options, query, maximum + 1, ranked);
@@ -4006,12 +3932,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 for (index::OwnedRankedSymbol& item : ranked)
                     snapshot_.symbols.push_back(std::move(item.symbol));
             }
-        } else if (query_error.ok() &&
-                   (name == "project_overview" ||
-                    name == "find_tests")) {
+        } else if (query_error.ok() && name == "index_overview") {
             query_error = index::query_symbols(
-                query_options, {}, snapshot_.symbols,
-                name == "project_overview" ? 4096 : 10000);
+                query_options, {}, snapshot_.symbols, 4096);
         } else if (query_error.ok() && name == "edit_file") {
             const json::Value* ops = args.get("ops");
             if (ops != nullptr && ops->is_array()) {
@@ -4033,7 +3956,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
         }
         if (!query_error.ok() &&
-            (name == "glob" || name == "search_text")) {
+            (name == "glob" || name == "grep")) {
             index::Options discovery_options = query_options;
             discovery_options.on_progress = {};
             std::vector<index::DiscoveredFile> discovered;
@@ -4062,7 +3985,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         rebuild_file_map();
     }
 
-    if (name == "project_overview") {
+    if (name == "index_overview") {
         json::Value data = object_value();
         data.object["workspace"] = string_value(snapshot_.workspace);
         data.object["updated_at"] = number_value(static_cast<double>(snapshot_.updated_at));
@@ -4137,7 +4060,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "list_directory") {
+    if (name == "list_dir") {
         std::string path;
         std::size_t maximum = 200;
         if (!get_string(args, "path", path, false, validation_error) ||
@@ -4152,7 +4075,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result("policy_denied", resolved.message);
             external = true;
             const GuardApprovalDecision decision = request_permission(
-                "list_directory", "list_directory " + absolute.generic_u8string(),
+                "list_dir", "list_dir " + absolute.generic_u8string(),
                 {absolute.generic_u8string()}, true,
                 resolved_path_is_under_system_temp(absolute), false, false,
                 "ask_on_external_directory_read",
@@ -4164,7 +4087,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     decision == GuardApprovalDecision::Cancelled ? "cancelled"
                                                                  : "policy_denied",
                     decision == GuardApprovalDecision::Cancelled
-                        ? "list_directory approval cancelled"
+                        ? "list_dir approval cancelled"
                         : "external directory listing requires user approval");
             Error stable = ensure_approved_external_path_unchanged(
                 absolute, "list directory", ErrorCode::FileRead);
@@ -4189,7 +4112,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     return tool_error_result("not_found", "directory does not exist: " + path);
                 if (fs::is_symlink(status))
                     return tool_error_result("policy_denied",
-                                            "refusing symlink path in list_directory: " + path);
+                                            "refusing symlink path in list_dir: " + path);
             }
             if (!fs::is_directory(absolute, ec) || ec)
                 return tool_error_result("not_found", "path is not a directory: " + path);
@@ -4351,7 +4274,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, truncated);
     }
 
-    if (name == "get_skeleton") {
+    if (name == "file_outline") {
         std::string path;
         if (!get_string(args, "path", path, true, validation_error)) return tool_error_result("invalid_arguments", validation_error);
         const auto file = files_.find(fs::u8path(path).generic_u8string());
@@ -4554,7 +4477,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, truncated, std::move(metadata));
     }
 
-    if (name == "search_text") {
+    if (name == "grep") {
         std::string query, pattern, path, glob;
         bool regex_mode = false, case_sensitive = false, word = false;
         std::size_t context = 0, maximum = 50;
@@ -6074,535 +5997,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         process.stdout_truncated || process.stderr_truncated);
     }
 
-    if (name == "index_status") {
-        bool check_fs = true;
-        std::size_t max_changed = 50;
-        if (!get_bool(args, "check_filesystem", true, check_fs, validation_error) ||
-            !get_size(args, "max_changed_files", 50, 500, max_changed, validation_error))
-            return tool_error_result("invalid_arguments", validation_error);
-        json::Value data = object_value();
-        const std::string db_path = index::database_path(snapshot_.workspace);
-        index::QueryTotals totals;
-        index::Options totals_options = index_options_;
-        totals_options.cancellation = cancellation;
-        const Error totals_error =
-            index_access_mode_ == IndexAccessMode::LazyHints
-                ? index::query_totals(totals_options, totals)
-                : ok_error();
-        if (!totals_error.ok())
-            return tool_error_result(error_code_string(totals_error.code),
-                                     totals_error.message);
-        std::error_code ec;
-        const bool exists = fs::exists(db_path, ec) && !ec;
-        data.object["index_exists"] = bool_value(exists);
-        data.object["path"] = string_value(db_path);
-        data.object["files_indexed"] = number_value(static_cast<double>(
-            index_access_mode_ == IndexAccessMode::LazyHints
-                ? totals.files
-                : snapshot_.files.size()));
-        data.object["symbols_indexed"] =
-            number_value(static_cast<double>(
-                index_access_mode_ == IndexAccessMode::LazyHints
-                    ? totals.symbols
-                    : snapshot_.symbols.size()));
-        data.object["last_updated"] = number_value(static_cast<double>(
-            index_access_mode_ == IndexAccessMode::LazyHints
-                ? totals.updated_at
-                : snapshot_.updated_at));
-        data.object["workspace"] = string_value(snapshot_.workspace);
-        bool fresh = true;
-        json::Value changed = array_value();
-        std::vector<std::string> warnings;
-        if (check_fs) {
-            index::Freshness freshness;
-            index::Options opts = index_options_;
-            opts.cancellation = cancellation;
-            const Error fresh_error = index::check_freshness(opts, freshness);
-            if (!fresh_error.ok()) {
-                warnings.push_back(fresh_error.message);
-                fresh = false;
-            } else {
-                fresh = freshness.fresh;
-                std::size_t count = 0;
-                auto append_paths = [&](const std::vector<std::string>& paths,
-                                        const char* kind) {
-                    for (const std::string& path : paths) {
-                        if (count >= max_changed) return;
-                        json::Value item = object_value();
-                        item.object["path"] = string_value(path);
-                        item.object["change"] = string_value(kind);
-                        changed.array.push_back(std::move(item));
-                        ++count;
-                    }
-                };
-                append_paths(freshness.added, "added");
-                append_paths(freshness.changed, "changed");
-                append_paths(freshness.removed, "removed");
-                if (!freshness.reason.empty() && !fresh)
-                    warnings.push_back(freshness.reason);
-            }
-        }
-        data.object["fresh"] = bool_value(fresh);
-        data.object["changed_files"] = std::move(changed);
-        return envelope(true, std::move(data), "", "", warnings, false);
-    }
-
-    if (name == "index_update") {
-        const Error pending_error =
-            refresh_persistent_index(false, cancellation);
-        if (!pending_error.ok())
-            return tool_error_result(error_code_string(pending_error.code),
-                                     pending_error.message);
-        bool force = false;
-        if (!get_bool(args, "force", false, force, validation_error))
-            return tool_error_result("invalid_arguments", validation_error);
-        std::vector<std::string> paths;
-        const json::Value* paths_value = args.get("paths");
-        if (paths_value != nullptr) {
-            if (!paths_value->is_array())
-                return tool_error_result("invalid_arguments", "paths must be an array of strings");
-            if (paths_value->array.size() > 200)
-                return tool_error_result("invalid_arguments", "paths accepts at most 200 entries");
-            for (const json::Value& item : paths_value->array) {
-                if (!item.is_string() || item.string.empty())
-                    return tool_error_result("invalid_arguments",
-                                            "paths entries must be non-empty strings");
-                if (!safe_relative_path(item.string))
-                    return tool_error_result("policy_denied",
-                                            unsafe_path_message(item.string, "index"));
-                paths.push_back(fs::u8path(item.string).generic_u8string());
-            }
-        }
-        index::Options opts = index_options_;
-        opts.cancellation = cancellation;
-        opts.force_rescan = force;
-        opts.update_paths = paths;
-        index::RefreshStats stats;
-        const Error error = index::refresh(opts, stats);
-        if (!error.ok())
-            return tool_error_result(error_code_string(error.code), error.message);
-        index::QueryTotals totals;
-        const Error totals_error = index::query_totals(opts, totals);
-        if (!totals_error.ok())
-            return tool_error_result(error_code_string(totals_error.code),
-                                     totals_error.message);
-        json::Value data = object_value();
-        data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
-        data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
-        data.object["unchanged"] = number_value(static_cast<double>(stats.unchanged));
-        data.object["skipped"] = number_value(static_cast<double>(stats.skipped));
-        data.object["removed"] = number_value(static_cast<double>(stats.removed));
-        data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
-        data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
-        data.object["files_indexed"] =
-            number_value(static_cast<double>(totals.files));
-        data.object["symbols_indexed"] =
-            number_value(static_cast<double>(totals.symbols));
-        data.object["last_updated"] =
-            number_value(static_cast<double>(totals.updated_at));
-        data.object["force"] = bool_value(force);
-        json::Value path_array = array_value();
-        for (const std::string& path : paths) path_array.array.push_back(string_value(path));
-        data.object["paths"] = std::move(path_array);
-        std::vector<std::string> warnings = stats.diagnostics;
-        return envelope(true, std::move(data), "", "", warnings, false);
-    }
-
-    if (name == "index_rebuild") {
-        const Error pending_error =
-            refresh_persistent_index(false, cancellation);
-        if (!pending_error.ok())
-            return tool_error_result(error_code_string(pending_error.code),
-                                     pending_error.message);
-        if (mutation_policy_ != MutationPolicy::Full)
-            return tool_error_result("policy_denied", "index_rebuild is not enabled in this session");
-        bool confirm = false;
-        if (!get_bool(args, "confirm", false, confirm, validation_error))
-            return tool_error_result("invalid_arguments", validation_error);
-        if (!confirm)
-            return tool_error_result("invalid_arguments",
-                                    "index_rebuild requires confirm=true (full index rebuild)");
-        index::Options opts = index_options_;
-        opts.cancellation = cancellation;
-        index::ClearStats clear_stats;
-        Error error = index::clear_database(opts, clear_stats);
-        if (!error.ok())
-            return tool_error_result(error_code_string(error.code), error.message);
-        opts.force_rescan = true;
-        index::RefreshStats stats;
-        error = index::refresh(opts, stats);
-        if (!error.ok())
-            return tool_error_result(error_code_string(error.code), error.message);
-        index::QueryTotals totals;
-        error = index::query_totals(opts, totals);
-        if (!error.ok())
-            return tool_error_result(error_code_string(error.code),
-                                     error.message);
-        json::Value data = object_value();
-        data.object["cleared_files"] = number_value(static_cast<double>(clear_stats.removed_files));
-        data.object["discovered"] = number_value(static_cast<double>(stats.discovered));
-        data.object["indexed"] = number_value(static_cast<double>(stats.indexed));
-        data.object["symbols"] = number_value(static_cast<double>(stats.symbols));
-        data.object["elapsed_ms"] = number_value(static_cast<double>(stats.elapsed_ms));
-        data.object["files_indexed"] =
-            number_value(static_cast<double>(totals.files));
-        data.object["symbols_indexed"] =
-            number_value(static_cast<double>(totals.symbols));
-        data.object["last_updated"] =
-            number_value(static_cast<double>(totals.updated_at));
-        return envelope(true, std::move(data), "", "", stats.diagnostics, false);
-    }
-
-    if (name == "find_tests") {
-        std::string path;
-        std::size_t symbol_id = 0;
-        std::size_t max_results = 20;
-        if (!get_string(args, "path", path, false, validation_error) ||
-            !get_size(args, "symbol_id", 0, 1000000000, symbol_id, validation_error) ||
-            !get_size(args, "max_results", 20, 100, max_results, validation_error) ||
-            max_results == 0)
-            return tool_error_result("invalid_arguments",
-                                    validation_error.empty() ? "max_results must be positive"
-                                                             : validation_error);
-        if (path.empty() && symbol_id == 0)
-            return tool_error_result("invalid_arguments",
-                                    "find_tests requires path and/or symbol_id");
-        if (!path.empty() && !safe_relative_path(path))
-            return tool_error_result("policy_denied", unsafe_path_message(path, "inspect"));
-
-        std::string focus_name;
-        std::string focus_path =
-            path.empty() ? std::string() : fs::u8path(path).generic_u8string();
-        if (symbol_id != 0) {
-            bool found = false;
-            for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
-                if (static_cast<std::size_t>(symbol.id) != symbol_id) continue;
-                focus_name = symbol.symbol.name;
-                if (focus_path.empty()) focus_path = symbol.path;
-                found = true;
-                break;
-            }
-            if (!found)
-                return tool_error_result("not_found",
-                                        "symbol_id not in index: " + std::to_string(symbol_id));
-        }
-
-        auto basename_stem = [](const std::string& file_path) {
-            const fs::path p(file_path);
-            std::string stem = p.stem().u8string();
-            // Strip common source suffixes like .test already handled by stem.
-            return stem;
-        };
-        const std::string stem = focus_path.empty() ? std::string() : basename_stem(focus_path);
-        const std::string stem_lower = lowercase(stem);
-        const std::string name_lower = lowercase(focus_name);
-
-        struct Ranked {
-            double score = 0;
-            std::string path;
-            long long symbol_id = 0;
-            std::string qualified_name;
-        };
-        std::vector<Ranked> ranked;
-
-        auto consider_file = [&](const std::string& candidate_path, double base) {
-            if (candidate_path == focus_path) return;
-            const std::string lower = lowercase(candidate_path);
-            double score = base;
-            if (!stem_lower.empty()) {
-                if (lower.find("/test_") != std::string::npos ||
-                    lower.find("/tests/") != std::string::npos ||
-                    lower.find("/test/") != std::string::npos ||
-                    lower.find("_test.") != std::string::npos ||
-                    lower.find(".test.") != std::string::npos ||
-                    lower.find("_spec.") != std::string::npos ||
-                    lower.rfind("test_", 0) == 0)
-                    score += 0.2;
-                if (lower.find(stem_lower) != std::string::npos) score += 0.5;
-            }
-            if (score < 0.3) return;
-            ranked.push_back({score, candidate_path, 0, {}});
-        };
-
-        for (const index::IndexedFile& file : snapshot_.files) {
-            if (file.status != "indexed") continue;
-            const std::string lower = lowercase(file.path);
-            const bool looks_test =
-                lower.find("/test") != std::string::npos ||
-                lower.find("_test.") != std::string::npos ||
-                lower.find(".test.") != std::string::npos ||
-                lower.find("_spec.") != std::string::npos ||
-                lower.find("/spec/") != std::string::npos ||
-                lower.rfind("test_", 0) == 0 ||
-                fs::u8path(file.path).filename().u8string().rfind("test_", 0) == 0;
-            if (!looks_test && focus_path.empty()) continue;
-            if (looks_test) consider_file(file.path, 0.4);
-            else if (!stem_lower.empty() && lower.find(stem_lower) != std::string::npos)
-                consider_file(file.path, 0.25);
-        }
-
-        for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
-            const std::string q = lowercase(symbol.symbol.qualified_name);
-            const std::string n = lowercase(symbol.symbol.name);
-            double score = 0;
-            if (!name_lower.empty() &&
-                (n.find(name_lower) != std::string::npos ||
-                 q.find(name_lower) != std::string::npos))
-                score += 0.6;
-            if (!stem_lower.empty() &&
-                (lowercase(symbol.path).find(stem_lower) != std::string::npos))
-                score += 0.3;
-            const bool looks_test =
-                n.rfind("test_", 0) == 0 || n.rfind("test", 0) == 0 ||
-                q.find("test") != std::string::npos ||
-                lowercase(symbol.path).find("/test") != std::string::npos;
-            if (!looks_test) continue;
-            if (score < 0.3 && name_lower.empty()) score = 0.35;
-            if (score < 0.3) continue;
-            ranked.push_back({score, symbol.path, symbol.id, symbol.symbol.qualified_name});
-        }
-
-        std::sort(ranked.begin(), ranked.end(),
-                  [](const Ranked& a, const Ranked& b) {
-                      if (a.score != b.score) return a.score > b.score;
-                      return a.path < b.path;
-                  });
-        // De-dupe by path+symbol.
-        std::set<std::string> seen;
-        json::Value tests = array_value();
-        bool truncated = false;
-        for (const Ranked& item : ranked) {
-            const std::string key =
-                item.path + "#" + std::to_string(item.symbol_id) + "#" + item.qualified_name;
-            if (!seen.insert(key).second) continue;
-            if (tests.array.size() >= max_results) {
-                truncated = true;
-                break;
-            }
-            json::Value entry = object_value();
-            entry.object["path"] = string_value(item.path);
-            if (item.symbol_id > 0)
-                entry.object["symbol_id"] = number_value(static_cast<double>(item.symbol_id));
-            if (!item.qualified_name.empty())
-                entry.object["qualified_name"] = string_value(item.qualified_name);
-            entry.object["confidence"] = number_value(item.score > 1.0 ? 1.0 : item.score);
-            tests.array.push_back(std::move(entry));
-        }
-
-        json::Value commands = array_value();
-        if (files_.find("Makefile") != files_.end()) {
-            commands.array.push_back(string_value("make test"));
-            commands.array.push_back(string_value("make test-unit"));
-        }
-        if (files_.find("CMakeLists.txt") != files_.end())
-            commands.array.push_back(string_value("ctest --output-on-failure"));
-        if (files_.find("package.json") != files_.end())
-            commands.array.push_back(string_value("npm test"));
-        if (files_.find("Cargo.toml") != files_.end())
-            commands.array.push_back(string_value("cargo test"));
-        if (files_.find("go.mod") != files_.end())
-            commands.array.push_back(string_value("go test ./..."));
-        if (files_.find("pyproject.toml") != files_.end() ||
-            files_.find("pytest.ini") != files_.end())
-            commands.array.push_back(string_value("python3 -m pytest"));
-
-        json::Value data = object_value();
-        data.object["tests"] = std::move(tests);
-        data.object["commands"] = std::move(commands);
-        if (!focus_path.empty()) data.object["path"] = string_value(focus_path);
-        if (symbol_id != 0) data.object["symbol_id"] = number_value(static_cast<double>(symbol_id));
-        return envelope(true, std::move(data), "", "", {}, truncated);
-    }
-
-    if (name == "inspect_code_task") {
-        std::string query;
-        std::size_t max_symbols = 20;
-        std::size_t max_files = 20;
-        bool include_skeletons = false;
-        bool include_tests = true;
-        std::size_t max_bytes = 32768;
-        if (!get_string(args, "query", query, true, validation_error) ||
-            !get_size(args, "max_symbols", 20, 100, max_symbols, validation_error) ||
-            !get_size(args, "max_files", 20, 100, max_files, validation_error) ||
-            !get_bool(args, "include_skeletons", false, include_skeletons, validation_error) ||
-            !get_bool(args, "include_tests", true, include_tests, validation_error) ||
-            !get_size(args, "max_bytes", 32768, 262144, max_bytes, validation_error) ||
-            max_symbols == 0 || max_files == 0 || max_bytes == 0)
-            return tool_error_result("invalid_arguments",
-                                    validation_error.empty() ? "limits must be positive"
-                                                             : validation_error);
-        const std::string query_lower = lowercase(query);
-        // Tokenize on non-alnum for lightweight ranking.
-        std::vector<std::string> tokens;
-        std::string token;
-        for (unsigned char ch : query_lower) {
-            if (std::isalnum(ch) || ch == '_' || ch == '-') {
-                token.push_back(static_cast<char>(ch));
-            } else if (!token.empty()) {
-                if (token.size() >= 2) tokens.push_back(token);
-                token.clear();
-            }
-        }
-        if (token.size() >= 2) tokens.push_back(token);
-        if (tokens.empty() && !query_lower.empty()) tokens.push_back(query_lower);
-
-        auto token_score = [&](const std::string& text_lower) {
-            double score = 0;
-            for (const std::string& t : tokens) {
-                if (text_lower == t)
-                    score += 1.0;
-                else if (text_lower.rfind(t, 0) == 0)
-                    score += 0.7;
-                else if (text_lower.find(t) != std::string::npos)
-                    score += 0.4;
-            }
-            return score;
-        };
-
-        struct RankedSymbol {
-            double score = 0;
-            const index::IndexedSymbol* symbol = nullptr;
-            int importance = 0;
-            std::string reason;
-        };
-        std::vector<RankedSymbol> symbol_hits;
-        const std::vector<index::RankedSymbol> ranked_symbols =
-            index::rank_task_symbols(snapshot_, query,
-                                     std::max(max_symbols, max_files) * 4);
-        for (const index::RankedSymbol& ranked : ranked_symbols)
-            symbol_hits.push_back(
-                {ranked.score, ranked.symbol, ranked.importance,
-                 ranked.reason});
-
-        struct RankedFile {
-            double score = 0;
-            std::string path;
-        };
-        std::map<std::string, double> file_scores;
-        for (const RankedSymbol& hit : symbol_hits) {
-            file_scores[hit.symbol->path] += hit.score;
-        }
-        for (const index::IndexedFile& file : snapshot_.files) {
-            if (file.status != "indexed") continue;
-            const double score = token_score(lowercase(file.path));
-            if (score > 0) file_scores[file.path] += score * 0.8;
-        }
-        // Boost important root files lightly when query mentions them.
-        static const char* kImportant[] = {"README.md", "AGENTS.md", "Makefile", "CMakeLists.txt",
-                                           "package.json", "pyproject.toml", "Cargo.toml", "go.mod"};
-        for (const char* name : kImportant) {
-            if (files_.find(name) == files_.end()) continue;
-            if (query_lower.find(lowercase(name)) != std::string::npos)
-                file_scores[name] += 2.0;
-        }
-        std::vector<RankedFile> file_hits;
-        for (const auto& entry : file_scores)
-            file_hits.push_back({entry.second, entry.first});
-        std::sort(file_hits.begin(), file_hits.end(),
-                  [](const RankedFile& a, const RankedFile& b) {
-                      if (a.score != b.score) return a.score > b.score;
-                      return a.path < b.path;
-                  });
-
-        json::Value likely_symbols = array_value();
-        json::Value suggested_reads = array_value();
-        bool truncated = false;
-        for (std::size_t i = 0; i < symbol_hits.size(); ++i) {
-            if (i >= max_symbols) {
-                truncated = true;
-                break;
-            }
-            const index::IndexedSymbol& symbol = *symbol_hits[i].symbol;
-            json::Value item = object_value();
-            item.object["symbol_id"] = number_value(static_cast<double>(symbol.id));
-            item.object["qualified_name"] = string_value(symbol.symbol.qualified_name);
-            item.object["path"] = string_value(symbol.path);
-            item.object["start_line"] = number_value(symbol.symbol.line_start);
-            item.object["end_line"] = number_value(symbol.symbol.line_end);
-            item.object["score"] = number_value(symbol_hits[i].score);
-            item.object["importance"] =
-                number_value(symbol_hits[i].importance);
-            item.object["reason"] = string_value(symbol_hits[i].reason);
-            likely_symbols.array.push_back(std::move(item));
-            if (suggested_reads.array.size() < max_files) {
-                json::Value read = object_value();
-                read.object["path"] = string_value(symbol.path);
-                read.object["start_line"] = number_value(symbol.symbol.line_start);
-                read.object["end_line"] = number_value(symbol.symbol.line_end);
-                suggested_reads.array.push_back(std::move(read));
-            }
-        }
-
-        json::Value likely_files = array_value();
-        for (std::size_t i = 0; i < file_hits.size(); ++i) {
-            if (i >= max_files) {
-                truncated = true;
-                break;
-            }
-            likely_files.array.push_back(string_value(file_hits[i].path));
-        }
-
-        json::Value skeletons = array_value();
-        if (include_skeletons) {
-            std::size_t budget = max_bytes;
-            for (std::size_t i = 0; i < file_hits.size() && i < max_files && budget > 0; ++i) {
-                const std::string& file_path = file_hits[i].path;
-                json::Value skeleton = object_value();
-                skeleton.object["path"] = string_value(file_path);
-                json::Value decls = array_value();
-                for (const index::IndexedSymbol& symbol : snapshot_.symbols) {
-                    if (symbol.path != file_path) continue;
-                    json::Value d = object_value();
-                    d.object["symbol_id"] = number_value(static_cast<double>(symbol.id));
-                    d.object["name"] = string_value(symbol.symbol.qualified_name);
-                    d.object["kind"] = string_value(symbol.symbol.kind);
-                    d.object["start_line"] = number_value(symbol.symbol.line_start);
-                    d.object["end_line"] = number_value(symbol.symbol.line_end);
-                    const std::string piece = symbol.symbol.qualified_name + symbol.symbol.kind;
-                    if (piece.size() > budget) {
-                        truncated = true;
-                        break;
-                    }
-                    budget -= piece.size();
-                    decls.array.push_back(std::move(d));
-                }
-                skeleton.object["symbols"] = std::move(decls);
-                skeletons.array.push_back(std::move(skeleton));
-            }
-        }
-
-        json::Value likely_tests = array_value();
-        if (include_tests && !file_hits.empty()) {
-            // Reuse find_tests heuristics for the top file.
-            const std::string top = file_hits.front().path;
-            const std::string stem = lowercase(fs::u8path(top).stem().u8string());
-            for (const index::IndexedFile& file : snapshot_.files) {
-                if (file.status != "indexed") continue;
-                const std::string lower = lowercase(file.path);
-                const bool looks_test =
-                    lower.find("/test") != std::string::npos ||
-                    lower.find("_test.") != std::string::npos ||
-                    lower.find(".test.") != std::string::npos;
-                if (!looks_test) continue;
-                if (!stem.empty() && lower.find(stem) == std::string::npos) continue;
-                if (likely_tests.array.size() >= 10) {
-                    truncated = true;
-                    break;
-                }
-                likely_tests.array.push_back(string_value(file.path));
-            }
-        }
-
-        json::Value data = object_value();
-        data.object["query"] = string_value(query);
-        data.object["likely_symbols"] = std::move(likely_symbols);
-        data.object["likely_files"] = std::move(likely_files);
-        data.object["suggested_reads"] = std::move(suggested_reads);
-        data.object["skeletons"] = std::move(skeletons);
-        data.object["likely_tests"] = std::move(likely_tests);
-        return envelope(true, std::move(data), "", "", {}, truncated);
-    }
-
     if (name == "fetch_url") {
         if (!allow_network_)
             return tool_error_result("policy_denied", "fetch_url is not enabled in this session");
@@ -6671,9 +6065,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, truncated);
     }
 
-    if (name == "search_web") {
+    if (name == "web_search") {
         if (!allow_network_)
-            return tool_error_result("policy_denied", "search_web is not enabled in this session");
+            return tool_error_result("policy_denied", "web_search is not enabled in this session");
         std::string term;
         std::string site;
         // Hard cap at 3 so agents do not pull large SERPs and then fetch every hit.

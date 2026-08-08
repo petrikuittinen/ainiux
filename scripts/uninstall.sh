@@ -111,4 +111,9 @@ fi
 remove_path "${BIN_PATH}"
 remove_path "${SHARE_DIR}"
 
+# Pre-v0.x installs also wrote /etc/xdg/ainiux; current binaries never read it.
+if [ -z "${DESTDIR}" ] && [ -d /etc/xdg/ainiux ]; then
+    remove_path /etc/xdg/ainiux
+fi
+
 echo "Uninstall finished."

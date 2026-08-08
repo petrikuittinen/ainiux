@@ -172,8 +172,8 @@ For each model-projected message and each tool event (sorted by `seq`):
 
 | Tier | Tools | Reduced form |
 | --- | --- | --- |
-| **Prune** | `index_status`, `index_update`, `index_rebuild`, `list_directory`, `glob`, `project_overview` | One line: `tool(args) -> ok\|fail` |
-| **Stub** | `read_file`, `read_many`, `read_symbol`, `get_skeleton`, `search_symbol`, `search_text` (+ aliases), `find_tests`, `inspect_code_task`, `fetch_url`, `search_web` | Args/target + status; bodies omitted (“reloadable”); searches keep hit paths + line numbers when parseable; failures keep ≤ **400** error bytes |
+| **Prune** | `list_dir` (+ legacy `list_directory`), `glob`, `index_overview` (+ legacy `project_overview`); also legacy removed `index_*` names | One line: `tool(args) -> ok\|fail` |
+| **Stub** | `read_file`, `read_many`, `read_symbol`, `file_outline` (+ legacy `get_skeleton`), `search_symbol`, `grep` (+ legacy `search_text`/`find`), `fetch_url`, `web_search` (+ legacy `search_web`); also legacy removed macro tools | Args/target + status; bodies omitted (“reloadable”); searches keep hit paths + line numbers when parseable; failures keep ≤ **400** error bytes |
 | **Digest** | `edit_file`, `write_file`, `str_replace`, `apply_patch`, `rename_path`, `remove`, `create_directory` | Path(s) + op + status; drop content/diff bodies |
 | **Semantic** | `git_status`, `git_diff`, `run_command` | Exit status + failure-oriented lines (or a short pass head); git-like irreversible actions annotated |
 | **Full / size** | other tools | Keep full text if result ≤ **1024** bytes; else args + 200 head/tail excerpt + “re-run to reload” |
@@ -260,8 +260,8 @@ So for a known window, the checkpoint text is bounded by roughly
 **Middle pre-shrink** (after partition, before fast/summary):
 
 1. Consecutive `read_file` stubs → one synthetic `read_many` (≤100 paths).
-2. Consecutive explore tools (`search_text` / `list_directory` / `glob` /
-   `project_overview` / `index_status`) → one `explored: …` line.
+2. Consecutive explore tools (`grep` / `list_dir` / `glob` /
+   `index_overview`, plus legacy names) → one `explored: …` line.
 3. `read_file(path)` immediately followed by a Digest mutation on the same
    path → drop the read (edit digest already names the file).
 4. Hash dedupe of identical stub re-reads (keep newest, annotate `×N`).

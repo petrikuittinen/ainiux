@@ -229,7 +229,7 @@ void test_compaction_strategies_timeline_and_partition() {
           "timeline excludes display roles and keeps one full logical tool unit");
     check(agent::is_reloadable_file_read_tool("read_file") &&
               agent::is_reloadable_file_read_tool("read_many") &&
-              agent::is_reloadable_file_read_tool("search_text") &&
+              agent::is_reloadable_file_read_tool("grep") &&
               !agent::is_reloadable_file_read_tool("run_command") &&
               !agent::is_reloadable_file_read_tool("edit_file"),
           "reloadable stub-tier tools are classified correctly");
@@ -522,7 +522,7 @@ void test_compaction_strategies_timeline_and_partition() {
         agent::compaction_summary_schema_prompt("user goal");
     check(schema.find("read_file") != std::string::npos &&
               schema.find("read_many") != std::string::npos &&
-              schema.find("search_text") != std::string::npos &&
+              schema.find("grep") != std::string::npos &&
               schema.find("Never paste source") != std::string::npos &&
               schema.find("verified-facts") != std::string::npos &&
               schema.find("Active Task") != std::string::npos,

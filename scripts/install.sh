@@ -236,7 +236,23 @@ case ":${PATH}:" in
         ;;
 esac
 
+# Older releases installed refreshable defaults under /etc/xdg/ainiux. That layer
+# is gone (share/ainiux is authoritative); remove leftovers so operators are not
+# misled by stale copies that the binary no longer reads.
+if [ -z "${DESTDIR}" ] && [ -d /etc/xdg/ainiux ]; then
+    echo "==> Removing legacy /etc/xdg/ainiux (no longer used; defaults live in ${PREFIX}/share/ainiux)"
+    if [ -w /etc/xdg/ainiux ] 2>/dev/null || [ "$(id -u)" -eq 0 ]; then
+        rm -rf -- /etc/xdg/ainiux
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo rm -rf -- /etc/xdg/ainiux
+    else
+        echo "Warning: could not remove /etc/xdg/ainiux; delete it manually if present." >&2
+    fi
+fi
+
 echo
 echo "Install complete."
-echo "  Smoke test:  ainiux -e"
-echo "  Uninstall:   ./scripts/uninstall.sh --prefix ${PREFIX}"
+echo "  Share configs: ${PREFIX}/share/ainiux/"
+echo "  Smoke test:    ainiux -e"
+echo "  Config debug:  ainiux --debug --provider none -p x"
+echo "  Uninstall:     ./scripts/uninstall.sh --prefix ${PREFIX}"

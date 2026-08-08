@@ -55,8 +55,8 @@ Interactive Agent may use the selected OpenRouter, OpenAI, or DeepSeek API key f
 
 - `apply_patch`, index/symbol/search tools, and dedicated Git tools remain project-scoped. Validated exact-path native filesystem tools may access external paths according to the active interactive permission mode; external changes create no project history or index entry.
 - `git_status` / `git_diff` use the git CLI with pager/external-diff disabled; only read-only options are allowed (no `--output`, no force push, etc.).
-- `index_status` / `index_update` refresh project `.ainiux-pr/index.sqlite`; `index_rebuild` requires `confirm=true` and is agent-only.
-- `fetch_url` and `search_web` reuse `src/fetch/` and `src/search/` safety (timeouts, size caps, private/loopback blocking unless explicitly allowed).
+- Code-index lifecycle is CLI/mutation-driven (`--index-code`, write-side refresh); agent mode no longer exposes `index_status` / `index_update` / `index_rebuild` tools.
+- `fetch_url` and `web_search` reuse `src/fetch/` and `src/search/` safety (timeouts, size caps, private/loopback blocking unless explicitly allowed).
 - Agent `fetch_url` **always** returns UTF-8 **Markdown or plain text** (HTML→MD via `src/html/`, scripts/styles stripped). It never returns raw HTML/CSS/JS to the model: full pages are a prompt-injection and token-cost hazard. CLI `--fetch-url` may still export HTML for local use.
 - Path escape, absolute paths, `~/…` / `~user/…` / `$ENV` components, `.ainiux-pr` / `.ainiux` / `.git` components, and symlink components are refused for ordinary workspace writes. On POSIX `~` is a relative path component: without this check `~/code/x` would incorrectly create `$workspace/~/code/x`. After resolve, every ordinary write path is re-checked to stay under the project workspace root. The narrow exception is interactive Act-mode `write_file`: Ainiux resolves and displays the exact external target, blocks the worker for a one-shot Yes/No decision, and writes only after Yes. No/Esc, cancellation, headless operation, and Plan mode deny it. Approved external writes do not create `.ainiux-pr/history` backups or update the project index.
 - `read_file` follows the same one-shot approval rule for an exact outside-project regular file. The usual UTF-8, size, line-range, output cap, and configured-secret redaction checks still apply. Other read/search/index tools remain workspace-contained.
@@ -139,7 +139,7 @@ Defaults:
 - credentials: API keys come from environment variables or config `*_key_env` names; do not store secrets in config files
 - network: uses the same libcurl transport, timeouts, and proxy settings as other HTTP features
 - local installs: Searxng/Exa on loopback require `--allow-private-url-fetch`, matching URL-fetch private-address policy
-- agent `search_web` returns at most 3 results so models do not fan out into many fetches; overlong result URLs are truncated
+- agent `web_search` returns at most 3 results so models do not fan out into many fetches; overlong result URLs are truncated
 - URL fetch uses a desktop Firefox-like User-Agent and browser-style Accept / Sec-Fetch headers (still not a full browser)
 - Fetched HTML/text is normalized to **UTF-8** (ISO-8859-1 / Windows-1252 via Content-Type or meta charset). Raw legacy bytes are never put into tool-result JSON (that broke local llama.cpp with “ill-formed UTF-8”)
 

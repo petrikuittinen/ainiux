@@ -263,11 +263,11 @@ void test_file_tools_unicode_and_path_attacks() {
         check(!json_ok(bad), "str_replace refuses non-UTF-8 or missing binary: " + bad);
     }
 
-    // list_directory sees unicode names and empty dirs.
+    // list_dir sees unicode names and empty dirs.
     fs::create_directories(fs::path(workspace) / u8"空目录");
     tools = make_registry(workspace, true);
-    const std::string listing = tools.execute("list_directory", R"({"path":"."})");
-    check(json_ok(listing), "list_directory root: " + listing);
+    const std::string listing = tools.execute("list_dir", R"({"path":"."})");
+    check(json_ok(listing), "list_dir root: " + listing);
     check(listing.find(u8"空目录") != std::string::npos || listing.find("empty") != std::string::npos,
           "lists unicode empty directory: " + listing);
 

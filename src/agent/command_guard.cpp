@@ -278,7 +278,7 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
         return deny("forbid_system_package_manager",
                     "system package managers are not allowed via run_command");
 
-    // Network listeners / remote shells (workspace coding should use fetch_url/search_web).
+    // Network listeners / remote shells (workspace coding should use fetch_url/web_search).
     if (command == "nc" || command == "ncat" || command == "netcat" || command == "socat" ||
         command == "ssh" || command == "scp" || command == "sftp" || command == "telnet" ||
         command == "rsh" || command == "ftp")
