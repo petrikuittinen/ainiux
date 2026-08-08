@@ -58,6 +58,40 @@ bool fence_at(const std::string& line, size_t& start, char& character, size_t& l
     return length >= 3;
 }
 
+// Chat models often append the closing fence to the last code line
+// ("...forever```") instead of putting ``` alone on its own line. Without
+// recognizing that form, the fence stays open and subsequent prose is
+// highlighted as the embedded language (e.g. shell turns can't into a string).
+bool trailing_close_fence(const std::string& line,
+                          char fence_character,
+                          size_t fence_length,
+                          size_t& content_end,
+                          size_t& fence_start,
+                          size_t& fence_end) {
+    size_t end = line.size();
+    while (end > 0 && (line[end - 1] == ' ' || line[end - 1] == '\t')) {
+        --end;
+    }
+    if (end < fence_length) return false;
+    size_t run_start = end;
+    while (run_start > 0 && line[run_start - 1] == fence_character) {
+        --run_start;
+    }
+    const size_t run = end - run_start;
+    if (run < fence_length) return false;
+    // A pure fence line is already handled by fence_at; require preceding
+    // content so we only accept the "...code```" recovery form.
+    size_t content = run_start;
+    while (content > 0 && (line[content - 1] == ' ' || line[content - 1] == '\t')) {
+        --content;
+    }
+    if (content == 0) return false;
+    content_end = run_start;
+    fence_start = run_start;
+    fence_end = end;
+    return true;
+}
+
 void append_candidate(std::vector<Candidate>& candidates,
                       size_t start,
                       size_t end,
@@ -2723,33 +2757,68 @@ HighlightedLine highlight_line(Language language,
             length >= result.next_state.fence_length && only_ascii_space_after(line, start + length)) {
             append_candidate(high_priority, start, line.size(), TokenRole::Preprocessor);
             result.next_state = {};
-        } else {
-            LineState embedded_state;
-            embedded_state.block = result.next_state.nested_block;
-            embedded_state.delimiter = result.next_state.nested_delimiter;
-            embedded_state.strip_tabs = result.next_state.nested_strip_tabs;
-            embedded_state.block_depth = result.next_state.nested_block_depth;
-            embedded_state.nested_block = result.next_state.nested_inner_block;
-            embedded_state.nested_delimiter = result.next_state.nested_inner_delimiter;
-            embedded_state.nested_strip_tabs = result.next_state.nested_inner_strip_tabs;
-            embedded_state.nested_block_depth = result.next_state.nested_inner_block_depth;
-            const HighlightedLine embedded = highlight_line(result.next_state.embedded_language,
-                                                            line,
-                                                            embedded_state,
-                                                            byte_budget);
-            result.spans = embedded.spans;
-            result.next_state.nested_block = embedded.next_state.block;
-            result.next_state.nested_delimiter = embedded.next_state.delimiter;
-            result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
-            result.next_state.nested_block_depth = embedded.next_state.block_depth;
-            result.next_state.nested_inner_block = embedded.next_state.nested_block;
-            result.next_state.nested_inner_delimiter = embedded.next_state.nested_delimiter;
-            result.next_state.nested_inner_strip_tabs = embedded.next_state.nested_strip_tabs;
-            result.next_state.nested_inner_block_depth = embedded.next_state.nested_block_depth;
-            result.work_limited = embedded.work_limited;
+            result.spans = resolve_candidates(line.size(), {high_priority});
             return result;
         }
-        result.spans = resolve_candidates(line.size(), {high_priority});
+
+        size_t trailing_content_end = 0;
+        size_t trailing_fence_start = 0;
+        size_t trailing_fence_end = 0;
+        const bool trailing_close =
+            trailing_close_fence(line,
+                                 result.next_state.fence_character,
+                                 result.next_state.fence_length,
+                                 trailing_content_end,
+                                 trailing_fence_start,
+                                 trailing_fence_end);
+
+        LineState embedded_state;
+        embedded_state.block = result.next_state.nested_block;
+        embedded_state.delimiter = result.next_state.nested_delimiter;
+        embedded_state.strip_tabs = result.next_state.nested_strip_tabs;
+        embedded_state.block_depth = result.next_state.nested_block_depth;
+        embedded_state.nested_block = result.next_state.nested_inner_block;
+        embedded_state.nested_delimiter = result.next_state.nested_inner_delimiter;
+        embedded_state.nested_strip_tabs = result.next_state.nested_inner_strip_tabs;
+        embedded_state.nested_block_depth = result.next_state.nested_inner_block_depth;
+        const std::string code_line =
+            trailing_close ? line.substr(0, trailing_content_end) : line;
+        const HighlightedLine embedded = highlight_line(result.next_state.embedded_language,
+                                                        code_line,
+                                                        embedded_state,
+                                                        byte_budget);
+        result.spans = embedded.spans;
+        result.work_limited = embedded.work_limited;
+        if (trailing_close) {
+            // Keep nested highlight spans for the code prefix, then mark the
+            // trailing fence and leave Markdown (not the embedded language).
+            append_candidate(high_priority,
+                             trailing_fence_start,
+                             trailing_fence_end > trailing_fence_start ? trailing_fence_end
+                                                                      : line.size(),
+                             TokenRole::Preprocessor);
+            // Merge fence marker into spans without losing code tokens.
+            std::vector<Span> merged = result.spans;
+            for (const Candidate& candidate : high_priority) {
+                merged.push_back({candidate.start, candidate.end, candidate.role});
+            }
+            std::sort(merged.begin(), merged.end(),
+                      [](const Span& a, const Span& b) {
+                          if (a.start != b.start) return a.start < b.start;
+                          return a.end < b.end;
+                      });
+            result.spans = std::move(merged);
+            result.next_state = {};
+            return result;
+        }
+        result.next_state.nested_block = embedded.next_state.block;
+        result.next_state.nested_delimiter = embedded.next_state.delimiter;
+        result.next_state.nested_strip_tabs = embedded.next_state.strip_tabs;
+        result.next_state.nested_block_depth = embedded.next_state.block_depth;
+        result.next_state.nested_inner_block = embedded.next_state.nested_block;
+        result.next_state.nested_inner_delimiter = embedded.next_state.nested_delimiter;
+        result.next_state.nested_inner_strip_tabs = embedded.next_state.nested_strip_tabs;
+        result.next_state.nested_inner_block_depth = embedded.next_state.nested_block_depth;
         return result;
     }
 

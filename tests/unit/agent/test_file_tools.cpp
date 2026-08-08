@@ -770,6 +770,27 @@ void test_edit_file_ops() {
     check(read_text(fs::path(workspace) / "src" / "alias.cpp") == "ALPHA\nbeta\n",
           "op alias replace_range applied");
 
+    // glm-5.2 / OpenRouter: flat replace_text without ops wrapper.
+    write_text(fs::path(workspace) / "src" / "flat.cpp", "hello world\n");
+    tools = make_registry(workspace, true);
+    const std::string flat = tools.execute(
+        "edit_file",
+        R"JSON({"path":"src/flat.cpp","old_text":"hello world","new_text":"hello there","op":"replace_text"})JSON");
+    check(json_ok(flat), "edit_file wraps flat replace_text into ops: " + flat);
+    check(read_text(fs::path(workspace) / "src" / "flat.cpp") == "hello there\n",
+          "flat replace_text applied");
+
+    // glm-5.2: replace_range with only "line" for a single-line rewrite.
+    write_text(fs::path(workspace) / "src" / "line_only.cpp", "one\ntwo\nthree\n");
+    tools = make_registry(workspace, true);
+    const std::string line_only = tools.execute(
+        "edit_file",
+        R"JSON({"path":"src/line_only.cpp","ops":[{"op":"replace_range","line":2,"new_text":"TWO"}]})JSON");
+    check(json_ok(line_only),
+          "edit_file promotes replace_range line to start_line/end_line: " + line_only);
+    check(read_text(fs::path(workspace) / "src" / "line_only.cpp") == "one\nTWO\nthree\n",
+          "replace_range line-only rewrite applied");
+
     // Infer replace_range when type/op is omitted but start/end/new_text are present.
     write_text(fs::path(workspace) / "src" / "infer.cpp", "one\ntwo\n");
     tools = make_registry(workspace, true);

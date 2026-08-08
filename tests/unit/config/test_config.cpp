@@ -837,7 +837,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 72, "common config has every expected setting");
+    check(parsed.document.entries.size() == 73, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -1323,6 +1323,27 @@ void test_agent_input_height_config() {
     check(!error.ok() &&
               error.message.find("0 through 1000") != std::string::npos,
           "agent thinking preview rejects values above 1000 actionably");
+    check(options.agent_thinking_idle_preview_seconds == 30,
+          "agent thinking idle preview defaults to 30 seconds");
+    for (int value : {0, 3600}) {
+        ainiux::config::ParseResult idle_parsed = ainiux::config::parse(
+            "[tui]\nagent_thinking_idle_preview_seconds = " +
+                std::to_string(value) + "\n",
+            "agent-thinking-idle.conf");
+        ainiux::Error idle_error =
+            ainiux::config::apply_document(idle_parsed.document, options);
+        check(idle_parsed.error.ok() && idle_error.ok() &&
+                  options.agent_thinking_idle_preview_seconds == value,
+              "agent thinking idle preview accepts its inclusive boundaries");
+    }
+    ainiux::config::ParseResult idle_invalid = ainiux::config::parse(
+        "[tui]\nagent_thinking_idle_preview_seconds = 3601\n",
+        "agent-thinking-idle-invalid.conf");
+    ainiux::Error idle_invalid_error =
+        ainiux::config::apply_document(idle_invalid.document, options);
+    check(!idle_invalid_error.ok() &&
+              idle_invalid_error.message.find("0 through 3600") != std::string::npos,
+          "agent thinking idle preview rejects values above 3600 actionably");
 }
 
 }  // namespace

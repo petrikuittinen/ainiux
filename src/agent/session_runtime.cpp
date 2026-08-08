@@ -2044,6 +2044,14 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         std::string round_reasoning;
         std::string round_preview;
         bool reasoning_row_started = false;
+        const std::size_t thinking_preview_max_chars = static_cast<std::size_t>(
+            std::max(0, context.options.agent_thinking_preview_max_chars));
+        const int thinking_idle_seconds =
+            std::max(0, context.options.agent_thinking_idle_preview_seconds);
+        std::size_t thinking_tool_id = 0;
+        std::size_t thinking_sentence_offset = 0;
+        std::string last_live_thinking_preview;
+        auto last_thinking_idle_emit = std::chrono::steady_clock::now();
         publish_phase(AgentActivityPhase::Thinking);
         ReviewLogContext log_context("agent");
         log_context.round = state_.turn + 1;
@@ -2067,6 +2075,11 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                             int backoff_seconds) {
                 round_reasoning.clear();
                 round_preview.clear();
+                reasoning_row_started = false;
+                thinking_tool_id = 0;
+                thinking_sentence_offset = 0;
+                last_live_thinking_preview.clear();
+                last_thinking_idle_emit = std::chrono::steady_clock::now();
                 retry_notice_active = true;
                 std::string retry_notice =
                     "Waiting for provider · retry " +
@@ -2096,21 +2109,116 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                  std::numeric_limits<std::size_t>::max(), {}, 0});
             retry_notice_active = false;
         };
+        auto thinking_preview_line = [&](const std::string& fragment) {
+            return clip_to_cells(
+                format_reasoning_preview(fragment, thinking_preview_max_chars, secrets_),
+                tool_line_width);
+        };
+        auto publish_thinking = [&](AgentProgressAction action, const std::string& text,
+                                    long long created_at_ms = 0) {
+            structured_progress({action, AgentProgressKind::Thinking, active_round_id,
+                                 thinking_tool_id, text, created_at_ms});
+        };
         auto on_reasoning = [&](const std::string& delta) -> Error {
                 if (!options_.interactive) return ok_error();
                 round_reasoning += delta;
-                const std::string preview = clip_to_cells(format_reasoning_preview(
-                    round_reasoning,
-                    static_cast<std::size_t>(
-                        std::max(0, context.options.agent_thinking_preview_max_chars)),
-                    secrets_), tool_line_width);
-                if (!preview.empty()) {
-                    round_preview = preview;
-                    reasoning_row_started = true;
-                    structured_progress({AgentProgressAction::Upsert,
-                                         AgentProgressKind::Thinking, active_round_id, 0,
-                                         preview, 0});
+                if (thinking_preview_max_chars == 0) {
+                    return cancellation.cancelled()
+                               ? Error{ErrorCode::Cancelled,
+                                       "agent reasoning preview cancelled"}
+                               : ok_error();
                 }
+
+                // 0 = single live row from the start of the stream (legacy).
+                if (thinking_idle_seconds <= 0) {
+                    const std::string preview = thinking_preview_line(round_reasoning);
+                    if (!preview.empty()) {
+                        round_preview = preview;
+                        reasoning_row_started = true;
+                        publish_thinking(AgentProgressAction::Upsert, preview);
+                    }
+                    return cancellation.cancelled()
+                               ? Error{ErrorCode::Cancelled,
+                                       "agent reasoning preview cancelled"}
+                               : ok_error();
+                }
+
+                const std::string normalized =
+                    normalize_reasoning_preview_text(round_reasoning, secrets_);
+                if (normalized.empty()) {
+                    return cancellation.cancelled()
+                               ? Error{ErrorCode::Cancelled,
+                                       "agent reasoning preview cancelled"}
+                               : ok_error();
+                }
+
+                const std::string prefix = "Thinking: ";
+                const std::size_t content_graphemes =
+                    thinking_preview_max_chars > prefix.size()
+                        ? thinking_preview_max_chars - prefix.size()
+                        : 0;
+                const auto now = std::chrono::steady_clock::now();
+                const bool idle_due =
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        now - last_thinking_idle_emit)
+                        .count() >= thinking_idle_seconds;
+
+                // Live row tracks the in-progress sentence/chunk from the
+                // current offset so the UI is not stuck on the stream head.
+                const std::string active =
+                    reasoning_active_slice(normalized, thinking_sentence_offset);
+                const std::string live_preview = thinking_preview_line(active);
+                if (!live_preview.empty()) {
+                    if (!reasoning_row_started) {
+                        last_thinking_idle_emit = now;
+                    }
+                    if (live_preview != last_live_thinking_preview) {
+                        publish_thinking(AgentProgressAction::Upsert, live_preview);
+                        last_live_thinking_preview = live_preview;
+                        round_preview = live_preview;
+                        reasoning_row_started = true;
+                    }
+                }
+
+                // After idle_seconds of pure reasoning, freeze the current unit
+                // as a history row and open a new live preview for the next one.
+                if (idle_due && reasoning_row_started) {
+                    const ReasoningIdleSlice slice = take_reasoning_idle_slice(
+                        normalized, thinking_sentence_offset, content_graphemes,
+                        true);
+                    if (!slice.text.empty() &&
+                        slice.next_offset > thinking_sentence_offset) {
+                        const std::string frozen =
+                            thinking_preview_line(slice.text);
+                        if (!frozen.empty()) {
+                            const long long frozen_ms = now_unix_ms();
+                            publish_thinking(AgentProgressAction::Commit, frozen,
+                                             frozen_ms);
+                            if (session_store_.is_open() && session_id_ > 0)
+                                (void)session_store_.append_message("thinking",
+                                                                    frozen);
+                            thinking_sentence_offset = slice.next_offset;
+                            ++thinking_tool_id;
+                            last_thinking_idle_emit = now;
+                            last_live_thinking_preview.clear();
+                            const std::string next_active = reasoning_active_slice(
+                                normalized, thinking_sentence_offset);
+                            const std::string next_preview =
+                                thinking_preview_line(next_active);
+                            if (!next_preview.empty()) {
+                                publish_thinking(AgentProgressAction::Upsert,
+                                                 next_preview);
+                                last_live_thinking_preview = next_preview;
+                                round_preview = next_preview;
+                            } else {
+                                // Remainder not ready yet; next deltas reopen.
+                                reasoning_row_started = false;
+                                round_preview = frozen;
+                            }
+                        }
+                    }
+                }
+
                 return cancellation.cancelled()
                            ? Error{ErrorCode::Cancelled,
                                    "agent reasoning preview cancelled"}
@@ -2133,6 +2241,11 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 round = provider::ToolRoundResult{};
                 round_reasoning.clear();
                 round_preview.clear();
+                reasoning_row_started = false;
+                thinking_tool_id = 0;
+                thinking_sentence_offset = 0;
+                last_live_thinking_preview.clear();
+                last_thinking_idle_emit = std::chrono::steady_clock::now();
                 error = send_tool_round_with_transport_retries(
                     context, conversation_, definitions, round, cancellation,
                     limits_.transport_attempts, observer_pointer,
@@ -2145,7 +2258,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         if (!error.ok()) {
             if (reasoning_row_started)
                 structured_progress({AgentProgressAction::Discard,
-                                     AgentProgressKind::Thinking, active_round_id, 0, {}, 0});
+                                     AgentProgressKind::Thinking, active_round_id,
+                                     thinking_tool_id, {}, 0});
             pair_dangling_tool_calls(context, conversation_, state_);
             publish_request_token_estimate();
             result.error = error;
@@ -2158,23 +2272,34 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         }
         if (options_.interactive && round_reasoning.empty())
             round_reasoning = round.reasoning_text;
-        if (options_.interactive && !round_reasoning.empty()) {
-            round_preview = clip_to_cells(format_reasoning_preview(
-                round_reasoning,
-                static_cast<std::size_t>(
-                    std::max(0, context.options.agent_thinking_preview_max_chars)),
-                secrets_), tool_line_width);
+        if (options_.interactive && !round_reasoning.empty() &&
+            thinking_preview_max_chars > 0) {
+            if (thinking_idle_seconds > 0) {
+                // Finalize the live remainder from the current offset so the
+                // last row matches the latest thought, not the stream head.
+                const std::string normalized =
+                    normalize_reasoning_preview_text(round_reasoning, secrets_);
+                const std::string active =
+                    reasoning_active_slice(normalized, thinking_sentence_offset);
+                if (!active.empty())
+                    round_preview = thinking_preview_line(active);
+                else if (round_preview.empty())
+                    round_preview = thinking_preview_line(round_reasoning);
+            } else {
+                round_preview = thinking_preview_line(round_reasoning);
+            }
         }
         if (!round_preview.empty()) {
             const long long preview_ms = now_unix_ms();
             structured_progress({AgentProgressAction::Commit,
-                                 AgentProgressKind::Thinking, active_round_id, 0,
-                                 round_preview, preview_ms});
+                                 AgentProgressKind::Thinking, active_round_id,
+                                 thinking_tool_id, round_preview, preview_ms});
             if (session_store_.is_open() && session_id_ > 0)
                 (void)session_store_.append_message("thinking", round_preview);
         } else if (reasoning_row_started) {
             structured_progress({AgentProgressAction::Discard,
-                                 AgentProgressKind::Thinking, active_round_id, 0, {}, 0});
+                                 AgentProgressKind::Thinking, active_round_id,
+                                 thinking_tool_id, {}, 0});
         }
 
         long long estimated_round_input_tokens = 0;

@@ -129,6 +129,10 @@ struct Options {
     int agent_input_max_height_percent = 25;
     int agent_thinking_preview_max_chars = 120;
     bool has_agent_thinking_preview_max_chars = false;
+    // Seconds of pure provider reasoning (no assistant text or tool calls)
+    // before printing the next thinking-preview sentence. 0 disables idle
+    // advancement; maximum 3600. Default 30.
+    int agent_thinking_idle_preview_seconds = 30;
     std::string benchmark_dataset = "builtin";
     std::string grade_input;
     std::string benchmark_category;

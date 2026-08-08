@@ -2847,6 +2847,17 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
             if (start_line != nullptr && start_line->type == json::Value::Type::Number)
                 normalized.object["line"] = *start_line;
         }
+        if (type != nullptr && type->is_string() && type->string == "replace_range") {
+            // glm-5.2 and similar sometimes send replace_range with only "line"
+            // (single-line rewrite) instead of start_line/end_line.
+            const json::Value* line = normalized.get("line");
+            if (line != nullptr && line->type == json::Value::Type::Number) {
+                if (normalized.get("start_line") == nullptr)
+                    normalized.object["start_line"] = *line;
+                if (normalized.get("end_line") == nullptr)
+                    normalized.object["end_line"] = *line;
+            }
+        }
         normalized_ops.push_back(std::move(normalized));
     }
 
@@ -5119,6 +5130,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         // Models (esp. under natural-language goals) often nest path inside ops[i]
         // instead of the top-level edit_file.path required by the schema. Promote
         // common top-level fields from ops when missing so the call still works.
+        // Weaker tool callers (observed: glm-5.2 via OpenRouter) also omit the ops
+        // array and put a single replace_text/replace_range payload at the top
+        // level — wrap that into ops when present.
         json::Value edit_args = args;
         if (!edit_args.is_object())
             return tool_error_result("invalid_arguments", "edit_file arguments must be an object");
@@ -5126,6 +5140,31 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         {
             auto it = edit_args.object.find("ops");
             if (it != edit_args.object.end()) ops_value = &it->second;
+        }
+        if (ops_value == nullptr || !ops_value->is_array()) {
+            static const char* kTopLevelOnly[] = {"path", "create_dirs", "expected_file_hash",
+                                                  "ops"};
+            json::Value promoted_op = object_value();
+            for (const auto& entry : edit_args.object) {
+                bool top_only = false;
+                for (const char* key : kTopLevelOnly) {
+                    if (entry.first == key) {
+                        top_only = true;
+                        break;
+                    }
+                }
+                if (!top_only) promoted_op.object[entry.first] = entry.second;
+            }
+            const json::Value shaped = normalize_edit_op_shape(promoted_op);
+            if (!infer_edit_op_type(shaped).empty() ||
+                shaped.get("old_text") != nullptr || shaped.get("new_text") != nullptr ||
+                shaped.get("replacement") != nullptr || shaped.get("start_line") != nullptr ||
+                shaped.get("line") != nullptr) {
+                json::Value ops = array_value();
+                ops.array.push_back(shaped);
+                edit_args.object["ops"] = std::move(ops);
+                ops_value = &edit_args.object["ops"];
+            }
         }
         if (ops_value == nullptr || !ops_value->is_array())
             return tool_error_result("invalid_arguments", "edit_file requires ops array");

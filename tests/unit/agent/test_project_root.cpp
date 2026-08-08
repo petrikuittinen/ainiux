@@ -663,9 +663,8 @@ void test_reasoning_preview_unicode_redaction_and_limits() {
     const std::string preview = agent::format_reasoning_preview(
         u8"  e\u0301 \n 👩‍💻 你好 SECRET trailing", 22, {"SECRET"});
     check(preview.rfind("Thinking: ", 0) == 0, "reasoning preview has stable prefix");
-    check(preview.find('\n') == std::string::npos &&
-              preview.find("  ") == std::string::npos,
-          "reasoning preview normalizes whitespace");
+    check(preview.find('\n') == std::string::npos && preview.find('\r') == std::string::npos,
+          "reasoning preview maps vertical whitespace for a single history row");
     check(preview.find("SECRET") == std::string::npos,
           "reasoning preview redacts configured secrets");
     check(agent::format_reasoning_preview("anything", 0, {}).empty(),
@@ -675,31 +674,78 @@ void test_reasoning_preview_unicode_redaction_and_limits() {
     check(clipped == u8"Thinking: 😀😀…",
           "reasoning preview clips by grapheme with ellipsis inside limit");
 
-    // Glue spaced punctuation tokens without gluing English words (Kimi).
-    const std::string kimi = agent::format_reasoning_preview(
+    // Provider spacing is preserved (Kimi whitespace gluer is intentionally not
+    // applied — it corrupted previews on other models, e.g. "I need" → "Ineed").
+    const std::string spaced = agent::format_reasoning_preview(
         "So the current state of server .c is inconsistent. The user is asking "
         "about blocking vs non-blocking. Let me look at parse _http and "
-        "End -to -end HTTP / 1 . 1. h\nunk across newline.",
+        "End -to -end HTTP / 1 . 1. I need main.c fully.",
         400, {});
-    check(kimi.find("server.c") != std::string::npos, "joins server .c → server.c: " + kimi);
-    check(kimi.find("parse_http") != std::string::npos, "joins parse _http: " + kimi);
-    check(kimi.find("End-to-end") != std::string::npos, "joins End -to -end: " + kimi);
-    check(kimi.find("HTTP/1.1") != std::string::npos, "joins HTTP / 1 . 1: " + kimi);
-    check(kimi.find("the current") != std::string::npos &&
-              kimi.find("user is") != std::string::npos &&
-              kimi.find("blocking vs") != std::string::npos &&
-              kimi.find("Let me") != std::string::npos &&
-              kimi.find("look at") != std::string::npos,
-          "keeps normal English word spaces: " + kimi);
-    check(kimi.find("useris") == std::string::npos &&
-              kimi.find("Letme") == std::string::npos &&
-              kimi.find("lookat") == std::string::npos &&
-              kimi.find("blockingvs") == std::string::npos,
-          "does not glue multi-letter English words: " + kimi);
-    check(kimi.find("hunk") != std::string::npos,
-          "joins single-letter fragment across newline (h\\nunk): " + kimi);
-    check(kimi.find("inconsistent. The") != std::string::npos,
-          "keeps space after sentence period: " + kimi);
+    check(spaced.find("server .c") != std::string::npos, "keeps spaced dots: " + spaced);
+    check(spaced.find("user is") != std::string::npos &&
+              spaced.find("Let me") != std::string::npos &&
+              spaced.find("I need") != std::string::npos &&
+              spaced.find("main.c fully") != std::string::npos,
+          "keeps normal English word spaces: " + spaced);
+    check(spaced.find("Ineed") == std::string::npos &&
+              spaced.find("main.cfully") == std::string::npos &&
+              spaced.find("Letme") == std::string::npos,
+          "does not glue English words: " + spaced);
+
+    const std::string newline_row = agent::format_reasoning_preview("I\nneed make clean", 80, {});
+    check(newline_row.find("I need") != std::string::npos &&
+              newline_row.find("Ineed") == std::string::npos,
+          "newline becomes a space without gluing single-letter words: " + newline_row);
+}
+
+void test_reasoning_idle_slice_advances_sentences_and_partials() {
+    const std::string normalized = agent::normalize_reasoning_preview_text(
+        "First idea here. Second thought continues. Third without end yet", {});
+    check(normalized.find("First idea here.") != std::string::npos,
+          "normalize keeps sentence punctuation");
+
+    std::size_t offset = 0;
+    agent::ReasoningIdleSlice first =
+        agent::take_reasoning_idle_slice(normalized, offset, 40, false);
+    check(first.text == "First idea here." && first.next_offset > offset,
+          "idle slice takes the first complete sentence: " + first.text);
+    offset = first.next_offset;
+
+    agent::ReasoningIdleSlice second =
+        agent::take_reasoning_idle_slice(normalized, offset, 40, false);
+    check(second.text == "Second thought continues." &&
+              second.next_offset > offset,
+          "idle slice advances to the next sentence: " + second.text);
+    offset = second.next_offset;
+
+    agent::ReasoningIdleSlice incomplete =
+        agent::take_reasoning_idle_slice(normalized, offset, 40, false);
+    check(incomplete.text.empty(),
+          "without force_partial, incomplete tail waits for a boundary");
+
+    agent::ReasoningIdleSlice forced =
+        agent::take_reasoning_idle_slice(normalized, offset, 12, true);
+    check(!forced.text.empty() && forced.next_offset > offset,
+          "force_partial emits a clipped monologue chunk: " + forced.text);
+    check(agent::format_reasoning_preview(forced.text, 30, {}).rfind("Thinking: ", 0) ==
+              0,
+          "idle chunks use the same Thinking preview formatter");
+
+    // Avoid treating version/file dots as sentence ends.
+    const std::string technical = agent::normalize_reasoning_preview_text(
+        "Use HTTP/1.1 and server.c carefully. Then continue.", {});
+    agent::ReasoningIdleSlice tech =
+        agent::take_reasoning_idle_slice(technical, 0, 80, false);
+    check(tech.text.find("server.c") != std::string::npos &&
+              tech.text.find("Then") == std::string::npos,
+          "sentence split skips technical dots: " + tech.text);
+
+    check(agent::reasoning_active_slice(normalized, first.next_offset)
+                  .rfind("Third without", 0) == 0,
+          "active slice prefers the newest incomplete fragment");
+    check(agent::reasoning_active_slice("Only one complete sentence.", 0) ==
+              "Only one complete sentence.",
+          "active slice falls back to the latest complete sentence");
 }
 
 }  // namespace
@@ -720,6 +766,7 @@ void run_all() {
     test_elapsed_seconds_format();
     test_prior_session_context_includes_recent_work();
     test_reasoning_preview_unicode_redaction_and_limits();
+    test_reasoning_idle_slice_advances_sentences_and_partials();
 }
 
 }  // namespace ainiux::test::agent_project_root

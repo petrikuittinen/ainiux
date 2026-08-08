@@ -72,7 +72,7 @@ At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic
 - `[editor]` controls undo, file size warnings, auto-save, indentation, line endings, alignment width, and AI continuation limits.
 - `[url_fetch]` controls byte limits and private-address permission.
 - `[web_search]` controls result count, provider, key-variable names, and optional endpoints.
-- `[tui]` controls colors, theme, color wire format (`color_mode`), highlighting, thinking display, agent input height, and reasoning-preview length.
+- `[tui]` controls colors, theme, color wire format (`color_mode`), highlighting, thinking display, agent input height, reasoning-preview length (`agent_thinking_preview_max_chars`), and how often idle pure-reasoning streams print a new thinking sentence (`agent_thinking_idle_preview_seconds`, default `30`).
 
 ## Themes
 

@@ -607,6 +607,40 @@ void test_markdown_multiline_state_and_precedence() {
               has_role(nested_rust[6].spans, TokenRole::Comment) &&
               has_role(nested_rust[6].spans, TokenRole::Keyword),
           "Markdown fences preserve nested Rust comment depth");
+
+    // Agent/chat models often close a fence on the last code line. Leaving the
+    // fence open mis-highlights following prose as shell (can't → string).
+    const auto trailing_close = ainiux::highlight::highlight_document(
+        Language::Markdown,
+        "```sh\n"
+        "make test\n"
+        "# closes idle connection after ~2s instead of hanging forever```\n"
+        "A stall test I can't run headlessly: open `nc 127.0.0.1 8080` and wait.\n"
+        "That's exactly what `test_timeout.c` verifies.\n");
+    check(trailing_close.size() >= 5, "trailing fence close keeps following prose lines");
+    check(has_role(trailing_close[2].spans, TokenRole::Preprocessor),
+          "Markdown accepts a closing fence appended to the last code line");
+    check(trailing_close[2].next_state.block != ainiux::highlight::LineState::Block::Fence,
+          "trailing fence close leaves the fence block");
+    check(trailing_close[3].next_state.block != ainiux::highlight::LineState::Block::Fence,
+          "prose after a trailing fence close is Markdown, not an open code fence");
+    check(has_role(trailing_close[3].spans, TokenRole::String),
+          "inline code after trailing fence close still highlights");
+    // "can't" must not open a multi-word shell String span covering "run headlessly".
+    // Markdown inline code uses String too, but only spans the short `...` runs.
+    {
+        bool long_string = false;
+        for (const auto& span : trailing_close[3].spans) {
+            if (span.role == TokenRole::String && span.end > span.start + 20) {
+                long_string = true;
+                break;
+            }
+        }
+        check(!long_string,
+              "apostrophe in can't must not start a long shell string after fence recovery");
+    }
+    check(!has_role(trailing_close[3].spans, TokenRole::Keyword),
+          "prose after fence recovery must not pick up shell keywords like and/do/type");
 }
 
 void test_setext_unicode_invalid_bytes_and_budget() {
