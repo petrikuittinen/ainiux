@@ -530,6 +530,7 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t thread_picker_selected = 0;
     std::vector<std::string> picker_items;
     size_t picker_selected = 0;
+    ui::TextSelectorNavState picker_nav;
     bool picker_cancel_quits = false;
     bool loaded_thread_requires_provider_selection = false;
     std::vector<ChatAttachment> chat_attachments;
@@ -571,6 +572,7 @@ app::TuiRunResult run(provider::RequestContext context,
             const Error context_error = apply_loaded_session_context(session);
             picker_items = ui::selectable_provider_ids();
             picker_selected = 0;
+            picker_nav.reset_for_open();
             picker_cancel_quits = false;
             mode = TuiMode::ProviderList;
             help_text.clear();
@@ -631,13 +633,10 @@ app::TuiRunResult run(provider::RequestContext context,
             return ui::model_selector_text(picker_items, picker_selected);
         }
         if (mode == TuiMode::ReasoningList) {
-            return config::reasoning_selector_text(context.options.model_catalog,
-                                                   context.profile.name,
-                                                   context.api_kind == provider::ApiKind::Responses
-                                                       ? "responses"
-                                                       : "chat",
-                                                   context.options.model,
-                                                   picker_selected);
+            // Render from the current picker_items order so . sort is visible.
+            ui::TextSelectorConfig config;
+            config.header = ui::kTextSelectorStandardHint;
+            return ui::render_text_selector(config, picker_selected, picker_items);
         }
         if (mode == TuiMode::ReasoningConfirm) {
             const std::string detail =
@@ -1010,6 +1009,7 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         picker_items = ui::selectable_provider_ids();
         picker_selected = 0;
+        picker_nav.reset_for_open();
         picker_cancel_quits = cancel_quits;
         mode = TuiMode::ProviderList;
         history_scroll = 0;
@@ -1042,6 +1042,7 @@ app::TuiRunResult run(provider::RequestContext context,
                                               &selections);
         picker_items.clear();
         picker_selected = 0;
+        picker_nav.reset_for_open();
         for (size_t i = 0; i < selections.size(); ++i) {
             picker_items.push_back(config::reasoning_selection_value(selections[i]));
             if (selections[i] == context.options.reasoning) picker_selected = i;
@@ -3378,6 +3379,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         } else {
                             picker_items = std::move(event.models);
                             picker_selected = 0;
+                            picker_nav.reset_for_open();
                             picker_cancel_quits = false;
                             mode = TuiMode::ModelList;
                             history_scroll = 0;
@@ -3615,7 +3617,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                                  thread_picker_selected,
                                                  input.text.empty(),
                                                  pending_thread_delete,
-                                                 context.options.agent};
+                                                 context.options.agent,
+                                                 picker_nav};
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
                     if (loaded_thread_requires_provider_selection && mode == TuiMode::Chat) {
                         status = chat_provider_model_required_status(context, true);

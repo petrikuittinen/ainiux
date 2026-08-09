@@ -77,6 +77,129 @@ void test_text_selector_type_ahead_jump() {
           "type-ahead on empty list is a no-op");
 }
 
+void test_text_selector_substring_search() {
+    const std::vector<std::string> items = {
+        "claude-sonnet", "GPT-6", "openai/gpt-5.6-sol", "deepseek-chat", "gemini-flash"};
+    auto label_at = [&](size_t index) { return items[index]; };
+
+    check(ainiux::ui::label_contains_ci("openai/gpt-5.6-sol", "gpt"),
+          "label_contains_ci matches partial mid-string");
+    check(ainiux::ui::label_contains_ci("GPT-6", "gpt"),
+          "label_contains_ci is case-insensitive");
+    check(!ainiux::ui::label_contains_ci("deepseek-chat", "gpt"),
+          "label_contains_ci rejects non-matches");
+    check(!ainiux::ui::label_contains_ci("GPT-6", ""),
+          "label_contains_ci rejects empty needle");
+
+    size_t selected = 0;
+    check(ainiux::ui::find_next_text_selector_match(selected, items.size(), label_at, "gpt") &&
+              selected == 1,
+          "substring search from start finds GPT-6");
+    check(ainiux::ui::find_next_text_selector_match(selected, items.size(), label_at, "gpt") &&
+              selected == 2,
+          "substring search advances to next partial match");
+    check(ainiux::ui::find_next_text_selector_match(selected, items.size(), label_at, "GPT") &&
+              selected == 1,
+          "substring search wraps and stays case-insensitive");
+
+    selected = 0;
+    check(!ainiux::ui::find_next_text_selector_match(selected, items.size(), label_at, "zzz") &&
+              selected == 0,
+          "substring search with no matches leaves selection unchanged");
+    check(!ainiux::ui::find_next_text_selector_match(selected, items.size(), label_at, "") &&
+              selected == 0,
+          "substring search with empty needle is a no-op");
+
+    selected = 3;
+    check(!ainiux::ui::find_next_text_selector_match(selected, items.size(), label_at, "deepseek") &&
+              selected == 3,
+          "substring search returns false when only the current row matches");
+
+    check(ainiux::ui::text_selector_no_match_status("gpt") == "No match for 'gpt'",
+          "no-match status formats needle");
+    check(ainiux::ui::text_selector_no_previous_search_status() == "No previous search",
+          "no-previous-search status is stable");
+}
+
+void test_text_selector_alpha_sort() {
+    std::vector<std::string> items = {"zeta", "alpha", "beta", "Alpha"};
+    size_t selected = 0;  // zeta
+    bool sorted = false;
+    std::vector<std::string> original;
+
+    check(ainiux::ui::toggle_text_selector_alpha_sort(items, selected, sorted, original),
+          "alpha sort first toggle succeeds");
+    check(sorted, "alpha sort marks sorted flag");
+    check(items == std::vector<std::string>({"Alpha", "alpha", "beta", "zeta"}),
+          "alpha sort uses Unicode/UTF-8 code-point order (ASCII uppercase before lowercase)");
+    check(items[selected] == "zeta", "alpha sort keeps selection on the same item");
+    check(original == std::vector<std::string>({"zeta", "alpha", "beta", "Alpha"}),
+          "alpha sort stores original order");
+
+    check(ainiux::ui::toggle_text_selector_alpha_sort(items, selected, sorted, original),
+          "alpha sort second toggle restores original order");
+    check(!sorted, "alpha sort clears sorted flag on restore");
+    check(items == std::vector<std::string>({"zeta", "alpha", "beta", "Alpha"}),
+          "alpha sort restores exact original order");
+    check(items[selected] == "zeta", "alpha sort restore keeps selection on the same item");
+    check(original.empty(), "alpha sort clears original backup after restore");
+
+    // Stable sort for equal labels via paired helper.
+    std::vector<std::string> values = {"id-b", "id-a", "id-c"};
+    std::vector<std::string> labels = {"same", "same", "other"};
+    size_t paired_selected = 0;
+    bool paired_sorted = false;
+    std::vector<std::string> orig_values;
+    std::vector<std::string> orig_labels;
+    check(ainiux::ui::toggle_text_selector_alpha_sort_paired(
+              values, labels, paired_selected, paired_sorted, orig_values, orig_labels),
+          "paired alpha sort succeeds");
+    // "other" < "same", and equal "same" keeps relative order id-b then id-a.
+    check(values == std::vector<std::string>({"id-c", "id-b", "id-a"}),
+          "paired alpha sort is stable for equal labels");
+    check(labels == std::vector<std::string>({"other", "same", "same"}),
+          "paired alpha sort reorders labels with values");
+    check(values[paired_selected] == "id-b", "paired alpha sort keeps selection identity");
+
+    // Display-order permutation for non-reorderable stores.
+    const std::vector<std::string> buffer_names = {"notes.md", "README", "app.cpp"};
+    auto buffer_label = [&](size_t underlying) { return buffer_names[underlying]; };
+    std::vector<size_t> order;
+    size_t display_selected = 0;  // notes.md
+    bool order_sorted = false;
+    check(ainiux::ui::toggle_text_selector_alpha_sort_order(
+              order, display_selected, order_sorted, buffer_names.size(), buffer_label),
+          "order alpha sort succeeds");
+    // README (R) < app.cpp (a) < notes.md (n) in code-point order.
+    check(order_sorted && order == std::vector<size_t>({1, 2, 0}),
+          "order alpha sort permutes underlying indices by label");
+    check(order[display_selected] == 0, "order alpha sort keeps selection on notes.md");
+    check(ainiux::ui::text_selector_underlying_index(order, display_selected, buffer_names.size()) ==
+              0,
+          "underlying index maps display row through order");
+
+    check(ainiux::ui::toggle_text_selector_alpha_sort_order(
+              order, display_selected, order_sorted, buffer_names.size(), buffer_label),
+          "order alpha sort restore succeeds");
+    check(!order_sorted && order.empty(), "order alpha sort clears permutation on restore");
+    check(display_selected == 0, "order alpha sort restore returns to underlying identity row");
+
+    ainiux::ui::TextSelectorNavState nav;
+    nav.search_active = true;
+    nav.search_draft = "gpt";
+    nav.last_search = "old";
+    nav.sorted = true;
+    nav.original_items = {"a"};
+    nav.display_order = {1, 0};
+    nav.reset_for_open();
+    check(!nav.search_active && nav.search_draft.empty() && !nav.sorted &&
+              nav.original_items.empty() && nav.display_order.empty() && nav.last_search == "old",
+          "nav state reset clears ephemeral fields but keeps last_search");
+    check(nav.draft_status() == "/", "empty draft status is a lone slash");
+    nav.search_draft = "gpt";
+    check(nav.draft_status() == "/gpt", "draft status prefixes slash");
+}
+
 void test_confirmation_helpers() {
     check(ainiux::ui::yes_answer("y"), "confirmation accepts lowercase y");
     check(ainiux::ui::no_answer("n"), "confirmation accepts lowercase n");
@@ -124,6 +247,10 @@ void test_provider_model_selectors() {
 
     const std::string provider_text =
         ainiux::ui::provider_selector_text({"lm_studio", "openai"}, 1);
+    check(provider_text.find("/ search") != std::string::npos,
+          "provider selector documents / search");
+    check(provider_text.find(". sort") != std::string::npos,
+          "provider selector documents . sort");
     check(provider_text.find("Enter select") != std::string::npos,
           "provider selector documents Enter selection");
     check(provider_text.find(u8"› openai") != std::string::npos,
@@ -202,6 +329,8 @@ void run_all() {
     test_text_selector_rendering();
     test_text_selector_movement();
     test_text_selector_type_ahead_jump();
+    test_text_selector_substring_search();
+    test_text_selector_alpha_sort();
     test_text_selector_escape_sequence();
     test_text_selector_status();
     test_provider_model_selectors();

@@ -7,6 +7,7 @@
 
 #include "chat/sqlite_store.hpp"
 #include "tui/events.hpp"
+#include "ui/text_selector.hpp"
 
 namespace ainiux::tui {
 
@@ -54,6 +55,7 @@ struct TuiPickerInputState {
     bool input_empty = true;
     size_t& pending_thread_delete;
     bool agent_mode = false;
+    ui::TextSelectorNavState& picker_nav;
 };
 
 bool handle_tui_picker_input(unsigned char ch,

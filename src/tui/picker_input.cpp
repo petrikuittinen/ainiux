@@ -33,6 +33,96 @@ std::string list_picker_label_at(const TuiPickerInputState& state, size_t index)
     return state.picker_items[index];
 }
 
+bool is_printable_search_char(unsigned char ch) {
+    return ch >= 0x20U && ch != 0x7fU;
+}
+
+// While search draft is active, Esc cancels the draft. Arrow keys cancel the
+// draft and move the selection (escape sequence is fully consumed).
+bool handle_search_draft_escape(TuiPickerInputState& state) {
+    ui::TextSelectorNavState& nav = state.picker_nav;
+    const char* selection_label = list_picker_selection_label(state.mode);
+    nav.search_active = false;
+    nav.search_draft.clear();
+
+    const PickerEscapeResult result = handle_list_picker_escape(
+        state.picker_items.size(), state.picker_selected, state.status, selection_label);
+    if (result == PickerEscapeResult::Navigated) {
+        // Movement already updated status.
+        return true;
+    }
+    // Bare Esc / unknown: leave picker open with draft cancelled.
+    state.status = ui::text_selector_status(selection_label, state.picker_selected,
+                                            state.picker_items.size());
+    return true;
+}
+
+bool handle_list_picker_search_and_sort(unsigned char ch, TuiPickerInputState& state) {
+    ui::TextSelectorNavState& nav = state.picker_nav;
+    auto label_at = [&](size_t index) { return list_picker_label_at(state, index); };
+    const char* selection_label = list_picker_selection_label(state.mode);
+
+    if (nav.search_active) {
+        if (ch == 27) {
+            return handle_search_draft_escape(state);
+        }
+        if (ch == '\r' || ch == '\n') {
+            const std::string needle =
+                nav.search_draft.empty() ? nav.last_search : nav.search_draft;
+            nav.search_active = false;
+            nav.search_draft.clear();
+            if (needle.empty()) {
+                state.status = ui::text_selector_no_previous_search_status();
+                return true;
+            }
+            nav.last_search = needle;
+            if (ui::find_next_text_selector_match(state.picker_selected, state.picker_items.size(),
+                                                  label_at, needle)) {
+                state.status = ui::text_selector_status(selection_label, state.picker_selected,
+                                                        state.picker_items.size());
+            } else {
+                state.status = ui::text_selector_no_match_status(needle);
+            }
+            return true;
+        }
+        if (ch == 127 || ch == 8) {
+            if (!nav.search_draft.empty()) {
+                nav.search_draft.pop_back();
+            }
+            state.status = nav.draft_status();
+            return true;
+        }
+        if (is_printable_search_char(ch)) {
+            nav.search_draft.push_back(static_cast<char>(ch));
+            state.status = nav.draft_status();
+            return true;
+        }
+        return true;
+    }
+
+    if (ch == '/') {
+        nav.search_active = true;
+        nav.search_draft.clear();
+        state.status = nav.draft_status();
+        return true;
+    }
+
+    if (ch == '.') {
+        if (state.mode == TuiMode::ProviderList) {
+            ui::toggle_text_selector_alpha_sort_by_label(
+                state.picker_items, state.picker_selected, nav.sorted, nav.original_items, label_at);
+        } else {
+            ui::toggle_text_selector_alpha_sort(state.picker_items, state.picker_selected, nav.sorted,
+                                               nav.original_items);
+        }
+        state.status =
+            ui::text_selector_status(selection_label, state.picker_selected, state.picker_items.size());
+        return true;
+    }
+
+    return false;
+}
+
 }  // namespace
 
 bool handle_tui_picker_input(unsigned char ch,
@@ -44,6 +134,11 @@ bool handle_tui_picker_input(unsigned char ch,
             state.quit = true;
             return true;
         }
+        // Search draft must handle Esc before picker-cancel Esc (so bare Esc only
+        // leaves the draft, while arrows move after cancelling the draft).
+        if (state.picker_nav.search_active) {
+            return handle_list_picker_search_and_sort(ch, state);
+        }
         if (ch == 27) {
             const std::string selection_label = list_picker_selection_label(state.mode);
             const PickerEscapeResult result = handle_list_picker_escape(
@@ -53,6 +148,7 @@ bool handle_tui_picker_input(unsigned char ch,
                 const bool reasoning_picker = state.mode == TuiMode::ReasoningList;
                 state.picker_items.clear();
                 state.picker_selected = 0;
+                state.picker_nav.reset_for_open();
                 if (state.picker_cancel_quits) {
                     state.quit = true;
                 } else {
@@ -63,6 +159,9 @@ bool handle_tui_picker_input(unsigned char ch,
                                    : reasoning_picker ? "Reasoning selection cancelled"
                                                       : "Model selection cancelled";
             }
+            return true;
+        }
+        if (handle_list_picker_search_and_sort(ch, state)) {
             return true;
         }
         if (ch == '\r' || ch == '\n') {

@@ -191,6 +191,7 @@ void test_tui_reasoning_picker_input() {
     std::vector<ainiux::chat::ThreadSummary> threads;
     size_t thread_selected = 0;
     size_t pending_thread_delete = 0;
+    ainiux::ui::TextSelectorNavState picker_nav;
     ainiux::tui::TuiPickerInputState state{
         mode,
         quit,
@@ -202,6 +203,8 @@ void test_tui_reasoning_picker_input() {
         thread_selected,
         true,
         pending_thread_delete,
+        false,
+        picker_nav,
     };
     std::string accepted;
     ainiux::tui::TuiPickerCallbacks callbacks;
@@ -1099,7 +1102,7 @@ void test_tui_color_mode_sequences_and_resolve() {
 
 void test_tui_buffer_list_uses_colored_panel_widget() {
     const std::string text =
-        "Buffers - Enter opens - Tab/Insert new - DEL close - Esc cancels\n> file1.txt - Ln 1, Col 1\n  file2.txt - Ln 2, Col 3";
+        "Buffers - Enter opens - / search - . sort - Tab/Insert new - DEL close - Esc cancels\n> file1.txt - Ln 1, Col 1\n  file2.txt - Ln 2, Col 3";
     const std::vector<ainiux::tui::StyledLine> lines =
         ainiux::tui::detail::panel_lines_for_text(text, ainiux::tui::TuiMode::ThreadList, 80, "Buffers");
 

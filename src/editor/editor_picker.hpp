@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "editor/editor.hpp"
+#include "ui/text_selector.hpp"
 
 namespace ainiux::editor {
 
@@ -17,6 +18,7 @@ struct EditorProviderModelPicker {
     size_t selected = 0;
     int scroll = 0;
     EditorState view;
+    ui::TextSelectorNavState nav;
 
     std::string selection_label() const;
     std::string cancel_message() const;
@@ -33,6 +35,11 @@ struct EditorProviderModelPicker {
     // Type-ahead jump by character against displayed labels. Returns true if
     // selection moved (caller should refresh_view and update status).
     bool handle_jump_char(unsigned char ch, std::string& status_out);
+    // Handle / search draft, . sort, and related keys. Returns true when the key
+    // was consumed (caller should refresh_view when the list order or selection
+    // may have changed).
+    bool handle_search_sort_char(unsigned char ch, std::string& status_out);
+    std::string label_at(size_t index) const;
 };
 
 }  // namespace ainiux::editor

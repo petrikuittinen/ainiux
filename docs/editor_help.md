@@ -68,7 +68,7 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 | `Ctrl+Shift+S` | Save as (prompts for path; asks before overwriting an existing file) |
 | `Ctrl+O` | Open another file buffer |
 | `Ctrl+N` | Open a new empty buffer |
-| `Ctrl+L` | List open buffers; Enter chooses, Tab/Insert new, type to jump, Esc cancels |
+| `Ctrl+L` | List open buffers; Enter chooses, `/` search, `.` sort, Tab/Insert new, type to jump, Esc cancels |
 | `Ctrl+P` | Open provider picker (same as bare `/provider`) |
 | `Ctrl+G` | Return to the chat/agent mode that opened the editor |
 | `Ctrl+W` | Close the active buffer; prompts before discarding modifications |
@@ -252,7 +252,7 @@ Press **`Ctrl+E`**, **`Esc`**, or **`Alt+X`** to open the command minibuffer (`C
 | `/replace` or `replace-string` | Replace (search, then interactive replace) |
 | `/open [PATH]` | Open file (same as `Ctrl+O`; `Tab` completes paths after the command) |
 | `/new` | Open a new empty editor buffer (same as `Ctrl+N`) |
-| `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, Tab/Insert new, type to jump, DEL closes selected with y/n prompt, Esc cancels) |
+| `/list` | List open editor buffers (same as `Ctrl+L`; Enter chooses, `/` search, `.` sort, Tab/Insert new, type to jump, DEL closes selected with y/n prompt, Esc cancels) |
 | `/close` | Close the active editor buffer (same as `Ctrl+W`; prompts if modified) |
 | `/vsplit` | Vertical split (side by side; same as `Ctrl+X v`) |
 | `/hsplit` | Horizontal split (stacked; same as `Ctrl+X h`) |

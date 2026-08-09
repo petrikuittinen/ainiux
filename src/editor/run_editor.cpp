@@ -296,6 +296,7 @@ app::EditorRunResult run_editor(const std::string& path,
     size_t buffer_list_selected = 0;
     int buffer_list_scroll = 0;
     EditorState buffer_list_view;
+    ui::TextSelectorNavState buffer_list_nav;
     EditorProviderModelPicker picker;
     EditorModelListRuntime model_list;
     provider::ModelsResult cached_editor_models;
@@ -454,6 +455,19 @@ app::EditorRunResult run_editor(const std::string& path,
         }
     };
 
+    auto buffer_list_underlying = [&](size_t display_selected) -> size_t {
+        return ui::text_selector_underlying_index(buffer_list_nav.display_order, display_selected,
+                                                  buffers.size());
+    };
+
+    auto buffer_list_label_at = [&](size_t display_index) -> std::string {
+        const size_t underlying = buffer_list_underlying(display_index);
+        if (underlying >= buffers.size()) {
+            return {};
+        }
+        return editor_buffer_display_name(buffers[underlying], underlying);
+    };
+
     auto selected_buffer_status = [&]() {
         return ui::text_selector_status("Selected buffer", buffer_list_selected, buffers.size());
     };
@@ -468,8 +482,15 @@ app::EditorRunResult run_editor(const std::string& path,
             buffers.back().linebreak = settings.linebreak;
             active_buffer = 0;
         }
+        // Buffer add/remove invalidates any display permutation; restore identity order.
+        if (buffer_list_nav.sorted &&
+            buffer_list_nav.display_order.size() != buffers.size()) {
+            buffer_list_nav.sorted = false;
+            buffer_list_nav.display_order.clear();
+        }
         buffer_list_selected = std::min(buffer_list_selected, buffers.size() - 1);
-        buffer_list_view = EditorState::from_text(editor_buffer_list_text(buffers, buffer_list_selected));
+        buffer_list_view = EditorState::from_text(
+            editor_buffer_list_text(buffers, buffer_list_selected, buffer_list_nav.display_order));
         buffer_list_view.set_path("[buffers]");
         buffer_list_view.highlight_enabled = false;
         const size_t selected_line = std::min(buffer_list_selected + 1, buffer_list_view.text.line_count() - 1);
@@ -907,6 +928,7 @@ app::EditorRunResult run_editor(const std::string& path,
             exit_help_view();
         }
         sync_active_buffer();
+        buffer_list_nav.reset_for_open();
         buffer_list_selected = std::min(active_buffer, buffers.empty() ? size_t{0} : buffers.size() - 1);
         buffer_list_scroll = 0;
         buffer_list_active = true;
@@ -918,6 +940,7 @@ app::EditorRunResult run_editor(const std::string& path,
     auto cancel_buffer_list = [&]() {
         buffer_list_active = false;
         buffer_list_selected = active_buffer;
+        buffer_list_nav.reset_for_open();
         pending_close_confirm = false;
         pending_close_index = static_cast<size_t>(-1);
         minibuffer_message(minibuffer, "Buffer list cancelled");
@@ -956,6 +979,7 @@ app::EditorRunResult run_editor(const std::string& path,
             active_buffer = 0;
             split_layout.reset(0);
             if (buffer_list_active) {
+                buffer_list_nav.reset_for_open();
                 buffer_list_selected = 0;
             }
             minibuffer_message(minibuffer, "Closed buffer; opened scratch buffer");
@@ -973,10 +997,9 @@ app::EditorRunResult run_editor(const std::string& path,
         split_layout.clamp_buffers(buffers.size());
         focus_buffer_from_split();
         if (buffer_list_active) {
-            if (buffer_list_selected > index) {
-                --buffer_list_selected;
-            }
-            buffer_list_selected = std::min(buffer_list_selected, buffers.size() - 1);
+            // Rebuilding the list after close is simpler and safer than patching a sort order.
+            buffer_list_nav.reset_for_open();
+            buffer_list_selected = std::min(active_buffer, buffers.size() - 1);
             minibuffer_message(minibuffer, selected_buffer_status());
         } else {
             minibuffer_message(minibuffer,
@@ -1003,12 +1026,16 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (sequence == "[3~") {
             if (!buffers.empty() && buffer_list_selected < buffers.size()) {
-                perform_buffer_close(buffer_list_selected, false);
+                perform_buffer_close(buffer_list_underlying(buffer_list_selected), false);
             }
             return;
         }
         MovementKeyEvent movement;
         if (parse_movement_sequence(sequence, movement)) {
+            if (buffer_list_nav.search_active) {
+                buffer_list_nav.search_active = false;
+                buffer_list_nav.search_draft.clear();
+            }
             buffer_list_selected =
                 move_editor_buffer_selection(buffer_list_selected, buffers.size(), movement.key);
             minibuffer_message(minibuffer, selected_buffer_status());
@@ -3736,6 +3763,12 @@ app::EditorRunResult run_editor(const std::string& path,
                 handle_picker_list_escape();
                 return;
             }
+            std::string search_status;
+            if (picker.handle_search_sort_char(ch, search_status)) {
+                picker.refresh_view();
+                minibuffer_message(minibuffer, search_status);
+                return;
+            }
             if (ch == '\r' || ch == '\n') {
                 confirm_picker_selection();
                 return;
@@ -3753,7 +3786,7 @@ app::EditorRunResult run_editor(const std::string& path,
                     case ui::ConfirmationKeyResult::Accepted: {
                         size_t idx = pending_close_index != static_cast<size_t>(-1)
                                          ? pending_close_index
-                                         : buffer_list_selected;
+                                         : buffer_list_underlying(buffer_list_selected);
                         perform_buffer_close(idx, true);
                         return;
                     }
@@ -3772,11 +3805,79 @@ app::EditorRunResult run_editor(const std::string& path,
                 return;
             }
             if (ch == 27) {
+                if (buffer_list_nav.search_active) {
+                    const std::string sequence =
+                        current_escape_was_decoded ? std::string{} : read_escape_suffix();
+                    buffer_list_nav.search_active = false;
+                    buffer_list_nav.search_draft.clear();
+                    if (!sequence.empty()) {
+                        MovementKeyEvent movement;
+                        if (parse_movement_sequence(sequence, movement)) {
+                            buffer_list_selected = move_editor_buffer_selection(
+                                buffer_list_selected, buffers.size(), movement.key);
+                        }
+                    }
+                    minibuffer_message(minibuffer, selected_buffer_status());
+                    return;
+                }
                 handle_buffer_list_escape();
                 return;
             }
+            if (buffer_list_nav.search_active) {
+                if (ch == '\r' || ch == '\n') {
+                    const std::string needle = buffer_list_nav.search_draft.empty()
+                                                   ? buffer_list_nav.last_search
+                                                   : buffer_list_nav.search_draft;
+                    buffer_list_nav.search_active = false;
+                    buffer_list_nav.search_draft.clear();
+                    if (needle.empty()) {
+                        minibuffer_message(minibuffer, ui::text_selector_no_previous_search_status());
+                        return;
+                    }
+                    buffer_list_nav.last_search = needle;
+                    if (ui::find_next_text_selector_match(buffer_list_selected, buffers.size(),
+                                                         buffer_list_label_at, needle)) {
+                        minibuffer_message(minibuffer, selected_buffer_status());
+                    } else {
+                        minibuffer_message(minibuffer, ui::text_selector_no_match_status(needle));
+                    }
+                    return;
+                }
+                if (ch == 127 || ch == 8) {
+                    if (!buffer_list_nav.search_draft.empty()) {
+                        buffer_list_nav.search_draft.pop_back();
+                    }
+                    minibuffer_message(minibuffer, buffer_list_nav.draft_status());
+                    return;
+                }
+                if (ch >= 0x20U && ch != 0x7fU) {
+                    buffer_list_nav.search_draft.push_back(static_cast<char>(ch));
+                    minibuffer_message(minibuffer, buffer_list_nav.draft_status());
+                    return;
+                }
+                return;
+            }
+            if (ch == '/') {
+                buffer_list_nav.search_active = true;
+                buffer_list_nav.search_draft.clear();
+                minibuffer_message(minibuffer, buffer_list_nav.draft_status());
+                return;
+            }
+            if (ch == '.') {
+                ui::toggle_text_selector_alpha_sort_order(
+                    buffer_list_nav.display_order, buffer_list_selected, buffer_list_nav.sorted,
+                    buffers.size(),
+                    [&](size_t underlying) {
+                        if (underlying >= buffers.size()) {
+                            return std::string{};
+                        }
+                        return editor_buffer_display_name(buffers[underlying], underlying);
+                    });
+                minibuffer_message(minibuffer, selected_buffer_status());
+                return;
+            }
             if (ch == '\r' || ch == '\n') {
-                activate_buffer(buffer_list_selected);
+                activate_buffer(buffer_list_underlying(buffer_list_selected));
                 return;
             }
             if (ch == '\t') {
@@ -3785,17 +3886,12 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             if (ch == 127 || ch == 8) {
                 if (!buffers.empty() && buffer_list_selected < buffers.size()) {
-                    perform_buffer_close(buffer_list_selected, false);
+                    perform_buffer_close(buffer_list_underlying(buffer_list_selected), false);
                 }
                 return;
             }
-            if (ui::jump_text_selector_by_char(
-                    buffer_list_selected,
-                    buffers.size(),
-                    [&](size_t index) {
-                        return editor_buffer_display_name(buffers[index], index);
-                    },
-                    ch)) {
+            if (ui::jump_text_selector_by_char(buffer_list_selected, buffers.size(),
+                                              buffer_list_label_at, ch)) {
                 minibuffer_message(minibuffer, selected_buffer_status());
             }
             return;

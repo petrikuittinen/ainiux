@@ -5,6 +5,13 @@
 #include "ui/text_selector.hpp"
 
 namespace ainiux::editor {
+namespace {
+
+bool is_printable_search_char(unsigned char ch) {
+    return ch >= 0x20U && ch != 0x7fU;
+}
+
+}  // namespace
 
 std::string EditorProviderModelPicker::selection_label() const {
     return for_provider ? "Selected provider" : for_reasoning ? "Selected reasoning" : "Selected model";
@@ -22,6 +29,19 @@ std::string EditorProviderModelPicker::empty_message() const {
 std::string EditorProviderModelPicker::status_message() const {
     return items.empty() ? empty_message()
                          : ui::text_selector_status(selection_label(), selected, items.size());
+}
+
+std::string EditorProviderModelPicker::label_at(size_t index) const {
+    if (index >= items.size()) {
+        return {};
+    }
+    if (for_provider) {
+        return provider::display_name_for_profile(items[index]);
+    }
+    if (for_reasoning && index < display_labels.size()) {
+        return display_labels[index];
+    }
+    return items[index];
 }
 
 void EditorProviderModelPicker::refresh_view() {
@@ -52,6 +72,7 @@ void EditorProviderModelPicker::open_providers() {
     scroll = 0;
     for_provider = true;
     for_reasoning = false;
+    nav.reset_for_open();
     active = true;
 }
 
@@ -62,6 +83,7 @@ void EditorProviderModelPicker::open_models(std::vector<std::string> models) {
     scroll = 0;
     for_provider = false;
     for_reasoning = false;
+    nav.reset_for_open();
     active = true;
 }
 
@@ -74,6 +96,7 @@ void EditorProviderModelPicker::open_reasoning(std::vector<std::string> values,
     scroll = 0;
     for_provider = false;
     for_reasoning = true;
+    nav.reset_for_open();
     active = true;
 }
 
@@ -84,9 +107,28 @@ void EditorProviderModelPicker::clear() {
     selected = 0;
     scroll = 0;
     for_reasoning = false;
+    nav.reset_for_open();
 }
 
 bool EditorProviderModelPicker::handle_escape(const std::string& sequence, std::string& status_out) {
+    if (nav.search_active) {
+        // Bare Esc (empty sequence) cancels draft only. Movement cancels draft and navigates.
+        nav.search_active = false;
+        nav.search_draft.clear();
+        if (sequence.empty()) {
+            status_out = status_message();
+            return true;
+        }
+        switch (ui::handle_selector_escape_sequence(sequence, items.size(), selected, status_out,
+                                                    selection_label())) {
+            case ui::SelectorMovementResult::Navigated:
+                return true;
+            case ui::SelectorMovementResult::Cancelled:
+                status_out = status_message();
+                return true;
+        }
+        return true;
+    }
     switch (ui::handle_selector_escape_sequence(sequence, items.size(), selected, status_out, selection_label())) {
         case ui::SelectorMovementResult::Navigated:
             return true;
@@ -101,26 +143,86 @@ bool EditorProviderModelPicker::handle_escape(const std::string& sequence, std::
 }
 
 bool EditorProviderModelPicker::handle_jump_char(unsigned char ch, std::string& status_out) {
-    if (!active || items.empty()) {
+    if (!active || items.empty() || nav.search_active) {
+        return false;
+    }
+    if (ch == '/' || ch == '.') {
         return false;
     }
     const bool jumped = ui::jump_text_selector_by_char(
-        selected,
-        items.size(),
-        [&](size_t index) -> std::string {
-            if (for_provider) {
-                return provider::display_name_for_profile(items[index]);
-            }
-            if (for_reasoning && index < display_labels.size()) {
-                return display_labels[index];
-            }
-            return items[index];
-        },
-        ch);
+        selected, items.size(), [&](size_t index) { return label_at(index); }, ch);
     if (jumped) {
         status_out = status_message();
     }
     return jumped;
+}
+
+bool EditorProviderModelPicker::handle_search_sort_char(unsigned char ch, std::string& status_out) {
+    if (!active) {
+        return false;
+    }
+
+    if (nav.search_active) {
+        if (ch == '\r' || ch == '\n') {
+            const std::string needle = nav.search_draft.empty() ? nav.last_search : nav.search_draft;
+            nav.search_active = false;
+            nav.search_draft.clear();
+            if (needle.empty()) {
+                status_out = ui::text_selector_no_previous_search_status();
+                return true;
+            }
+            nav.last_search = needle;
+            if (ui::find_next_text_selector_match(
+                    selected, items.size(), [&](size_t index) { return label_at(index); }, needle)) {
+                status_out = status_message();
+            } else {
+                status_out = ui::text_selector_no_match_status(needle);
+            }
+            return true;
+        }
+        if (ch == 127 || ch == 8) {
+            if (!nav.search_draft.empty()) {
+                nav.search_draft.pop_back();
+            }
+            status_out = nav.draft_status();
+            return true;
+        }
+        if (is_printable_search_char(ch)) {
+            nav.search_draft.push_back(static_cast<char>(ch));
+            status_out = nav.draft_status();
+            return true;
+        }
+        // Consume other control keys while drafting so they do not select/jump.
+        return true;
+    }
+
+    if (ch == '/') {
+        nav.search_active = true;
+        nav.search_draft.clear();
+        status_out = nav.draft_status();
+        return true;
+    }
+
+    if (ch == '.') {
+        if (items.empty()) {
+            status_out = empty_message();
+            return true;
+        }
+        if (for_reasoning) {
+            ui::toggle_text_selector_alpha_sort_paired(items, display_labels, selected, nav.sorted,
+                                                       nav.original_items, nav.original_labels);
+        } else if (for_provider) {
+            ui::toggle_text_selector_alpha_sort_by_label(
+                items, selected, nav.sorted, nav.original_items,
+                [&](size_t index) { return label_at(index); });
+        } else {
+            ui::toggle_text_selector_alpha_sort(items, selected, nav.sorted, nav.original_items);
+        }
+        status_out = status_message();
+        return true;
+    }
+
+    return false;
 }
 
 }  // namespace ainiux::editor
