@@ -21,6 +21,7 @@
 #include <utility>
 
 #include "agent/apply_patch.hpp"
+#include "agent/history_backup.hpp"
 #include "agent/process.hpp"
 #include "agent/project_paths.hpp"
 #include "agent/read_only_command.hpp"
@@ -1551,23 +1552,15 @@ Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
         return ok_error();  // too large — skip without error
     }
 
-    const fs::path history_dir =
-        fs::u8path(snapshot_.workspace) / kProjectStateDirName / "history";
-    std::error_code ec;
+    const std::string generic = fs::u8path(relative_path).generic_u8string();
+    const fs::path history_file =
+        fs::u8path(history_backup_path(snapshot_.workspace, generic));
+    const fs::path history_dir = history_file.parent_path();
     Error directory_error =
         platform::ensure_private_directory(history_dir.u8string(), true, true);
     if (!directory_error.ok()) return directory_error;
 
     // One stable slot per workspace path (hash of generic relative path).
-    const std::string generic = fs::u8path(relative_path).generic_u8string();
-    const std::string digest = index::content_hash(generic);
-    std::string short_hash = digest.size() > 16 ? digest.substr(0, 16) : digest;
-    std::string safe_tail = generic;
-    for (char& ch : safe_tail) {
-        if (ch == '/' || ch == '\\' || ch == ':' || ch == ' ') ch = '_';
-    }
-    if (safe_tail.size() > 48) safe_tail = safe_tail.substr(safe_tail.size() - 48);
-    const fs::path history_file = history_dir / (short_hash + "-" + safe_tail + ".bak");
     Error history_error =
         platform::atomic_write_private(history_file.u8string(), previous_content, true);
     if (!history_error.ok()) return history_error;
@@ -1691,7 +1684,9 @@ void ReadToolRegistry::note_removed_path(const std::string& relative_path) const
 namespace {
 
 Error write_bytes_atomic(const fs::path& absolute, const std::string& content) {
-    return platform::atomic_write_private(absolute.u8string(), content, true);
+    // Project/workspace source is not secret: use shared modes (umask / preserve).
+    // History under .ainiux-pr still goes through atomic_write_private separately.
+    return platform::atomic_write_shared(absolute.u8string(), content, true);
 }
 
 std::string read_all_bytes(const fs::path& absolute, Error& error) {

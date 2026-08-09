@@ -6,6 +6,9 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#endif
 
 #include "agent/index/index.hpp"
 #include "agent/process.hpp"
@@ -552,6 +555,18 @@ void test_write_file_create_and_readback() {
     check(json_ok(created), "write_file create_new succeeds: " + created);
     check(read_text(fs::path(workspace) / "src" / "new_note.md") == "# hello\n",
           "write_file wrote expected content");
+#if !defined(_WIN32)
+    {
+        struct stat info {};
+        check(::stat((fs::path(workspace) / "src" / "new_note.md").c_str(), &info) == 0,
+              "stat new workspace file");
+        // Shared write: group/other read bits present (not private 0600).
+        check((info.st_mode & S_IRUSR) != 0 && (info.st_mode & S_IRGRP) != 0 &&
+                  (info.st_mode & S_IROTH) != 0,
+              "new workspace file is world-readable under umask (not 0600)");
+        check((info.st_mode & 0777) != 0600, "new workspace file is not private 0600");
+    }
+#endif
     const std::string new_hash = json_data_string(created, "new_file_hash");
     check(!new_hash.empty(), "write_file returns new_file_hash");
 
@@ -571,12 +586,25 @@ void test_write_file_create_and_readback() {
     check(!json_ok(stale) && json_error_code(stale) == "stale_file",
           "stale expected_file_hash is rejected");
 
+#if !defined(_WIN32)
+    // Restrictive mode must be preserved across overwrite (do not widen or force 0600).
+    check(::chmod((fs::path(workspace) / "src" / "new_note.md").c_str(), 0640) == 0,
+          "chmod test file to 0640");
+#endif
     const std::string overwrite = tools.execute(
         "write_file",
         ("{\"path\":\"src/new_note.md\",\"content\":\"# next\\n\",\"expected_file_hash\":\"" +
          new_hash + "\"}")
             .c_str());
     check(json_ok(overwrite), "overwrite with matching hash succeeds: " + overwrite);
+#if !defined(_WIN32)
+    {
+        struct stat info {};
+        check(::stat((fs::path(workspace) / "src" / "new_note.md").c_str(), &info) == 0 &&
+                  (info.st_mode & 0777) == 0640,
+              "overwrite preserves existing file mode 0640");
+    }
+#endif
     check(read_text(fs::path(workspace) / "src" / "new_note.md") == "# next\n",
           "overwrite wrote expected content");
     check(!json_data_string(overwrite, "history_path").empty(),

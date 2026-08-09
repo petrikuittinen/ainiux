@@ -341,7 +341,8 @@ Error save_file(const std::string& path, const PieceTable& text, LineBreak lineb
     if (!out) {
         return {ErrorCode::FileWrite, "failed while serializing editor file: " + resolved};
     }
-    Error save_error = platform::atomic_write_private(resolved, out.str(), true);
+    // Editor buffers are ordinary project files: respect umask / existing mode.
+    Error save_error = platform::atomic_write_shared(resolved, out.str(), true);
     if (!save_error.ok()) {
         return {ErrorCode::FileWrite,
                 "failed while writing editor buffer: " + resolved + ": " +

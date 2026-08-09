@@ -45,7 +45,7 @@ This compact timeline moves release material out of the landing page. It describ
 | v1.14 | Offline editor text layout and line cleanup, width/align history display modes, and width-capped pretty tables |
 | v1.15 | Documentation overhaul with a concise landing page, focused user guides, provider and credential references, corrected shortcuts, and explicit compatibility limits |
 | v1.16 | Full-screen editor dired (directory browser): CLI `--dired`, F4 / Ctrl+X d, list↔read-only view, file ops, content-hash dirty markers, POSIX mode/owner/group |
-| Unreleased | Native Windows 10 1903+/Windows 11 x64 UCRT64 target: wide UTF-8 process boundary, shared subprocess/interrupt and terminal ownership, Job Object cancellation, native clipboard, identity-safe paths and protected persistence, Windows dired behavior, ConPTY/CI coverage, and portable ZIP packaging; publication remains gated on the native parity checklist |
+| Unreleased | Native Windows 10 1903+/Windows 11 x64 UCRT64 target: wide UTF-8 process boundary, shared subprocess/interrupt and terminal ownership, Job Object cancellation, native clipboard, identity-safe paths and protected persistence, Windows dired behavior, ConPTY/CI coverage, and portable ZIP packaging; publication remains gated on the native parity checklist. Dired read-only view marks lines changed vs `.ainiux-pr/history` on dirty files (same syntax highlight, mild panel background). |
 
 ## Current status after v1.16
 

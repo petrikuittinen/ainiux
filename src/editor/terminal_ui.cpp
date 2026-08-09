@@ -212,29 +212,63 @@ std::string activity_color_sequence(const TerminalThemeStyle& theme_style, tui::
         theme_style.color_mode);
 }
 
+tui::Rgb blend_rgb(tui::Rgb from, tui::Rgb toward, double amount) {
+    if (amount <= 0.0) {
+        return from;
+    }
+    if (amount >= 1.0) {
+        return toward;
+    }
+    auto mix = [amount](int a, int b) {
+        return static_cast<int>(a + (b - a) * amount + 0.5);
+    };
+    return {mix(from.r, toward.r), mix(from.g, toward.g), mix(from.b, toward.b)};
+}
+
+// Mild tint of panel_highlight on the normal background so changed lines are
+// obvious without a separate syntax scheme. panel_background alone is nearly
+// identical to background on built-in dark/light themes.
+tui::Rgb changed_line_background(const tui::ThemePalette& palette) {
+    return blend_rgb(palette.background, palette.panel_highlight, 0.28);
+}
+
 void append_editor_rendered_line(std::string& output,
                                  const std::string& line,
                                  const std::vector<RenderedPanel::Span>& spans,
-                                 const TerminalThemeStyle& theme_style) {
+                                 const TerminalThemeStyle& theme_style,
+                                 bool changed_line_bg = false) {
     size_t pos = 0;
-    auto append_base_style = [&]() {
-        if (theme_style.use_colors && theme_style.themes != nullptr) {
-            output += tui::style_sequence_for(
-                *theme_style.themes, theme_style.theme_name, tui::StyleRole::Text, theme_style.color_mode);
+    const bool colors = theme_style.use_colors && theme_style.themes != nullptr;
+    const tui::ThemePalette* palette =
+        colors ? theme_style.themes->find(theme_style.theme_name) : nullptr;
+    if (colors && palette == nullptr) {
+        palette = theme_style.themes->find("dark");
+    }
+    const bool use_changed_bg = changed_line_bg && colors && palette != nullptr;
+    const tui::Rgb changed_bg =
+        use_changed_bg ? changed_line_background(*palette) : tui::Rgb{};
+    auto append_role_style = [&](tui::StyleRole role) {
+        if (!colors) {
+            return;
         }
+        tui::StylePair pair =
+            tui::style_pair_for(*theme_style.themes, theme_style.theme_name, role);
+        if (use_changed_bg) {
+            pair.background = changed_bg;
+        }
+        output += tui::ansi_style_sequence(pair, theme_style.color_mode);
     };
+    auto append_base_style = [&]() { append_role_style(tui::StyleRole::Text); };
     append_base_style();
     for (const RenderedPanel::Span& span : spans) {
         const size_t start = std::min(span.start, line.size());
         const size_t end = std::min(span.end, line.size());
         if (start > pos) {
+            // Gap text must keep the changed-line background (style is already active).
             output.append(line, pos, start - pos);
         }
-        if (span.syntax && theme_style.use_colors && theme_style.themes != nullptr) {
-            output += tui::style_sequence_for(*theme_style.themes,
-                                              theme_style.theme_name,
-                                              tui::style_role_for_token(span.role),
-                                              theme_style.color_mode);
+        if (span.syntax && colors) {
+            append_role_style(tui::style_role_for_token(span.role));
             output += tui::ansi_text_attributes_sequence(
                 tui::text_attributes_for_token(span.role));
         } else {
@@ -253,7 +287,8 @@ void append_editor_rendered_line(std::string& output,
     if (pos < line.size()) {
         output.append(line, pos, line.size() - pos);
     }
-    if (!spans.empty() || (theme_style.use_colors && theme_style.themes != nullptr)) {
+    // Changed lines always emit a styled full-width row (including padding spaces).
+    if (!spans.empty() || colors || use_changed_bg) {
         output += "\x1b[0m";
     }
 }
@@ -1293,7 +1328,8 @@ void render_terminal(EditorState& state,
                      bool show_scrollbars,
                      bool follow_cursor,
                      const EditorStatusChrome& status_chrome,
-                     const char* status_text_override) {
+                     const char* status_text_override,
+                     const std::vector<bool>* changed_source_lines) {
     SplitPaneRect single;
     single.buffer_index = 0;
     single.leaf_index = 0;
@@ -1312,7 +1348,8 @@ void render_terminal(EditorState& state,
         show_scrollbars,
         follow_cursor,
         status_chrome,
-        status_text_override);
+        status_text_override,
+        changed_source_lines);
 }
 
 void render_terminal_splits(
@@ -1328,7 +1365,8 @@ void render_terminal_splits(
     bool show_scrollbars,
     bool follow_cursor,
     const EditorStatusChrome& status_chrome,
-    const char* status_text_override) {
+    const char* status_text_override,
+    const std::vector<bool>* changed_source_lines) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -1359,8 +1397,11 @@ void render_terminal_splits(
         clamp_pane_scroll(view.scroll_line,
                           content_rows,
                           static_cast<size_t>(std::max(0, content_rect.height)));
-        const RenderedPanel panel =
-            source->render(content_rect, view.cursor, view.scroll_line, view.scroll_column);
+        // History-diff marks apply only to the focused pane (dired single-view path).
+        const std::vector<bool>* pane_changed =
+            pane.focused ? changed_source_lines : nullptr;
+        const RenderedPanel panel = source->render(
+            content_rect, view.cursor, view.scroll_line, view.scroll_column, pane_changed);
         ui::ScrollbarMetrics bar_metrics;
         if (show_scrollbar) {
             bar_metrics = ui::compute_vertical_scrollbar(
@@ -1376,8 +1417,11 @@ void render_terminal_splits(
                 const std::vector<RenderedPanel::Span> empty_spans;
                 const std::vector<RenderedPanel::Span>& spans =
                     index < panel.line_spans.size() ? panel.line_spans[index] : empty_spans;
+                const bool row_changed =
+                    index < panel.line_changed_bg.size() && panel.line_changed_bg[index];
                 // Clip to content width; render() already sizes lines to content_rect.width.
-                append_editor_rendered_line(command, panel.lines[index], spans, theme_style);
+                append_editor_rendered_line(
+                    command, panel.lines[index], spans, theme_style, row_changed);
             }
             if (show_scrollbar) {
                 // Position the scrollbar on the pane's rightmost column.

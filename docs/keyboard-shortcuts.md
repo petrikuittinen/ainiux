@@ -214,7 +214,7 @@ Full guide: [dired-mode.md](dired-mode.md).
 | `F4` or `Ctrl+X d` or `/dired` or CLI `-d` / `--dired [PATH]` | Enter dired |
 | `q` | Leave dired → editor |
 | `Ctrl+Q` | Quit ainiux (global) |
-| `Enter` | Enter dir / view file RO; again leaves view for list |
+| `Enter` | Enter dir / view file RO (dirty + history → line bg diff); again leaves view for list |
 | `←` / `→` | Parent directory / enter selected directory |
 | `o` | Open file for edit (exits dired) |
 | `g` | Refresh |

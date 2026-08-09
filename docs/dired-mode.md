@@ -169,9 +169,19 @@ In list focus, `f` or `/` reminds you to open a file with Enter first.
 | --- | --- |
 | `p` | **Toggle** the selected **file**: dirty → reviewed, or reviewed → dirty (“pass”) |
 
-**Dirty** means the file’s **content hash** differs from the review baseline, or you manually marked it dirty with `p`—not merely that mtime changed, and not requiring git. The baseline is established on the first dired open in the session (when empty). Refresh (`g`) recomputes hashes and updates markers without changing the baseline. Pressing `p` only affects the **selected file** (directories and `../` are not tracked). `p` is used instead of `*` so non-US keyboard layouts do not need Shift for a common action.
+**Dirty** means the file’s **content hash** differs from the review baseline, or you manually marked it dirty with `p`—not merely that mtime changed, and not requiring git. The baseline is established on the first dired open in the session (when empty). When a project-local `.ainiux-pr/history/` pre-write backup exists and differs from the live file, that backup seeds the baseline so files already changed by the agent show as dirty immediately (you do not need to have had dired open before the edit). Refresh (`g`) recomputes hashes and updates markers without changing the baseline. Pressing `p` only affects the **selected file** (directories and `../` are not tracked). `p` is used instead of `*` so non-US keyboard layouts do not need Shift for a common action.
 
 Note: listing **type** colors (directories, executables, hidden names) are separate from dirty/reviewed. Dirty files show a `*` and use the dirty name color; `p` only toggles that reviewed state.
+
+### History line diff in read-only view
+
+When you **Enter** a **dirty** file, dired builds a poor-man's line review:
+
+- If a last agent pre-write snapshot exists under `.ainiux-pr/history/` (same one-slot backup the agent tools write before overwrite), lines that differ from that copy (insertions and replacements) get a **tinted background** (a blend of the theme background with `panel_highlight`—same syntax colors, no extra syntax scheme).
+- If the file is dirty but there is no history snapshot yet (for example a brand-new file), **every line** is tinted so the whole buffer is easy to scan.
+- The status line appends `[diff N]` with the number of marked lines.
+
+If the file is not dirty (including after **`p`**), the preview has no line-background overlay. This is not a git diff; it only compares to the last agent history copy when one exists.
 
 Git status coloring and freeform git commands are **not** part of this release.
 
@@ -181,6 +191,7 @@ Git status coloring and freeform git commands are **not** part of this release.
 
 - Browse directories and simple globs (`*`, `?` in the last path component)
 - Read-only preview with the editor’s syntax highlighter when the extension is known
+- Dirty-file history line backgrounds against `.ainiux-pr/history` (same syntax colors)
 - Rename, copy, delete, touch, create file, create nested directories
 - Content-hash “changed since reviewed” markers
 - POSIX permission/owner/group display on non-Windows builds
@@ -191,15 +202,16 @@ Git status coloring and freeform git commands are **not** part of this release.
 - Multi-file marks (operate on several selected entries at once)
 - Trash / undelete
 - Git status colors or in-dired git commands
+- Side-by-side or character-level diffs in the preview
 - Recursive `**` globs without bounds
-- New theme color roles dedicated to dired (listing reuses existing semantic colors)
+- New theme color roles dedicated to dired (listing and history marks reuse existing semantic colors)
 
 ## Tips for agentic coding
 
 1. After an agent turn, open dired on the project root (`F4` or `ainiux -d .`).
 2. Use `g` to refresh and scan for `*` dirty files; press **`p`** on each file to mark it reviewed (or again to mark dirty).
-3. **Enter** to preview one file at a time with highlight; **Enter** again for the list. In a file, `f` or `/` finds text; Space/`b` page like less.
-4. **`o`** when you need to edit; that exits dired into the normal multi-buffer editor.
+3. **Enter** to preview one file at a time with highlight (and history line backgrounds when a `.bak` exists); **Enter** again for the list. In a file, `f` or `/` finds text; Space/`b` page like less.
+4. **`o`** when you need to edit; that exits dired into the normal multi-buffer editor (history line marks apply only in dired read-only view).
 5. Use `←` / `→` to walk the tree without hunting for `../`.
 
 ## Related documentation

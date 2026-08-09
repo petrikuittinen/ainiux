@@ -131,7 +131,8 @@ void render_terminal(EditorState& state,
                      bool show_scrollbars = true,
                      bool follow_cursor = true,
                      const EditorStatusChrome& status_chrome = {},
-                     const char* status_text_override = nullptr);
+                     const char* status_text_override = nullptr,
+                     const std::vector<bool>* changed_source_lines = nullptr);
 
 // Multi-pane editor layout. panes come from SplitLayout::layout_panes(editor_main_area()).
 // buffer_at(index) must return the EditorState for that buffer index; the focused buffer
@@ -149,7 +150,8 @@ void render_terminal_splits(
     bool show_scrollbars = true,
     bool follow_cursor = true,
     const EditorStatusChrome& status_chrome = {},
-    const char* status_text_override = nullptr);
+    const char* status_text_override = nullptr,
+    const std::vector<bool>* changed_source_lines = nullptr);
 
 void render_terminal_panel(EditorState& state,
                            const MinibufferState& minibuffer,

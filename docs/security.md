@@ -63,7 +63,7 @@ Interactive Agent may use the selected OpenRouter, OpenAI, or DeepSeek API key f
 - Inside the active project, `read_file` and `read_many` accept any safe regular file on the live filesystem, including ignored, unsupported, generated, or newly created files absent from the code index. Protected metadata, traversal, symlink paths, non-UTF-8 files, and configured size limits remain denied.
 - `create_dirs=true` never silently `mkdir -p`: creating missing parent directories requires interactive Guard **y/n** approval (`ask_on_create_dirs`). Headless `run` denies directory creation (create parents first, or use interactive agent). `create_directories` never deletes existing trees; if a parent path exists as a non-directory, the write fails.
 - Optional `expected_file_hash` / per-op `expected_hash` rejects stale concurrent edits.
-- Pre-overwrite copies are stored under `.ainiux-pr/history/` (project-local; mode depends on umask/filesystem defaults).
+- Pre-overwrite copies are stored under `.ainiux-pr/history/` (project-local; private mode `0600` / protected DACL). Ordinary workspace `write_file` / editor saves use shared atomic writes: new files get `0666` masked by the process umask (typically `0644` or `0664`); overwrites preserve the existing file mode.
 - The live touched-file index view is updated after a successful native write so later reads in the same run stay consistent. Exact touched paths are coalesced into a cancellable definitions refresh; readers consume only a completed database generation, and cancellation preserves the prior SQLite transaction.
 - Project `AGENTS.md` cannot disable safety rules, change the workspace root, or override the user's direct request.
 

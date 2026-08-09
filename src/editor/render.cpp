@@ -25,16 +25,19 @@ RenderedPanel render_panel(const PieceTable& text,
                            highlight::Language language,
                            bool highlight_enabled,
                            highlight::DocumentCache* highlight_cache,
-                           size_t tab_width) {
+                           size_t tab_width,
+                           const std::vector<bool>* changed_source_lines) {
     (void)scroll_column;
     RenderedPanel rendered;
     const size_t height = static_cast<size_t>(std::max(0, rect.height));
     const size_t width = static_cast<size_t>(std::max(0, rect.width));
     rendered.lines.reserve(height);
     rendered.line_spans.reserve(height);
+    rendered.line_changed_bg.reserve(height);
     if (width == 0) {
         rendered.lines.resize(height);
         rendered.line_spans.resize(height);
+        rendered.line_changed_bg.resize(height, false);
         return rendered;
     }
 
@@ -67,10 +70,16 @@ RenderedPanel render_panel(const PieceTable& text,
         ++line;
     }
 
+    auto source_line_changed = [&](size_t source_line) {
+        return changed_source_lines != nullptr && source_line < changed_source_lines->size() &&
+               (*changed_source_lines)[source_line];
+    };
+
     for (size_t row = 0; row < height; ++row) {
         if (line >= line_count) {
             rendered.lines.push_back(std::string(width, ' '));
             rendered.line_spans.push_back({});
+            rendered.line_changed_bg.push_back(false);
             continue;
         }
 
@@ -81,6 +90,7 @@ RenderedPanel render_panel(const PieceTable& text,
         const size_t global_line_start = text.line_start(line);
         rendered.lines.push_back(
             display_range(line_text_value, segment.start, segment.end, width, tab_width));
+        rendered.line_changed_bg.push_back(source_line_changed(line));
 
         const highlight::HighlightedLine* highlighted = nullptr;
         if (highlight_enabled && highlight_cache != nullptr && language != highlight::Language::Text) {

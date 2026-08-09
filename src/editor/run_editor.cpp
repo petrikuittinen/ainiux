@@ -551,6 +551,8 @@ app::EditorRunResult run_editor(const std::string& path,
             dired.view.highlight_enabled = highlight_enabled;
             dired.view.read_only = true;
             const std::string dired_status = dired_status_line(dired);
+            const std::vector<bool>* changed =
+                dired.view_changed_lines.empty() ? nullptr : &dired.view_changed_lines;
             render_terminal(dired.view,
                             minibuffer,
                             terminal_frame_renderer,
@@ -560,7 +562,8 @@ app::EditorRunResult run_editor(const std::string& path,
                             show_scrollbars,
                             true,
                             {},
-                            dired_status.c_str());
+                            dired_status.c_str(),
+                            changed);
             return;
         }
         if (buffer_list_active) {
@@ -3493,7 +3496,7 @@ app::EditorRunResult run_editor(const std::string& path,
             if (dired.focus == DiredFocus::View) {
                 if (ch == '\r' || ch == '\n') {
                     dired_close_view(dired);
-                    minibuffer_message(minibuffer, "Back to file list");
+                    minibuffer_message(minibuffer, "");
                     return;
                 }
                 if (ch == 'o' || ch == 'O') {
@@ -3518,8 +3521,7 @@ app::EditorRunResult run_editor(const std::string& path,
                     const std::string sequence =
                         decoded_escape ? std::string{} : read_escape_suffix();
                     if (sequence.empty()) {
-                        // Bare Esc cancels nothing special; stay in view.
-                        minibuffer_message(minibuffer, "Viewing file — Enter returns to list");
+                        // Bare Esc: stay in view; status bar has path/position.
                         return;
                     }
                     if (is_dired_f4_sequence(sequence)) {
@@ -3561,7 +3563,9 @@ app::EditorRunResult run_editor(const std::string& path,
                                              dired.last_search.empty() ? last_search
                                                                        : dired.last_search,
                                              &focus_rect);
-                    if (!escape_status.empty()) {
+                    // Keep minibuffer clear during RO browsing; status bar tracks position.
+                    if (!escape_status.empty() &&
+                        escape_status.find("not found") != std::string::npos) {
                         minibuffer_message(minibuffer, escape_status);
                     }
                     return;
@@ -3631,7 +3635,14 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             if (ch == '\r' || ch == '\n') {
                 Error err = dired_activate_selection(dired, settings);
-                minibuffer_message(minibuffer, err.ok() ? dired_status_line(dired) : err.message);
+                if (!err.ok()) {
+                    minibuffer_message(minibuffer, err.message);
+                } else if (dired.focus == DiredFocus::View) {
+                    // RO view: status bar has path/position; do not mirror dired list chrome.
+                    minibuffer_message(minibuffer, "");
+                } else {
+                    minibuffer_message(minibuffer, dired_status_line(dired));
+                }
                 return;
             }
             if (ch == 'o' || ch == 'O') {
@@ -4413,6 +4424,29 @@ app::EditorRunResult run_editor(const std::string& path,
 
     auto handle_mouse_input = [&](const MouseInputEvent& mouse) {
         if (picker.active || buffer_list_active || pending_close_confirm) return;
+        // RO dired view: move the caret with the wheel so Ln/Col status stays accurate.
+        if (dired.active && dired.focus == DiredFocus::View) {
+            const Rect content_rect = editor_content_rect(editor_main_area());
+            if (mouse.row < content_rect.row ||
+                mouse.row >= content_rect.row + content_rect.height ||
+                mouse.col < content_rect.col ||
+                mouse.col >= content_rect.col + content_rect.width) {
+                return;
+            }
+            MovementKey key = MovementKey::Down;
+            if (mouse.button == MouseButton::WheelUp) {
+                key = MovementKey::Up;
+            } else if (mouse.button == MouseButton::WheelDown) {
+                key = MovementKey::Down;
+            } else {
+                return;
+            }
+            for (int step = 0; step < 3; ++step) {
+                dired.view.apply_movement(key, content_rect, false, false, false);
+            }
+            return;
+        }
+        if (dired.active) return;
         const Rect pane_rect = help_view.active || !split_layout.has_split()
                                    ? editor_main_area()
                                    : split_layout.focused_rect(editor_main_area());

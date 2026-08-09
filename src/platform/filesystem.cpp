@@ -827,9 +827,17 @@ Error read_file_bounded(const std::string& path, std::size_t limit, std::string&
     return ok_error();
 }
 
-Error atomic_write_private(const std::string& path,
-                           const std::string& data,
-                           bool reject_reparse_points) {
+namespace {
+
+enum class AtomicWritePrivacy {
+    Private,  // 0600 / private DACL (secrets, chat, history)
+    Shared,   // umask for new files; preserve mode when overwriting
+};
+
+Error atomic_write_impl(const std::string& path,
+                        const std::string& data,
+                        bool reject_reparse_points,
+                        AtomicWritePrivacy privacy) {
     const fs::path parent = fs::u8path(path).parent_path();
     if (!parent.empty()) {
         Error error = require_directory_access(parent.u8string(), true, true);
@@ -860,14 +868,19 @@ Error atomic_write_private(const std::string& path,
     const std::string temporary = path + ".ainiux-tmp-" + suffix;
 #if defined(_WIN32)
     SecurityAttributes security;
-    Error error = security.initialize();
-    if (!error.ok()) return error;
+    LPSECURITY_ATTRIBUTES security_ptr = nullptr;
+    if (privacy == AtomicWritePrivacy::Private) {
+        Error error = security.initialize();
+        if (!error.ok()) return error;
+        security_ptr = &security.attributes;
+    }
     std::wstring native_temp;
     std::wstring native_path_value;
+    Error error;
     if (!(error = native_path(temporary, native_temp)).ok() ||
         !(error = native_path(path, native_path_value)).ok())
         return error;
-    Handle file(CreateFileW(native_temp.c_str(), GENERIC_WRITE, 0, &security.attributes,
+    Handle file(CreateFileW(native_temp.c_str(), GENERIC_WRITE, 0, security_ptr,
                             CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
                             nullptr));
     if (!file)
@@ -927,33 +940,73 @@ Error atomic_write_private(const std::string& path,
                 path_error("could not atomically replace file", path,
                            windows_error_message(code))};
     }
-    Handle destination(CreateFileW(
-        native_path_value.c_str(), READ_CONTROL | WRITE_DAC,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
-        nullptr));
-    if (!destination)
-        return {ErrorCode::FileWrite,
-                path_error("could not open replaced file ACL", path,
-                           windows_error_message(GetLastError()))};
-    BY_HANDLE_FILE_INFORMATION destination_information{};
-    if (!GetFileInformationByHandle(destination.get(), &destination_information))
-        return {ErrorCode::FileWrite,
-                path_error("could not verify replaced file", path,
-                           windows_error_message(GetLastError()))};
-    if (reject_reparse_points &&
-        (destination_information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
-        return {ErrorCode::BadArgs,
-                "atomic-write target became a Windows reparse point: " + path};
-    if (!(error = apply_private_acl(destination.get(), path, security.acl)).ok())
-        return error;
+    if (privacy == AtomicWritePrivacy::Private) {
+        Handle destination(CreateFileW(
+            native_path_value.c_str(), READ_CONTROL | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr));
+        if (!destination)
+            return {ErrorCode::FileWrite,
+                    path_error("could not open replaced file ACL", path,
+                               windows_error_message(GetLastError()))};
+        BY_HANDLE_FILE_INFORMATION destination_information{};
+        if (!GetFileInformationByHandle(destination.get(), &destination_information))
+            return {ErrorCode::FileWrite,
+                    path_error("could not verify replaced file", path,
+                               windows_error_message(GetLastError()))};
+        if (reject_reparse_points &&
+            (destination_information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+            return {ErrorCode::BadArgs,
+                    "atomic-write target became a Windows reparse point: " + path};
+        if (!(error = apply_private_acl(destination.get(), path, security.acl)).ok())
+            return error;
+    } else if (reject_reparse_points) {
+        Handle destination(CreateFileW(
+            native_path_value.c_str(), FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr));
+        if (destination) {
+            BY_HANDLE_FILE_INFORMATION destination_information{};
+            if (GetFileInformationByHandle(destination.get(), &destination_information) &&
+                (destination_information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+                return {ErrorCode::BadArgs,
+                        "atomic-write target became a Windows reparse point: " + path};
+        }
+    }
 #else
+    mode_t create_mode = 0600;
+    mode_t preserve_mode = 0;
+    bool have_preserve = false;
+    if (privacy == AtomicWritePrivacy::Shared) {
+        create_mode = 0666;  // umask applied by the kernel on create
+        struct stat existing {};
+        if (::lstat(path.c_str(), &existing) == 0 && S_ISREG(existing.st_mode)) {
+            preserve_mode = existing.st_mode & 0777;
+            have_preserve = true;
+        }
+    }
     Fd file(::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                   0600));
+                   create_mode));
     if (file.get() < 0)
         return {ErrorCode::FileWrite,
                 path_error("could not create temporary file", temporary,
                            std::strerror(errno))};
+    if (have_preserve && ::fchmod(file.get(), preserve_mode) != 0) {
+        const int code = errno;
+        file.reset();
+        (void)::unlink(temporary.c_str());
+        return {ErrorCode::FileWrite,
+                path_error("could not set temporary file mode", temporary, std::strerror(code))};
+    }
+    if (privacy == AtomicWritePrivacy::Private && ::fchmod(file.get(), 0600) != 0) {
+        const int code = errno;
+        file.reset();
+        (void)::unlink(temporary.c_str());
+        return {ErrorCode::FileWrite,
+                path_error("could not protect temporary file", temporary, std::strerror(code))};
+    }
     std::size_t offset = 0;
     while (offset < data.size()) {
         const ssize_t written = ::write(file.get(), data.data() + offset, data.size() - offset);
@@ -988,6 +1041,20 @@ Error atomic_write_private(const std::string& path,
     }
 #endif
     return ok_error();
+}
+
+}  // namespace
+
+Error atomic_write_private(const std::string& path,
+                           const std::string& data,
+                           bool reject_reparse_points) {
+    return atomic_write_impl(path, data, reject_reparse_points, AtomicWritePrivacy::Private);
+}
+
+Error atomic_write_shared(const std::string& path,
+                          const std::string& data,
+                          bool reject_reparse_points) {
+    return atomic_write_impl(path, data, reject_reparse_points, AtomicWritePrivacy::Shared);
 }
 
 Error atomic_move(const std::string& from, const std::string& to, bool replace_existing) {

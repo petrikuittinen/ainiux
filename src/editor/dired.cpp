@@ -1,6 +1,9 @@
 #include "editor/dired.hpp"
 
+#include "agent/history_backup.hpp"
 #include "editor/detail/editor_common.hpp"
+#include "editor/line_diff.hpp"
+#include "platform/filesystem.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -518,6 +521,33 @@ fs::path resolve_under_directory(const DiredState& state, const std::string& nam
     return (fs::u8path(state.directory) / input).lexically_normal();
 }
 
+// Hash of the agent history backup for a live file path, if present under .ainiux-pr/history.
+// Uses the same dired_hash_file algorithm as listing content hashes.
+bool history_backup_content_hash(const std::string& file_path, std::string& hash_out) {
+    hash_out.clear();
+    if (file_path.empty()) {
+        return false;
+    }
+    std::error_code abs_ec;
+    const fs::path absolute = fs::absolute(fs::u8path(file_path), abs_ec);
+    if (abs_ec) {
+        return false;
+    }
+    std::string project_root;
+    std::string relative;
+    if (!agent::find_enclosing_project_root(absolute.u8string(), project_root) ||
+        !agent::project_relative_path(project_root, absolute.u8string(), relative)) {
+        return false;
+    }
+    const std::string history_path = agent::history_backup_path(project_root, relative);
+    std::error_code hist_ec;
+    if (!fs::is_regular_file(fs::u8path(history_path), hist_ec) || hist_ec) {
+        return false;
+    }
+    hash_out = dired_hash_file(history_path, kDefaultHashCap);
+    return !hash_out.empty();
+}
+
 }  // namespace
 
 bool is_dired_f4_sequence(const std::string& sequence) {
@@ -706,20 +736,28 @@ std::vector<tui::StyledLine> dired_list_body_lines(const DiredState& state) {
 
 std::string dired_status_line(const DiredState& state) {
     std::ostringstream out;
+    if (state.focus == DiredFocus::View) {
+        // Compact RO chrome: single path, no sort key, no duplicated directory.
+        const std::string path =
+            state.view_path.empty() ? state.view.path : state.view_path;
+        out << "Dired  " << path << "  [RO]";
+        const size_t line = state.view.text.line_for_offset(state.view.cursor) + 1;
+        const size_t column =
+            state.view.text.display_column_for_offset(state.view.cursor, state.view.tab_width) + 1;
+        out << "  Ln " << line << ", Col " << column;
+        if (state.view_has_history_baseline) {
+            const size_t changed = count_changed_lines(state.view_changed_lines);
+            out << "  [diff " << changed << "]";
+        }
+        return out.str();
+    }
+
     out << "Dired  " << state.directory;
     if (!state.glob_pattern.empty()) {
         out << "  filter:" << state.glob_pattern;
     }
     out << "  " << dired_sort_label(state.sort_key, state.sort_ascending);
-    if (state.focus == DiredFocus::View) {
-        out << "  viewing " << (state.view_path.empty() ? state.view.path : state.view_path)
-            << " [RO]";
-        // Position only — no editor language/line-break chrome (meaningless in dired).
-        const size_t line = state.view.text.line_for_offset(state.view.cursor) + 1;
-        const size_t column =
-            state.view.text.display_column_for_offset(state.view.cursor, state.view.tab_width) + 1;
-        out << "  Ln " << line << ", Col " << column;
-    } else if (const DiredEntry* entry = dired_selected_entry(state)) {
+    if (const DiredEntry* entry = dired_selected_entry(state)) {
         out << "  " << (entry->is_directory ? "dir " : "file ") << entry->name;
         if (entry->dirty) {
             out << " *changed";
@@ -888,7 +926,16 @@ void dired_capture_baseline(DiredState& state) {
         if (entry.is_parent || entry.is_directory) {
             continue;
         }
-        if (!entry.content_hash.empty()) {
+        if (entry.content_hash.empty()) {
+            continue;
+        }
+        // Prefer the last agent pre-write snapshot as the "reviewed" baseline when
+        // it differs from the live file. Opening dired after an agent edit then
+        // correctly marks those files dirty instead of snapshotting the new content.
+        std::string bak_hash;
+        if (history_backup_content_hash(entry.path, bak_hash) && bak_hash != entry.content_hash) {
+            state.reviewed_hashes[entry.path] = bak_hash;
+        } else {
             state.reviewed_hashes[entry.path] = entry.content_hash;
         }
     }
@@ -999,7 +1046,48 @@ Error dired_activate_selection(DiredState& state, const EditorSettings& settings
     state.view.clear_selection();
     state.view.clear_undo_history();
     state.view_path = entry->path;
+    state.view_changed_lines.clear();
+    state.view_has_history_baseline = false;
     state.focus = DiredFocus::View;
+
+    // Dirty files: prefer last-agent pre-write snapshot under .ainiux-pr/history/
+    // for per-line backgrounds. Without a snapshot (brand-new file), mark every
+    // line so the RO view still acts as a poor-man's "what is new" review.
+    if (entry->dirty) {
+        bool loaded_history = false;
+        std::error_code abs_ec;
+        const fs::path absolute = fs::absolute(fs::u8path(entry->path), abs_ec);
+        if (!abs_ec) {
+            std::string project_root;
+            std::string relative;
+            if (agent::find_enclosing_project_root(absolute.u8string(), project_root) &&
+                agent::project_relative_path(project_root, absolute.u8string(), relative)) {
+                const std::string history_path =
+                    agent::history_backup_path(project_root, relative);
+                std::error_code hist_ec;
+                const fs::file_status hist_status =
+                    fs::status(fs::u8path(history_path), hist_ec);
+                if (!hist_ec && fs::is_regular_file(hist_status)) {
+                    // Match default history max (1M); larger backups are rare.
+                    constexpr std::size_t kHistoryReadCap = 1024U * 1024U;
+                    std::string previous;
+                    Error read_err =
+                        platform::read_file_bounded(history_path, kHistoryReadCap, previous);
+                    if (read_err.ok()) {
+                        const std::string current = state.view.text.str();
+                        state.view_changed_lines = mark_changed_lines(previous, current);
+                        state.view_has_history_baseline = true;
+                        loaded_history = true;
+                    }
+                }
+            }
+        }
+        if (!loaded_history) {
+            const size_t lines = state.view.text.line_count();
+            state.view_changed_lines.assign(lines, true);
+            state.view_has_history_baseline = true;
+        }
+    }
     return ok_error();
 }
 
@@ -1054,6 +1142,8 @@ void dired_close_view(DiredState& state) {
     state.focus = DiredFocus::List;
     state.view = EditorState{};
     state.view_path.clear();
+    state.view_changed_lines.clear();
+    state.view_has_history_baseline = false;
 }
 
 Error dired_rename_selected(DiredState& state, const std::string& new_path, bool overwrite) {

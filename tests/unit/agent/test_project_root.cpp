@@ -9,6 +9,7 @@
 #endif
 
 #include "agent/compact.hpp"
+#include "agent/history_backup.hpp"
 #include "agent/project_root.hpp"
 #include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
@@ -816,6 +817,54 @@ void test_reasoning_sticky_slice_prefers_first_thought_and_backtracks() {
 
 }  // namespace
 
+void test_history_backup_path_and_enclosing_project() {
+    const std::string root = temp_dir("history-bak");
+    fs::create_directories(fs::path(root) / ".ainiux-pr" / "history");
+    fs::create_directories(fs::path(root) / "src");
+    {
+        std::ofstream f(fs::path(root) / "src" / "a.cpp");
+        f << "int main() {}\n";
+    }
+
+    const std::string name1 = agent::history_backup_filename("src/a.cpp");
+    const std::string name2 = agent::history_backup_filename("src/a.cpp");
+    check(name1 == name2 && !name1.empty(), "history filename is stable for same relative path");
+    check(name1 != agent::history_backup_filename("src/b.cpp"),
+          "different relative paths get different history names");
+    check(name1.size() > 4 && name1.compare(name1.size() - 4, 4, ".bak") == 0,
+          "history filename ends with .bak");
+    check(name1.find('-') != std::string::npos, "history filename has hash-tail form");
+    // generic_u8string keeps a leading "./" distinction; tools pass cleaned relative paths.
+    check(agent::history_backup_filename("src/nested/file.hpp").find(".bak") != std::string::npos,
+          "nested relative path produces a .bak name");
+
+    const std::string full = agent::history_backup_path(root, "src/a.cpp");
+    check(full.find(".ainiux-pr") != std::string::npos && full.find("history") != std::string::npos,
+          "history path nests under .ainiux-pr/history");
+    check(full.find(name1) != std::string::npos, "history path uses stable filename");
+
+    std::string found_root;
+    check(agent::find_enclosing_project_root((fs::path(root) / "src" / "a.cpp").string(),
+                                             found_root),
+          "finds enclosing project from nested file");
+    std::error_code ec;
+    check(fs::equivalent(fs::u8path(found_root), fs::u8path(root), ec) ||
+              fs::weakly_canonical(found_root) == fs::weakly_canonical(root),
+          "enclosing root matches project");
+
+    std::string relative;
+    check(agent::project_relative_path(root, (fs::path(root) / "src" / "a.cpp").string(), relative),
+          "project_relative_path succeeds");
+    check(relative == "src/a.cpp", "relative path is generic src/a.cpp got: " + relative);
+
+    std::string outside_root;
+    check(!agent::find_enclosing_project_root(temp_dir("no-project"), outside_root),
+          "no project outside .ainiux-pr tree");
+
+    std::error_code rm;
+    fs::remove_all(root, rm);
+}
+
 void run_all() {
     test_resolve_clean_workspace();
     test_reject_parent_ainiux();
@@ -825,6 +874,7 @@ void run_all() {
     test_windows_protected_names_are_case_insensitive();
 #endif
     test_new_project_target_resolution_and_validation();
+    test_history_backup_path_and_enclosing_project();
     test_compact_threshold_defaults();
     test_compaction_strategies_timeline_and_partition();
     test_tool_display_format();

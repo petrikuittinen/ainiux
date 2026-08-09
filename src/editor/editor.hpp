@@ -50,6 +50,8 @@ struct RenderedPanel {
         bool selected = false;
     };
     std::vector<std::vector<Span>> line_spans;
+    // Parallel to lines: true when this display row should use the mild changed-line bg.
+    std::vector<bool> line_changed_bg;
     CursorPoint cursor;
 };
 
@@ -288,13 +290,15 @@ struct EditorState {
     // Scroll the viewport by rendered rows without moving or editing the caret.
     // Positive values move toward the document end; negative values move up.
     bool scroll_view_rows(const Rect& rect, int rows);
-    RenderedPanel render(const Rect& rect) const;
+    RenderedPanel render(const Rect& rect,
+                         const std::vector<bool>* changed_source_lines = nullptr) const;
     // Render using an explicit window view (per-pane cursor/scroll) while
     // keeping this buffer's text, selection, and highlight cache.
     RenderedPanel render(const Rect& rect,
                          size_t view_cursor,
                          size_t view_scroll_line,
-                         size_t view_scroll_column) const;
+                         size_t view_scroll_column,
+                         const std::vector<bool>* changed_source_lines = nullptr) const;
     // Counts visual rows only until limit is reached. This is intended for
     // responsive UI sizing and avoids scanning the rest of a large draft.
     size_t visual_row_count_bounded(size_t width, size_t limit) const;
@@ -340,7 +344,8 @@ RenderedPanel render_panel(const PieceTable& text,
                            highlight::Language language = highlight::Language::Text,
                            bool highlight_enabled = false,
                            highlight::DocumentCache* highlight_cache = nullptr,
-                           size_t tab_width = kDefaultTabWidth);
+                           size_t tab_width = kDefaultTabWidth,
+                           const std::vector<bool>* changed_source_lines = nullptr);
 
 struct LoadedFile {
     PieceTable text;

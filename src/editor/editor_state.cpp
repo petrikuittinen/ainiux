@@ -1147,14 +1147,16 @@ bool EditorState::scroll_view_rows(const Rect& rect, int rows) {
     return scroll_line != before;
 }
 
-RenderedPanel EditorState::render(const Rect& rect) const {
-    return render(rect, cursor, scroll_line, scroll_column);
+RenderedPanel EditorState::render(const Rect& rect,
+                                  const std::vector<bool>* changed_source_lines) const {
+    return render(rect, cursor, scroll_line, scroll_column, changed_source_lines);
 }
 
 RenderedPanel EditorState::render(const Rect& rect,
                                   size_t view_cursor,
                                   size_t view_scroll_line,
-                                  size_t view_scroll_column) const {
+                                  size_t view_scroll_column,
+                                  const std::vector<bool>* changed_source_lines) const {
     const std::optional<Selection> active_selection =
         selection.has_range() ? std::optional<Selection>(selection) : std::nullopt;
     return render_panel(text,
@@ -1166,7 +1168,8 @@ RenderedPanel EditorState::render(const Rect& rect,
                         language,
                         highlight_enabled,
                         &highlight_cache_,
-                        tab_width);
+                        tab_width,
+                        changed_source_lines);
 }
 
 size_t EditorState::visual_row_count_bounded(size_t width, size_t limit) const {

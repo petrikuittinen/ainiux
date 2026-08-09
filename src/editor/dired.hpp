@@ -60,6 +60,9 @@ struct DiredState {
     EditorState view;
     std::string view_path;
     std::string last_search;
+    // Per source-line marks for dired read-only history diff (empty = no overlay).
+    std::vector<bool> view_changed_lines;
+    bool view_has_history_baseline = false;
 };
 
 // Physical F4 key escape sequences (not the internal Alt+X sentinel 0xF4).

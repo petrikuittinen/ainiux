@@ -11,8 +11,10 @@
 #include "editor/clipboard.hpp"
 #include "editor/editor.hpp"
 #include "editor/editor_assist.hpp"
+#include "agent/history_backup.hpp"
 #include "editor/dired.hpp"
 #include "editor/editor_help.hpp"
+#include "editor/line_diff.hpp"
 #include "editor/editor_picker.hpp"
 #include "editor/file_session.hpp"
 #include "editor/path_completion.hpp"
@@ -3536,6 +3538,63 @@ void test_editor_undo_redo_key_bindings() {
     ainiux::editor::clear_terminal_input_queue();
 }
 
+void test_editor_line_diff() {
+    using ainiux::editor::count_changed_lines;
+    using ainiux::editor::mark_changed_lines;
+    using ainiux::editor::split_logical_lines;
+
+    check(split_logical_lines("a\nb\n").size() == 3, "trailing newline yields empty last line");
+    check(split_logical_lines("a\nb").size() == 2, "no trailing newline has two lines");
+    check(split_logical_lines("").size() == 1, "empty text is one empty line");
+
+    {
+        const auto marks = mark_changed_lines("a\nb\nc\n", "a\nb\nc\n");
+        check(count_changed_lines(marks) == 0, "identical files mark nothing");
+    }
+    {
+        const auto marks = mark_changed_lines("a\nb\nc\n", "a\nB\nc\n");
+        check(marks.size() >= 3 && !marks[0] && marks[1] && !marks[2],
+              "single replaced line is marked");
+    }
+    {
+        const auto marks = mark_changed_lines("a\nc\n", "a\nb\nc\n");
+        check(marks.size() >= 3 && !marks[0] && marks[1] && !marks[2],
+              "inserted middle line is marked");
+    }
+    {
+        const auto marks = mark_changed_lines("a\nb\nc\n", "a\nc\n");
+        check(marks.size() >= 2 && !marks[0] && !marks[1],
+              "deletion leaves remaining equal lines unmarked");
+    }
+    {
+        const auto marks = mark_changed_lines("a\r\nb\r\n", "a\nb\n");
+        check(count_changed_lines(marks) == 0, "CRLF history matches LF buffer");
+    }
+    {
+        const auto marks = mark_changed_lines("", "only\n");
+        check(count_changed_lines(marks) > 0, "empty previous marks current content");
+    }
+
+    // render_panel applies row flags without changing syntax span roles.
+    {
+        ainiux::editor::PieceTable text =
+            ainiux::editor::PieceTable::from_string("int x = 1;\nint y = 2;\n");
+        std::vector<bool> changed{false, true, false};
+        ainiux::editor::Rect rect;
+        rect.row = 1;
+        rect.col = 1;
+        rect.height = 3;
+        rect.width = 40;
+        ainiux::highlight::DocumentCache cache;
+        const ainiux::editor::RenderedPanel panel = ainiux::editor::render_panel(
+            text, rect, 0, 0, 0, std::nullopt, ainiux::highlight::Language::Cpp, true, &cache,
+            4, &changed);
+        check(panel.line_changed_bg.size() >= 2, "render emits line_changed_bg rows");
+        check(!panel.line_changed_bg[0] && panel.line_changed_bg[1],
+              "render marks only changed source lines");
+    }
+}
+
 void test_editor_dired() {
     namespace fs = std::filesystem;
     using ainiux::editor::DiredFocus;
@@ -3733,8 +3792,109 @@ void test_editor_dired() {
     check(state.focus == DiredFocus::View, "focus switches to view");
     check(state.view.read_only, "view is read-only");
     check(state.view.text.str().find("world") != std::string::npos, "view loads file content");
+    check(!state.view_has_history_baseline && state.view_changed_lines.empty(),
+          "clean/non-project view has no history diff marks");
     ainiux::editor::dired_close_view(state);
     check(state.focus == DiredFocus::List, "closing view returns to list");
+
+    // Dirty file + project history backup → per-line changed marks in RO view.
+    {
+        const fs::path project = fs::path("build") / "dired-history-diff";
+        fs::remove_all(project, ec);
+        fs::create_directories(project / "src", ec);
+        fs::create_directories(project / ".ainiux-pr" / "history", ec);
+        {
+            std::ofstream f(project / "src" / "main.cpp");
+            f << "line1\nline2\nline3\n";
+        }
+        // Simulate agent write: bak holds pre-write, live file is already edited.
+        std::string project_root;
+        std::string relative;
+        check(ainiux::agent::find_enclosing_project_root(
+                  (project / "src" / "main.cpp").string(), project_root),
+              "enclosing project found for main.cpp");
+        check(ainiux::agent::project_relative_path(
+                  project_root, (project / "src" / "main.cpp").string(), relative),
+              "relative path for main.cpp");
+        const std::string bak =
+            ainiux::agent::history_backup_path(project_root, relative);
+        {
+            fs::create_directories(fs::path(bak).parent_path(), ec);
+            std::ofstream out(bak, std::ios::binary | std::ios::trunc);
+            out << "line1\nline2\nline3\n";
+        }
+        {
+            std::ofstream f(project / "src" / "main.cpp", std::ios::trunc);
+            f << "line1\nline2-changed\nline3\nline4\n";
+        }
+
+        // First dired open AFTER the agent edit must seed dirty from history bak.
+        DiredState hist_state;
+        check(ainiux::editor::dired_open(hist_state, (project / "src").string()).ok(),
+              "history-diff dired opens after agent edit");
+        for (size_t i = 0; i < hist_state.entries.size(); ++i) {
+            if (hist_state.entries[i].name == "main.cpp") {
+                hist_state.selected = i;
+                break;
+            }
+        }
+        check(hist_state.entries[hist_state.selected].dirty,
+              "main.cpp dirty on first open when history bak differs");
+
+        check(ainiux::editor::dired_activate_selection(hist_state, settings).ok(),
+              "open dirty file with history");
+        check(hist_state.view_has_history_baseline, "history baseline active");
+        check(hist_state.view_changed_lines.size() >= 3, "changed-line vector sized");
+        check(!hist_state.view_changed_lines[0], "unchanged line1 not marked");
+        check(hist_state.view_changed_lines[1], "changed line2 marked");
+        check(!hist_state.view_changed_lines[2], "unchanged line3 not marked");
+        if (hist_state.view_changed_lines.size() > 3) {
+            check(hist_state.view_changed_lines[3], "added line4 marked");
+        }
+        const std::string status = ainiux::editor::dired_status_line(hist_state);
+        check(status.find("[diff") != std::string::npos, "status reports diff count");
+        check(status.find("name^") == std::string::npos &&
+                  status.find("viewing") == std::string::npos,
+              "RO status omits sort label and duplicated viewing path");
+        check(status.find("main.cpp") != std::string::npos, "RO status shows file path");
+        ainiux::editor::dired_close_view(hist_state);
+
+        // After pass, reopening should not mark (not dirty).
+        check(ainiux::editor::dired_toggle_pass_selected(hist_state).ok(), "pass dirty file");
+        check(!hist_state.entries[hist_state.selected].dirty, "passed file clean");
+        check(ainiux::editor::dired_activate_selection(hist_state, settings).ok(),
+              "open reviewed file");
+        check(!hist_state.view_has_history_baseline && hist_state.view_changed_lines.empty(),
+              "reviewed file has no history marks");
+        ainiux::editor::dired_close(hist_state);
+
+        // File appearing after the session baseline, with no history bak: dirty + all lines tinted.
+        DiredState new_state;
+        check(ainiux::editor::dired_open(new_state, (project / "src").string()).ok(),
+              "open before brand-new file appears");
+        ainiux::editor::dired_capture_baseline(new_state);
+        {
+            std::ofstream f(project / "src" / "brand_new.txt");
+            f << "alpha\nbeta\n";
+        }
+        check(ainiux::editor::dired_refresh(new_state).ok(), "refresh after brand-new appears");
+        for (size_t i = 0; i < new_state.entries.size(); ++i) {
+            if (new_state.entries[i].name == "brand_new.txt") {
+                new_state.selected = i;
+                break;
+            }
+        }
+        check(new_state.entries[new_state.selected].dirty, "brand-new file is dirty");
+        check(ainiux::editor::dired_activate_selection(new_state, settings).ok(),
+              "view brand-new dirty file");
+        check(new_state.view_has_history_baseline, "diff overlay active without bak");
+        check(!new_state.view_changed_lines.empty(), "marks present without bak");
+        for (bool mark : new_state.view_changed_lines) {
+            check(mark, "every line marked when no history snapshot");
+        }
+        ainiux::editor::dired_close(new_state);
+        fs::remove_all(project, ec);
+    }
 
     // mkdir -p style, touch, rename, copy, delete.
     check(ainiux::editor::dired_create_directory(state, "templates/poll").ok(),
@@ -5582,6 +5742,7 @@ void run_all() {
     test_editor_undo_redo_key_bindings();
     test_editor_revert_to_snapshot();
     test_editor_undo_redo();
+    test_editor_line_diff();
     test_editor_dired();
     test_editor_split_layout();
     test_editor_unicode_combining_sequence_wraps_on_grapheme_boundary();

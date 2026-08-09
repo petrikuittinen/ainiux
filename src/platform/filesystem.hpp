@@ -53,9 +53,16 @@ Error create_private_file_exclusive(const std::string& utf8_path, bool& created)
 Error read_file_bounded(const std::string& utf8_path,
                         std::size_t limit,
                         std::string& output);
+// Private content (credentials, chat, history under .ainiux-pr): mode 0600 / private DACL.
 Error atomic_write_private(const std::string& utf8_path,
                            const std::string& data,
                            bool reject_reparse_points = false);
+// Ordinary project/workspace content: preserve existing mode when overwriting;
+// new files use 0666 so the process umask applies (typically 0644 or 0664).
+// On Windows uses default inheritance (not the private user-only DACL).
+Error atomic_write_shared(const std::string& utf8_path,
+                          const std::string& data,
+                          bool reject_reparse_points = false);
 Error atomic_move(const std::string& from_utf8_path,
                   const std::string& to_utf8_path,
                   bool replace_existing = false);
