@@ -222,6 +222,19 @@ long long AgentSessionRuntime::last_nonzero_request_tokens() const {
     return last_nonzero_request_tokens_.load(std::memory_order_relaxed);
 }
 
+long long AgentSessionRuntime::in_flight_generation_tokens() const {
+    return in_flight_generation_tokens_.load(std::memory_order_relaxed);
+}
+
+void AgentSessionRuntime::publish_in_flight_generation_tokens(long long tokens) {
+    if (tokens < 0) tokens = 0;
+    in_flight_generation_tokens_.store(tokens, std::memory_order_relaxed);
+}
+
+void AgentSessionRuntime::clear_in_flight_generation_tokens() {
+    in_flight_generation_tokens_.store(0, std::memory_order_relaxed);
+}
+
 Error AgentSessionRuntime::update_project_settings(
     const provider::RequestContext& context) {
     if (!prepared_) return {ErrorCode::Internal, "agent runtime is not prepared"};
@@ -947,6 +960,7 @@ void AgentSessionRuntime::reset() {
     goal_ = SessionGoal{};
     cached_request_tokens_.store(0, std::memory_order_relaxed);
     last_nonzero_request_tokens_.store(0, std::memory_order_relaxed);
+    in_flight_generation_tokens_.store(0, std::memory_order_relaxed);
     guard_approval_wait_ms_.store(0, std::memory_order_relaxed);
     operation_active_.store(false, std::memory_order_relaxed);
 }
@@ -2137,6 +2151,24 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         std::size_t thinking_sentence_offset = 0;
         std::string last_live_thinking_preview;
         auto last_thinking_idle_emit = std::chrono::steady_clock::now();
+        const int thinking_token_refresh_seconds =
+            std::max(0, context.options.agent_thinking_token_refresh_seconds);
+        auto last_thinking_token_publish = std::chrono::steady_clock::time_point::min();
+        clear_in_flight_generation_tokens();
+        auto maybe_publish_in_flight_tokens = [&](const std::string& reasoning_so_far) {
+            if (!options_.interactive || thinking_token_refresh_seconds <= 0) return;
+            const auto now = std::chrono::steady_clock::now();
+            if (last_thinking_token_publish !=
+                std::chrono::steady_clock::time_point::min()) {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                                         now - last_thinking_token_publish)
+                                         .count();
+                if (elapsed < thinking_token_refresh_seconds) return;
+            }
+            publish_in_flight_generation_tokens(
+                estimate_tokens_from_text(reasoning_so_far));
+            last_thinking_token_publish = now;
+        };
         publish_phase(AgentActivityPhase::Thinking);
         ReviewLogContext log_context("agent");
         log_context.round = state_.turn + 1;
@@ -2165,6 +2197,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 thinking_sentence_offset = 0;
                 last_live_thinking_preview.clear();
                 last_thinking_idle_emit = std::chrono::steady_clock::now();
+                last_thinking_token_publish =
+                    std::chrono::steady_clock::time_point::min();
+                clear_in_flight_generation_tokens();
                 retry_notice_active = true;
                 std::string retry_notice =
                     "Waiting for provider · retry " +
@@ -2207,6 +2242,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         auto on_reasoning = [&](const std::string& delta) -> Error {
                 if (!options_.interactive) return ok_error();
                 round_reasoning += delta;
+                // Throttled chrome meter: request size + local in-flight
+                // reasoning estimate. Display-only; not compaction input.
+                maybe_publish_in_flight_tokens(round_reasoning);
                 if (thinking_preview_max_chars == 0) {
                     return cancellation.cancelled()
                                ? Error{ErrorCode::Cancelled,
@@ -2332,6 +2370,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 thinking_sentence_offset = 0;
                 last_live_thinking_preview.clear();
                 last_thinking_idle_emit = std::chrono::steady_clock::now();
+                last_thinking_token_publish =
+                    std::chrono::steady_clock::time_point::min();
+                clear_in_flight_generation_tokens();
                 error = send_tool_round_with_transport_retries(
                     context, conversation_, definitions, round, cancellation,
                     limits_.transport_attempts, observer_pointer,
@@ -2346,6 +2387,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 structured_progress({AgentProgressAction::Discard,
                                      AgentProgressKind::Thinking, active_round_id,
                                      thinking_tool_id, {}, 0});
+            clear_in_flight_generation_tokens();
             pair_dangling_tool_calls(context, conversation_, state_);
             publish_request_token_estimate();
             result.error = error;
@@ -2414,6 +2456,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         accumulate_agent_token_usage(round.metrics, result.token_usage,
                                      estimated_round_input_tokens,
                                      estimated_round_output_tokens);
+        // In-flight reasoning is not retained in the request projection; drop
+        // the live meter before republishing the true next-request estimate.
+        clear_in_flight_generation_tokens();
         const provider::ChatResult round_metrics = round.metrics;
         AgentRoundOutcome outcome = handle_agent_tool_round(
             state_, limits_, context, conversation_, std::move(round), known_tools_, executor,

@@ -2319,6 +2319,13 @@ Error apply_document(const Document& document, cli::Options& options) {
                     entry,
                     "tui.agent_thinking_idle_preview_seconds expects an integer from 0 through 3600");
             }
+        } else if (name == "tui.agent_thinking_token_refresh_seconds") {
+            err = nonnegative_int(entry, candidate.agent_thinking_token_refresh_seconds);
+            if (err.ok() && candidate.agent_thinking_token_refresh_seconds > 3600) {
+                err = schema_error(
+                    entry,
+                    "tui.agent_thinking_token_refresh_seconds expects an integer from 0 through 3600");
+            }
         } else {
             err = schema_error(entry, "unknown section or key");
         }

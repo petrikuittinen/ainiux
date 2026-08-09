@@ -837,7 +837,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 73, "common config has every expected setting");
+    check(parsed.document.entries.size() == 74, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -1363,6 +1363,28 @@ void test_agent_input_height_config() {
     check(!idle_invalid_error.ok() &&
               idle_invalid_error.message.find("0 through 3600") != std::string::npos,
           "agent thinking idle preview rejects values above 3600 actionably");
+    check(options.agent_thinking_token_refresh_seconds == 1,
+          "agent thinking token refresh defaults to 1 second");
+    for (int value : {0, 3600}) {
+        ainiux::config::ParseResult refresh_parsed = ainiux::config::parse(
+            "[tui]\nagent_thinking_token_refresh_seconds = " +
+                std::to_string(value) + "\n",
+            "agent-thinking-token-refresh.conf");
+        ainiux::Error refresh_error =
+            ainiux::config::apply_document(refresh_parsed.document, options);
+        check(refresh_parsed.error.ok() && refresh_error.ok() &&
+                  options.agent_thinking_token_refresh_seconds == value,
+              "agent thinking token refresh accepts its inclusive boundaries");
+    }
+    ainiux::config::ParseResult refresh_invalid = ainiux::config::parse(
+        "[tui]\nagent_thinking_token_refresh_seconds = 3601\n",
+        "agent-thinking-token-refresh-invalid.conf");
+    ainiux::Error refresh_invalid_error =
+        ainiux::config::apply_document(refresh_invalid.document, options);
+    check(!refresh_invalid_error.ok() &&
+              refresh_invalid_error.message.find("0 through 3600") !=
+                  std::string::npos,
+          "agent thinking token refresh rejects values above 3600 actionably");
 }
 
 }  // namespace

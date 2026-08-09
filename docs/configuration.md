@@ -84,7 +84,7 @@ At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic
 - `[editor]` controls undo, file size warnings, auto-save, indentation, line endings, alignment width, and AI continuation limits.
 - `[url_fetch]` controls byte limits and private-address permission.
 - `[web_search]` controls result count, provider, key-variable names, and optional endpoints.
-- `[tui]` controls colors, theme, color wire format (`color_mode`), highlighting, thinking display, agent input height, reasoning-preview length (`agent_thinking_preview_max_chars`), and how often idle pure-reasoning streams print a new thinking sentence (`agent_thinking_idle_preview_seconds`, default `30`). Live agent thinking rows still animate the newest fragment; frozen rows prefer the first thought of the uncommitted range and backtrack for very short closers within the same char budget.
+- `[tui]` controls colors, theme, color wire format (`color_mode`), highlighting, thinking display, agent input height, reasoning-preview length (`agent_thinking_preview_max_chars`), how often idle pure-reasoning streams print a new thinking sentence (`agent_thinking_idle_preview_seconds`, default `30`), and how often the agent context chrome refreshes an in-flight reasoning token estimate during long thinks (`agent_thinking_token_refresh_seconds`, default `1`; `0` disables). Live agent thinking rows still animate the newest fragment; frozen rows prefer the first thought of the uncommitted range and backtrack for very short closers within the same char budget.
 
 ## Themes
 

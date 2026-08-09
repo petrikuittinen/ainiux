@@ -2,6 +2,8 @@
 #include "tui/agent_progress.hpp"
 #include "tui/agent_widgets.hpp"
 #include "tui/tui.hpp"
+
+#include <limits>
 #include "tui/events.hpp"
 #include "tui/chat_assist.hpp"
 #include "tui/background_metadata.hpp"
@@ -300,6 +302,14 @@ app::TuiRunResult run(provider::RequestContext context,
             // the last non-zero worker estimate over an empty chrome reading.
             if (used <= 0)
                 used = agent_runtime->last_nonzero_request_tokens();
+            // During long pure-reasoning streams, add a throttled local estimate
+            // of in-flight generation so the chrome is not frozen for minutes.
+            // This is display-only; compaction uses estimated_request_tokens alone.
+            const long long inflight = agent_runtime->in_flight_generation_tokens();
+            if (inflight > 0 &&
+                used <= std::numeric_limits<long long>::max() - inflight) {
+                used += inflight;
+            }
         } else {
             used = context::estimated_text_tokens(session.messages);
         }

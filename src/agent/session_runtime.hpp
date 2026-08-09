@@ -177,11 +177,16 @@ class AgentSessionRuntime {
 
     // Thread-safe: returns last published estimate (worker updates only).
     // Never walks conversation_ from the UI thread — that races with run_user_turn.
+    // Pure model-visible request size; does not include in-flight generation.
     long long estimated_request_tokens() const;
     // Last non-zero published request estimate. Used by the TUI when the live
     // cache is temporarily 0 (e.g. between prepare and first seed) so the
     // status line does not claim an empty context after compact/resume.
     long long last_nonzero_request_tokens() const;
+    // Local estimate of streamed reasoning/output not yet committed into the
+    // request conversation. TUI chrome may add this to estimated_request_tokens
+    // for a live meter; compaction must not.
+    long long in_flight_generation_tokens() const;
 
     // Refresh index, create tools, open agent.sqlite, load prompts/AGENTS.md.
     // Does not create a session row until the first user turn.
@@ -284,6 +289,9 @@ class AgentSessionRuntime {
                         const std::function<bool()>& interrupted) const;
     // Worker-only: recompute from conversation_ and publish for UI chrome.
     void publish_request_token_estimate();
+    // Worker-only: publish or clear the throttled in-flight generation estimate.
+    void publish_in_flight_generation_tokens(long long tokens);
+    void clear_in_flight_generation_tokens();
     // Fixed per-request overhead always present after seed: system prompt,
     // optional AGENTS.md, Act/Plan control, and native tool schemas.
     long long estimate_seed_overhead_tokens() const;
@@ -327,6 +335,7 @@ class AgentSessionRuntime {
     // Published by the agent worker; read by the TUI render path without locking conversation_.
     mutable std::atomic<long long> cached_request_tokens_{0};
     mutable std::atomic<long long> last_nonzero_request_tokens_{0};
+    mutable std::atomic<long long> in_flight_generation_tokens_{0};
     // Total steady-clock time spent waiting for interactive Guard decisions.
     // The tool executor snapshots this counter to exclude approval waits.
     std::atomic<long long> guard_approval_wait_ms_{0};

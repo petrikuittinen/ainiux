@@ -133,6 +133,10 @@ struct Options {
     // before printing the next thinking-preview sentence. 0 disables idle
     // advancement; maximum 3600. Default 30.
     int agent_thinking_idle_preview_seconds = 30;
+    // How often interactive agent chrome refreshes the in-flight generation
+    // token estimate while pure reasoning streams. Default 1 second; 0 disables
+    // mid-stream updates (request estimate only); maximum 3600.
+    int agent_thinking_token_refresh_seconds = 1;
     std::string benchmark_dataset = "builtin";
     std::string grade_input;
     std::string benchmark_category;
