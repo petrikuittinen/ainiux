@@ -37,4 +37,19 @@ ReasoningIdleSlice take_reasoning_idle_slice(const std::string& normalized,
 std::string reasoning_active_slice(const std::string& normalized,
                                    std::size_t start_offset);
 
+// Commit-time (sticky) preview for a thinking history row.
+// Prefers the first thought(s) of the uncommitted range [start_offset, end),
+// packing complete sentences up to content_graphemes. When that result is a
+// short closer (e.g. "Good."), expands backward so the window still ends on
+// the closer and fills the same budget. next_offset advances only forward
+// through uncommitted text (not past backtracked context).
+struct ReasoningStickySlice {
+    std::string text;
+    std::size_t next_offset = 0;
+};
+
+ReasoningStickySlice reasoning_sticky_slice(const std::string& normalized,
+                                            std::size_t start_offset,
+                                            std::size_t content_graphemes);
+
 }  // namespace ainiux::agent

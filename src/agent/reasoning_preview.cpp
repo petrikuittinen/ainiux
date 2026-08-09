@@ -1,6 +1,7 @@
 #include "agent/reasoning_preview.hpp"
 
 #include <cctype>
+#include <vector>
 
 #include "editor/detail/unicode.hpp"
 #include "security/redact.hpp"
@@ -197,6 +198,104 @@ std::string grapheme_prefix(const std::string& text, std::size_t count) {
     return text.substr(0, position);
 }
 
+// Last `count` graphemes of text (or all of text when shorter).
+std::string grapheme_suffix(const std::string& text, std::size_t count) {
+    if (count == 0 || text.empty()) return {};
+    std::vector<std::size_t> starts;
+    starts.reserve(text.size());
+    for (std::size_t position = 0; position < text.size();) {
+        starts.push_back(position);
+        position = editor::detail::next_grapheme_offset(text, position);
+    }
+    if (starts.size() <= count) return text;
+    return text.substr(starts[starts.size() - count]);
+}
+
+// Short closers like "Good." / "OK." that should pull preceding context.
+constexpr std::size_t kShortStickyGraphemes = 24;
+constexpr std::size_t kShortStickyTokens = 3;
+
+std::size_t count_whitespace_tokens(const std::string& text) {
+    std::size_t tokens = 0;
+    bool in_token = false;
+    for (unsigned char ch : text) {
+        if (std::isspace(ch) != 0) {
+            in_token = false;
+            continue;
+        }
+        if (!in_token) {
+            ++tokens;
+            in_token = true;
+        }
+    }
+    return tokens;
+}
+
+bool is_short_sticky_text(const std::string& text) {
+    if (text.empty()) return true;
+    if (grapheme_count(text) < kShortStickyGraphemes) return true;
+    return count_whitespace_tokens(text) < kShortStickyTokens;
+}
+
+// If suffix begins mid-word, drop the leading partial word so the sticky row
+// starts on a cleaner boundary.
+std::string trim_leading_partial_word(std::string text) {
+    if (text.empty()) return text;
+    const unsigned char first = static_cast<unsigned char>(text.front());
+    if (!is_word_char(first)) return text;
+    std::size_t i = 0;
+    while (i < text.size() && is_word_char(static_cast<unsigned char>(text[i])))
+        ++i;
+    while (i < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[i])) != 0)
+        ++i;
+    if (i == 0 || i >= text.size()) return text;
+    return text.substr(i);
+}
+
+// Prefer starting just after a sentence end inside the reverse window when the
+// remainder still carries useful content; otherwise keep the window as-is.
+// Leading partial-word trimming is handled by the caller only when the reverse
+// window actually cut mid-token.
+std::string refine_backtrack_window(const std::string& window) {
+    if (window.empty()) return window;
+    // Look for a sentence end in the first half so the row still ends on the
+    // short closer but opens on a thought boundary when possible.
+    const std::size_t limit = window.size() / 2;
+    std::size_t best = std::string::npos;
+    for (std::size_t pos = 0; pos < limit; ++pos) {
+        if (!is_sentence_end(window, pos)) continue;
+        const std::size_t after =
+            skip_spaces(window, pos + sentence_end_byte_length(window, pos));
+        if (after > 0 && after < window.size() &&
+            grapheme_count(window.substr(after)) >= kShortStickyGraphemes)
+            best = after;
+    }
+    if (best != std::string::npos) return window.substr(best);
+    return window;
+}
+
+std::string backtrack_sticky_window(const std::string& normalized,
+                                    std::size_t sticky_end,
+                                    std::size_t content_graphemes) {
+    if (sticky_end == 0 || content_graphemes == 0) return {};
+    const std::string prefix = normalized.substr(0, sticky_end);
+    std::string window = grapheme_suffix(prefix, content_graphemes);
+    if (window.empty()) return {};
+    // Only drop a leading partial word when the reverse window cut mid-token
+    // (previous byte was also a word char). Whole tokens like "Good." stay.
+    const std::size_t window_start = sticky_end - window.size();
+    if (window_start > 0) {
+        const unsigned char at =
+            static_cast<unsigned char>(normalized[window_start]);
+        const unsigned char before =
+            static_cast<unsigned char>(normalized[window_start - 1]);
+        if (is_word_char(at) && is_word_char(before))
+            window = trim_leading_partial_word(window);
+    }
+    return refine_backtrack_window(window);
+}
+
 }  // namespace
 
 std::string normalize_reasoning_preview_text(
@@ -292,6 +391,78 @@ std::string reasoning_active_slice(const std::string& normalized,
         if (offset >= normalized.size()) return last_complete;
     }
     return last_complete;
+}
+
+ReasoningStickySlice reasoning_sticky_slice(const std::string& normalized,
+                                            std::size_t start_offset,
+                                            std::size_t content_graphemes) {
+    ReasoningStickySlice out;
+    if (content_graphemes == 0) {
+        out.next_offset = start_offset;
+        return out;
+    }
+    const std::size_t start = skip_spaces(normalized, start_offset);
+    if (start >= normalized.size()) {
+        out.next_offset = normalized.size();
+        return out;
+    }
+
+    std::size_t packed_end = start;
+    std::size_t advance_to = start;
+    std::size_t cursor = start;
+    while (cursor < normalized.size()) {
+        const ReasoningIdleSlice slice =
+            take_reasoning_idle_slice(normalized, cursor, 0, false);
+        if (slice.text.empty()) {
+            if (packed_end == start) {
+                // No complete sentence yet: clip the monologue head.
+                const ReasoningIdleSlice forced = take_reasoning_idle_slice(
+                    normalized, start, content_graphemes, true);
+                out.text = forced.text;
+                out.next_offset = forced.next_offset;
+                const std::size_t sticky_end = start + out.text.size();
+                if (is_short_sticky_text(out.text) && start > 0) {
+                    const std::string expanded = backtrack_sticky_window(
+                        normalized, sticky_end, content_graphemes);
+                    if (!expanded.empty()) out.text = expanded;
+                }
+                return out;
+            }
+            // Prefer complete sentences already packed; do not append a short
+            // incomplete tail that would reintroduce closers like "Good".
+            break;
+        }
+
+        const std::size_t sent_start = skip_spaces(normalized, cursor);
+        const std::size_t sent_end = sent_start + slice.text.size();
+        const std::string trial = normalized.substr(start, sent_end - start);
+        if (grapheme_count(trial) > content_graphemes) {
+            if (packed_end == start) {
+                // First sentence alone exceeds the budget: show a prefix, but
+                // advance past the full sentence so idle rows still progress.
+                out.text = grapheme_prefix(slice.text, content_graphemes);
+                out.next_offset = slice.next_offset;
+                return out;
+            }
+            break;
+        }
+        packed_end = sent_end;
+        advance_to = slice.next_offset;
+        cursor = slice.next_offset;
+    }
+
+    if (packed_end > start)
+        out.text = normalized.substr(start, packed_end - start);
+    out.next_offset = advance_to > start ? advance_to : start;
+
+    if (is_short_sticky_text(out.text) && packed_end > 0) {
+        const std::string expanded =
+            backtrack_sticky_window(normalized, packed_end, content_graphemes);
+        if (!expanded.empty()) out.text = expanded;
+        // Forward progress still consumes only the short unit from start.
+        if (out.next_offset <= start) out.next_offset = packed_end;
+    }
+    return out;
 }
 
 }  // namespace ainiux::agent

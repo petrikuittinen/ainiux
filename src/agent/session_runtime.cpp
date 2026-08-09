@@ -2267,14 +2267,15 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
 
                 // After idle_seconds of pure reasoning, freeze the current unit
                 // as a history row and open a new live preview for the next one.
+                // Sticky text prefers the first thought of the uncommitted range
+                // (with short-closer backtrack); live animation stays on the tail.
                 if (idle_due && reasoning_row_started) {
-                    const ReasoningIdleSlice slice = take_reasoning_idle_slice(
-                        normalized, thinking_sentence_offset, content_graphemes,
-                        true);
-                    if (!slice.text.empty() &&
-                        slice.next_offset > thinking_sentence_offset) {
+                    const ReasoningStickySlice sticky = reasoning_sticky_slice(
+                        normalized, thinking_sentence_offset, content_graphemes);
+                    if (!sticky.text.empty() &&
+                        sticky.next_offset > thinking_sentence_offset) {
                         const std::string frozen =
-                            thinking_preview_line(slice.text);
+                            thinking_preview_line(sticky.text);
                         if (!frozen.empty()) {
                             const long long frozen_ms = now_unix_ms();
                             publish_thinking(AgentProgressAction::Commit, frozen,
@@ -2282,7 +2283,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                             if (session_store_.is_open() && session_id_ > 0)
                                 (void)session_store_.append_message("thinking",
                                                                     frozen);
-                            thinking_sentence_offset = slice.next_offset;
+                            thinking_sentence_offset = sticky.next_offset;
                             ++thinking_tool_id;
                             last_thinking_idle_emit = now;
                             last_live_thinking_preview.clear();
@@ -2360,14 +2361,19 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         if (options_.interactive && !round_reasoning.empty() &&
             thinking_preview_max_chars > 0) {
             if (thinking_idle_seconds > 0) {
-                // Finalize the live remainder from the current offset so the
-                // last row matches the latest thought, not the stream head.
+                // Finalize the live remainder with the sticky (first-thought)
+                // selection so the frozen row is useful, not a short closer.
                 const std::string normalized =
                     normalize_reasoning_preview_text(round_reasoning, secrets_);
-                const std::string active =
-                    reasoning_active_slice(normalized, thinking_sentence_offset);
-                if (!active.empty())
-                    round_preview = thinking_preview_line(active);
+                const std::string prefix = "Thinking: ";
+                const std::size_t content_graphemes =
+                    thinking_preview_max_chars > prefix.size()
+                        ? thinking_preview_max_chars - prefix.size()
+                        : 0;
+                const ReasoningStickySlice sticky = reasoning_sticky_slice(
+                    normalized, thinking_sentence_offset, content_graphemes);
+                if (!sticky.text.empty())
+                    round_preview = thinking_preview_line(sticky.text);
                 else if (round_preview.empty())
                     round_preview = thinking_preview_line(round_reasoning);
             } else {

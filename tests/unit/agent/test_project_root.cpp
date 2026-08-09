@@ -755,6 +755,65 @@ void test_reasoning_idle_slice_advances_sentences_and_partials() {
           "active slice falls back to the latest complete sentence");
 }
 
+void test_reasoning_sticky_slice_prefers_first_thought_and_backtracks() {
+    const std::string monologue = agent::normalize_reasoning_preview_text(
+        "User wants me to refactor the game engine. I should first look at "
+        "src/game/engine.js and the related tests. Then I will plan the "
+        "changes carefully. Good.",
+        {});
+
+    agent::ReasoningStickySlice head =
+        agent::reasoning_sticky_slice(monologue, 0, 110);
+    check(head.text.find("User wants me to refactor") != std::string::npos,
+          "sticky prefers the first thought: " + head.text);
+    check(head.text.find("Good.") == std::string::npos ||
+              head.text.find("User wants") != std::string::npos,
+          "sticky does not freeze only the stream tail: " + head.text);
+    check(head.next_offset > 0 && head.next_offset <= monologue.size(),
+          "sticky advances a forward next_offset");
+
+    // Budget packing: first thought fills content graphemes without taking the
+    // irrelevant closer when there is ample early text.
+    check(head.text.rfind("Good.") == std::string::npos ||
+              head.text.find("User wants me to refactor the game engine.") !=
+                  std::string::npos,
+          "head fill keeps the opening plan: " + head.text);
+
+    // Short closer remainder: backtrack so "Good." carries preceding context.
+    const std::string with_closer = agent::normalize_reasoning_preview_text(
+        "The unit tests and smoke test passed. Good.", {});
+    const std::size_t good_offset = with_closer.rfind("Good.");
+    check(good_offset != std::string::npos, "fixture has Good. closer");
+    agent::ReasoningStickySlice short_tail =
+        agent::reasoning_sticky_slice(with_closer, good_offset, 80);
+    check(short_tail.text.find("Good") != std::string::npos,
+          "short sticky still ends on the closer: " + short_tail.text);
+    check(short_tail.text.find("unit tests") != std::string::npos ||
+              short_tail.text.find("smoke test") != std::string::npos,
+          "short sticky backtracks for preceding context: " + short_tail.text);
+    check(short_tail.next_offset > good_offset,
+          "short sticky still advances past the closer unit");
+
+    agent::ReasoningStickySlice only_good =
+        agent::reasoning_sticky_slice("Good.", 0, 80);
+    check(only_good.text.find("Good") != std::string::npos,
+          "lone short closer stays usable: " + only_good.text);
+
+    agent::ReasoningStickySlice empty =
+        agent::reasoning_sticky_slice("anything", 0, 0);
+    check(empty.text.empty(), "zero content budget disables sticky text");
+
+    // Technical dots must not split the first thought early.
+    const std::string technical = agent::normalize_reasoning_preview_text(
+        "Use HTTP/1.1 and server.c carefully. Then continue with the rest.",
+        {});
+    agent::ReasoningStickySlice tech =
+        agent::reasoning_sticky_slice(technical, 0, 80);
+    check(tech.text.find("server.c") != std::string::npos &&
+              tech.text.find("HTTP/1.1") != std::string::npos,
+          "sticky sentence split skips technical dots: " + tech.text);
+}
+
 }  // namespace
 
 void run_all() {
@@ -774,6 +833,7 @@ void run_all() {
     test_prior_session_context_includes_recent_work();
     test_reasoning_preview_unicode_redaction_and_limits();
     test_reasoning_idle_slice_advances_sentences_and_partials();
+    test_reasoning_sticky_slice_prefers_first_thought_and_backtracks();
 }
 
 }  // namespace ainiux::test::agent_project_root
