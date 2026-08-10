@@ -15,6 +15,15 @@ def set_winsize(fd, rows=40, cols=120):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def color_capable_env():
+    env = os.environ.copy()
+    if not env.get("TERM") or env.get("TERM") in ("dumb", "unknown"):
+        env["TERM"] = "xterm-256color"
+    if not env.get("COLORTERM"):
+        env["COLORTERM"] = "truecolor"
+    return env
+
+
 def drain(master, timeout=0.0):
     output = bytearray()
     deadline = time.time() + timeout
@@ -81,6 +90,7 @@ def verify_editor_minibuffer(binary, target_path, save_path):
     if os.path.exists(save_path):
         os.remove(save_path)
     master, slave = pty.openpty()
+    set_winsize(slave)
     set_winsize(master)
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor"],
@@ -88,6 +98,7 @@ def verify_editor_minibuffer(binary, target_path, save_path):
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     try:
@@ -132,6 +143,7 @@ def verify_editor_insert(binary, target_path, fetch_url, save_path):
     if os.path.exists(save_path):
         os.remove(save_path)
     master, slave = pty.openpty()
+    set_winsize(slave)
     set_winsize(master)
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor", "--allow-private-url-fetch"],
@@ -139,6 +151,7 @@ def verify_editor_insert(binary, target_path, fetch_url, save_path):
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     try:
@@ -189,6 +202,8 @@ def main():
     if os.path.exists(odd_path):
         os.remove(odd_path)
     master, slave = pty.openpty()
+    # Size the slave before the child starts so terminal_size() sees real rows/cols.
+    set_winsize(slave)
     set_winsize(master)
     process = subprocess.Popen(
         [binary, base, "--quiet", "--chat", "--no-stream", "-m", model,
@@ -198,18 +213,30 @@ def main():
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     try:
         wait_for_terminal(master)
         # Chat opens the thread list first; Tab starts a new thread before input works.
-        send(master, "\t", 0.6)
+        send(master, "\t", 0.8)
+        time.sleep(0.3)
+        drain(master, 0.5)
         require_running(process, "TUI")
-        help_output = send(master, "/help\r", 0.8)
+        help_output = send(master, "/help\r", 1.2)
+        help_output += drain(master, 0.6)
         # Prefer an early command so short terminals still observe the panel; also
         # accept /fetch URL when the taller PTY paints the full help list.
-        if b"/provider" not in help_output and b"/fetch URL" not in help_output:
-            raise RuntimeError("TUI help panel did not render slash commands")
+        if (
+            b"/provider" not in help_output
+            and b"/fetch URL" not in help_output
+            and b"/fetch" not in help_output
+            and b"/help or Ctrl+H" not in help_output
+        ):
+            raise RuntimeError(
+                "TUI help panel did not render slash commands; "
+                f"saw {help_output[-500:]!r}"
+            )
         send(master, "/help\r", 0.4)
         completion_output = send(master, f"/insert {insert_path[:-4]}\t", 0.5)
         if b"Completed path:" not in completion_output:

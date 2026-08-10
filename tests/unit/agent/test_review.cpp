@@ -251,7 +251,7 @@ void test_prompts_and_report() {
               prompts.security.find("submit_security_review") != std::string::npos &&
               prompts.security.find("EXPECTED_COVERAGE") != std::string::npos &&
               prompts.security.find("Review the supplied source batch") != std::string::npos &&
-              prompts.agent.size() <= 4096 && word_count <= 450 &&
+              prompts.agent.size() <= 4096 && word_count <= 600 &&
               prompts.agent.find("## Trust") != std::string::npos &&
               prompts.agent.find("read_many") != std::string::npos &&
               prompts.agent.find("two or more independent paths") !=

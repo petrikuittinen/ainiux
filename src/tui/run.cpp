@@ -252,23 +252,33 @@ app::TuiRunResult run(provider::RequestContext context,
         options.search_options = search::options_for(context.options);
         // Prefer controller event queue so callbacks remain valid across
         // temporary editor hops (local `events` is destroyed with the TUI).
+        // Capture weak_ptr only: SessionRuntimeOptions is stored on the runtime
+        // which the controller owns — a strong shared_ptr here would cycle
+        // (controller → runtime → options callbacks → controller) and leak the
+        // session DB under ASan/LSan.
         if (agent_controller) {
-            std::shared_ptr<agent::AgentController> ctl = agent_controller;
-            options.on_phase = [ctl](agent::AgentActivityPhase phase) {
+            std::weak_ptr<agent::AgentController> weak_ctl = agent_controller;
+            options.on_phase = [weak_ctl](agent::AgentActivityPhase phase) {
+                std::shared_ptr<agent::AgentController> ctl = weak_ctl.lock();
+                if (!ctl) return;
                 agent::AgentSurfaceEvent event;
                 event.type = agent::AgentSurfaceEvent::Type::Phase;
                 event.agent_phase = phase;
                 ctl->events().push(std::move(event));
             };
             options.on_prepare_progress =
-                [ctl](const agent::PreparationProgress& progress) {
+                [weak_ctl](const agent::PreparationProgress& progress) {
+                    std::shared_ptr<agent::AgentController> ctl = weak_ctl.lock();
+                    if (!ctl) return;
                     agent::AgentSurfaceEvent event;
                     event.type = agent::AgentSurfaceEvent::Type::PrepareProgress;
                     event.agent_prepare_progress = progress;
                     ctl->events().push(std::move(event));
                 };
             options.on_structured_progress =
-                [ctl](const agent::AgentProgressUpdate& update) {
+                [weak_ctl](const agent::AgentProgressUpdate& update) {
+                    std::shared_ptr<agent::AgentController> ctl = weak_ctl.lock();
+                    if (!ctl) return;
                     agent::AgentSurfaceEvent event;
                     event.type = agent::AgentSurfaceEvent::Type::Progress;
                     event.agent_progress = update;

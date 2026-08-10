@@ -11,6 +11,32 @@ import tempfile
 import time
 
 
+def color_capable_env():
+    """PTY drivers must force a color-capable TERM; make/CI may inherit TERM=dumb."""
+    env = os.environ.copy()
+    term = env.get("TERM", "")
+    if not term or term in ("dumb", "unknown"):
+        env["TERM"] = "xterm-256color"
+    # Prefer truecolor when advertised; otherwise leave unset so auto picks 256-color.
+    if not env.get("COLORTERM"):
+        env["COLORTERM"] = "truecolor"
+    return env
+
+
+def open_color_pty(rows=40, cols=120):
+    """Open a PTY with a wide enough window that long panel hints are not clipped."""
+    import fcntl
+    import struct
+    import termios
+
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except OSError:
+        pass
+    return master, slave
+
+
 def drain(master, timeout=0.1):
     output = bytearray()
     deadline = time.time() + timeout
@@ -63,13 +89,14 @@ def require_match(raw, pattern, context):
 
 def check_new_file_mode(binary, tmpdir, filename, expected_mode):
     path = os.path.join(tmpdir, filename)
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor", path],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -98,13 +125,14 @@ def check_language_reformat(binary, tmpdir):
     path = os.path.join(tmpdir, "reformat.cpp")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("if (ready) {\ncall();\n}\n")
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor", path],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -140,13 +168,14 @@ def check_detected_indentation(binary, tmpdir):
     with open(source, "r", encoding="utf-8") as source_handle:
         with open(path, "w", encoding="utf-8") as target_handle:
             target_handle.write(source_handle.read())
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor", path],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -172,13 +201,14 @@ def check_detected_indentation(binary, tmpdir):
 
 
 def check_provider_model_picker(binary, base_url, model):
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -191,10 +221,12 @@ def check_provider_model_picker(binary, base_url, model):
         picker_output.extend(send(master, "/provider\r"))
         require_seen(picker_output, "Enter select", "opening the editor provider selector")
         require_seen_plain(picker_output, "── Provider", "rendering the shared provider selector panel")
+        # Truecolor may use colon form (38:2:R:G:B) or semicolon form (38;2;R;G;B);
+        # 256-color uses 38:5:N / 38;5;N. Accept either separator style.
         require_match(
             picker_output,
-            r"\x1b\[(?:38;2;\d+;\d+;\d+|38;5;\d+)m"
-            r"\x1b\[(?:48;2;\d+;\d+;\d+|48;5;\d+)mProvider",
+            r"\x1b\[(?:38[;:]2[;:]\d+[;:]\d+[;:]\d+|38[;:]5[;:]\d+)m"
+            r"\x1b\[(?:48[;:]2[;:]\d+[;:]\d+[;:]\d+|48[;:]5[;:]\d+)mProvider",
             "coloring the editor provider selector title",
         )
         output.extend(picker_output)
@@ -221,13 +253,14 @@ def check_provider_model_picker(binary, base_url, model):
 
 
 def check_bare_editor_startup(binary):
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [binary, "--editor"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -250,13 +283,14 @@ def check_bare_editor_startup(binary):
 
 
 def check_single_model_editor_startup(binary, base_url, model):
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [binary, base_url, "--editor"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -279,7 +313,7 @@ def check_single_model_editor_startup(binary, base_url, model):
 
 
 def check_multiple_model_editor_startup(binary, base_url, model):
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [
             binary,
@@ -292,6 +326,7 @@ def check_multiple_model_editor_startup(binary, base_url, model):
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -341,13 +376,14 @@ def main():
     with open(file2, "w", encoding="utf-8") as handle:
         handle.write("beta")
 
-    master, slave = pty.openpty()
+    master, slave = open_color_pty()
     process = subprocess.Popen(
         [binary, "--provider", "none", "--editor", file1],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=color_capable_env(),
     )
     os.close(slave)
     output = bytearray()
@@ -360,7 +396,11 @@ def main():
         require_seen(output, f"Opened {file2}", "opening second buffer")
 
         output.extend(send(master, "\x0c"))  # Ctrl+L buffer list
-        require_seen(output, "Buffers - Enter opens - Tab/Insert new - DEL close - Esc cancels", "listing buffers")
+        require_seen(
+            output,
+            "Buffers - Enter opens - / search - . sort - Tab/Insert new - DEL close - Esc cancels",
+            "listing buffers",
+        )
         require_seen(output, "file1.txt", "listing first buffer")
         require_seen(output, "file2.txt", "listing second buffer")
         output.extend(send(master, "\x1b[A"))  # Up to file1

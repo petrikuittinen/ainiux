@@ -153,14 +153,32 @@ def check_multiple_model_surface(binary, base_url, model, mode):
     require(output, model + "-second", f"showing the second startup {mode} model")
     require(output, "ready", f"accepting a startup {mode} model")
 
+def open_wide_pty(rows=40, cols=120):
+    import fcntl
+    import struct
+    import termios
+
+    master, slave = pty.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except OSError:
+        pass
+    return master, slave
+
+
 def check_agent_permission_persistence(binary, base_url):
     workspace = tempfile.mkdtemp(prefix="ainiux-agent-permissions-")
     env = os.environ.copy()
     env["HOME"] = workspace
-    env["TERM"] = env.get("TERM", "xterm-256color")
+    # make/CI often inherit TERM=dumb; force a color-capable wide terminal.
+    if not env.get("TERM") or env.get("TERM") in ("dumb", "unknown"):
+        env["TERM"] = "xterm-256color"
+    if not env.get("COLORTERM"):
+        env["COLORTERM"] = "truecolor"
 
-    def run(actions):
-        master, slave = pty.openpty()
+    def launch_and_idle():
+        """Start agent TUI, decline optional index offer, wait until idle ready."""
+        master, slave = open_wide_pty()
         process = subprocess.Popen(
             [binary, base_url, "--quiet", "--agent"],
             stdin=slave,
@@ -173,11 +191,50 @@ def check_agent_permission_persistence(binary, base_url):
         os.close(slave)
         output = bytearray()
         try:
-            time.sleep(1.0)
-            output.extend(drain(master, 1.0))
+            deadline = time.time() + 25.0
+            saw_index_offer = False
+            while time.time() < deadline:
+                output.extend(drain(master, 0.4))
+                rendered = plain(output)
+                if (
+                    "Build code index" in rendered
+                    or "index-build" in rendered.lower()
+                    or "Build code" in rendered
+                ):
+                    saw_index_offer = True
+                    break
+                if "Agent ready" in rendered:
+                    break
+            if saw_index_offer:
+                # Only send n when the Yes/No index offer is actually showing.
+                output.extend(send(master, "n", 0.8))
+            # Wait until prepare finishes and no turn is running.
+            deadline = time.time() + 20.0
+            while time.time() < deadline:
+                output.extend(drain(master, 0.4))
+                rendered = plain(output)
+                if "Agent ready" in rendered and "Task complete" not in rendered[-200:]:
+                    # Prefer a stable idle ready after any accidental turn ends.
+                    if "thinking" not in rendered.lower()[-300:]:
+                        break
+                if "Task complete" in rendered or "Task completed" in rendered:
+                    # Turn finished; continue until chrome settles.
+                    time.sleep(0.3)
+            time.sleep(0.3)
+            output.extend(drain(master, 0.5))
+            return process, master, output
+        except Exception:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=2)
+            os.close(master)
+            raise
+
+    def finish(process, master, output, actions):
+        try:
             for data, delay in actions:
                 output.extend(send(master, data, delay))
-            process.wait(timeout=10)
+            process.wait(timeout=15)
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -190,16 +247,29 @@ def check_agent_permission_persistence(binary, base_url):
         return bytes(output)
 
     try:
-        # Fresh projects without an index open a Yes/No index-build offer first.
-        # Decline it so subsequent slash commands reach Chat mode.
-        changed = run(
+        process, master, output = launch_and_idle()
+        changed = finish(
+            process,
+            master,
+            output,
             [
-                ("n", 0.5),
-                ("/permissions yolo\r", 0.6),
-                ("/quit\r", 0.4),
-            ]
+                ("/permissions yolo\r", 1.5),
+                ("/quit\r", 0.8),
+            ],
         )
-        require(changed, " yolo ", "switching agent permissions")
+        # Status text is transient under retained row-diff painting; accept either
+        # the status phrase or the mode chrome badge, then verify SQLite.
+        rendered = plain(changed)
+        status_ok = (
+            "Permissions set to yolo" in rendered
+            or "Permissions already yolo" in rendered
+            or re.search(r"\byolo\b", rendered) is not None
+        )
+        if not status_ok:
+            raise RuntimeError(
+                "expected yolo permissions status or chrome while switching agent "
+                f"permissions; saw {rendered[-700:]!r}"
+            )
         database = os.path.join(workspace, ".ainiux-pr", "agent.sqlite")
         with sqlite3.connect(database) as connection:
             settings = connection.execute(
@@ -207,10 +277,10 @@ def check_agent_permission_persistence(binary, base_url):
             ).fetchone()[0]
         if '"permission_mode":"yolo"' not in settings:
             raise RuntimeError(f"permission mode was not persisted: {settings!r}")
-        # Missing index still opens the build offer on each launch; decline it so
-        # /quit reaches Chat mode. Permission chrome should already show yolo.
-        restored = run([("n", 0.5), ("/quit\r", 0.4)])
-        require(restored, " yolo ", "restoring persisted agent permissions")
+        # Reopen: decline index if offered; chrome should already show yolo.
+        process, master, output = launch_and_idle()
+        restored = finish(process, master, output, [("/quit\r", 0.8)])
+        require(restored, "yolo", "restoring persisted agent permissions")
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
