@@ -40,6 +40,7 @@ error layers should serve:
 | v0.90 | Local OpenAI-compatible server | Deferred behind v1.1 |
 | v1.0–v1.15 | Local agent foundation, hardening, and documentation overhaul | Landed through v1.15 |
 | v1.16 | Editor dired directory browser (`--dired`, F4, Ctrl+X d) | Landed |
+| v1.17 | Mid-turn agent↔editor/dired review, dired history line-diff, agent chrome/tool polish, Apple Silicon builds | Landed |
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
@@ -50,14 +51,14 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-08-03): **v1.16**.
+Implementation status (2026-08-10): **v1.17**.
 
 The shipped product includes:
 
 - script-friendly Chat Completions and text Responses API paths
 - built-in provider profiles and OpenAI-compatible custom/local endpoints
 - cancellable SSE/HTTP runtime jobs and provider/model selection
-- REPL, chat TUI, standalone editor, benchmark, grade, and document conversion
+- REPL, chat TUI, standalone editor with dired, benchmark, grade, and document conversion
 - retained row-diff rendering across chat, agent, and editor terminal surfaces
 - SQLite chat persistence plus JSON import/export
 - text/Markdown/HTML attachments and supported image input
@@ -65,11 +66,16 @@ The shipped product includes:
 - syntax highlighting, grapheme-aware editing, multiple editor buffers, and AI assist
 - one-shot and interactive local agents with project-local `.ainiux-pr/` state
 - Act/Plan task modes, Guard approvals, project-contained writes, and tool logging
-- compact live tool rows, bounded reasoning previews, and transcript-preserving
-  three-strategy `/compact`: local-only `fast`, loss-aware default `smart`, and
-  active-model `summary`, with a universal 75% automatic threshold
+- mid-turn editor/dired review while an agent turn continues (Ctrl+G / F4; session stays open)
+- dired history line-diff tints and n/p changed-block navigation on dirty files
+- compact live tool rows, bounded first-thought reasoning previews, request-token chrome,
+  and transcript-preserving three-strategy `/compact`: local-only `fast`, loss-aware default
+  `smart`, and active-model `summary`, with a universal 75% automatic threshold
+- compact native agent tool schemas with industry-aligned names and silent execute aliases
+- shared list pickers with `/` multi-character find and `.` alphabetical sort
 - OpenRouter, OpenAI, and DeepSeek credit display when the selected key can query it
 - a fast project-local symbol index with incremental discovery and lightweight scanners
+- Apple Silicon macOS 15+ source builds
 
 The current v1.1 index stores files and definitions for every supported scanner
 language, plus static declaration importance. It intentionally has no reference
@@ -84,7 +90,7 @@ older Windows, and mintty full-screen operation are explicit non-goals.
 
 ## Release history
 
-The compact v0.0–v1.16 timeline lives in `docs/version-history.md`. Historical
+The compact v0.0–v1.17 timeline lives in `docs/version-history.md`. Historical
 implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing

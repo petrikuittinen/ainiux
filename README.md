@@ -6,7 +6,7 @@ Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compati
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.16**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.17**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -91,13 +91,13 @@ ainiux deepseek -m "deepseek-v4-flash" -a
 
 ![Agent code index summary](docs/ainiux_local_agent.png)
 
-Chat, editor, and agent share terminal presentation and selectors, but not semantics. Switch explicitly with `/chat`, `/editor`, `/agent`, `/mode`, `/cycle`, or `Ctrl+G`. The agent finishes its project session and disarms tools when you leave it.
+Chat, editor, and agent share terminal presentation and selectors, but not semantics. Switch explicitly with `/chat`, `/editor`, `/agent`, `/mode`, `/cycle`, or `Ctrl+G`. From an interactive agent turn you can hop to the editor or dired with `Ctrl+G` / `F4` without cancelling the turn; temporary editor hops keep the project session open. Leaving for chat or quitting finishes the agent session and disarms tools.
 
 I have tested Ainiux using mostly the following local models: Qwen3.6-35B-A3B, Qwen3.6-27B, Gemma-4-26-A4B and Gemma-4-31B.
 
 From cloud models I have mostly relied on Deepseek-V4-Flash via official Deepseek API and lots of models Openrouter e.g. gpt-5.6-luna to gpt-5.6-sol to gemini-3.6-flash and gemini-3.5-lite.
 
-## Current v1.16 capabilities
+## Current v1.17 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -139,7 +139,7 @@ Saved chat data and project agent data are deliberately separated. Removing or m
 
 ### Standalone editor
 
-The editor is usable with or without AI. It supports multiple buffers, horizontal and vertical splits, advisory file locks, external-change checks, auto-save backups, undo/redo, search/replace, word and path completion, syntax highlighting, reformatting, Unicode grapheme navigation, terminal cell-width rendering, and preserved line endings.
+The editor is usable with or without AI. It supports multiple buffers, horizontal and vertical splits, advisory file locks, external-change checks, auto-save backups, undo/redo, search/replace, word and path completion, syntax highlighting, reformatting, Unicode grapheme navigation, terminal cell-width rendering, preserved line endings, and full-screen **dired** (`-d` / `--dired`, `F4`, `Ctrl+X d`) with content-hash dirty markers, optional `.ainiux-pr/history` line-diff tints in the read-only preview, and `n`/`p` jumps between changed blocks.
 
 When idle, `Ctrl+E`, `Esc`, or `Alt+X` opens the command minibuffer. `Ctrl+Space` runs mode-aware continuation, and `Ctrl+R` regenerates the previous AI assist. `/spell`, `/grammar`, `/rewrite`, translations, and other commands come from layered `editor-commands.conf` files. Local `/left-align`, `/right-align`, `/center-align`, `/justify`, and line-cleanup commands work offline. You can TAB complete any command.
 
@@ -149,7 +149,7 @@ Writable file buffers hold an advisory `FILE.LOCK` session and check for externa
 
 ### Local agent
 
-Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act mode can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval. Plan mode retains research tools but code-enforces writes to planning documents only.
+Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act mode can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval (including while you are reviewing in the editor after a mid-turn hop). Plan mode retains research tools but code-enforces writes to planning documents only. During a long interactive turn, `Ctrl+G` or `F4` opens the editor/dired so you can review dirty files and history-tinted change lines without cancelling tools or finishing the project session.
 
 ```sh
 ainiux lmstudio -m MODEL -r "add focused tests for the parser"
@@ -289,7 +289,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.16 history](docs/version-history.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.17 history](docs/version-history.md).
 
 For the complete current option list, run:
 
