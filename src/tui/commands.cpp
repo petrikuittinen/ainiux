@@ -362,7 +362,9 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         return;
     }
     if (text == "/editor") {
-        if (ctx.active_job != ActiveJob::None) {
+        // Agent may hop to the editor while a turn runs (background controller).
+        // Chat generation still blocks; leave_for enforces the distinction.
+        if (ctx.active_job != ActiveJob::None && !ctx.context.options.agent) {
             ctx.status = "Cannot switch to editor while a model job is running";
             return;
         }
@@ -394,7 +396,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         return;
     }
     if (text == "/cycle") {
-        if (ctx.active_job != ActiveJob::None) {
+        // Same as /editor: agent turns may continue in the background.
+        if (ctx.active_job != ActiveJob::None && !ctx.context.options.agent) {
             ctx.status = "Cannot switch mode while a model job is running";
             return;
         }
@@ -406,11 +409,13 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         return;
     }
     if (text == "/mode" || text.rfind("/mode ", 0) == 0) {
-        if (ctx.active_job != ActiveJob::None) {
+        const std::string arg = app::detail::trim_ascii(text.size() > 5 ? text.substr(5) : "");
+        // Agent may open the editor while a turn runs; chat switches still need idle.
+        if (ctx.active_job != ActiveJob::None &&
+            !(ctx.context.options.agent && (arg.empty() || arg == "editor"))) {
             ctx.status = "Cannot switch mode while a model job is running";
             return;
         }
-        const std::string arg = app::detail::trim_ascii(text.size() > 5 ? text.substr(5) : "");
         if (arg.empty()) {
             if (ctx.context.options.agent) {
                 ctx.status = "Mode: agent · /mode chat|editor|agent · /cycle";

@@ -225,9 +225,11 @@ Full guide: [dired-mode.md](dired-mode.md).
 | `m` | New directory (`mkdir -p`) |
 | `t` | Touch |
 | `f` or `/` | Find in viewed file (`/` is less-style alias) |
+| `n` / `p` (RO view with history diff) | Next / previous changed-line block (wraps); no-op if no marks |
 | `Space` / `b` | Page down / page up (less-style; list and view) |
 | `s` + `(n)ame`/`(s)ize`/`(d)ate` or `(N)ame`/`(S)ize`/`(D)ate` | Sort asc/desc |
-| `p` | Toggle selected file dirty ↔ reviewed (pass) |
+| `p` (list) | Toggle selected file dirty ↔ reviewed (pass) |
+| `n` (list) | New file |
 
 Also: `/provider`, `/model`, `/search QUERY`
 
@@ -247,12 +249,13 @@ session management.
 | `Ctrl+H` | Toggle mode help panel (same as `/help`) |
 | `Ctrl+P` | Open provider picker (same as bare `/provider`; model picker follows when needed) |
 | `Ctrl+O` | Toggle history scrollbar visibility (`/scrollbar show|hide`) |
-| `Ctrl+G` | Toggle agent → editor; the next Ctrl+G returns editor → agent |
+| `Ctrl+G` | Toggle agent → editor (allowed while a turn is running); the next Ctrl+G returns editor → agent (works from dired too — no need to press `q` first) |
+| `F4` | Open dired in the editor immediately (workspace root; same as Ctrl+G then F4). Allowed while a turn is running |
 | `Ctrl+Q` | Finish the project session and quit |
-| `y` / `n` | Allow or deny an active Guard Ask confirmation |
+| `y` / `n` | Allow or deny an active Guard Ask confirmation (agent TUI or editor while agent runs in the background) |
 
 Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
-`/cycle` follows Ctrl+G and enters the editor from chat or agent. Manual
+`/cycle` follows Ctrl+G and enters the editor from chat or agent—including mid-turn so you can review dirty files in dired while tools continue. `F4` is the short path into dired for that review. Temporary editor hops do not finish the project agent session; leaving for chat or process quit does. Manual
 `/compact` preserves the full transcript while compacting model-visible context. In interactive agent mode, `/plan` selects planning mode and `/act` returns to full coding mode. `/goal [condition|clear|pause|resume]` sets a persistent completion condition; the agent auto-continues until it calls `goal_met` with evidence, stalls/blocks, hits the goal turn cap, or the user interrupts. Refactor mode is not implemented yet. New agent projects require explicit `/new` (Tab/Insert do not create one).
 
 ---

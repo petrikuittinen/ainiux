@@ -411,7 +411,7 @@ The TUI is a shipped foundation, not a future milestone. Continue improving it w
 - Share presentation and selector widgets with chat; keep generation on `AgentSessionRuntime` / `run_user_turn`, not plain `send_chat_messages`.
 - Multi-turn agent state lives in project `.ainiux-pr/` (`agent.sqlite`, index, history, logs); never in user `~/.ainiux/` (chat DB/media only).
 - Mode cycle chat ↔ editor ↔ agent is an **explicit** handoff (`/chat`, `/agent`, `/editor`, `/mode`, `/cycle`); never silent tool enablement inside chat.
-- Leaving agent finishes the open project session cleanly and disarms tools.
+- Temporary editor hops (`Ctrl+G` / `/cycle` / `/editor`) may happen while an agent turn is still running: the session-scoped `AgentController` keeps the turn job alive; do not `finish_session` on temporary leave. Leaving for chat or process quit finishes the open project session and disarms tools.
 
 ### Standalone editor rules
 

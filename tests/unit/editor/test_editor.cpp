@@ -3857,7 +3857,34 @@ void test_editor_dired() {
                   status.find("viewing") == std::string::npos,
               "RO status omits sort label and duplicated viewing path");
         check(status.find("main.cpp") != std::string::npos, "RO status shows file path");
+
+        // n/p jump between changed blocks (wrap). File: line1 same, line2 changed,
+        // line3 same, line4 added → block starts at lines 1 and 3 (0-based).
+        hist_state.view.cursor = hist_state.view.text.line_start(0);
+        check(ainiux::editor::dired_goto_next_changed_block(hist_state),
+              "n from top finds first changed block");
+        check(hist_state.view.text.line_for_offset(hist_state.view.cursor) == 1,
+              "n lands on line2 (first changed block start)");
+        check(ainiux::editor::dired_goto_next_changed_block(hist_state),
+              "n again finds second changed block");
+        check(hist_state.view.text.line_for_offset(hist_state.view.cursor) == 3,
+              "n lands on line4 (added line block)");
+        check(ainiux::editor::dired_goto_next_changed_block(hist_state),
+              "n wraps to first block");
+        check(hist_state.view.text.line_for_offset(hist_state.view.cursor) == 1,
+              "n wrap returns to first changed block");
+        check(ainiux::editor::dired_goto_prev_changed_block(hist_state),
+              "p from first block wraps to last");
+        check(hist_state.view.text.line_for_offset(hist_state.view.cursor) == 3,
+              "p wrap lands on last block start");
+        check(ainiux::editor::dired_goto_prev_changed_block(hist_state),
+              "p finds previous block");
+        check(hist_state.view.text.line_for_offset(hist_state.view.cursor) == 1,
+              "p lands on first changed block");
+
         ainiux::editor::dired_close_view(hist_state);
+        check(!ainiux::editor::dired_goto_next_changed_block(hist_state),
+              "n no-op outside RO view");
 
         // After pass, reopening should not mark (not dirty).
         check(ainiux::editor::dired_toggle_pass_selected(hist_state).ok(), "pass dirty file");

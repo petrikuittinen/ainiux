@@ -13,6 +13,7 @@
 #include "editor/detail/editor_common.hpp"
 #include "editor/assist_runtime.hpp"
 #include "editor/dired.hpp"
+#include "editor/line_diff.hpp"
 #include "editor/editor_assist.hpp"
 #include "editor/editor_help.hpp"
 #include "editor/editor_picker.hpp"
@@ -310,7 +311,9 @@ app::EditorRunResult run_editor(const std::string& path,
     TerminalSize last_size = terminal_size();
     size_t activity_frame = 0;
     const auto activity_animation_started = std::chrono::steady_clock::now();
-    std::string theme_name = settings.theme_name;
+    std::string theme_name =
+        interactive != nullptr && !interactive->theme_name.empty() ? interactive->theme_name
+                                                                   : settings.theme_name;
     bool use_colors = interactive != nullptr ? interactive->use_colors : settings.use_colors;
     bool show_scrollbars = interactive != nullptr ? interactive->show_scrollbars : true;
     bool mouse_view_detached = false;
@@ -323,6 +326,14 @@ app::EditorRunResult run_editor(const std::string& path,
     } else if (ai_continue.has_value()) {
         runtime_options = &ai_continue->request.options;
     }
+    // Theme paint must never see a null registry. Options owns the loaded
+    // themes.conf / defaults; EditorSettings.themes is only a non-owning hint.
+    // resolve_theme_registry falls back to process-lifetime builtins if needed.
+    const tui::ThemeRegistry* preferred_themes = settings.themes;
+    const tui::ThemeRegistry* options_themes =
+        runtime_options != nullptr ? &runtime_options->tui_themes : nullptr;
+    const tui::ThemeRegistry& themes_ref =
+        tui::resolve_theme_registry(preferred_themes, options_themes);
     if (runtime_options != nullptr) {
         insert_options.max_file_bytes = runtime_options->max_input_bytes > 0
                                             ? static_cast<size_t>(runtime_options->max_input_bytes)
@@ -339,14 +350,12 @@ app::EditorRunResult run_editor(const std::string& path,
         insert_options.auto_convert_html_to_markdown =
             runtime_options->auto_convert_html_to_markdown;
     }
-    if (settings.themes != nullptr) {
-        settings.themes->normalize_name(theme_name, theme_name);
-    }
+    themes_ref.normalize_name(theme_name, theme_name);
     auto terminal_theme_style = [&]() {
         const tui::ColorModePreference preference =
             runtime_options != nullptr ? runtime_options->color_mode
                                        : tui::ColorModePreference::Auto;
-        return TerminalThemeStyle{settings.themes,
+        return TerminalThemeStyle{&themes_ref,
                                   theme_name,
                                   use_colors,
                                   tui::resolve_color_mode(use_colors, preference)};
@@ -402,12 +411,82 @@ app::EditorRunResult run_editor(const std::string& path,
         apply_pane_view_to_state(state, split_layout.focused_view());
     };
 
+    bool pending_agent_guard = false;
+    agent::GuardApprovalRequest agent_guard_request;
+    bool pending_agent_quit_confirm = false;
+    std::string last_agent_status_badge;
+    std::chrono::steady_clock::time_point last_dired_sync{};
+
+    auto agent_controller = [&]() -> agent::AgentController* {
+        if (interactive == nullptr || !interactive->agent_controller) return nullptr;
+        return interactive->agent_controller.get();
+    };
+
+    auto refresh_agent_background_status = [&]() {
+        agent::AgentController* ctl = agent_controller();
+        if (!ctl) return;
+        if (ctl->waiting_guard() || (ctl->approval_gate() && ctl->approval_gate()->has_pending())) {
+            agent::GuardApprovalRequest pending;
+            if (ctl->approval_gate() && ctl->approval_gate()->try_get_pending(pending)) {
+                if (!pending_agent_guard ||
+                    pending.command_preview != agent_guard_request.command_preview) {
+                    agent_guard_request = std::move(pending);
+                    pending_agent_guard = true;
+                    std::string prompt = "Agent Guard: ";
+                    if (!agent_guard_request.tool_name.empty()) {
+                        prompt += agent_guard_request.tool_name;
+                        prompt += " · ";
+                    }
+                    if (!agent_guard_request.command_preview.empty()) {
+                        prompt += agent_guard_request.command_preview;
+                    } else if (!agent_guard_request.message.empty()) {
+                        prompt += agent_guard_request.message;
+                    } else {
+                        prompt += "approval required";
+                    }
+                    prompt += " (y/n) ";
+                    minibuffer_message(minibuffer, prompt);
+                }
+            }
+            return;
+        }
+        if (pending_agent_guard) {
+            // Resolved elsewhere (e.g. cancel); clear local modal state.
+            pending_agent_guard = false;
+            agent_guard_request = {};
+        }
+        if (ctl->turn_running()) {
+            const std::string badge = ctl->status_label().empty()
+                                          ? std::string("Agent running · Ctrl+G to return")
+                                          : ctl->status_label() + " · Ctrl+G to return";
+            if (badge != last_agent_status_badge && !minibuffer.active && !pending_agent_guard &&
+                !pending_close_confirm && !pending_agent_quit_confirm) {
+                last_agent_status_badge = badge;
+                minibuffer_message(minibuffer, badge);
+            }
+        } else if (!last_agent_status_badge.empty() &&
+                   last_agent_status_badge.find("Agent") != std::string::npos) {
+            const std::string done = ctl->status_label().empty()
+                                         ? std::string("Agent done · Ctrl+G to return")
+                                         : ctl->status_label() + " · Ctrl+G to return";
+            if (done != last_agent_status_badge && !minibuffer.active && !pending_agent_guard) {
+                last_agent_status_badge = done;
+                minibuffer_message(minibuffer, done);
+            }
+        }
+    };
+
     auto can_leave_editor_for_mode_switch = [&]() {
         if (interactive == nullptr) {
             return false;
         }
-        return !help_view.active && !dired.active && !picker.active && !buffer_list_active &&
-               !pending_close_confirm && !minibuffer.active && !replace.active &&
+        // Dired may still be active: leave_editor_for closes it first so Ctrl+G
+        // from dired can return to agent without requiring q first.
+        // pending_agent_guard is allowed: Ctrl+G leaves Guard Ask pending for
+        // the agent TUI (must not auto-deny).
+        return !help_view.active && !picker.active && !buffer_list_active &&
+               !pending_close_confirm && !pending_agent_quit_confirm &&
+               !minibuffer.active && !replace.active &&
                !assist_session.active && !reformat_session.active && !insert_session.active &&
                !shell_session.active && !window_prefix_active;
     };
@@ -419,6 +498,10 @@ app::EditorRunResult run_editor(const std::string& path,
             }
             return;
         }
+        if (dired.active) {
+            dired_close(dired);
+            dired_overwrite_is_rename = false;
+        }
         clear_assist_session(assist_session);
         model_list.job.cancel();
         model_list.job.join();
@@ -429,6 +512,9 @@ app::EditorRunResult run_editor(const std::string& path,
         interactive->editor_path = path;
         interactive->editor_save_as = save_as;
         interactive->editor_settings = settings;
+        // start_dired is a one-shot entry flag (agent F4 / CLI); never persist it.
+        interactive->editor_settings.start_dired = false;
+        interactive->editor_settings.start_dired_path.clear();
         interactive->assist_config = assist_config;
         interactive->highlight_enabled = highlight_enabled;
         interactive->theme_name = theme_name;
@@ -3207,6 +3293,63 @@ app::EditorRunResult run_editor(const std::string& path,
         if (ch != '\t') {
             word_completer.reset();
         }
+        // Background agent Guard Ask (worker blocked); answer without leaving editor.
+        // Ctrl+G must NOT deny the Guard — leave the Ask pending for agent TUI.
+        if (pending_agent_guard) {
+            if (ch == 7) {
+                // Cycle back to agent with Guard still pending (do not resolve).
+                pending_agent_guard = false;
+                agent_guard_request = {};
+                if (dired.active) {
+                    dired_close(dired);
+                    dired_overwrite_is_rename = false;
+                }
+                request_editor_toggle();
+                return;
+            }
+            switch (ui::parse_confirmation_key(ch)) {
+                case ui::ConfirmationKeyResult::Accepted:
+                    if (agent_controller() && agent_controller()->approval_gate()) {
+                        agent_controller()->approval_gate()->resolve(
+                            agent::GuardApprovalDecision::Allow);
+                    }
+                    pending_agent_guard = false;
+                    agent_guard_request = {};
+                    minibuffer_message(minibuffer, "Guard: allowed · agent continues");
+                    return;
+                case ui::ConfirmationKeyResult::Rejected:
+                    if (agent_controller() && agent_controller()->approval_gate()) {
+                        agent_controller()->approval_gate()->resolve(
+                            agent::GuardApprovalDecision::Deny);
+                    }
+                    pending_agent_guard = false;
+                    agent_guard_request = {};
+                    minibuffer_message(minibuffer, "Guard: denied");
+                    return;
+                case ui::ConfirmationKeyResult::Pending:
+                    minibuffer_message(minibuffer, ui::kConfirmationRetryPrompt);
+                    return;
+            }
+        }
+        if (pending_agent_quit_confirm) {
+            switch (ui::parse_confirmation_key(ch)) {
+                case ui::ConfirmationKeyResult::Accepted:
+                    if (agent_controller()) {
+                        agent_controller()->cancel_turn();
+                        agent_controller()->set_status_label("Agent cancelled");
+                    }
+                    pending_agent_quit_confirm = false;
+                    quit = true;
+                    return;
+                case ui::ConfirmationKeyResult::Rejected:
+                    pending_agent_quit_confirm = false;
+                    minibuffer_message(minibuffer, "Quit cancelled · agent still running");
+                    return;
+                case ui::ConfirmationKeyResult::Pending:
+                    minibuffer_message(minibuffer, ui::kConfirmationRetryPrompt);
+                    return;
+            }
+        }
         if (ch == editor_key_toggle_thinking_traces()) {
             toggle_thinking_traces();
             return;
@@ -3487,6 +3630,14 @@ app::EditorRunResult run_editor(const std::string& path,
                 handle_key(17, false);
                 return;
             }
+            if (ch == 7) {
+                // Ctrl+G: cycle back to agent/chat even while dired is open
+                // (q only demotes to the editor buffer list).
+                dired_close(dired);
+                dired_overwrite_is_rename = false;
+                request_editor_toggle();
+                return;
+            }
             if (ch == 'q' || ch == 'Q') {
                 exit_dired();
                 return;
@@ -3501,6 +3652,31 @@ app::EditorRunResult run_editor(const std::string& path,
                 }
                 if (ch == 'o' || ch == 'O') {
                     dired_open_for_edit();
+                    return;
+                }
+                // n / p: next / previous changed-line block (history diff only).
+                // No-op when the file has no tracked changes. List mode keeps
+                // n=new-file and p=pass; those keys never reach list while in view.
+                if (ch == 'n' || ch == 'N') {
+                    if (dired_goto_next_changed_block(dired)) {
+                        const size_t line =
+                            dired.view.text.line_for_offset(dired.view.cursor) + 1;
+                        minibuffer_message(minibuffer,
+                                           "Next change · Ln " + std::to_string(line));
+                    } else {
+                        minibuffer_message(minibuffer, "No changed lines in this view");
+                    }
+                    return;
+                }
+                if (ch == 'p' || ch == 'P') {
+                    if (dired_goto_prev_changed_block(dired)) {
+                        const size_t line =
+                            dired.view.text.line_for_offset(dired.view.cursor) + 1;
+                        minibuffer_message(minibuffer,
+                                           "Previous change · Ln " + std::to_string(line));
+                    } else {
+                        minibuffer_message(minibuffer, "No changed lines in this view");
+                    }
                     return;
                 }
                 // f, /, Ctrl+F: find in the viewed file (less-style / also accepted).
@@ -3638,8 +3814,18 @@ app::EditorRunResult run_editor(const std::string& path,
                 if (!err.ok()) {
                     minibuffer_message(minibuffer, err.message);
                 } else if (dired.focus == DiredFocus::View) {
-                    // RO view: status bar has path/position; do not mirror dired list chrome.
-                    minibuffer_message(minibuffer, "");
+                    // Surface history-diff status so users see when marks exist
+                    // (agent F4 path previously painted them without a cue).
+                    if (dired.view_has_history_baseline) {
+                        const size_t n =
+                            ainiux::editor::count_changed_lines(dired.view_changed_lines);
+                        minibuffer_message(minibuffer,
+                                           n == 0 ? "History baseline · no line changes"
+                                                  : ("History diff · " + std::to_string(n) +
+                                                     " changed line(s) · gray bg"));
+                    } else {
+                        minibuffer_message(minibuffer, "");
+                    }
                 } else {
                     minibuffer_message(minibuffer, dired_status_line(dired));
                 }
@@ -4170,6 +4356,13 @@ app::EditorRunResult run_editor(const std::string& path,
                 exit_help_view();
                 return;
             }
+            // Background agent turn: confirm cancel before process exit.
+            if (agent_controller() && agent_controller()->turn_running()) {
+                pending_agent_quit_confirm = true;
+                minibuffer_message(minibuffer,
+                                   "Agent is still running — cancel and quit? (y/n) ");
+                return;
+            }
             sync_active_buffer();
             const bool modified_buffers = std::any_of(buffers.begin(), buffers.end(), [](const EditorState& buffer) {
                 return buffer.dirty;
@@ -4482,6 +4675,12 @@ app::EditorRunResult run_editor(const std::string& path,
 
     if (settings.start_dired) {
         enter_dired(settings.start_dired_path.empty() ? "." : settings.start_dired_path);
+        // One-shot request from agent F4 / CLI --dired; clear so a later mode
+        // cycle does not reopen dired unexpectedly.
+        if (interactive != nullptr) {
+            interactive->editor_settings.start_dired = false;
+            interactive->editor_settings.start_dired_path.clear();
+        }
     }
 
     while (!quit) {
@@ -4593,6 +4792,21 @@ app::EditorRunResult run_editor(const std::string& path,
             }
         }
         try_autosave(SteadyClock::duration::zero());
+        refresh_agent_background_status();
+        // While the agent writes files under an open dired, re-hash and remake
+        // RO history-diff marks so dirty files and changed-line tints stay live.
+        if (dired.active) {
+            const auto now = SteadyClock::now();
+            const bool agent_writing =
+                agent_controller() != nullptr && agent_controller()->turn_running();
+            const auto interval = agent_writing ? std::chrono::milliseconds(400)
+                                                : std::chrono::milliseconds(1500);
+            if (last_dired_sync.time_since_epoch().count() == 0 ||
+                now - last_dired_sync >= interval) {
+                last_dired_sync = now;
+                (void)dired_sync_live(dired, settings);
+            }
+        }
 
         last_size = terminal_size();
         render_editor();

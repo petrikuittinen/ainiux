@@ -227,9 +227,10 @@ tui::Rgb blend_rgb(tui::Rgb from, tui::Rgb toward, double amount) {
 
 // Mild tint of panel_highlight on the normal background so changed lines are
 // obvious without a separate syntax scheme. panel_background alone is nearly
-// identical to background on built-in dark/light themes.
+// identical to background on built-in dark/light themes. 0.42 keeps syntax
+// readable while making agent edit diffs clearly distinct from clean lines.
 tui::Rgb changed_line_background(const tui::ThemePalette& palette) {
-    return blend_rgb(palette.background, palette.panel_highlight, 0.28);
+    return blend_rgb(palette.background, palette.panel_highlight, 0.42);
 }
 
 void append_editor_rendered_line(std::string& output,
@@ -245,10 +246,17 @@ void append_editor_rendered_line(std::string& output,
         palette = theme_style.themes->find("dark");
     }
     const bool use_changed_bg = changed_line_bg && colors && palette != nullptr;
+    // If themes are missing (e.g. agent→editor hop without a registry pointer),
+    // still mark changed lines with reverse video so history diffs are never
+    // invisible compared to `ainiux -d`.
+    const bool use_changed_reverse = changed_line_bg && !use_changed_bg;
     const tui::Rgb changed_bg =
         use_changed_bg ? changed_line_background(*palette) : tui::Rgb{};
     auto append_role_style = [&](tui::StyleRole role) {
         if (!colors) {
+            if (use_changed_reverse) {
+                output += "\x1b[7m";
+            }
             return;
         }
         tui::StylePair pair =
@@ -257,6 +265,9 @@ void append_editor_rendered_line(std::string& output,
             pair.background = changed_bg;
         }
         output += tui::ansi_style_sequence(pair, theme_style.color_mode);
+        if (use_changed_reverse) {
+            output += "\x1b[7m";
+        }
     };
     auto append_base_style = [&]() { append_role_style(tui::StyleRole::Text); };
     append_base_style();

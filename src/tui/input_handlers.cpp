@@ -3,6 +3,7 @@
 #include "tui/detail/render.hpp"
 #include "tui/session_load.hpp"
 
+#include "editor/dired.hpp"
 #include "editor/selection.hpp"
 #include "editor/terminal_input.hpp"
 #include "provider/provider.hpp"
@@ -217,6 +218,10 @@ EscapeResult handle_escape(editor::EditorState& input,
 
     std::string sequence;
     if (read_csi_sequence(ch, sequence)) {
+        // F4 opens dired (editor and agent share the same physical key sequences).
+        if (editor::is_dired_f4_sequence(sequence)) {
+            return EscapeResult::OpenDired;
+        }
         editor::MovementKeyEvent movement;
         if (editor::parse_movement_sequence(sequence, movement)) {
             apply_alt_meta_prefix(movement, alt_meta_prefix);

@@ -59,6 +59,14 @@ class ThemeRegistry {
 };
 
 ThemeRegistry default_theme_registry();
+// Process-lifetime built-in registry (at least dark + light). Never empty.
+// Use when a non-owning EditorSettings::themes pointer is null or stale —
+// config loading is separate; this prevents paint-time themeless UI.
+const ThemeRegistry& builtin_theme_registry();
+// Prefer a non-null registry that has at least one palette; otherwise builtin.
+const ThemeRegistry& resolve_theme_registry(const ThemeRegistry* preferred);
+const ThemeRegistry& resolve_theme_registry(const ThemeRegistry* preferred,
+                                           const ThemeRegistry* secondary);
 bool parse_rgb_color(const std::string& text, Rgb& out);
 std::string format_theme_list(const ThemeRegistry& registry);
 

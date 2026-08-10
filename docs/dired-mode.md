@@ -163,11 +163,22 @@ Directories are listed before regular files; `../` stays first. The title update
 
 In list focus, `f` or `/` reminds you to open a file with Enter first.
 
+### Jump between changed lines (read-only view only)
+
+Only when the open RO preview has a history-diff baseline with at least one marked line (dirty file with `[diff N]`). Clean / reviewed previews ignore these keys for navigation (no-op with a short status).
+
+| Key | Action |
+| --- | --- |
+| `n` | Jump to the **next** changed-line **block** after the cursor (wraps to the first block) |
+| `p` | Jump to the **previous** block: if mid-block, go to that block’s start; else previous block (wraps to the last) |
+
+A **block** is a maximal contiguous run of tinted (changed) lines. List focus keeps `n` = new file and `p` = pass; those list bindings do not apply while viewing.
+
 ### Review / dirty markers
 
 | Key | Action |
 | --- | --- |
-| `p` | **Toggle** the selected **file**: dirty → reviewed, or reviewed → dirty (“pass”) |
+| `p` | **List focus only:** **Toggle** the selected **file**: dirty → reviewed, or reviewed → dirty (“pass”) |
 
 **Dirty** means the file’s **content hash** differs from the review baseline, or you manually marked it dirty with `p`—not merely that mtime changed, and not requiring git. The baseline is established on the first dired open in the session (when empty). When a project-local `.ainiux-pr/history/` pre-write backup exists and differs from the live file, that backup seeds the baseline so files already changed by the agent show as dirty immediately (you do not need to have had dired open before the edit). Refresh (`g`) recomputes hashes and updates markers without changing the baseline. Pressing `p` only affects the **selected file** (directories and `../` are not tracked). `p` is used instead of `*` so non-US keyboard layouts do not need Shift for a common action.
 
@@ -181,7 +192,9 @@ When you **Enter** a **dirty** file, dired builds a poor-man's line review:
 - If the file is dirty but there is no history snapshot yet (for example a brand-new file), **every line** is tinted so the whole buffer is easy to scan.
 - The status line appends `[diff N]` with the number of marked lines.
 
-If the file is not dirty (including after **`p`**), the preview has no line-background overlay. This is not a git diff; it only compares to the last agent history copy when one exists.
+If the file is not dirty (including after list-mode **`p`** pass), the preview has no line-background overlay. This is not a git diff; it only compares to the last agent history copy when one exists.
+
+While viewing a file with marked changes, **`n`** / **`p`** jump to the next / previous changed block (with wrap) so you can scan agent edits without scrolling the whole file.
 
 Git status coloring and freeform git commands are **not** part of this release.
 

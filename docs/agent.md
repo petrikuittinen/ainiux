@@ -89,6 +89,19 @@ It produces Markdown and may write its local diagnostic review log unless disabl
 
 Agent mode shares input editing, cancellation, help, provider/model selectors, scrolling, and editor switching with chat. Agent-only commands include `/compact`, `/cmd-out`, `/index-code`, `/show-index`, `/plan`, `/act`, `/goal`, and project permission controls shown by `/help`. `/chat`, `/editor`, `/agent`, `/mode`, and `/cycle` are explicit surface handoffs.
 
+### Background agent while in the editor
+
+An interactive agent turn runs on a session-scoped background controller. While a turn is in progress you can open the full editor with `Ctrl+G` / `/cycle` / `/editor` without cancelling the turn, or press **`F4`** to jump straight into **dired** on the project root (one key instead of Ctrl+G then F4). Use that time to review agent writes (dirty files and read-only change previews). **`Ctrl+G` from dired** returns to agent without needing `q` first. Open files show changed-line tints against the last agent pre-write snapshot under `.ainiux-pr/history/`; the listing and open RO view soft-refresh while the agent is still writing. Returning with `Ctrl+G` reattaches the agent transcript; the project session under `.ainiux-pr/` stays open across temporary editor hops.
+
+Startup chrome shows **Agent preparing** only while local prepare phases run (index probe, tools, session DB). As soon as prepare finishes the activity line becomes **Agent ready** even if history is still loading in the background (`Agent ready · loading history...`). A large prior transcript must not leave the UI stuck on preparing.
+
+Returning from editor/dired never re-starts a CLI/startup prompt (`-p`); that used to open a second turn and freeze chrome on “thinking” until Esc. Guard Ask raised while you are in dired stays pending across Ctrl+G (it is not auto-denied); answer with y/n in the editor or after returning to agent.
+
+- Guard Ask (`y`/`n`) can be answered in the editor if approval is needed while you are reviewing files.
+- Quitting the editor while a turn is still running asks whether to cancel the agent and quit.
+- Switching to ordinary **chat** while a turn is running is blocked until the turn finishes or you cancel it (chat never silently gains workspace tools).
+- Dual AI (editor assist while the agent also streams) is intentionally deferred; manual editing and dired review are supported first.
+
 Live tool rows update in place. Provider-supplied reasoning previews are bounded, redacted, and display-only. Neither reasoning previews nor notice rows are sent back as conversational context. While a model streams only reasoning (no answer text or tool calls), the live `Thinking:` row still animates through the newest in-progress fragment so the UI looks busy. When a row freezes—after `tui.agent_thinking_idle_preview_seconds` (default `30`; `0` keeps a single live preview from the start of the stream), or when a tool call or final answer ends the pure-reasoning phase—Ainiux prefers the **first thought** of the uncommitted range (for example the opening plan sentence), not the last short closer. If that frozen unit would be only a word or two (such as `Good.`), the sticky text backtracks to include preceding characters up to the same `tui.agent_thinking_preview_max_chars` budget (default `120`, including the `Thinking: ` prefix).
 
 The agent context chrome (`N tok (P%)`) is primarily a local estimate of the **next model request**. During long pure-reasoning streams it also adds a throttled local estimate of in-flight reasoning tokens so the meter is not frozen for minutes. Refresh interval is `tui.agent_thinking_token_refresh_seconds` (default `1`; `0` disables mid-stream updates). That in-flight estimate is display-only: it does not change compaction, provider context, or durable transcript accounting, and it drops when the model round finishes (reasoning previews are not retained as request context).

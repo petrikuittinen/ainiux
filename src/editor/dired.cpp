@@ -521,10 +521,10 @@ fs::path resolve_under_directory(const DiredState& state, const std::string& nam
     return (fs::u8path(state.directory) / input).lexically_normal();
 }
 
-// Hash of the agent history backup for a live file path, if present under .ainiux-pr/history.
-// Uses the same dired_hash_file algorithm as listing content hashes.
-bool history_backup_content_hash(const std::string& file_path, std::string& hash_out) {
-    hash_out.clear();
+// Resolve absolute path → project root + relative + history bak path.
+bool resolve_history_backup_path(const std::string& file_path,
+                                 std::string& history_path_out) {
+    history_path_out.clear();
     if (file_path.empty()) {
         return false;
     }
@@ -544,8 +544,105 @@ bool history_backup_content_hash(const std::string& file_path, std::string& hash
     if (!fs::is_regular_file(fs::u8path(history_path), hist_ec) || hist_ec) {
         return false;
     }
+    history_path_out = history_path;
+    return true;
+}
+
+// Hash of the agent history backup for a live file path, if present under .ainiux-pr/history.
+// Uses the same dired_hash_file algorithm as listing content hashes.
+bool history_backup_content_hash(const std::string& file_path, std::string& hash_out) {
+    hash_out.clear();
+    std::string history_path;
+    if (!resolve_history_backup_path(file_path, history_path)) {
+        return false;
+    }
     hash_out = dired_hash_file(history_path, kDefaultHashCap);
     return !hash_out.empty();
+}
+
+// Load pre-write agent snapshot bytes when present (capped like activate view).
+bool load_history_backup_bytes(const std::string& file_path, std::string& previous_out) {
+    previous_out.clear();
+    std::string history_path;
+    if (!resolve_history_backup_path(file_path, history_path)) {
+        return false;
+    }
+    constexpr std::size_t kHistoryReadCap = 1024U * 1024U;
+    return platform::read_file_bounded(history_path, kHistoryReadCap, previous_out).ok();
+}
+
+}  // namespace
+
+namespace {
+
+// File-local helpers used by dired_activate_selection / dired_sync_live.
+// (Placed outside the first anonymous block only so load_* helpers above stay
+// shared; these remain translation-unit local.)
+
+void apply_view_change_marks(DiredState& state, DiredEntry* entry, const std::string& current);
+void rehash_listed_files(DiredState& state);
+
+void apply_view_change_marks(DiredState& state, DiredEntry* entry, const std::string& current) {
+    state.view_changed_lines.clear();
+    state.view_has_history_baseline = false;
+    const std::string path =
+        entry != nullptr ? entry->path
+                         : (!state.view_path.empty() ? state.view_path : std::string());
+    if (path.empty()) {
+        return;
+    }
+
+    // Prefer last agent pre-write snapshot whenever it differs from the live file.
+    // Do not require entry.dirty: the list hash can be stale while the view loads
+    // fresh bytes (agent wrote under an open dired session).
+    std::string previous;
+    if (load_history_backup_bytes(path, previous)) {
+        const std::string prev_hash = dired_hash_bytes(previous);
+        const std::string curr_hash = dired_hash_bytes(current);
+        if (!prev_hash.empty() && prev_hash != curr_hash) {
+            if (entry != nullptr) entry->content_hash = curr_hash;
+            // Explicit pass: reviewed_hashes matches the live content — no overlay.
+            const auto it = state.reviewed_hashes.find(path);
+            if (it != state.reviewed_hashes.end() && it->second == curr_hash) {
+                if (entry != nullptr) entry->dirty = false;
+                return;
+            }
+            state.view_changed_lines = mark_changed_lines(previous, current);
+            state.view_has_history_baseline = true;
+            // Keep list baseline anchored on the bak so the entry stays dirty.
+            state.reviewed_hashes[path] = prev_hash;
+            if (entry != nullptr) entry->dirty = true;
+            return;
+        }
+    }
+
+    // No usable bak: mark all lines when the entry is dirty vs session baseline.
+    if (entry != nullptr && entry->dirty) {
+        const size_t lines = state.view.text.line_count();
+        state.view_changed_lines.assign(lines, true);
+        state.view_has_history_baseline = true;
+    }
+}
+
+void rehash_listed_files(DiredState& state) {
+    for (DiredEntry& entry : state.entries) {
+        if (entry.is_parent || entry.is_directory) {
+            continue;
+        }
+        entry.content_hash = dired_hash_file(entry.path, kDefaultHashCap);
+        std::string bak_hash;
+        if (!history_backup_content_hash(entry.path, bak_hash) || bak_hash.empty() ||
+            bak_hash == entry.content_hash) {
+            continue;
+        }
+        auto it = state.reviewed_hashes.find(entry.path);
+        // Keep an explicit pass (reviewed == live content) until the next edit.
+        if (it != state.reviewed_hashes.end() && it->second == entry.content_hash) {
+            continue;
+        }
+        state.reviewed_hashes[entry.path] = bak_hash;
+    }
+    dired_update_dirty_flags(state);
 }
 
 }  // namespace
@@ -672,7 +769,7 @@ std::string dired_list_text(const DiredState& state) {
     std::ostringstream out;
     // Two fixed help lines (kept short so typical terminals show both fully).
     out << "  RET view  o edit  g refresh  r rename  c copy  d del  n file  m dir\n";
-    out << "  t touch  f|/ find  p pass  SPC/b page  ←=parent  →=enter  q quit\n";
+    out << "  t touch  f|/ find  p pass  view n/p chg  SPC/b  ←=parent  →=enter  q\n";
     for (size_t i = 0; i < state.entries.size(); ++i) {
         const DiredEntry& entry = state.entries[i];
         const bool selected = i == state.selected && state.focus == DiredFocus::List;
@@ -696,7 +793,7 @@ std::vector<tui::StyledLine> dired_list_body_lines(const DiredState& state) {
         lines.push_back(std::move(line));
     };
     push_help("  RET view  o edit  g refresh  r rename  c copy  d del  n file  m dir");
-    push_help("  t touch  f|/ find  p pass  SPC/b page  ←=parent  →=enter  q quit");
+    push_help("  t touch  f|/ find  p pass  view n/p chg  SPC/b  ←=parent  →=enter  q");
 
     for (size_t i = 0; i < state.entries.size(); ++i) {
         const DiredEntry& entry = state.entries[i];
@@ -942,6 +1039,8 @@ void dired_capture_baseline(DiredState& state) {
     dired_update_dirty_flags(state);
 }
 
+
+
 void dired_update_dirty_flags(DiredState& state) {
     for (DiredEntry& entry : state.entries) {
         entry.dirty = false;
@@ -1026,6 +1125,10 @@ Error dired_activate_selection(DiredState& state, const EditorSettings& settings
         return ok_error();
     }
 
+    // Re-hash listing so agent writes under an open dired are visible as dirty
+    // before we decide how to paint the RO view.
+    rehash_listed_files(state);
+    // entry pointer remains valid (rehash only mutates fields, not the vector).
     LoadedFile loaded;
     Error err = load_file(entry->path, settings, loaded);
     if (!err.ok()) {
@@ -1046,49 +1149,121 @@ Error dired_activate_selection(DiredState& state, const EditorSettings& settings
     state.view.clear_selection();
     state.view.clear_undo_history();
     state.view_path = entry->path;
-    state.view_changed_lines.clear();
-    state.view_has_history_baseline = false;
+    state.view_content_hash = dired_hash_bytes(state.view.text.str());
+    entry->content_hash = state.view_content_hash;
     state.focus = DiredFocus::View;
 
-    // Dirty files: prefer last-agent pre-write snapshot under .ainiux-pr/history/
-    // for per-line backgrounds. Without a snapshot (brand-new file), mark every
-    // line so the RO view still acts as a poor-man's "what is new" review.
-    if (entry->dirty) {
-        bool loaded_history = false;
-        std::error_code abs_ec;
-        const fs::path absolute = fs::absolute(fs::u8path(entry->path), abs_ec);
-        if (!abs_ec) {
-            std::string project_root;
-            std::string relative;
-            if (agent::find_enclosing_project_root(absolute.u8string(), project_root) &&
-                agent::project_relative_path(project_root, absolute.u8string(), relative)) {
-                const std::string history_path =
-                    agent::history_backup_path(project_root, relative);
-                std::error_code hist_ec;
-                const fs::file_status hist_status =
-                    fs::status(fs::u8path(history_path), hist_ec);
-                if (!hist_ec && fs::is_regular_file(hist_status)) {
-                    // Match default history max (1M); larger backups are rare.
-                    constexpr std::size_t kHistoryReadCap = 1024U * 1024U;
-                    std::string previous;
-                    Error read_err =
-                        platform::read_file_bounded(history_path, kHistoryReadCap, previous);
-                    if (read_err.ok()) {
-                        const std::string current = state.view.text.str();
-                        state.view_changed_lines = mark_changed_lines(previous, current);
-                        state.view_has_history_baseline = true;
-                        loaded_history = true;
-                    }
-                }
+    // Always prefer agent history bak for line marks when it differs from live.
+    // Stale list dirty flags must not suppress the RO change overlay.
+    apply_view_change_marks(state, entry, state.view.text.str());
+    // Jump to the first changed line so the tint is on-screen (large files often
+    // have only a few changed lines far from the top).
+    if (state.view_has_history_baseline) {
+        for (size_t i = 0; i < state.view_changed_lines.size(); ++i) {
+            if (!state.view_changed_lines[i]) continue;
+            if (i < state.view.text.line_count()) {
+                state.view.cursor = state.view.text.line_start(i);
+                state.view.scroll_line = i > 2 ? i - 2 : 0;
+                state.view.preferred_column = 0;
             }
-        }
-        if (!loaded_history) {
-            const size_t lines = state.view.text.line_count();
-            state.view_changed_lines.assign(lines, true);
-            state.view_has_history_baseline = true;
+            break;
         }
     }
     return ok_error();
+}
+
+bool dired_sync_live(DiredState& state, const EditorSettings& settings) {
+    if (!state.active) {
+        return false;
+    }
+    bool changed = false;
+
+    // Snapshot previous dirty flags / hashes for change detection on the list.
+    std::map<std::string, bool> was_dirty;
+    std::map<std::string, std::string> was_hash;
+    for (const DiredEntry& entry : state.entries) {
+        was_dirty[entry.path] = entry.dirty;
+        was_hash[entry.path] = entry.content_hash;
+    }
+    rehash_listed_files(state);
+    for (const DiredEntry& entry : state.entries) {
+        if (was_hash[entry.path] != entry.content_hash || was_dirty[entry.path] != entry.dirty) {
+            changed = true;
+            break;
+        }
+    }
+
+    if (state.focus != DiredFocus::View || state.view_path.empty()) {
+        return changed;
+    }
+
+    const std::string live_hash = dired_hash_file(state.view_path);
+    if (live_hash.empty() || live_hash == state.view_content_hash) {
+        // Still refresh marks if bak appeared/changed while content hash matches
+        // (unlikely) — nothing to do.
+        return changed;
+    }
+
+    // Viewed file changed on disk (agent write). Reload and remake marks.
+    DiredEntry* entry = nullptr;
+    for (DiredEntry& e : state.entries) {
+        if (e.path == state.view_path) {
+            entry = &e;
+            break;
+        }
+    }
+    // Path equality may fail if listing uses a different absolute form; match by
+    // name or re-open from view_path.
+    if (entry == nullptr) {
+        for (DiredEntry& e : state.entries) {
+            if (!e.is_directory && !e.is_parent &&
+                fs::u8path(e.path).filename() == fs::u8path(state.view_path).filename()) {
+                std::error_code ec1;
+                std::error_code ec2;
+                if (fs::equivalent(fs::u8path(e.path), fs::u8path(state.view_path), ec1) &&
+                    !ec1) {
+                    entry = &e;
+                    break;
+                }
+                (void)ec2;
+            }
+        }
+    }
+
+    LoadedFile loaded;
+    Error err = load_file(state.view_path, settings, loaded);
+    if (!err.ok()) {
+        return changed;
+    }
+    const size_t keep_cursor = state.view.cursor;
+    const size_t keep_scroll = state.view.scroll_line;
+    state.view = EditorState{};
+    state.view.text = std::move(loaded.text);
+    state.view.linebreak = loaded.linebreak;
+    state.view.set_path(state.view_path);
+    state.view.read_only = true;
+    state.view.dirty = false;
+    state.view.highlight_enabled = true;
+    state.view.redetect_language();
+    state.view.cursor = std::min(keep_cursor, state.view.text.size());
+    state.view.scroll_line = keep_scroll;
+    state.view.scroll_column = 0;
+    state.view.preferred_column = 0;
+    state.view.clear_selection();
+    state.view.clear_undo_history();
+    state.view_content_hash = dired_hash_bytes(state.view.text.str());
+    if (entry != nullptr) {
+        entry->content_hash = state.view_content_hash;
+        entry->path = state.view_path;
+    }
+    apply_view_change_marks(state, entry, state.view.text.str());
+    // Clamp scroll if the file shrank.
+    const size_t max_line =
+        state.view.text.line_count() > 0 ? state.view.text.line_count() - 1 : 0;
+    if (state.view.scroll_line > max_line) {
+        state.view.scroll_line = max_line;
+    }
+    return true;
 }
 
 Error dired_go_parent(DiredState& state) {
@@ -1142,8 +1317,98 @@ void dired_close_view(DiredState& state) {
     state.focus = DiredFocus::List;
     state.view = EditorState{};
     state.view_path.clear();
+    state.view_content_hash.clear();
     state.view_changed_lines.clear();
     state.view_has_history_baseline = false;
+}
+
+namespace {
+
+bool is_changed_block_start(const std::vector<bool>& marks, size_t i) {
+    if (i >= marks.size() || !marks[i]) {
+        return false;
+    }
+    return i == 0 || !marks[i - 1];
+}
+
+// Collect 0-based line indices of block starts (first line of each run of trues).
+std::vector<size_t> changed_block_starts(const std::vector<bool>& marks) {
+    std::vector<size_t> starts;
+    for (size_t i = 0; i < marks.size(); ++i) {
+        if (is_changed_block_start(marks, i)) {
+            starts.push_back(i);
+        }
+    }
+    return starts;
+}
+
+void jump_view_to_line(DiredState& state, size_t line) {
+    if (state.view.text.line_count() == 0) {
+        return;
+    }
+    if (line >= state.view.text.line_count()) {
+        line = state.view.text.line_count() - 1;
+    }
+    state.view.cursor = state.view.text.line_start(line);
+    state.view.scroll_line = line > 2 ? line - 2 : 0;
+    state.view.preferred_column = 0;
+    state.view.clear_selection();
+}
+
+bool has_usable_changed_marks(const DiredState& state) {
+    return state.focus == DiredFocus::View && state.view_has_history_baseline &&
+           count_changed_lines(state.view_changed_lines) > 0;
+}
+
+}  // namespace
+
+bool dired_goto_next_changed_block(DiredState& state) {
+    if (!has_usable_changed_marks(state)) {
+        return false;
+    }
+    const std::vector<size_t> starts = changed_block_starts(state.view_changed_lines);
+    if (starts.empty()) {
+        return false;
+    }
+    const size_t cur = state.view.text.line_for_offset(state.view.cursor);
+    for (size_t start : starts) {
+        if (start > cur) {
+            jump_view_to_line(state, start);
+            return true;
+        }
+    }
+    // Wrap to first block.
+    jump_view_to_line(state, starts.front());
+    return true;
+}
+
+bool dired_goto_prev_changed_block(DiredState& state) {
+    if (!has_usable_changed_marks(state)) {
+        return false;
+    }
+    const std::vector<size_t> starts = changed_block_starts(state.view_changed_lines);
+    if (starts.empty()) {
+        return false;
+    }
+    size_t cur = state.view.text.line_for_offset(state.view.cursor);
+    // Mid-block: jump to the start of the current block first.
+    if (cur < state.view_changed_lines.size() && state.view_changed_lines[cur] &&
+        !is_changed_block_start(state.view_changed_lines, cur)) {
+        while (cur > 0 && state.view_changed_lines[cur - 1]) {
+            --cur;
+        }
+        jump_view_to_line(state, cur);
+        return true;
+    }
+    for (size_t i = starts.size(); i > 0; --i) {
+        if (starts[i - 1] < cur) {
+            jump_view_to_line(state, starts[i - 1]);
+            return true;
+        }
+    }
+    // Wrap to last block.
+    jump_view_to_line(state, starts.back());
+    return true;
 }
 
 Error dired_rename_selected(DiredState& state, const std::string& new_path, bool overwrite) {

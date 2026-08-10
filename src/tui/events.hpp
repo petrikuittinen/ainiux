@@ -133,6 +133,8 @@ struct TuiEvent {
 enum class EscapeResult {
     Unhandled,
     Handled,
+    // Physical F4 (same sequences as editor dired). Agent mode hops to dired.
+    OpenDired,
 };
 
 }  // namespace ainiux::tui

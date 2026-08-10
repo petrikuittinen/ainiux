@@ -36,6 +36,7 @@ These documents preserve audit context. Their dates and code references matter; 
 
 - [Security hardening audit](quick_security_todo.md)
 - [Testing coverage analysis](testing_coverage.md)
+- [Prompt-cache hit rate test runs](cache_hit_rate_test_runs.md)
 
 ## Other project material
 

@@ -26,6 +26,7 @@
 #include "app/index_progress.hpp"
 #include "app/detail.hpp"
 #include "app/user_shell.hpp"
+#include "agent/agent_controller.hpp"
 #include "agent/approval.hpp"
 #include "agent/project_root.hpp"
 #include "agent/session_runtime.hpp"
@@ -180,12 +181,24 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     bool quit = false;
     app::InteractiveUiTarget leave_target = app::InteractiveUiTarget::Quit;
+    // Temporary editor hop keeps the controller (and any in-flight turn) alive.
+    bool preserve_agent_controller = false;
     // Warm multi-turn agent session (project .ainiux-pr/agent.sqlite).
-    // Prepared on agent-mode entry (index refresh + history load), not deferred
-    // until the first user turn.
-    std::shared_ptr<agent::AgentSessionRuntime> agent_runtime =
-        context.options.agent ? std::make_shared<agent::AgentSessionRuntime>()
-                              : std::shared_ptr<agent::AgentSessionRuntime>{};
+    // Owned by InteractiveSession::agent_controller so it survives editor hops.
+    std::shared_ptr<agent::AgentController> agent_controller;
+    std::shared_ptr<agent::AgentSessionRuntime> agent_runtime;
+    std::shared_ptr<agent::ApprovalGate> agent_approval_gate;
+    if (context.options.agent) {
+        if (interactive != nullptr) {
+            agent_controller = agent::ensure_agent_controller(interactive->agent_controller);
+        } else {
+            agent_controller = std::make_shared<agent::AgentController>();
+        }
+        agent_runtime = agent_controller->runtime();
+        agent_approval_gate = agent_controller->approval_gate();
+        // Guard notify already posts to controller->events(); TUI drains them.
+        agent_controller->arm_guard_notify();
+    }
     auto agent_ready_with_index_controls = [&]() {
         std::string value = agent_ready_status();
         if (agent_runtime && agent_runtime->prepared() &&
@@ -200,23 +213,8 @@ app::TuiRunResult run(provider::RequestContext context,
             initial_agent_workspace = std::move(resolved_workspace);
         }
     }
-    // Shared with the agent worker: blocks tool execution until the user answers y/n.
-    std::shared_ptr<agent::ApprovalGate> agent_approval_gate =
-        context.options.agent ? std::make_shared<agent::ApprovalGate>()
-                              : std::shared_ptr<agent::ApprovalGate>{};
     agent::GuardApprovalRequest pending_guard_request;
     bool have_pending_guard_request = false;
-    if (agent_approval_gate) {
-        agent_approval_gate->set_notify([&events](const agent::GuardApprovalRequest& request) {
-            TuiEvent event;
-            event.type = TuiEventType::GuardApproval;
-            event.guard_tool_name = request.tool_name;
-            event.guard_command_preview = request.command_preview;
-            event.guard_rule_id = request.rule_id;
-            event.guard_message = request.message;
-            events.push(std::move(event));
-        });
-    }
     auto make_agent_runtime_options = [&](const std::string& workspace = std::string()) {
         agent::SessionRuntimeOptions options;
         options.workspace = !workspace.empty()
@@ -252,19 +250,45 @@ app::TuiRunResult run(provider::RequestContext context,
         options.fetch_options.trace_http = context.options.trace_http;
         options.fetch_options.allow_private = context.options.allow_private_url_fetch;
         options.search_options = search::options_for(context.options);
-        options.on_phase = [&events](agent::AgentActivityPhase phase) {
-            TuiEvent event;
-            event.type = TuiEventType::AgentPhase;
-            event.agent_phase = phase;
-            events.push(std::move(event));
-        };
-        options.on_prepare_progress =
-            [&events](const agent::PreparationProgress& progress) {
+        // Prefer controller event queue so callbacks remain valid across
+        // temporary editor hops (local `events` is destroyed with the TUI).
+        if (agent_controller) {
+            std::shared_ptr<agent::AgentController> ctl = agent_controller;
+            options.on_phase = [ctl](agent::AgentActivityPhase phase) {
+                agent::AgentSurfaceEvent event;
+                event.type = agent::AgentSurfaceEvent::Type::Phase;
+                event.agent_phase = phase;
+                ctl->events().push(std::move(event));
+            };
+            options.on_prepare_progress =
+                [ctl](const agent::PreparationProgress& progress) {
+                    agent::AgentSurfaceEvent event;
+                    event.type = agent::AgentSurfaceEvent::Type::PrepareProgress;
+                    event.agent_prepare_progress = progress;
+                    ctl->events().push(std::move(event));
+                };
+            options.on_structured_progress =
+                [ctl](const agent::AgentProgressUpdate& update) {
+                    agent::AgentSurfaceEvent event;
+                    event.type = agent::AgentSurfaceEvent::Type::Progress;
+                    event.agent_progress = update;
+                    ctl->events().push(std::move(event));
+                };
+        } else {
+            options.on_phase = [&events](agent::AgentActivityPhase phase) {
                 TuiEvent event;
-                event.type = TuiEventType::AgentPrepareProgress;
-                event.agent_prepare_progress = progress;
+                event.type = TuiEventType::AgentPhase;
+                event.agent_phase = phase;
                 events.push(std::move(event));
             };
+            options.on_prepare_progress =
+                [&events](const agent::PreparationProgress& progress) {
+                    TuiEvent event;
+                    event.type = TuiEventType::AgentPrepareProgress;
+                    event.agent_prepare_progress = progress;
+                    events.push(std::move(event));
+                };
+        }
         if (agent_approval_gate) {
             std::shared_ptr<agent::ApprovalGate> gate = agent_approval_gate;
             options.on_guard_ask =
@@ -274,6 +298,66 @@ app::TuiRunResult run(provider::RequestContext context,
             };
         }
         return options;
+    };
+
+    auto map_agent_surface_event = [](agent::AgentSurfaceEvent src) -> TuiEvent {
+        TuiEvent event;
+        switch (src.type) {
+            case agent::AgentSurfaceEvent::Type::Progress:
+                event.type = TuiEventType::AgentProgress;
+                event.agent_progress = std::move(src.agent_progress);
+                break;
+            case agent::AgentSurfaceEvent::Type::Phase:
+                event.type = TuiEventType::AgentPhase;
+                event.agent_phase = src.agent_phase;
+                break;
+            case agent::AgentSurfaceEvent::Type::PrepareProgress:
+                event.type = TuiEventType::AgentPrepareProgress;
+                event.agent_prepare_progress = src.agent_prepare_progress;
+                break;
+            case agent::AgentSurfaceEvent::Type::IndexProgress:
+                event.type = TuiEventType::AgentIndexProgress;
+                event.agent_index_progress = src.agent_index_progress;
+                break;
+            case agent::AgentSurfaceEvent::Type::PrepareDone:
+                event.type = TuiEventType::AgentPrepareDone;
+                event.error = std::move(src.error);
+                event.text = std::move(src.text);
+                event.agent_history = std::move(src.agent_history);
+                event.agent_history_loaded = src.agent_history_loaded;
+                event.agent_index_enabled = src.agent_index_enabled;
+                break;
+            case agent::AgentSurfaceEvent::Type::TurnDone:
+                event.type = TuiEventType::Done;
+                event.chat = std::move(src.chat);
+                event.agent_turn = true;
+                event.agent_tool_lines = std::move(src.agent_tool_lines);
+                event.agent_tool_line_ms = std::move(src.agent_tool_line_ms);
+                event.agent_final_text = std::move(src.agent_final_text);
+                event.agent_needs_user_continue = src.agent_needs_user_continue;
+                event.agent_turn_started_ms = src.agent_turn_started_ms;
+                event.agent_finished_at_ms = src.agent_finished_at_ms;
+                break;
+            case agent::AgentSurfaceEvent::Type::TurnError:
+                event.type = TuiEventType::Error;
+                event.error = std::move(src.error);
+                event.chat = std::move(src.chat);
+                event.agent_turn = src.agent_turn;
+                event.agent_tool_lines = std::move(src.agent_tool_lines);
+                event.agent_tool_line_ms = std::move(src.agent_tool_line_ms);
+                event.agent_final_text = std::move(src.agent_final_text);
+                event.agent_turn_started_ms = src.agent_turn_started_ms;
+                event.agent_finished_at_ms = src.agent_finished_at_ms;
+                break;
+            case agent::AgentSurfaceEvent::Type::GuardApproval:
+                event.type = TuiEventType::GuardApproval;
+                event.guard_tool_name = std::move(src.guard_tool_name);
+                event.guard_command_preview = std::move(src.guard_command_preview);
+                event.guard_rule_id = std::move(src.guard_rule_id);
+                event.guard_message = std::move(src.guard_message);
+                break;
+        }
+        return event;
     };
     bool show_thinking_traces = context.options.show_thinking_traces;
     size_t pending_user = static_cast<size_t>(-1);
@@ -1180,131 +1264,166 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_task_active = true;
             agent_completed_task_ms = -1;
             status = "Waiting for provider";
-        }
-        model_job.start([job_context, request_messages = std::move(request_messages),
-                         media_database_path, max_image_bytes, max_attachment_bytes, agent_mode,
-                         agent_payload = std::move(agent_payload), agent_runtime,
-                         agent_prep_options = std::move(agent_prep_options),
-                         &events](runtime::CancellationToken token) mutable {
-            provider::ChatResult chat_result;
-            Error send_error = ok_error();
-            ainiux::context::PreparedMessages prepared;
-            agent::SessionTurnResult agent_turn;
-            bool have_agent_turn = false;
-            if (agent_mode) {
-                // Interactive agent turn: multi-turn session runtime (shared tools/DB).
-                const std::string model_name = job_context.options.model;
-                job_context.options.quiet = true;
-                std::shared_ptr<agent::AgentSessionRuntime> runtime = agent_runtime;
-                if (!runtime) {
-                    send_error = {ErrorCode::Internal, "agent session runtime is missing"};
-                } else {
-                    // prepare() normally runs at agent-mode entry; re-try only if
-                    // that bootstrap failed or the runtime was reset.
-                    if (!runtime->prepared()) {
-                        send_error =
-                            runtime->prepare(job_context, token, {}, agent_prep_options);
-                    }
-                    // Expand text attachments into the goal so the model sees bodies,
-                    // not only the compact "Attached files" list kept for display.
-                    if (send_error.ok()) {
-                        for (auto it = request_messages.rbegin();
-                             it != request_messages.rend(); ++it) {
-                            if (it->role != "user" || it->text_attachments.empty()) continue;
-                            std::vector<provider::Message> attach_carrier = {*it};
-                            send_error = chat::hydrate_message_text_attachments(
-                                media_database_path, attach_carrier, max_attachment_bytes,
-                                token);
-                            if (!send_error.ok()) {
-                                // Prefer inline Markdown already on the message.
-                                std::string expanded = agent_payload.text;
-                                bool any_inline = false;
-                                for (const provider::TextAttachment& attachment :
-                                     it->text_attachments) {
-                                    if (attachment.markdown_content.empty()) continue;
-                                    any_inline = true;
-                                    if (!expanded.empty()) expanded += "\n\n";
-                                    expanded += "---" + attachment.display_name + "---\n";
-                                    expanded += attachment.markdown_content;
-                                }
-                                if (any_inline) {
-                                    agent_payload.text = std::move(expanded);
-                                    send_error = ok_error();
-                                }
-                            } else if (!attach_carrier.empty()) {
-                                agent_payload.text = std::move(attach_carrier.front().content);
-                            }
-                            break;
+            if (!agent_controller) {
+                status = "Agent controller is missing";
+                active_job = ActiveJob::None;
+                agent_task_active = false;
+                return;
+            }
+            // Background-capable turn: job lives on the controller so the user can
+            // hop to the editor without cancelling.
+            const bool started = agent_controller->start_turn(
+                [job_context, request_messages = std::move(request_messages),
+                 media_database_path, max_image_bytes, max_attachment_bytes,
+                 agent_payload = std::move(agent_payload), agent_runtime,
+                 agent_prep_options = std::move(agent_prep_options)](
+                    runtime::CancellationToken token) mutable {
+                    agent::AgentSurfaceEvent event;
+                    provider::ChatResult chat_result;
+                    Error send_error = ok_error();
+                    agent::SessionTurnResult agent_turn;
+                    bool have_agent_turn = false;
+                    const std::string model_name = job_context.options.model;
+                    job_context.options.quiet = true;
+                    std::shared_ptr<agent::AgentSessionRuntime> runtime = agent_runtime;
+                    if (!runtime) {
+                        send_error = {ErrorCode::Internal,
+                                      "agent session runtime is missing"};
+                    } else {
+                        if (!runtime->prepared()) {
+                            send_error = runtime->prepare(job_context, token, {},
+                                                          agent_prep_options);
                         }
-                    }
-                    // Agent attaches are request-local base64. Hydrate unresolved
-                    // managed-media refs only as a best-effort bridge from chat.
-                    if (send_error.ok()) {
-                        for (provider::ImageInput& image : agent_payload.images) {
-                            if (!image.base64_data.empty()) continue;
-                            if (!image.storage_ref.empty() && !media_database_path.empty()) {
-                                std::vector<provider::Message> carrier = {
-                                    {"user", "", {image}}};
-                                send_error = chat::hydrate_message_images(
-                                    media_database_path, carrier, max_image_bytes, token);
-                                if (send_error.ok() && !carrier.empty() &&
-                                    !carrier.front().images.empty()) {
-                                    image = std::move(carrier.front().images.front());
+                        if (send_error.ok()) {
+                            for (auto it = request_messages.rbegin();
+                                 it != request_messages.rend(); ++it) {
+                                if (it->role != "user" || it->text_attachments.empty())
+                                    continue;
+                                std::vector<provider::Message> attach_carrier = {*it};
+                                send_error = chat::hydrate_message_text_attachments(
+                                    media_database_path, attach_carrier,
+                                    max_attachment_bytes, token);
+                                if (!send_error.ok()) {
+                                    std::string expanded = agent_payload.text;
+                                    bool any_inline = false;
+                                    for (const provider::TextAttachment& attachment :
+                                         it->text_attachments) {
+                                        if (attachment.markdown_content.empty()) continue;
+                                        any_inline = true;
+                                        if (!expanded.empty()) expanded += "\n\n";
+                                        expanded +=
+                                            "---" + attachment.display_name + "---\n";
+                                        expanded += attachment.markdown_content;
+                                    }
+                                    if (any_inline) {
+                                        agent_payload.text = std::move(expanded);
+                                        send_error = ok_error();
+                                    }
+                                } else if (!attach_carrier.empty()) {
+                                    agent_payload.text =
+                                        std::move(attach_carrier.front().content);
                                 }
-                            } else {
-                                send_error = {
-                                    ErrorCode::FileRead,
-                                    "image attachment data is unavailable" +
-                                        (image.display_name.empty()
-                                             ? std::string("; re-attach the file in agent mode")
-                                             : ": " + image.display_name +
-                                                   "; re-attach the file in agent mode")};
+                                break;
                             }
-                            if (!send_error.ok()) break;
                         }
-                    }
-                    if (send_error.ok()) {
-                        // Stream tool activity into the chat panel as each call runs.
-                        auto agent_progress = [&events](const std::string& line) {
-                            if (line.empty()) return;
-                            if (line.rfind("Agent turn ", 0) == 0) return;
-                            TuiEvent delta;
-                            delta.type = TuiEventType::Delta;
-                            delta.text = line;
-                            if (delta.text.back() != '\n') delta.text.push_back('\n');
-                            events.push(std::move(delta));
-                        };
-                        auto structured_progress =
-                            [&events](const agent::AgentProgressUpdate& update) {
-                                TuiEvent event;
-                                event.type = TuiEventType::AgentProgress;
-                                event.agent_progress = update;
-                                events.push(std::move(event));
+                        if (send_error.ok()) {
+                            for (provider::ImageInput& image : agent_payload.images) {
+                                if (!image.base64_data.empty()) continue;
+                                if (!image.storage_ref.empty() &&
+                                    !media_database_path.empty()) {
+                                    std::vector<provider::Message> carrier = {
+                                        {"user", "", {image}}};
+                                    send_error = chat::hydrate_message_images(
+                                        media_database_path, carrier, max_image_bytes,
+                                        token);
+                                    if (send_error.ok() && !carrier.empty() &&
+                                        !carrier.front().images.empty()) {
+                                        image = std::move(carrier.front().images.front());
+                                    }
+                                } else {
+                                    send_error = {
+                                        ErrorCode::FileRead,
+                                        "image attachment data is unavailable" +
+                                            (image.display_name.empty()
+                                                 ? std::string(
+                                                       "; re-attach the file in agent mode")
+                                                 : ": " + image.display_name +
+                                                       "; re-attach the file in agent mode")};
+                                }
+                                if (!send_error.ok()) break;
+                            }
+                        }
+                        if (send_error.ok()) {
+                            auto agent_progress = [](const std::string& line) {
+                                // Compact tool lines are delivered via structured
+                                // progress; ignore legacy string progress in the TUI.
+                                (void)line;
                             };
-                        agent_turn = runtime->run_user_turn(job_context, std::move(agent_payload),
-                                                            token, {}, agent_progress,
-                                                            structured_progress);
-                        have_agent_turn = true;
-                        send_error = agent_turn.error;
-                        // Fallback single-blob content (Done prefers structured fields).
-                        std::string display;
-                        for (std::size_t i = 0; i < agent_turn.compact_tool_lines.size(); ++i) {
-                            if (!display.empty()) display.push_back('\n');
-                            display += agent_turn.compact_tool_lines[i];
+                            agent_turn = runtime->run_user_turn(
+                                job_context, std::move(agent_payload), token, {},
+                                agent_progress, {});
+                            have_agent_turn = true;
+                            send_error = agent_turn.error;
+                            std::string display;
+                            for (std::size_t i = 0;
+                                 i < agent_turn.compact_tool_lines.size(); ++i) {
+                                if (!display.empty()) display.push_back('\n');
+                                display += agent_turn.compact_tool_lines[i];
+                            }
+                            if (!agent_turn.final_text.empty()) {
+                                if (!display.empty()) display.push_back('\n');
+                                display += agent_turn.final_text;
+                            } else if (!send_error.ok() && !send_error.message.empty()) {
+                                if (!display.empty()) display.push_back('\n');
+                                display += send_error.message;
+                            }
+                            chat_result.content = display;
+                            chat_result.model = model_name;
                         }
-                        if (!agent_turn.final_text.empty()) {
-                            if (!display.empty()) display.push_back('\n');
-                            display += agent_turn.final_text;
-                        } else if (!send_error.ok() && !send_error.message.empty()) {
-                            // Surface abort/policy reasons instead of a blank failure.
-                            if (!display.empty()) display.push_back('\n');
-                            display += send_error.message;
-                        }
-                        chat_result.content = display;
-                        chat_result.model = model_name;
                     }
-                }
-            } else {
+                    event.chat = std::move(chat_result);
+                    event.agent_turn = have_agent_turn;
+                    if (have_agent_turn) {
+                        event.agent_tool_lines = std::move(agent_turn.compact_tool_lines);
+                        event.agent_tool_line_ms =
+                            std::move(agent_turn.compact_tool_line_ms);
+                        event.agent_final_text = std::move(agent_turn.final_text);
+                        event.agent_needs_user_continue = agent_turn.needs_user_continue;
+                        event.agent_turn_started_ms = agent_turn.turn_started_ms;
+                        event.agent_finished_at_ms = agent_turn.finished_at_ms;
+                        if (event.agent_final_text.empty() && !agent_turn.notice.empty() &&
+                            !send_error.ok()) {
+                            event.agent_final_text = agent_turn.notice;
+                        }
+                    }
+                    if (send_error.ok()) {
+                        event.type = agent::AgentSurfaceEvent::Type::TurnDone;
+                    } else {
+                        event.type = agent::AgentSurfaceEvent::Type::TurnError;
+                        event.error = send_error;
+                        if (have_agent_turn && event.agent_final_text.empty()) {
+                            event.agent_final_text = send_error.message;
+                        }
+                        if (have_agent_turn && event.agent_finished_at_ms <= 0) {
+                            event.agent_finished_at_ms = agent::now_unix_ms();
+                        }
+                    }
+                    return event;
+                });
+            if (!started) {
+                status = "A model job is already running";
+                active_job = ActiveJob::None;
+                agent_task_active = false;
+                return;
+            }
+            if (agent_controller) agent_controller->set_status_label("Waiting for provider");
+        } else {
+            model_job.start([job_context, request_messages = std::move(request_messages),
+                             media_database_path, max_image_bytes, max_attachment_bytes,
+                             &events](runtime::CancellationToken token) mutable {
+                provider::ChatResult chat_result;
+                Error send_error = ok_error();
+                ainiux::context::PreparedMessages prepared;
                 send_error = chat::hydrate_message_text_attachments(
                     media_database_path, request_messages, max_attachment_bytes, token);
                 if (send_error.ok()) {
@@ -1324,59 +1443,35 @@ app::TuiRunResult run(provider::RequestContext context,
                     send_error = provider::send_chat_messages(
                         job_context,
                         prepared.messages,
-                    [&](const std::string& delta) -> Error {
-                        TuiEvent event;
-                        event.type = TuiEventType::Delta;
-                        event.text = delta;
-                        events.push(std::move(event));
-                        if (token.cancelled()) {
-                            return {ErrorCode::Cancelled, "chat request cancelled while streaming"};
-                        }
-                        return ok_error();
-                    },
-                    chat_result,
-                    token);
+                        [&](const std::string& delta) -> Error {
+                            TuiEvent event;
+                            event.type = TuiEventType::Delta;
+                            event.text = delta;
+                            events.push(std::move(event));
+                            if (token.cancelled()) {
+                                return {ErrorCode::Cancelled,
+                                        "chat request cancelled while streaming"};
+                            }
+                            return ok_error();
+                        },
+                        chat_result,
+                        token);
                 }
-            }
-            TuiEvent event;
-            if (send_error.ok()) {
-                event.type = TuiEventType::Done;
-                event.chat = std::move(chat_result);
-                event.compaction = std::move(prepared.event);
-                event.compacted = prepared.compacted;
-                if (have_agent_turn) {
-                    event.agent_turn = true;
-                    event.agent_tool_lines = std::move(agent_turn.compact_tool_lines);
-                    event.agent_tool_line_ms = std::move(agent_turn.compact_tool_line_ms);
-                    event.agent_final_text = std::move(agent_turn.final_text);
-                    event.agent_needs_user_continue = agent_turn.needs_user_continue;
-                    event.agent_turn_started_ms = agent_turn.turn_started_ms;
-                    event.agent_finished_at_ms = agent_turn.finished_at_ms;
+                TuiEvent event;
+                if (send_error.ok()) {
+                    event.type = TuiEventType::Done;
+                    event.chat = std::move(chat_result);
+                    event.compaction = std::move(prepared.event);
+                    event.compacted = prepared.compacted;
+                } else {
+                    event.type = TuiEventType::Error;
+                    event.error = send_error;
+                    event.chat = std::move(chat_result);
                 }
-            } else {
-                event.type = TuiEventType::Error;
-                event.error = send_error;
-                event.chat = std::move(chat_result);
-                // Keep agent tool lines / failure text for the transcript even on error.
-                if (have_agent_turn) {
-                    event.agent_turn = true;
-                    event.agent_tool_lines = std::move(agent_turn.compact_tool_lines);
-                    event.agent_tool_line_ms = std::move(agent_turn.compact_tool_line_ms);
-                    event.agent_final_text = !agent_turn.final_text.empty()
-                                                ? std::move(agent_turn.final_text)
-                                                : send_error.message;
-                    if (event.agent_final_text.empty() && !agent_turn.notice.empty())
-                        event.agent_final_text = agent_turn.notice;
-                    event.agent_turn_started_ms = agent_turn.turn_started_ms;
-                    event.agent_finished_at_ms = agent_turn.finished_at_ms > 0
-                                                    ? agent_turn.finished_at_ms
-                                                    : agent::now_unix_ms();
-                }
-            }
-            events.push(std::move(event));
-        });
-        status = agent_mode ? "Waiting for provider"
-                            : "Waiting for response...";
+                events.push(std::move(event));
+            });
+        }
+        status = agent_mode ? "Waiting for provider" : "Waiting for response...";
     };
 
     auto start_turn_with_payload = [&](const std::string& history_content,
@@ -1478,7 +1573,13 @@ app::TuiRunResult run(provider::RequestContext context,
             mode = TuiMode::Chat;
             have_pending_guard_request = false;
         }
-        model_job.cancel();
+        if (context.options.agent && agent_controller &&
+            (agent_controller->turn_running() || agent_controller->job_joinable())) {
+            agent_controller->cancel_turn();
+            agent_controller->set_status_label("Cancelling...");
+        } else {
+            model_job.cancel();
+        }
         status = "Cancelling...";
     };
 
@@ -2170,19 +2271,39 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     command_handlers.set_thinking_trace_mode = set_thinking_trace_mode;
     auto leave_for = [&](app::InteractiveUiTarget target) {
-        if (active_job != ActiveJob::None) {
-            status = "Cannot switch mode while a model job is running";
-            return;
-        }
         if (target == app::InteractiveUiTarget::Editor && interactive == nullptr) {
             status = "Editor mode is unavailable";
             return;
         }
-        // Leaving agent: finish project session without tearing down chat DB.
-        if (context.options.agent && agent_runtime && agent_runtime->prepared() &&
-            agent_runtime->session_id() > 0) {
-            (void)agent_runtime->finish_session("cancelled", "", "Cancelled",
-                                                "left agent mode");
+        // Allow temporary editor hops while an agent turn runs (or is idle).
+        // Chat generation and non-editor mode switches still require idle jobs.
+        const bool agent_editor_hop =
+            context.options.agent && target == app::InteractiveUiTarget::Editor;
+        if (!agent_editor_hop && active_job != ActiveJob::None) {
+            status = "Cannot switch mode while a model job is running";
+            return;
+        }
+        if (target == app::InteractiveUiTarget::Chat && context.options.agent &&
+            agent_controller &&
+            (agent_controller->turn_running() || active_job != ActiveJob::None)) {
+            status = "Cancel the agent turn before switching to chat";
+            return;
+        }
+        if (agent_editor_hop) {
+            // Keep controller + in-flight turn; do not finish_session.
+            preserve_agent_controller = true;
+            if (agent_controller && agent_controller->turn_running()) {
+                agent_controller->set_status_label("Agent running · reviewing in editor");
+            }
+        } else if (context.options.agent && agent_runtime && agent_runtime->prepared() &&
+                   agent_runtime->session_id() > 0) {
+            // Permanent leave (chat / quit handled elsewhere): finish session.
+            if (agent_controller) {
+                agent_controller->shutdown(true, "left agent mode");
+            } else {
+                (void)agent_runtime->finish_session("cancelled", "", "Cancelled",
+                                                    "left agent mode");
+            }
         }
         leave_target = target;
         quit = true;
@@ -2662,16 +2783,32 @@ app::TuiRunResult run(provider::RequestContext context,
         file_job.start([prep_context = std::move(prep_context),
                         prep_options = std::move(prep_options), agent_runtime,
                         &events](runtime::CancellationToken token) mutable {
-            TuiEvent event;
-            event.type = TuiEventType::AgentPrepareDone;
-            event.error =
+            // Mark Ready as soon as prepare() finishes. Loading a large project
+            // transcript can take much longer and must not leave the chrome on
+            // "Agent preparing..." (users read that as not ready to type).
+            TuiEvent ready;
+            ready.type = TuiEventType::AgentPrepareDone;
+            ready.error =
                 agent_runtime->prepare(prep_context, token, {}, prep_options);
-            if (event.error.ok()) {
-                event.agent_index_enabled = agent_runtime->indexing_enabled();
-                event.error =
-                    agent_runtime->load_display_messages(event.agent_history);
+            if (ready.error.ok()) {
+                ready.agent_index_enabled = agent_runtime->indexing_enabled();
             }
-            events.push(std::move(event));
+            events.push(ready);
+            if (!ready.error.ok() || token.cancelled()) {
+                return;
+            }
+            TuiEvent history;
+            history.type = TuiEventType::AgentPrepareDone;
+            history.agent_history_loaded = true;
+            history.agent_index_enabled = ready.agent_index_enabled;
+            history.error =
+                agent_runtime->load_display_messages(history.agent_history);
+            if (history.error.ok() && history.agent_history.empty()) {
+                // Empty history still needs a final event so the UI can join
+                // the file job without hanging on a second PrepareDone wait.
+                history.text = "history empty";
+            }
+            events.push(std::move(history));
         });
     };
     // prepare() is local-only (tools, project DB/history, AGENTS.md, cheap index
@@ -2726,10 +2863,73 @@ app::TuiRunResult run(provider::RequestContext context,
         begin_chat_provider_model_startup();
     };
 
+    // True when this tui::run is a reattach to an already-prepared controller
+    // (return from editor/dired). Startup CLI prompt must not re-fire.
+    const bool agent_reattach =
+        context.options.agent && agent_runtime && agent_runtime->prepared();
+
     // Agent preparation is fully asynchronous so discovery, SQLite, and history
-    // I/O never block terminal input/rendering.
+    // I/O never block terminal input/rendering. Re-entry after an editor hop
+    // reuses a prepared controller and reloads the display transcript.
     if (context.options.agent && agent_runtime) {
-        ensure_agent_prepare();
+        if (agent_runtime->prepared()) {
+            std::vector<provider::Message> history;
+            if (agent_runtime->load_display_messages(history).ok()) {
+                session.messages = std::move(history);
+                history_scroll = history_scroll_for_thread_end();
+            }
+            // Job may have finished (turn_running false) while Done is still
+            // queued, or still be joinable after turn_running clears. Either
+            // case needs active_job so the main loop applies completion events.
+            const bool turn_inflight =
+                agent_controller &&
+                (agent_controller->turn_running() || agent_controller->job_joinable() ||
+                 agent_controller->waiting_guard());
+            if (turn_inflight) {
+                agent_activity_state = agent_controller->waiting_guard()
+                                           ? AgentActivityState::Working
+                                           : AgentActivityState::Thinking;
+                agent_task_active = true;
+                agent_task_started = agent_controller->turn_started();
+                agent_completed_task_ms = -1;
+                active_job = ActiveJob::Chat;
+                status = agent_controller->status_label();
+                if (status.empty()) {
+                    status = agent_controller->waiting_guard()
+                                 ? "Guard approval required"
+                                 : "Agent running";
+                }
+                // Mid-turn reattach: history comes from the project DB + live
+                // structured progress. Do not invent a placeholder assistant row
+                // (Done reloads display messages when pending_assistant is unset).
+                pending_user = static_cast<size_t>(-1);
+                pending_assistant = static_cast<size_t>(-1);
+                pending_user_added_for_job = false;
+            } else {
+                agent_activity_state = AgentActivityState::Ready;
+                agent_task_active = false;
+                active_job = ActiveJob::None;
+                status = agent_ready_with_index_controls();
+                const std::string badge =
+                    agent_controller ? agent_controller->status_label() : std::string();
+                if (!badge.empty() && badge != "Agent running" &&
+                    badge.rfind("Agent waiting", 0) != 0) {
+                    status = badge;
+                }
+            }
+            if (agent_approval_gate && agent_approval_gate->has_pending()) {
+                agent::GuardApprovalRequest pending;
+                if (agent_approval_gate->try_get_pending(pending)) {
+                    pending_guard_request = std::move(pending);
+                    have_pending_guard_request = true;
+                    mode = TuiMode::GuardApprovalConfirm;
+                    status = "Guard approval required";
+                }
+            }
+            agent_runtime->begin_background_index_freshness();
+        } else {
+            ensure_agent_prepare();
+        }
     } else {
         refresh_startup_status();
     }
@@ -2737,17 +2937,39 @@ app::TuiRunResult run(provider::RequestContext context,
     file_jobs.start_media_cleanup(context.options.media_auto_expiration_days,
                                   session.thread_id, true);
 
+    auto consume_startup_agent_prompt = [&]() -> std::string {
+        const std::string prompt = app::detail::trim_ascii(context.options.prompt);
+        if (prompt.empty()) return {};
+        if (interactive != nullptr) {
+            if (interactive->agent_startup_prompt_consumed) return {};
+            interactive->agent_startup_prompt_consumed = true;
+        }
+        // Prevent later reattach paths from seeing the same -p text.
+        context.options.prompt.clear();
+        return prompt;
+    };
+
     if (context.options.agent) {
         if (provider::tui_needs_startup_provider_selection(context.options)) {
             open_provider_picker(true);
         } else if (provider::needs_interactive_model_selection(context)) {
             start_models(ModelsRequestPurpose::Picker);
-        } else if (!app::detail::trim_ascii(context.options.prompt).empty()) {
-            if (!agent_runtime || !agent_runtime->prepared()) {
-                deferred_agent_prompt = context.options.prompt;
-            } else {
-                start_turn(context.options.prompt);
+        } else if (!agent_reattach) {
+            // Only the first agent-surface entry may auto-start a CLI prompt.
+            // Reattach after editor/dired must not start a second turn.
+            const std::string startup = consume_startup_agent_prompt();
+            if (!startup.empty()) {
+                if (!agent_runtime || !agent_runtime->prepared()) {
+                    deferred_agent_prompt = startup;
+                } else if (active_job == ActiveJob::None &&
+                           !(agent_controller && agent_controller->turn_running())) {
+                    start_turn(startup);
+                }
             }
+        } else if (interactive != nullptr) {
+            // Returning from editor: never re-fire -p, even if options still hold it.
+            interactive->agent_startup_prompt_consumed = true;
+            context.options.prompt.clear();
         }
     } else {
         // Chat starts on the thread selector (same as Ctrl+L / /list) so the
@@ -2782,6 +3004,13 @@ app::TuiRunResult run(provider::RequestContext context,
     while (!quit) {
         credit_jobs.reap_finished();
         process_clipboard_events();
+        // Merge controller events (survives editor hops) into the local queue.
+        if (agent_controller) {
+            agent::AgentSurfaceEvent surface;
+            while (agent_controller->events().try_pop(surface)) {
+                events.push(map_agent_surface_event(std::move(surface)));
+            }
+        }
         TuiEvent event;
         while (events.try_pop(event)) {
             bool completed_file_job = false;
@@ -2797,9 +3026,14 @@ app::TuiRunResult run(provider::RequestContext context,
                                                 event.agent_progress);
                     break;
                 }
-                case TuiEventType::AgentPrepareDone:
-                    file_job.join();
-                    {
+                case TuiEventType::AgentPrepareDone: {
+                    // Two-phase prepare: (1) ready signal without history so the
+                    // chrome leaves "Agent preparing"; (2) history payload with
+                    // agent_history_loaded, which joins the worker.
+                    const bool history_phase = event.agent_history_loaded;
+                    if (history_phase || !event.error.ok() || !file_job.running()) {
+                        file_job.join();
+                    }
                     const bool preserve_setup_picker =
                         mode == TuiMode::ProviderList ||
                         mode == TuiMode::ModelList ||
@@ -2812,35 +3046,62 @@ app::TuiRunResult run(provider::RequestContext context,
                         append_agent_history_notice(event.error.message);
                         agent_activity_state = AgentActivityState::Unavailable;
                         status = "Agent unavailable";
-                    } else if (!event.agent_history.empty()) {
+                    } else if (history_phase) {
+                        // History I/O finished; keep Ready even if empty.
                         agent_activity_state = AgentActivityState::Ready;
-                        session.messages = std::move(event.agent_history);
-                        history_scroll = history_scroll_for_thread_end();
-                        status = event.text.empty()
-                                     ? "agent · resumed · " +
-                                           std::to_string(session.messages.size()) +
-                                           " message(s)"
-                                     : event.text;
-                        if (context.options.disable_indexing)
-                            status += " · indexing off";
+                        if (!event.agent_history.empty()) {
+                            session.messages = std::move(event.agent_history);
+                            history_scroll = history_scroll_for_thread_end();
+                            if (!preserve_setup_picker) {
+                                status = event.text.empty()
+                                             ? "agent · resumed · " +
+                                                   std::to_string(session.messages.size()) +
+                                                   " message(s)"
+                                             : event.text;
+                                if (context.options.disable_indexing)
+                                    status += " · indexing off";
+                            }
+                        } else if (!preserve_setup_picker &&
+                                   (status.empty() ||
+                                    status.rfind("Preparing agent", 0) == 0 ||
+                                    status.rfind("Loading history", 0) == 0)) {
+                            status = agent_ready_with_index_controls();
+                        }
                     } else {
+                        // Local prepare finished; agent can accept input now.
                         agent_activity_state = AgentActivityState::Ready;
-                        status = agent_ready_with_index_controls();
-                    }
-                    agent_runtime->begin_background_index_freshness();
-                    if (preserve_setup_picker) {
-                        status = setup_status;
-                        // Offer after provider/model setup returns to Chat.
-                        if (event.error.ok() && !event.agent_index_enabled &&
-                            !context.options.disable_indexing)
-                            pending_index_build_offer = true;
-                    } else if (event.error.ok() && !event.agent_index_enabled &&
-                               !context.options.disable_indexing) {
-                        open_index_build_offer();
+                        if (!preserve_setup_picker) {
+                            status = file_job.running()
+                                         ? "Agent ready · loading history..."
+                                         : agent_ready_with_index_controls();
+                        }
+                        agent_runtime->begin_background_index_freshness();
+                        if (preserve_setup_picker) {
+                            // Do not restore a stale "Preparing agent..." status
+                            // over a completed prepare while pickers are open.
+                            if (setup_status.rfind("Preparing agent", 0) != 0) {
+                                status = setup_status;
+                            }
+                            if (event.error.ok() && !event.agent_index_enabled &&
+                                !context.options.disable_indexing)
+                                pending_index_build_offer = true;
+                        } else if (event.error.ok() && !event.agent_index_enabled &&
+                                   !context.options.disable_indexing) {
+                            open_index_build_offer();
+                        }
                     }
                     break;
-                    }
+                }
                 case TuiEventType::AgentPrepareProgress: {
+                    // Ignore late/stale phase events once prepare completed so
+                    // the chrome never flips back to "Agent preparing".
+                    if (agent_runtime && agent_runtime->prepared()) {
+                        break;
+                    }
+                    if (agent_activity_state != AgentActivityState::Preparing &&
+                        agent_activity_state != AgentActivityState::Unavailable) {
+                        break;
+                    }
                     agent_activity_state = AgentActivityState::Preparing;
                     const agent::PreparationProgress& progress =
                         event.agent_prepare_progress;
@@ -2871,45 +3132,66 @@ app::TuiRunResult run(provider::RequestContext context,
                     break;
                 }
                 case TuiEventType::Done: {
-                    model_job.join();
+                    if (event.agent_turn && agent_controller) {
+                        agent_controller->join_turn();
+                    } else {
+                        model_job.join();
+                    }
+                    // Do not drop a still-pending Guard Ask (e.g. reattach race).
                     if (mode == TuiMode::GuardApprovalConfirm) {
-                        mode = TuiMode::Chat;
-                        have_pending_guard_request = false;
+                        if (!(agent_approval_gate && agent_approval_gate->has_pending())) {
+                            mode = TuiMode::Chat;
+                            have_pending_guard_request = false;
+                        }
                     }
                     const bool should_regenerate = regenerate_after_cancel;
                     const size_t regenerate_erase_from = pending_user;
                     if (event.agent_turn) {
-                        // Expand timed tool rows; renderer adds only the final
-                        // "Task complete in …" from wall-clock timestamps.
-                        if (pending_user != static_cast<size_t>(-1) &&
-                            pending_user < session.messages.size() &&
-                            session.messages[pending_user].created_at_ms <= 0 &&
-                            event.agent_turn_started_ms > 0) {
-                            session.messages[pending_user].created_at_ms =
-                                event.agent_turn_started_ms;
-                        }
-                        if (pending_assistant != static_cast<size_t>(-1) &&
-                            pending_assistant < session.messages.size()) {
-                            const std::size_t erased = pending_assistant;
-                            session.messages.erase(session.messages.begin() +
-                                                   static_cast<long>(pending_assistant));
-                            adjust_agent_live_rows_after_erase(live_agent_rows, erased);
-                        }
-                        if (live_agent_rows.empty()) {
-                            for (std::size_t i = 0; i < event.agent_tool_lines.size(); ++i) {
-                                provider::Message tool_msg{"tool", event.agent_tool_lines[i]};
-                                if (i < event.agent_tool_line_ms.size()) {
-                                    tool_msg.created_at_ms = event.agent_tool_line_ms[i];
-                                }
-                                session.messages.push_back(std::move(tool_msg));
+                        // After a mid-turn editor hop, prefer the durable project
+                        // transcript over reconstructing rows from this surface.
+                        if (pending_assistant == static_cast<size_t>(-1) && agent_runtime &&
+                            agent_runtime->prepared()) {
+                            std::vector<provider::Message> history;
+                            if (agent_runtime->load_display_messages(history).ok()) {
+                                session.messages = std::move(history);
+                                live_agent_rows.clear();
+                                history_scroll = history_scroll_for_thread_end();
                             }
-                        }
-                        if (!event.agent_final_text.empty()) {
-                            provider::Message assistant_msg{"assistant", event.agent_final_text};
-                            assistant_msg.created_at_ms = event.agent_finished_at_ms > 0
-                                                              ? event.agent_finished_at_ms
-                                                              : agent::now_unix_ms();
-                            session.messages.push_back(std::move(assistant_msg));
+                        } else {
+                            // Expand timed tool rows; renderer adds only the final
+                            // "Task complete in …" from wall-clock timestamps.
+                            if (pending_user != static_cast<size_t>(-1) &&
+                                pending_user < session.messages.size() &&
+                                session.messages[pending_user].created_at_ms <= 0 &&
+                                event.agent_turn_started_ms > 0) {
+                                session.messages[pending_user].created_at_ms =
+                                    event.agent_turn_started_ms;
+                            }
+                            if (pending_assistant != static_cast<size_t>(-1) &&
+                                pending_assistant < session.messages.size()) {
+                                const std::size_t erased = pending_assistant;
+                                session.messages.erase(session.messages.begin() +
+                                                       static_cast<long>(pending_assistant));
+                                adjust_agent_live_rows_after_erase(live_agent_rows, erased);
+                            }
+                            if (live_agent_rows.empty()) {
+                                for (std::size_t i = 0; i < event.agent_tool_lines.size(); ++i) {
+                                    provider::Message tool_msg{"tool",
+                                                               event.agent_tool_lines[i]};
+                                    if (i < event.agent_tool_line_ms.size()) {
+                                        tool_msg.created_at_ms = event.agent_tool_line_ms[i];
+                                    }
+                                    session.messages.push_back(std::move(tool_msg));
+                                }
+                            }
+                            if (!event.agent_final_text.empty()) {
+                                provider::Message assistant_msg{"assistant",
+                                                                event.agent_final_text};
+                                assistant_msg.created_at_ms =
+                                    event.agent_finished_at_ms > 0 ? event.agent_finished_at_ms
+                                                                  : agent::now_unix_ms();
+                                session.messages.push_back(std::move(assistant_msg));
+                            }
                         }
                     } else if (pending_assistant != static_cast<size_t>(-1) &&
                                pending_assistant < session.messages.size()) {
@@ -3005,7 +3287,11 @@ app::TuiRunResult run(provider::RequestContext context,
                         mode = TuiMode::Chat;
                         have_pending_guard_request = false;
                     }
-                    model_job.join();
+                    if (event.agent_turn && agent_controller) {
+                        agent_controller->join_turn();
+                    } else {
+                        model_job.join();
+                    }
                     const bool should_regenerate = regenerate_after_cancel && event.error.code == ErrorCode::Cancelled;
                     const size_t regenerate_erase_from = pending_user_added_for_job ? static_cast<size_t>(-1) : pending_user;
                     active_job = ActiveJob::None;
@@ -3788,6 +4074,35 @@ app::TuiRunResult run(provider::RequestContext context,
                     const detail::TuiSize screen = detail::terminal_size();
                     const EscapeResult escape_result =
                         handle_escape(input, current_layout(screen.rows, screen.cols), history_scroll, status);
+                    if (escape_result == EscapeResult::OpenDired) {
+                        // F4: hop straight into editor dired (skip Ctrl+G then F4).
+                        if (interactive == nullptr) {
+                            status = "Dired is unavailable";
+                        } else {
+                            interactive->editor_settings.start_dired = true;
+                            // Keep theme/colors wired for RO history-diff paint.
+                            // Changed-line backgrounds require a non-null theme
+                            // registry; without this, agent→F4 dired can load
+                            // correct marks but paint them invisibly.
+                            interactive->editor_settings.themes =
+                                &context.options.tui_themes;
+                            interactive->editor_settings.theme_name = theme;
+                            interactive->editor_settings.use_colors = use_colors;
+                            interactive->theme_name = theme;
+                            interactive->use_colors = use_colors;
+                            if (context.options.agent && agent_runtime &&
+                                agent_runtime->prepared() &&
+                                !agent_runtime->workspace().empty()) {
+                                interactive->editor_settings.start_dired_path =
+                                    agent_runtime->workspace();
+                            } else if (interactive->editor_settings.start_dired_path
+                                           .empty()) {
+                                interactive->editor_settings.start_dired_path = ".";
+                            }
+                            leave_for(app::InteractiveUiTarget::Editor);
+                        }
+                        continue;
+                    }
                     if (escape_result == EscapeResult::Unhandled) {
                         if (active_job != ActiveJob::None) {
                             cancel_active_request();
@@ -3888,8 +4203,10 @@ app::TuiRunResult run(provider::RequestContext context,
                                                     chat_assist_callbacks);
                     continue;
                 }
-                if (ch == 7 && mode == TuiMode::Chat && active_job == ActiveJob::None) {
+                if (ch == 7 && mode == TuiMode::Chat &&
+                    (active_job == ActiveJob::None || context.options.agent)) {
                     // Ctrl+G: cycle chat/agent ↔ editor (same as /cycle).
+                    // Agent turns may keep running via AgentController.
                     command_handlers.switch_to_editor();
                     continue;
                 }
@@ -3970,6 +4287,13 @@ app::TuiRunResult run(provider::RequestContext context,
     completion_job.join();
     file_job.cancel();
     file_job.join();
+    // Temporary editor hop: leave the agent turn job running on the controller.
+    // Permanent leave/quit: cancel and finish via interactive_mode or below.
+    if (!preserve_agent_controller && agent_controller &&
+        (agent_controller->turn_running() || agent_controller->job_joinable())) {
+        agent_controller->cancel_turn();
+        agent_controller->join_turn();
+    }
     TuiEvent shutdown_event;
     while (events.try_pop(shutdown_event)) {
         if (shutdown_event.type == TuiEventType::StoreSaveDone &&
@@ -4011,12 +4335,22 @@ app::TuiRunResult run(provider::RequestContext context,
             interactive->theme_name = theme;
             interactive->use_colors = use_colors;
             interactive->show_scrollbars = show_scrollbars;
+            // Point editor themes at the session-owned registry (after context
+            // assignment) so agent→editor hops still paint changed-line tints.
+            interactive->editor_settings.themes =
+                &interactive->context.options.tui_themes;
+            interactive->editor_settings.theme_name = theme;
+            interactive->editor_settings.use_colors = use_colors;
+            interactive->editor_settings.highlight_enabled = syntax_highlight;
         }
         return {0, leave_target};
     }
     // Process exit from agent: finish open session if any.
-    if (context.options.agent && agent_runtime && agent_runtime->prepared() &&
-        agent_runtime->session_id() > 0) {
+    if (context.options.agent && agent_controller) {
+        agent_controller->shutdown(true, "quit agent mode");
+        if (interactive != nullptr) interactive->agent_controller.reset();
+    } else if (context.options.agent && agent_runtime && agent_runtime->prepared() &&
+               agent_runtime->session_id() > 0) {
         (void)agent_runtime->finish_session("success", "", "", "");
     }
     return {0, app::InteractiveUiTarget::Quit};

@@ -198,6 +198,31 @@ ThemeRegistry default_theme_registry() {
     return registry;
 }
 
+const ThemeRegistry& builtin_theme_registry() {
+    // Constructed once; lives for the process. Paint paths must never depend on
+    // a nullable EditorSettings::themes pointer alone.
+    static const ThemeRegistry registry = default_theme_registry();
+    return registry;
+}
+
+const ThemeRegistry& resolve_theme_registry(const ThemeRegistry* preferred) {
+    if (preferred != nullptr && !preferred->names().empty()) {
+        return *preferred;
+    }
+    return builtin_theme_registry();
+}
+
+const ThemeRegistry& resolve_theme_registry(const ThemeRegistry* preferred,
+                                           const ThemeRegistry* secondary) {
+    if (preferred != nullptr && !preferred->names().empty()) {
+        return *preferred;
+    }
+    if (secondary != nullptr && !secondary->names().empty()) {
+        return *secondary;
+    }
+    return builtin_theme_registry();
+}
+
 bool parse_rgb_color(const std::string& text, Rgb& out) {
     std::string trimmed;
     trimmed.reserve(text.size());

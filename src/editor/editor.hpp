@@ -106,6 +106,10 @@ struct EditorSettings {
     size_t auto_save_threshold = kDefaultAutoSaveThreshold;
     int auto_save_timeout_seconds = kDefaultAutoSaveTimeoutSeconds;
     long long auto_save_size_limit = kDefaultAutoSaveSizeLimit;
+    // Non-owning pointer into Options::tui_themes (or equivalent). May be null
+    // on default-constructed settings; paint code must call
+    // tui::resolve_theme_registry() and never assume this is set. Prefer
+    // app::rebind_editor_theme_settings() before entering the editor surface.
     const tui::ThemeRegistry* themes = nullptr;
     std::string theme_name = "dark";
     bool use_colors = true;

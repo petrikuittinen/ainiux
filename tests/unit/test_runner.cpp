@@ -3,6 +3,7 @@
 #include "benchmark/test_benchmark.hpp"
 #include "app/test_user_shell.hpp"
 #include "agent/test_agent_adversarial.hpp"
+#include "agent/test_agent_controller.hpp"
 #include "agent/test_agent_loop.hpp"
 #include "agent/test_agents_md.hpp"
 #include "agent/test_apply_patch.hpp"
@@ -43,6 +44,7 @@ int main() {
     ainiux::test::agent_apply_patch::run_all();
     ainiux::test::agent_session_store::run_all();
     ainiux::test::agent_session_runtime::run_all();
+    ainiux::test::agent_controller::run_all();
     ainiux::test::agent_project_root::run_all();
     ainiux::test::agent_command_guard::run_all();
     ainiux::test::agent_adversarial::run_all();

@@ -59,6 +59,8 @@ struct DiredState {
     std::map<std::string, std::string> reviewed_hashes;
     EditorState view;
     std::string view_path;
+    // Content hash of the currently loaded RO view (for live agent-write sync).
+    std::string view_content_hash;
     std::string last_search;
     // Per source-line marks for dired read-only history diff (empty = no overlay).
     std::vector<bool> view_changed_lines;
@@ -103,6 +105,20 @@ Error dired_go_parent(DiredState& state);
 // Right arrow: enter selected directory when possible (no-op for plain files).
 Error dired_go_deeper(DiredState& state);
 void dired_close_view(DiredState& state);
+// Soft refresh while staying in dired: re-hash listed files and dirty flags.
+// If the RO view is open and the file changed on disk (e.g. agent edit_file),
+// reloads content and remakes per-line history marks. Returns true when the
+// listing or view content was updated.
+bool dired_sync_live(DiredState& state, const EditorSettings& settings);
+
+// RO view only: jump to next/previous changed-line block (wraps). No-op and
+// returns false when there is no history-diff baseline or no changed lines.
+// A block is a maximal contiguous run of true view_changed_lines entries.
+// next: first block start strictly after the cursor line (wrap to first).
+// prev: if mid-block, start of the current block; else previous block start
+// (wrap to last).
+bool dired_goto_next_changed_block(DiredState& state);
+bool dired_goto_prev_changed_block(DiredState& state);
 
 // Filesystem operations on the selected entry (or prompts supply names).
 Error dired_rename_selected(DiredState& state, const std::string& new_path, bool overwrite);

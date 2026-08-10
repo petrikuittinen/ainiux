@@ -64,6 +64,6 @@ Display-only notices and thinking previews are excluded from provider context, c
 
 ## Mode switching
 
-Use `/editor`, `/agent`, `/chat`, `/mode`, `/cycle`, or `Ctrl+G` for explicit handoff. Provider, model, theme, and relevant UI state follow the transition. Moving to agent mode starts separate project-local semantics; it does not retrofit tools into the current chat transcript.
+Use `/editor`, `/agent`, `/chat`, `/mode`, `/cycle`, or `Ctrl+G` for explicit handoff. Provider, model, theme, and relevant UI state follow the transition. Moving to agent mode starts separate project-local semantics; it does not retrofit tools into the current chat transcript. From agent mode, `Ctrl+G` may open the editor while a turn is still running so you can review workspace changes; return with `Ctrl+G` to reattach the agent view.
 
 Related documentation: [documentation index](README.md), [editor help](editor_help.md), [agent workflows](agent.md), [configuration](configuration.md), [security](security.md).

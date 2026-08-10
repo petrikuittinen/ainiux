@@ -1,9 +1,11 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "agent/agent_controller.hpp"
 #include "chat/session.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/editor.hpp"
@@ -50,6 +52,15 @@ struct InteractiveSession {
     std::string chat_routing_session_id;
     std::string agent_routing_session_id;
 
+    // Long-lived agent session + optional background turn. Survives temporary
+    // hops to the editor so the user can review dirty files via dired while a
+    // turn continues. Cleared when leaving agent for chat or process quit.
+    std::shared_ptr<agent::AgentController> agent_controller;
+    // One-shot CLI / startup prompt (-p / prompt=) must not re-fire when the
+    // user returns from a temporary editor/dired hop; that restarted a second
+    // turn and left the TUI stuck on "thinking" until Esc.
+    bool agent_startup_prompt_consumed = false;
+
     std::vector<editor::EditorState> editor_buffers;
     size_t editor_active_buffer = 0;
     bool editor_buffers_initialized = false;
@@ -78,6 +89,10 @@ struct TuiRunResult {
 void sync_editor_provider_to_shared(InteractiveSession& session,
                                   const std::optional<editor::AiContinueContext>& ai_continue);
 void sync_shared_provider_to_editor(InteractiveSession& session);
+// Rebind EditorSettings::themes to the session-owned Options registry and
+// copy theme_name / use_colors / highlight. Call before every editor surface
+// entry so agent/chat→editor hops never leave themes as a null pointer.
+void rebind_editor_theme_settings(InteractiveSession& session);
 void ensure_chat_session_initialized(InteractiveSession& session);
 InteractiveUiTarget editor_toggle_target(const InteractiveSession& session);
 
