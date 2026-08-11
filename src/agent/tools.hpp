@@ -16,6 +16,7 @@
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 #include "search/search.hpp"
+#include "mcp/tool_bridge.hpp"
 
 namespace ainiux::agent {
 
@@ -137,6 +138,9 @@ class ReadToolRegistry {
     void set_vision_hooks(VisionAttachHooks hooks) {
         vision_hooks_ = std::move(hooks);
     }
+    // Optional MCP tools (agent/run/plan only). Not owned; caller keeps Manager alive.
+    void set_mcp_bridge(mcp::ToolBridge* bridge) { mcp_bridge_ = bridge; }
+    mcp::ToolBridge* mcp_bridge() const { return mcp_bridge_; }
     std::vector<provider::FunctionDefinition> definitions() const;
     // Mutating tools update the in-memory snapshot so later reads in the same
     // run see the new file hashes. Security-review never enables mutations.
@@ -266,6 +270,7 @@ class ReadToolRegistry {
     std::unique_ptr<IndexRefreshState> index_refresh_;
     mutable std::size_t loaded_index_generation_ = 0;
     mutable std::map<std::string, IndexOverlayEntry> index_overlay_;
+    mcp::ToolBridge* mcp_bridge_ = nullptr;
     MutationPolicy mutation_policy_ = MutationPolicy::Disabled;
     bool allow_network_ = false;
     HistoryBackupPolicy history_backup_{};

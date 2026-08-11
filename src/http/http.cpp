@@ -223,6 +223,7 @@ size_t header_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
         const std::string name = ascii_lower(ascii_trim(trimmed.substr(0, colon)));
         const bool safe = name == "request-id" || name == "x-request-id" ||
                           name == "openai-request-id" || name == "retry-after" ||
+                          name == "mcp-session-id" ||
                           name.rfind("x-ratelimit-", 0) == 0;
         if (safe) state->response.diagnostic_headers[name] =
                       ascii_trim(trimmed.substr(colon + 1));

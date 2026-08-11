@@ -3479,6 +3479,11 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"fuzzy\":{\"type\":\"boolean\"}",
                     "")});
     }
+        if (mcp_bridge_ != nullptr) {
+        for (const provider::FunctionDefinition& mcp_tool : mcp_bridge_->definitions()) {
+            tools.push_back(mcp_tool);
+        }
+    }
     return tools;
 }
 
@@ -3781,6 +3786,23 @@ Error ReadToolRegistry::read_source(const std::string& path,
 std::string ReadToolRegistry::execute(const std::string& requested_name,
                                       const std::string& arguments_json,
                                       runtime::CancellationToken cancellation) const {
+    if (mcp_bridge_ != nullptr && mcp_bridge_->is_mcp_tool(requested_name)) {
+        // MCP tools are external capability: Confirm always asks; Smart asks once
+        // per tool name via request_permission (stdio treated as higher risk).
+        if (permission_controls_ || permission_mode_ != PermissionMode::Yolo) {
+            const GuardApprovalDecision decision = request_permission(
+                requested_name, "MCP tool " + requested_name,
+                {arguments_json.substr(0, 200)}, false, false,
+                /*write=*/true, /*destructive=*/false, "mcp.tool",
+                "Approve MCP tool call " + requested_name + "?",
+                cancellation);
+            if (decision != GuardApprovalDecision::Allow) {
+                return tool_error_result("permission_denied",
+                                         "MCP tool call denied: " + requested_name);
+            }
+        }
+        return mcp_bridge_->execute(requested_name, arguments_json, cancellation);
+    }
     if (cancellation.cancelled()) return tool_error_result("cancelled", "tool call cancelled");
 
     // Stage 7: silent legacy aliases first (not advertised), then case/snake-camel

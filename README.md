@@ -169,7 +169,20 @@ ainiux --clear-index
 
 In a measured audit on the current 20-core ARM64 system, 437 files and 11,631 definitions were indexed in 110–149 ms across three cold runs. Repository contents, storage, builds, and hardware vary, so this is a point-in-time measurement rather than a universal performance guarantee.
 
-See [Agent workflows](docs/agent.md), [code-index internals](docs/code_index_and_tool_calls_explained.md), and [Security](docs/security.md).
+See [Agent workflows](docs/agent.md), [MCP servers](docs/mcp.md), [code-index internals](docs/code_index_and_tool_calls_explained.md), and [Security](docs/security.md).
+
+### MCP tools (agent only)
+
+Install servers into `~/.ainiux/mcp/registry.json` (CLI; no model key required), then use them from `-a` / `--run` / `--plan`:
+
+```sh
+ainiux --add-mcp catalog --mcp-url https://awesome-mcp.tools/mcp
+ainiux --list-mcp
+ainiux --add-mcp time --mcp-transport stdio -- npx -y @modelcontextprotocol/server-time
+```
+
+Tools appear as `mcp__<server>__<tool>`. In agent: `/list-mcp`, `/enable-mcp`, `/disable-mcp`, `/remove-mcp`; `/add-mcp` shows CLI install examples (install stays CLI-only). Full guide: [docs/mcp.md](docs/mcp.md).
+
 
 One-shot modes print compact tool activity to `stderr` and reserve `stdout` for the final answer. Plan and Act are enforcement policies, not merely prompt labels: Plan mutations are restricted to recognized planning Markdown paths. The security-review path remains read-only even though the broader agent engine supports mutations.
 

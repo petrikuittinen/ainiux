@@ -47,6 +47,7 @@ packaging.
 ## Layout
 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
+- `tests/unit/mcp/` — MCP registry, HTTP/stdio client against `tests/mock_server/mcp_mock.py`, tool envelope, prepare-cancel regression.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
 - `tests/integration/test_mock_smoke.sh` — fast Chat, Responses, and one-shot-agent transport smoke.
 - `tests/integration/test_mock_server.sh` — comprehensive CLI, REPL, benchmark/grade, fetch, config, attachments, TUI, SQLite, and native-tool security-review coverage against one shared local mock API.

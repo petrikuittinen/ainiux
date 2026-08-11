@@ -14,6 +14,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Dired mode](dired-mode.md) | Full-screen directory browser: keys, listing, dirty markers, CLI `-d` / `--dired` |
 | [Keyboard shortcuts](keyboard-shortcuts.md) | Current chat, editor, agent, and dired bindings |
 | [Agent workflows](agent.md) | Act/Plan, permissions, Guard, goals, compaction, indexing, and security review |
+| [MCP servers](mcp.md) | Install/list MCP servers; agent/run/plan tools (`mcp__server__tool`); mock and CLI |
 | [Configuration](configuration.md) | Layering, credentials, themes, models, benchmark prompts, and editor commands |
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
@@ -44,3 +45,4 @@ These documents preserve audit context. Their dates and code references matter; 
 - [License](../LICENSE) contains the Modified MIT terms and no-warranty language.
 
 Every Markdown document under `docs/` is linked from this index. Topical guides also link back here so readers can distinguish current instructions from historical or internal material.
+

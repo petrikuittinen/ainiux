@@ -328,6 +328,56 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.version = true;
         } else if (arg == "--list-models") {
             opts.list_models = true;
+        } else if (arg == "--list-mcp") {
+            opts.list_mcp = true;
+        } else if (arg == "--add-mcp" || arg == "--install-mcp") {
+            opts.add_mcp = true;
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_name = value;
+        } else if (arg == "--remove-mcp") {
+            opts.remove_mcp = true;
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_name = value;
+        } else if (arg == "--enable-mcp") {
+            opts.enable_mcp = true;
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_name = value;
+        } else if (arg == "--disable-mcp") {
+            opts.disable_mcp = true;
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_name = value;
+        } else if (opt == "--mcp-transport") {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_transport = value;
+        } else if (opt == "--mcp-url" || opt == "--url") {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_url = value;
+        } else if (opt == "--transport") {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_transport = value;
+        } else if (opt == "--header" && opts.add_mcp) {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_headers.push_back(value);
+        } else if (opt == "--mcp-header") {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_headers.push_back(value);
+        } else if (opt == "--mcp-env") {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_env.push_back(value);
+        } else if (arg == "--mcp-allow-private") {
+            opts.mcp_allow_private = true;
+        } else if (opt == "--mcp-protocol") {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_protocol_hint = value;
+        } else if (opt == "--mcp-registry") {
+            if (auto err = take_value()) return {opts, *err};
+            opts.mcp_registry_path = value;
+        } else if (arg == "--" && opts.add_mcp) {
+            // Remaining argv are stdio command + args.
+            for (int j = i + 1; j < argc; ++j) {
+                opts.mcp_command_args.push_back(argv[j]);
+            }
+            break;
         } else if (arg == "--index-code") {
             opts.index_code = true;
         } else if (arg == "--print-index") {
@@ -1110,6 +1160,24 @@ Examples:
 Options:
   Mode:
       --list-models             List models from the configured endpoint.
+      --list-mcp                List installed MCP servers (~/.ainiux/mcp/registry.json).
+      --add-mcp/--install-mcp NAME
+                                Install or update an MCP server.
+                                HTTP: --mcp-url URL [--mcp-header "K: V"]...
+                                stdio: --mcp-transport stdio -- command [args...]
+      --remove-mcp NAME         Remove an installed MCP server.
+      --enable-mcp NAME         Enable an installed MCP server.
+      --disable-mcp NAME        Disable an installed MCP server (tools not loaded).
+      --mcp-url URL             URL for HTTP MCP install.
+      --mcp-transport http|stdio
+                                Transport for --add-mcp (default: http if --mcp-url, else stdio).
+      --mcp-header "Name: value"
+                                Extra HTTP header for MCP install (repeatable; ${ENV} ok).
+      --mcp-env NAME=VALUE      Environment entry for stdio MCP (repeatable; ${ENV} ok).
+      --mcp-allow-private       Allow private/loopback URLs for this MCP server.
+      --mcp-protocol auto|2026-07-28|2025-11-25|2025-03-26
+                                Protocol hint for MCP negotiate (default auto).
+      --mcp-registry PATH       Override MCP registry path (tests).
   -i, --repl                    Start a simple line-oriented interactive chat.
   -c, --chat                    Start the full-screen non-blocking terminal chat.
       --nocolors                Disable TUI/editor color styling (same as --theme off).

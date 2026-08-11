@@ -166,3 +166,14 @@ PDF and DOCX are not read as text or uploaded in this slice. Their future input 
 Benchmark prompts and any fetched reference text are sent to the selected model provider. The built-in 50-case corpus performs no URL fetches. A custom JSONL case may specify `fetch_url`; this is an explicit network operation using the same response-size, timeout, proxy, TLS, private-address, and resolved-socket restrictions as other URL fetching. Benchmark text fetching accepts UTF-8 `text/plain`, `text/html`, or `application/xhtml+xml`; HTML is converted to Markdown before it enters context. The supplied `benchmarks/long-context.jsonl` contacts Project Gutenberg and must be selected explicitly.
 
 Treat third-party datasets as untrusted input. Loading is capped at 16 MiB total and 1 MiB per line, requires unique IDs and a known schema, and validates UTF-8 before any model request. Dataset content can still contain adversarial instructions by design, so do not run benchmarks against providers or tools with privileges beyond ordinary chat.
+
+## MCP servers
+
+Installed MCP servers live under `~/.ainiux/mcp/` (user private registry) and are available only in agent, run, and plan modes. They must be installed explicitly (`ainiux --add-mcp` / related flags). Disabled servers never connect.
+
+- **stdio** servers run as the local user (same risk class as installing a CLI). Spawn is argv-only (no shell).
+- **HTTP** targets block private/loopback addresses unless the server has `--mcp-allow-private` or global `--allow-private-url-fetch` applies.
+- Prefer `${ENV}` / `${ENV:-default}` in headers and env entries over secrets in the registry file.
+- MCP tool results are untrusted input (like fetched web content). Plan mode does not sandbox remote MCP side effects.
+
+Details: [MCP servers](mcp.md).

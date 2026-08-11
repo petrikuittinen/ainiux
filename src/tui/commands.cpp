@@ -1,4 +1,7 @@
 #include "tui/commands.hpp"
+#include "mcp/registry.hpp"
+#include "provider/provider.hpp"
+#include <sstream>
 
 #include "app/app.hpp"
 #include "app/detail.hpp"
@@ -178,6 +181,54 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
         command.argument = argument;
         return command;
     }
+    if (text == "/list-mcp") {
+        command.action = AgentSlashAction::ListMcp;
+        return command;
+    }
+    if (text == "/add-mcp" || text.rfind("/add-mcp ", 0) == 0 ||
+        text == "/install-mcp" || text.rfind("/install-mcp ", 0) == 0) {
+        // Always AddMcp (including bare /add-mcp): handler shows install help.
+        // Do not mark Invalid — agent mode leaves "Usage:" only on the status line.
+        command.action = AgentSlashAction::AddMcp;
+        const std::size_t sp = text.find(' ');
+        command.argument =
+            sp == std::string::npos ? std::string()
+                                    : app::detail::trim_ascii(text.substr(sp + 1));
+        return command;
+    }
+    if (text == "/remove-mcp" || text.rfind("/remove-mcp ", 0) == 0) {
+        command.action = AgentSlashAction::RemoveMcp;
+        command.argument =
+            text.size() <= 11 ? std::string()
+                              : app::detail::trim_ascii(text.substr(11));
+        if (command.argument.empty()) {
+            command.action = AgentSlashAction::Invalid;
+            command.error = "Usage: /remove-mcp NAME";
+        }
+        return command;
+    }
+    if (text == "/enable-mcp" || text.rfind("/enable-mcp ", 0) == 0) {
+        command.action = AgentSlashAction::EnableMcp;
+        command.argument =
+            text.size() <= 11 ? std::string()
+                              : app::detail::trim_ascii(text.substr(11));
+        if (command.argument.empty()) {
+            command.action = AgentSlashAction::Invalid;
+            command.error = "Usage: /enable-mcp NAME";
+        }
+        return command;
+    }
+    if (text == "/disable-mcp" || text.rfind("/disable-mcp ", 0) == 0) {
+        command.action = AgentSlashAction::DisableMcp;
+        command.argument =
+            text.size() <= 12 ? std::string()
+                              : app::detail::trim_ascii(text.substr(12));
+        if (command.argument.empty()) {
+            command.action = AgentSlashAction::Invalid;
+            command.error = "Usage: /disable-mcp NAME";
+        }
+        return command;
+    }
     return command;
 }
 
@@ -205,6 +256,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                                     "/act (full coding task mode)\n"
                                     "/goal [condition|clear|pause|resume]\n"
                                     "/permissions [confirm|smart|yolo]\n"
+                                    "/list-mcp /enable-mcp /disable-mcp /remove-mcp NAME\n"
+                                    "/add-mcp  (shows CLI install examples; install is not in-agent yet)\n"
                                     "/setting thinking_preview_max_chars=N (0 disables)\n"
                                   : "/new [NAME]\n") +
                 "/provider [PROVIDER]\n"
@@ -594,6 +647,112 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             return;
         }
         if (handlers.resume_agent_goal) handlers.resume_agent_goal();
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::ListMcp) {
+        mcp::Registry registry;
+        const Error err = mcp::load_registry(registry);
+        std::ostringstream out;
+        if (!err.ok()) {
+            out << err.message;
+        } else if (registry.servers.empty()) {
+            out << "No MCP servers installed. CLI: ainiux --add-mcp NAME --mcp-url URL";
+        } else {
+            out << "Installed MCP servers (" << registry.servers.size() << "):";
+            for (const auto& entry : registry.servers) {
+                const mcp::ServerConfig& cfg = entry.second;
+                out << "\n  " << cfg.name << (cfg.enabled ? "" : " (disabled)")
+                    << " [" << mcp::transport_kind_name(cfg.transport) << "]";
+                if (cfg.transport == mcp::TransportKind::Http && !cfg.url.empty())
+                    out << " " << cfg.url;
+                else if (!cfg.command.empty())
+                    out << " " << cfg.command;
+            }
+        }
+        const std::string text_out = out.str();
+        ctx.status = text_out.find('\n') == std::string::npos
+                         ? text_out
+                         : "MCP servers listed (see notice above)";
+        if (ctx.context.options.agent) {
+            provider::Message notice{"notice", text_out};
+            ctx.session.messages.push_back(std::move(notice));
+            ctx.history_scroll = 0;
+        }
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::RemoveMcp ||
+        agent_command.action == AgentSlashAction::EnableMcp ||
+        agent_command.action == AgentSlashAction::DisableMcp) {
+        mcp::Registry registry;
+        Error err = mcp::load_registry(registry);
+        if (err.ok()) {
+            if (agent_command.action == AgentSlashAction::RemoveMcp)
+                err = mcp::remove_server(registry, agent_command.argument);
+            else
+                err = mcp::set_server_enabled(
+                    registry, agent_command.argument,
+                    agent_command.action == AgentSlashAction::EnableMcp);
+            if (err.ok()) err = mcp::save_registry(registry);
+        }
+        std::string text_out;
+        if (!err.ok()) {
+            text_out = err.message;
+        } else if (agent_command.action == AgentSlashAction::RemoveMcp) {
+            text_out = "Removed MCP server: " + agent_command.argument;
+        } else if (agent_command.action == AgentSlashAction::EnableMcp) {
+            text_out = "Enabled MCP server: " + agent_command.argument +
+                       " (new agent turn reloads tools)";
+        } else {
+            text_out = "Disabled MCP server: " + agent_command.argument +
+                       " (new agent turn reloads tools)";
+        }
+        ctx.status = text_out;
+        if (ctx.context.options.agent) {
+            provider::Message notice{"notice", text_out};
+            ctx.session.messages.push_back(std::move(notice));
+            ctx.history_scroll = 0;
+        }
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::AddMcp) {
+        // Install is CLI-only for now; show durable help in agent history.
+        std::ostringstream out;
+        out << "MCP install is not done inside agent yet — use the shell/CLI, then "
+               "start a new agent turn (or restart -a) so tools reload.\n"
+            << "\n"
+            << "List / manage after install:\n"
+            << "  ainiux --list-mcp\n"
+            << "  ainiux --enable-mcp NAME | --disable-mcp NAME | --remove-mcp NAME\n"
+            << "  In agent: /list-mcp  /enable-mcp NAME  /disable-mcp NAME  /remove-mcp NAME\n"
+            << "\n"
+            << "HTTP example (remote or local mock):\n"
+            << "  # terminal 1 — local mock\n"
+            << "  python3 tests/mock_server/mcp_mock.py --host 127.0.0.1 --port 8765 --mode both\n"
+            << "  # terminal 2 — install (loopback needs --mcp-allow-private)\n"
+            << "  ainiux --add-mcp mock --mcp-url http://127.0.0.1:8765/mcp --mcp-allow-private\n"
+            << "  ainiux --add-mcp catalog --mcp-url https://awesome-mcp.tools/mcp\n"
+            << "\n"
+            << "stdio example (local process; no shell — argv after --):\n"
+            << "  ainiux --add-mcp time --mcp-transport stdio -- npx -y @modelcontextprotocol/server-time\n"
+            << "  ainiux --add-mcp mockstdio --mcp-transport stdio -- python3 tests/mock_server/mcp_mock.py --stdio --mode both\n"
+            << "\n"
+            << "Useful flags: --mcp-url, --mcp-transport http|stdio, --mcp-header \"Name: value\",\n"
+            << "  --mcp-env NAME=VALUE, --mcp-allow-private, --mcp-protocol auto|2026-07-28|2025-11-25\n"
+            << "Details: docs/mcp.md";
+        if (!agent_command.argument.empty()) {
+            out << "\n\n(You typed: /add-mcp " << agent_command.argument << ")";
+        }
+        const std::string text_out = out.str();
+        ctx.status = "MCP install help (see notice above)";
+        if (ctx.context.options.agent) {
+            provider::Message notice{"notice", text_out};
+            ctx.session.messages.push_back(std::move(notice));
+            ctx.history_scroll = 0;
+        } else {
+            // Chat mode: keep multi-line text on status is poor; still set a short line.
+            ctx.status = "MCP install is CLI-only; see docs/mcp.md "
+                         "(ainiux --add-mcp … --mcp-url … or --mcp-transport stdio -- …)";
+        }
         return;
     }
     if (text == "/compact" || text.rfind("/compact ", 0) == 0) {

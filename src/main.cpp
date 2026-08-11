@@ -88,6 +88,15 @@ int ainiux_main(int argc, char** argv) {
         std::cout << ainiux::app_version_label() << "\n";
         return 0;
     }
+    if (ainiux::app::mcp_manage_requested(parsed.options)) {
+        ainiux::Error mcp_error =
+            ainiux::app::run_mcp_manage(parsed.options, std::cout, std::cerr);
+        if (!mcp_error.ok()) {
+            ainiux::app::print_error(mcp_error);
+            return ainiux::app::exit_code_for(mcp_error.code);
+        }
+        return 0;
+    }
     ainiux::config::LoadResult configured = ainiux::config::load_automatic(
         ainiux::cli::Options{}, ainiux::config::process_environment(), !parsed.options.no_config);
     if (parsed.options.debug && !parsed.options.quiet) {

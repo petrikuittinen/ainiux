@@ -107,3 +107,17 @@ Live tool rows update in place. Provider-supplied reasoning previews are bounded
 The agent context chrome (`N tok (P%)`) is primarily a local estimate of the **next model request**. During long pure-reasoning streams it also adds a throttled local estimate of in-flight reasoning tokens so the meter is not frozen for minutes. Refresh interval is `tui.agent_thinking_token_refresh_seconds` (default `1`; `0` disables mid-stream updates). That in-flight estimate is display-only: it does not change compaction, provider context, or durable transcript accounting, and it drops when the model round finishes (reasoning previews are not retained as request context).
 
 Related documentation: [documentation index](README.md), [keyboard shortcuts](keyboard-shortcuts.md), [security](security.md), [project roadmap](../PLANS.md).
+
+## MCP tools
+
+Agent, run, and plan modes can call tools from installed [MCP](mcp.md) servers. Ordinary chat and the editor do not load them.
+
+```sh
+ainiux --add-mcp catalog --mcp-url https://awesome-mcp.tools/mcp
+ainiux --list-mcp
+ainiux lmstudio -m MODEL -a    # then /list-mcp; model tools look like mcp__catalog__search_servers
+```
+
+Interactive agent slash commands: `/list-mcp`, `/enable-mcp NAME`, `/disable-mcp NAME`, `/remove-mcp NAME`. `/add-mcp` posts CLI install help (HTTP and stdio examples); install itself is CLI-only. After registry changes, start a new turn or restart agent so prepare reloads tools.
+
+Full guide: [MCP servers](mcp.md).

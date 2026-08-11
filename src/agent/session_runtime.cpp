@@ -1,4 +1,5 @@
 #include "agent/session_runtime.hpp"
+#include "mcp/registry.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -931,6 +932,10 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
 }
 
 void AgentSessionRuntime::reset() {
+    tools_.set_mcp_bridge(nullptr);
+    mcp_bridge_.reset();
+    if (mcp_manager_) mcp_manager_->close_all();
+    mcp_manager_.reset();
     if (session_id_ > 0 && session_store_.is_open()) {
         // Best-effort close of a still-running session when the runtime is torn down.
         (void)session_store_.finish_session(session_id_, "cancelled", "", "Cancelled",
@@ -1154,6 +1159,42 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     if (!error.ok()) {
         reset();
         return error;
+    }
+
+    // Load enabled MCP servers and advertise their tools (agent/run/plan only).
+    mcp_manager_ = std::make_shared<mcp::Manager>();
+    mcp::ConnectOptions mcp_opts;
+    mcp_opts.connect_timeout_seconds = context.options.connect_timeout_seconds > 0
+                                           ? context.options.connect_timeout_seconds
+                                           : 30;
+    mcp_opts.tool_timeout_seconds =
+        context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 120;
+    mcp_opts.block_private_addresses = !context.options.allow_private_url_fetch;
+    mcp_opts.insecure_tls = context.options.insecure_tls;
+    mcp_opts.trace = context.options.trace_http;
+    mcp_opts.secrets_to_redact = secrets_;
+    mcp_opts.cancellation = cancellation;
+    mcp_manager_->set_connect_options(mcp_opts);
+    {
+        const Error mcp_load = mcp_manager_->reload_from_registry();
+        if (!mcp_load.ok() && !context.options.quiet) {
+            std::cerr << "MCP registry: " << mcp_load.message << "\n";
+        }
+        mcp_bridge_ = std::make_unique<mcp::ToolBridge>();
+        mcp_bridge_->set_manager(mcp_manager_);
+        const Error mcp_refresh = mcp_bridge_->refresh(cancellation);
+        if (!mcp_refresh.ok() && !context.options.quiet) {
+            std::cerr << "MCP tools: " << mcp_refresh.message << "\n";
+        } else if (!context.options.quiet) {
+            const auto defs = mcp_bridge_->definitions();
+            if (!defs.empty()) {
+                std::cerr << "MCP tools loaded: " << defs.size() << "\n";
+            }
+            for (const std::string& msg : mcp_bridge_->last_errors()) {
+                std::cerr << "MCP: " << msg << "\n";
+            }
+        }
+        tools_.set_mcp_bridge(mcp_bridge_.get());
     }
 
     error = load_trusted_prompts(options_.trusted_prompt_dir, prompts_);

@@ -81,3 +81,22 @@ portable package, PowerShell, profile paths, and supported console details are i
 [Native Windows](windows.md).
 
 Related documentation: [documentation index](README.md), [getting started](getting-started.md), [API compatibility](api-compatibility.md), [security](security.md).
+
+## MCP server management
+
+Install and manage Model Context Protocol servers for agent modes (not used by plain chat). Registry: `~/.ainiux/mcp/registry.json`.
+
+```sh
+ainiux --list-mcp
+ainiux --add-mcp catalog --mcp-url https://awesome-mcp.tools/mcp
+ainiux --add-mcp mock --mcp-url http://127.0.0.1:8765/mcp --mcp-allow-private
+ainiux --add-mcp time --mcp-transport stdio -- npx -y @modelcontextprotocol/server-time
+ainiux --enable-mcp NAME
+ainiux --disable-mcp NAME
+ainiux --remove-mcp NAME
+```
+
+These flags cannot be combined with `--agent` / `--run` / chat / editor. After install, run agent or `-r` so tools load as `mcp__<name>__<tool>`.
+
+Full guide: [MCP servers](mcp.md).
+

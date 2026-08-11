@@ -18,6 +18,8 @@
 #include "agent/review_log.hpp"
 #include "agent/session_store.hpp"
 #include "agent/tools.hpp"
+#include "mcp/client.hpp"
+#include "mcp/tool_bridge.hpp"
 #include "common.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
@@ -323,6 +325,8 @@ class AgentSessionRuntime {
     AgentSessionStore session_store_;
     long long session_id_ = 0;
     ReadToolRegistry tools_;
+    std::shared_ptr<mcp::Manager> mcp_manager_;
+    std::unique_ptr<mcp::ToolBridge> mcp_bridge_;
     TrustedPrompts prompts_;
     AgentsMdBundle agents_md_;
     provider::ToolConversation conversation_;

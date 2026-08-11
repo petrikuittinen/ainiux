@@ -148,6 +148,7 @@ This is the **authoritative** layout. Put new code in the matching module. Do no
 │   ├── benchmark/               # dataset, run, scoring, grading, report
 │   ├── fetch/                   # safe URL fetch
 │   ├── search/                  # web search providers and fallbacks
+│   ├── mcp/                     # MCP client, registry, tool bridge (agent/run/plan)
 │   ├── input/                   # local text/image classification and read
 │   ├── html/                    # HTML → text/Markdown
 │   ├── markdown/                # Markdown → HTML/plaintext

@@ -34,6 +34,11 @@ enum class AgentSlashAction {
     GoalClear,
     GoalPause,
     GoalResume,
+    ListMcp,
+    AddMcp,
+    RemoveMcp,
+    EnableMcp,
+    DisableMcp,
     Invalid
 };
 

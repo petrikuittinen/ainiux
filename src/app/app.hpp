@@ -56,6 +56,10 @@ int run_grade_mode(const cli::Options& options);
 int run_index_mode(const cli::Options& options);
 int run_security_review_mode(provider::RequestContext context);
 
+// MCP registry management (--list-mcp / --add-mcp / ...).
+bool mcp_manage_requested(const cli::Options& options);
+Error run_mcp_manage(const cli::Options& options, std::ostream& out, std::ostream& err);
+
 // One-shot headless agent (--run / -r / ainiux run). Writes final answer to stdout.
 int run_agent_mode(provider::RequestContext context);
 

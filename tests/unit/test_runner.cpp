@@ -26,6 +26,7 @@
 #include "input/test_input.hpp"
 #include "json/test_json.hpp"
 #include "markdown/test_markdown.hpp"
+#include "mcp/test_mcp.hpp"
 #include "output/test_output.hpp"
 #include "provider/test_provider.hpp"
 #include "runtime/test_runtime.hpp"
@@ -61,6 +62,7 @@ int main() {
     ainiux::test::html::run_all();
     ainiux::test::highlight::run_all();
     ainiux::test::markdown::run_all();
+    ainiux::test::mcp::run_all();
     ainiux::test::provider::run_all();
     ainiux::test::json::run_all();
     ainiux::test::chat::run_all();
