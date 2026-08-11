@@ -208,6 +208,65 @@ Catalogs: [mcpservers.org](https://mcpservers.org/), [modelcontextprotocol/serve
 
 ---
 
+## Local vision bridge MCP
+
+Ainiux ships a stdlib Python helper that exposes a local vision model as an MCP tool. Use it when the **agent model is text-only** (e.g. DeepSeek) but you still want OCR/captions via a **vision-capable** OpenAI-compatible endpoint (llama.cpp, vLLM, LM Studio, …).
+
+Script: [`scripts/image_mcp_server.py`](../scripts/image_mcp_server.py) (Python 3.8+, no extra packages).
+
+### Workflow
+
+```sh
+# Terminal 1 — vision LLM already serving Chat Completions (example :30000)
+# llama-server / vLLM / LM Studio with a multimodal model
+
+# Terminal 2 — MCP bridge (loopback by default)
+python3 scripts/image_mcp_server.py http://localhost:30000 --port 8765
+
+# Optional connectivity check (no MCP install required)
+python3 scripts/image_mcp_server.py http://localhost:30000 \
+  --self-test tests/image_files/temperature_meter.jpg
+
+# Terminal 3 — register + use with a blind agent model
+ainiux --add-mcp local-image --mcp-url http://127.0.0.1:8765/mcp --mcp-allow-private
+ainiux deepseek -m deepseek-v4-flash -r "Describe the attached image." \
+  --attach tests/image_files/sea_view.jpg
+# Interactive: ainiux deepseek -m deepseek-v4-flash -a
+```
+
+The model should call `mcp__local-image__describe_image` (name depends on the install name). Args:
+
+| Arg | Notes |
+| --- | --- |
+| `path` | Absolute filesystem path (stdio-style local servers) |
+| `image_base64` / `image` | Raw base64 or `data:` URL (HTTP MCP rewrite from ainiux often fills this) |
+| `mime_type` | Optional when using base64 |
+| `prompt` | Question / caption instruction (default: detailed description) |
+| `max_tokens` | Optional cap for the vision completion |
+
+### Script flags
+
+```text
+image_mcp_server.py BASE_URL [--host 127.0.0.1] [-p|--port 8765] [-m MODEL]
+  [--api-key KEY] [--timeout 120] [--max-tokens 1024] [--max-image-bytes N]
+  [--mode legacy|stateless|both] [--enable-thinking] [--self-test IMAGE]
+```
+
+- `BASE_URL` accepts `http://host:port` or `…/v1`; normalized to `{base}/v1/chat/completions`.
+- `-m` defaults to the first id from `/v1/models`.
+- **Thinking is off by default** (`chat_template_kwargs.enable_thinking=false`) so Qwen-style local servers return `message.content` instead of filling only `reasoning_content`. Pass `--enable-thinking` if you want chain-of-thought (raise `--max-tokens` accordingly). Empty `content` still falls back to `reasoning_content` / `reasoning` / `thinking` when present.
+- Bind stays on loopback unless you pass a non-loopback `--host` (not recommended).
+
+### Install reminder
+
+Private/loopback MCP URLs need **`--mcp-allow-private`** (or global private URL fetch). See security notes above.
+
+### Vision quality
+
+Caption quality and language depend entirely on the upstream vision model. Ainiux’s blind agent model only sees the **text** tool result.
+
+---
+
 ## Non-goals (this release)
 
 - MCP **resources** / **prompts** / sampling / roots as first-class surfaces  
@@ -215,7 +274,7 @@ Catalogs: [mcpservers.org](https://mcpservers.org/), [modelcontextprotocol/serve
 - Project-scoped (`.ainiux-pr`) MCP registry  
 - MCP tools in `--chat` or `--editor`  
 - Marketplace UI or auto-install from agent without CLI  
-- Shipping a production MCP **server** inside ainiux (mock only)  
+- Built-in C++ MCP **server** inside the ainiux binary (helpers live under `scripts/` / `tests/mock_server/`)  
 
 ---
 
@@ -246,20 +305,22 @@ Before each `mcp__*` `tools/call`, ainiux may rewrite string arguments that look
 | Transport | Typical rewrite |
 | --- | --- |
 | **stdio** (local process) | Normalize to **absolute path** (server reads the file) |
-| **HTTP** (remote) | Load image and put **base64** in the argument field |
+| **HTTP loopback** + `--mcp-allow-private` | Absolute **path** only (local bridge can open the file) |
+| **HTTP remote** | Keep absolute `path`, add **`image_base64`** (+ `mime_type` when useful). Path-shaped fields are never replaced with raw base64 (that used to echo multi-MB error text into the model context). |
 
-Also used when the field name suggests binary (`image_base64`, `image`, `data`, …). Caps follow `--max-image-bytes` and a max JSON args size.
-
-**Blind model + image-to-text MCP example:**
+Also used when the field name suggests binary (`image_base64`, `image`, `data`, …). Caps follow `--max-image-bytes` and a max JSON args size. MCP tool **errors** and successes are size-capped before they re-enter the agent transcript.
+**Blind model + local vision bridge example:**
 
 ```sh
-# Text-only model; MCP does OCR/captioning
-ainiux --add-mcp ocr --mcp-url https://example/mcp   # or stdio server
-ainiux deepseek -m deepseek-chat -r "Use the OCR MCP on the attached image and summarize text." \
-  --attach ./scan.png
+# Terminal: vision endpoint on :30000, bridge on :8765
+python3 scripts/image_mcp_server.py http://localhost:30000 --port 8765
+
+ainiux --add-mcp local-image --mcp-url http://127.0.0.1:8765/mcp --mcp-allow-private
+ainiux deepseek -m deepseek-v4-flash -r "Use mcp__local-image__describe_image on the attached photo." \
+  --attach tests/image_files/sea_view.jpg
 ```
 
-Or in agent: `attach_image` / `/attach`, then call `mcp__ocr__…` with `{"path":"scan.png"}`.
+Or in agent: `attach_image` / `/attach`, then call `mcp__local-image__describe_image` with `{"path":"…"}` or let HTTP rewrite supply `image_base64`.
 
 MCP **results** remain text-first (`content[].type == "text"`). Image content blocks from MCP are not injected as vision.
 

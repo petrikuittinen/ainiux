@@ -64,11 +64,39 @@ bool name_suggests_mime(const std::string& key) {
            k == "media_type";
 }
 
+bool http_url_is_loopback(const std::string& url) {
+    // Lightweight host check; matches how users install local MCP bridges.
+    const auto scheme = url.find("://");
+    if (scheme == std::string::npos) return false;
+    std::size_t host_begin = scheme + 3;
+    if (host_begin >= url.size()) return false;
+    if (url.compare(host_begin, 1, "[") == 0) {
+        // IPv6 literal e.g. http://[::1]:8765/mcp
+        const auto end = url.find(']', host_begin);
+        if (end == std::string::npos) return false;
+        const std::string host = lower_ascii(url.substr(host_begin + 1, end - host_begin - 1));
+        return host == "::1" || host == "0:0:0:0:0:0:0:1";
+    }
+    std::size_t host_end = host_begin;
+    while (host_end < url.size() && url[host_end] != '/' && url[host_end] != ':' &&
+           url[host_end] != '?' && url[host_end] != '#') {
+        ++host_end;
+    }
+    const std::string host = lower_ascii(url.substr(host_begin, host_end - host_begin));
+    return host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1";
+}
+
 bool prefer_base64(const ServerConfig& server,
                    const std::string& field_key,
                    const ArgRewriteCaps& caps) {
     if (caps.force_base64) return true;
-    if (server.transport == TransportKind::Http) return true;
+    if (server.transport == TransportKind::Http) {
+        // Loopback HTTP MCP with --mcp-allow-private can read local paths directly
+        // (e.g. scripts/image_mcp_server.py). Prefer absolute paths to avoid stuffing
+        // multi-MB base64 into path-shaped fields and the model transcript.
+        if (server.allow_private && http_url_is_loopback(server.url)) return false;
+        return true;
+    }
     if (name_suggests_base64(field_key) && !name_suggests_path(field_key)) return true;
     return false;
 }
@@ -152,8 +180,12 @@ void maybe_rewrite_string_field(json::Value& object,
         return;  // leave argument unchanged
     }
 
-    // Ensure bag has the image if we're going to touch it.
-    if (entry == nullptr || (prefer_base64(server, key, caps) && entry->base64_data.empty())) {
+    const bool use_b64 = prefer_base64(server, key, caps);
+
+    // Load into the bag only when we need base64 (remote HTTP) or the bag already
+    // owns the file. Path-only rewrites (stdio / loopback HTTP) just normalize paths.
+    if (use_b64 &&
+        (entry == nullptr || entry->base64_data.empty())) {
         const agent::AttachmentEntry* loaded = nullptr;
         Error err =
             load_image_into_bag(bag, absolute, raw, caps, cancellation, loaded);
@@ -167,7 +199,6 @@ void maybe_rewrite_string_field(json::Value& object,
         absolute = entry->absolute_path;
     }
 
-    const bool use_b64 = prefer_base64(server, key, caps);
     if (use_b64) {
         agent::AttachmentEntry* mut = bag.find_by_path_mut(absolute);
         if (mut == nullptr) return;
@@ -176,25 +207,56 @@ void maybe_rewrite_string_field(json::Value& object,
             result.notes.push_back("base64 load failed for " + key + ": " + err.message);
             return;
         }
-        value = jstring(mut->base64_data);
-        result.changed = true;
-        result.notes.push_back("field " + key + ": path→base64 (" +
-                               std::to_string(mut->byte_size) + " bytes, " + mut->mime_type +
-                               ")");
-        // Sibling mime field if empty/missing and name suggests image.
-        if (object.is_object()) {
-            for (auto& field : object.object) {
-                if (name_suggests_mime(field.first) && field.second.is_string() &&
-                    field.second.string.empty() && !mut->mime_type.empty()) {
-                    field.second = jstring(mut->mime_type);
+        // Never put multi-MB base64 into a path-shaped field. HTTP rewrite for path-like
+        // keys moves bytes to image_base64 and keeps an absolute path string.
+        if (name_suggests_path(key) && object.is_object()) {
+            if (value.string != absolute) {
+                value = jstring(absolute);
+                result.changed = true;
+            }
+            auto b64_it = object.object.find("image_base64");
+            if (b64_it == object.object.end() || !b64_it->second.is_string() ||
+                b64_it->second.string.empty()) {
+                object.object["image_base64"] = jstring(mut->base64_data);
+                result.changed = true;
+            }
+            if (!mut->mime_type.empty()) {
+                bool mime_set = false;
+                for (auto& field : object.object) {
+                    if (name_suggests_mime(field.first) && field.second.is_string()) {
+                        if (field.second.string.empty()) {
+                            field.second = jstring(mut->mime_type);
+                            result.changed = true;
+                        }
+                        mime_set = true;
+                    }
+                }
+                if (!mime_set && object.object.count("mime_type") == 0) {
+                    object.object["mime_type"] = jstring(mut->mime_type);
                     result.changed = true;
                 }
             }
-            // If schema-style object has no mime but has path-like key we converted,
-            // optionally add mime_type when a free key is absent — skip inventing keys.
+            result.notes.push_back("field " + key + ": path→image_base64 (" +
+                                   std::to_string(mut->byte_size) + " bytes, " +
+                                   mut->mime_type + ")");
+        } else {
+            value = jstring(mut->base64_data);
+            result.changed = true;
+            result.notes.push_back("field " + key + ": path→base64 (" +
+                                   std::to_string(mut->byte_size) + " bytes, " +
+                                   mut->mime_type + ")");
+            if (object.is_object()) {
+                for (auto& field : object.object) {
+                    if (name_suggests_mime(field.first) && field.second.is_string() &&
+                        field.second.string.empty() && !mut->mime_type.empty()) {
+                        field.second = jstring(mut->mime_type);
+                        result.changed = true;
+                    }
+                }
+            }
         }
     } else {
-        // Normalize to absolute path for local stdio servers.
+        // Normalize to absolute path for local stdio / loopback HTTP servers.
         if (value.string != absolute) {
             value = jstring(absolute);
             result.changed = true;

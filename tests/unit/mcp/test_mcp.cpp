@@ -298,20 +298,35 @@ void test_arg_rewrite_path_and_base64() {
           "bag add without b64");
     ainiux::mcp::ServerConfig http;
     http.transport = ainiux::mcp::TransportKind::Http;
-    http.url = "http://example/mcp";
+    http.url = "http://example.com/mcp";  // remote → base64 into image_base64
     ainiux::mcp::ArgRewriteCaps caps;
     ainiux::mcp::ArgRewriteResult out;
     const std::string args = std::string("{\"path\":\"") + abs + "\"}";
     check(ainiux::mcp::rewrite_mcp_arguments(http, "image_probe", "", args, bag, caps, {}, out).ok(),
           "rewrite http");
     check(out.changed, "http rewrite changes args");
-    check(out.arguments_json.find("iVBORw0KGgo") != std::string::npos ||
-              out.arguments_json.find("base64") != std::string::npos ||
-              out.arguments_json.size() > args.size() + 50,
-          "http embeds base64-ish payload: " + out.arguments_json.substr(0, 80));
-    // Tiny PNG base64 may be under the redaction threshold; only require rewrite worked.
-    check(out.changed && out.arguments_json.size() >= args.size(),
-          "history path: rewrite produced payload");
+    check(out.arguments_json.find("image_base64") != std::string::npos,
+          "remote http path rewrite adds image_base64: " + out.arguments_json.substr(0, 120));
+    check(out.arguments_json.find(abs) != std::string::npos,
+          "remote http keeps absolute path field: " + out.arguments_json.substr(0, 120));
+    // Must not replace path value with the raw base64 blob alone.
+    check(out.arguments_json.find("\"path\":\"iVBORw") == std::string::npos,
+          "path field must not become base64");
+
+    ainiux::mcp::ServerConfig loopback;
+    loopback.transport = ainiux::mcp::TransportKind::Http;
+    loopback.url = "http://127.0.0.1:8765/mcp";
+    loopback.allow_private = true;
+    ainiux::mcp::ArgRewriteResult out_lb;
+    check(ainiux::mcp::rewrite_mcp_arguments(loopback, "describe_image", "", args, bag, caps, {},
+                                             out_lb)
+              .ok(),
+          "rewrite loopback http");
+    check(out_lb.arguments_json.find(abs) != std::string::npos,
+          "loopback http keeps path: " + out_lb.arguments_json.substr(0, 160));
+    check(out_lb.arguments_json.find("image_base64") == std::string::npos,
+          "loopback allow_private prefers path over base64: " +
+              out_lb.arguments_json.substr(0, 160));
 
     ainiux::mcp::ServerConfig stdio;
     stdio.transport = ainiux::mcp::TransportKind::Stdio;

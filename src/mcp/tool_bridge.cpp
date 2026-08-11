@@ -170,15 +170,33 @@ std::string ToolBridge::execute(const std::string& qualified_name,
     if (!err.ok()) {
         return agent_envelope(false, make_json_object(), "mcp_error", err.message);
     }
+
+    // Bound large MCP payloads (success *and* error). Error paths must not return
+    // multi-MB text (e.g. accidental base64 echo) into the model transcript.
+    constexpr std::size_t kMaxResultChars = 64U * 1024U;
+    constexpr std::size_t kMaxErrorMessageChars = 4U * 1024U;
+
     if (result.is_error) {
-        const std::string message =
+        std::string message =
             result.text.empty() ? "MCP tool reported an error" : result.text;
-        return agent_envelope(false, data_from_tool_result(result), "mcp_tool_error",
-                              message);
+        if (message.size() > kMaxErrorMessageChars) {
+            message = message.substr(0, kMaxErrorMessageChars) +
+                      "\n… [mcp error truncated; " +
+                      std::to_string(result.text.size()) + " chars total]";
+        }
+        json::Value data = data_from_tool_result(result);
+        // Strip oversized nested content that would re-inflate the envelope.
+        std::string probe = agent_envelope(false, data, "mcp_tool_error", message);
+        if (probe.size() > kMaxResultChars) {
+            json::Value slim = make_json_object();
+            slim.object["text"] = make_json_string(message);
+            slim.object["note"] =
+                make_json_string("MCP error result truncated to protect context");
+            return agent_envelope(false, slim, "mcp_tool_error", message, true);
+        }
+        return probe;
     }
 
-    // Bound very large MCP payloads the same way native tools surface truncation.
-    constexpr std::size_t kMaxResultChars = 64U * 1024U;
     bool truncated = false;
     json::Value data = data_from_tool_result(result);
     std::string body = agent_envelope(true, data, "", "");

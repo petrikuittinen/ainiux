@@ -183,6 +183,15 @@ ainiux --add-mcp time --mcp-transport stdio -- npx -y @modelcontextprotocol/serv
 
 Tools appear as `mcp__<server>__<tool>`. In agent: `/list-mcp`, `/enable-mcp`, `/disable-mcp`, `/remove-mcp`; `/add-mcp` shows CLI install examples (install stays CLI-only). Full guide: [docs/mcp.md](docs/mcp.md).
 
+For a **text-only agent model + local vision LLM**, use the bundled bridge:
+
+```sh
+python3 scripts/image_mcp_server.py http://localhost:30000 --port 8765
+ainiux --add-mcp local-image --mcp-url http://127.0.0.1:8765/mcp --mcp-allow-private
+ainiux deepseek -m deepseek-v4-flash -r "Describe the attached image." \
+  --attach tests/image_files/sea_view.jpg
+```
+
 
 One-shot modes print compact tool activity to `stderr` and reserve `stdout` for the final answer. Plan and Act are enforcement policies, not merely prompt labels: Plan mutations are restricted to recognized planning Markdown paths. The security-review path remains read-only even though the broader agent engine supports mutations.
 
