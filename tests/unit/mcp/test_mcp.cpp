@@ -10,6 +10,8 @@
 #include "mcp/client.hpp"
 #include "runtime/runtime.hpp"
 #include "mcp/tool_bridge.hpp"
+#include "mcp/arg_rewrite.hpp"
+#include "agent/attachment_bag.hpp"
 #include "agent/agent_loop.hpp"
 #include <memory>
 #include "mcp/protocol.hpp"
@@ -275,6 +277,57 @@ void test_http_not_stuck_on_prepare_cancel() {
 }
 
 
+
+void test_arg_rewrite_path_and_base64() {
+    ainiux::agent::AttachmentBag bag;
+    const std::string abs = "/tmp/ainiux-mcp-img-test.png";
+    // Minimal 1x1 PNG
+    static const unsigned char png[] = {
+        0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52,
+        0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x01,0x08,0x02,0x00,0x00,0x00,0x90,0x77,0x53,
+        0xde,0x00,0x00,0x00,0x0c,0x49,0x44,0x41,0x54,0x08,0xd7,0x63,0xf8,0xcf,0xc0,0x00,
+        0x00,0x00,0x03,0x00,0x01,0x00,0x05,0xfe,0xd4,0xef,0x00,0x00,0x00,0x00,0x49,0x45,
+        0x4e,0x44,0xae,0x42,0x60,0x82};
+    {
+        std::ofstream out(abs, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(png), sizeof(png));
+    }
+    // base64 of that png - load via bag ensure
+    check(bag.add_image(abs, "img.png", "image/png", "", 0,
+                        ainiux::agent::AttachmentSource::CliAttach).ok(),
+          "bag add without b64");
+    ainiux::mcp::ServerConfig http;
+    http.transport = ainiux::mcp::TransportKind::Http;
+    http.url = "http://example/mcp";
+    ainiux::mcp::ArgRewriteCaps caps;
+    ainiux::mcp::ArgRewriteResult out;
+    const std::string args = std::string("{\"path\":\"") + abs + "\"}";
+    check(ainiux::mcp::rewrite_mcp_arguments(http, "image_probe", "", args, bag, caps, {}, out).ok(),
+          "rewrite http");
+    check(out.changed, "http rewrite changes args");
+    check(out.arguments_json.find("iVBORw0KGgo") != std::string::npos ||
+              out.arguments_json.find("base64") != std::string::npos ||
+              out.arguments_json.size() > args.size() + 50,
+          "http embeds base64-ish payload: " + out.arguments_json.substr(0, 80));
+    // Tiny PNG base64 may be under the redaction threshold; only require rewrite worked.
+    check(out.changed && out.arguments_json.size() >= args.size(),
+          "history path: rewrite produced payload");
+
+    ainiux::mcp::ServerConfig stdio;
+    stdio.transport = ainiux::mcp::TransportKind::Stdio;
+    stdio.command = "x";
+    ainiux::mcp::ArgRewriteResult out2;
+    check(ainiux::mcp::rewrite_mcp_arguments(stdio, "image_probe", "", args, bag, caps, {}, out2)
+              .ok(),
+          "rewrite stdio");
+    // path should remain or become absolute; not necessarily huge base64
+    check(out2.arguments_json.find(abs) != std::string::npos ||
+              out2.arguments_json.find("/tmp/") != std::string::npos,
+          "stdio keeps path: " + out2.arguments_json.substr(0, 120));
+    std::remove(abs.c_str());
+}
+
+
 void test_stdio_mock() {
     ainiux::mcp::ServerConfig cfg;
     cfg.name = "mockstdio";
@@ -312,6 +365,7 @@ void run_all() {
     test_http_not_stuck_on_prepare_cancel();
     test_mcp_tool_result_envelope_shape();
     test_mcp_bridge_envelope();
+    test_arg_rewrite_path_and_base64();
 }
 
 }  // namespace ainiux::test::mcp

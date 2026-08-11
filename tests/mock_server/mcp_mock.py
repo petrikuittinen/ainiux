@@ -63,6 +63,19 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "image_probe",
+        "description": "Probe image argument: reports path length and/or base64 length.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "image_base64": {"type": "string"},
+                "mime_type": {"type": "string"},
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -98,6 +111,13 @@ def handle_tools_call(params: Dict[str, Any]) -> Dict[str, Any]:
     if name == "fail":
         msg = str(args.get("message") or "intentional failure")
         return tool_result_text(msg, is_error=True)
+    if name == "image_probe":
+        path = str(args.get("path") or "")
+        b64 = str(args.get("image_base64") or args.get("image") or "")
+        mime = str(args.get("mime_type") or "")
+        return tool_result_text(
+            f"path_len={len(path)} b64_len={len(b64)} mime={mime} path={path[:120]}"
+        )
     return tool_result_text(f"unknown tool: {name}", is_error=True)
 
 

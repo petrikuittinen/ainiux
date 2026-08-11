@@ -1,4 +1,6 @@
 #include "mcp/tool_bridge.hpp"
+#include "mcp/arg_rewrite.hpp"
+#include "mcp/protocol.hpp"
 
 #include <sstream>
 
@@ -140,9 +142,31 @@ std::string ToolBridge::execute(const std::string& qualified_name,
     opts.cancellation = cancellation;
     impl_->manager->set_connect_options(opts);
 
+    std::string wire_args = arguments_json;
+    std::string server_name;
+    std::string tool_name;
+    if (attachment_bag_ != nullptr &&
+        parse_qualified_tool_name(qualified_name, server_name, tool_name)) {
+        Client* client = nullptr;
+        // ensure_connected for dialect/transport; ignore error and still try call.
+        (void)impl_->manager->ensure_connected(server_name, client);
+        ServerConfig cfg;
+        auto it = impl_->manager->registry().servers.find(server_name);
+        if (it != impl_->manager->registry().servers.end()) cfg = it->second;
+        else if (client != nullptr) cfg = client->config();
+        ArgRewriteResult rewritten;
+        Error rew = rewrite_mcp_arguments(cfg, tool_name, "", wire_args, *attachment_bag_,
+                                          rewrite_caps_, cancellation, rewritten);
+        if (!rew.ok()) {
+            return agent_envelope(false, make_json_object(), "mcp_attachment_too_large",
+                                  rew.message);
+        }
+        if (rewritten.changed) wire_args = rewritten.arguments_json;
+    }
+
     ToolCallResult result;
     Error err =
-        impl_->manager->call_qualified_tool(qualified_name, arguments_json, result);
+        impl_->manager->call_qualified_tool(qualified_name, wire_args, result);
     if (!err.ok()) {
         return agent_envelope(false, make_json_object(), "mcp_error", err.message);
     }

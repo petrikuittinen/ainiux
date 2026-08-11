@@ -1,5 +1,6 @@
 #include "agent/session_runtime.hpp"
 #include "mcp/registry.hpp"
+#include "mcp/arg_rewrite.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1808,12 +1809,21 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         result.error = {ErrorCode::BadArgs, "agent turn requires a non-empty user message"};
         return result;
     }
+    // Turn-scoped attachment bag for MCP rewrite (and optional vision inject).
+    attachment_bag_.clear();
+    if (mcp_bridge_) {
+        mcp_bridge_->set_attachment_bag(&attachment_bag_);
+        mcp::ArgRewriteCaps caps;
+        caps.max_image_bytes =
+            context.options.max_image_bytes > 0
+                ? static_cast<std::size_t>(context.options.max_image_bytes)
+                : 20U * 1024U * 1024U;
+        mcp_bridge_->set_arg_rewrite_caps(caps);
+        tools_.set_mcp_bridge(mcp_bridge_.get());
+    }
+
+    const bool vision_model_ok = provider::validate_image_input(context).ok();
     if (!payload.images.empty()) {
-        Error image_error = provider::validate_image_input(context);
-        if (!image_error.ok()) {
-            result.error = image_error;
-            return result;
-        }
         for (const provider::ImageInput& image : payload.images) {
             if (image.mime_type.empty() || image.base64_data.empty()) {
                 result.error = {
@@ -1823,6 +1833,14 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                                     : ": " + image.display_name)};
                 return result;
             }
+            const std::string abs =
+                !image.source_ref.empty() ? image.source_ref : image.display_name;
+            (void)attachment_bag_.add_image(
+                abs, image.display_name, image.mime_type, image.base64_data,
+                static_cast<std::size_t>(
+                    image.byte_size > 0 ? image.byte_size
+                                        : static_cast<long long>(image.base64_data.size())),
+                AttachmentSource::CliAttach, vision_model_ok);
         }
     }
     // attach_image tool: queue request-local images and inject after each tool round.
@@ -1837,6 +1855,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         VisionAttachHooks vision;
         vision.max_image_bytes = max_image_bytes;
         vision.max_images_per_turn = max_tool_images_per_turn;
+        vision.vision_capable = vision_model_ok;
+        vision.attachment_bag = &attachment_bag_;
         vision.validate_capability = [&context]() -> Error {
             return provider::validate_image_input(context);
         };
@@ -1858,11 +1878,26 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         };
         tools_.set_vision_hooks(std::move(vision));
     }
+    // Only inject pixels into the model when vision is supported.
+    std::vector<provider::ImageInput> model_images;
+    if (vision_model_ok) {
+        model_images = payload.images;
+    } else if (!payload.images.empty() && !context.options.quiet) {
+        std::cerr << "Agent notice: " << payload.images.size()
+                  << " image(s) attached for tools/MCP only (model is text-only; "
+                     "pixels not sent to the model).\n";
+    }
     // Lambdas above capture stack state; clear hooks on every exit path.
     struct ClearVisionHooks {
         ReadToolRegistry& tools;
-        ~ClearVisionHooks() { tools.set_vision_hooks({}); }
-    } clear_vision_hooks{tools_};
+        AttachmentBag& bag;
+        mcp::ToolBridge* bridge;
+        ~ClearVisionHooks() {
+            tools.set_vision_hooks({});
+            if (bridge) bridge->set_attachment_bag(nullptr);
+            bag.clear();
+        }
+    } clear_vision_hooks{tools_, attachment_bag_, mcp_bridge_.get()};
     auto flush_pending_tool_images = [&]() {
         if (pending_tool_images.empty()) return;
         std::string note = "[Vision attachment for subsequent model rounds of this turn]";
@@ -1989,7 +2024,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 std::cerr << "Injected prior agent transcript (" << prior.size()
                           << " stored messages) into model context.\n";
         }
-        attach_images_to_last_user_message(conversation_, payload.images);
+        attach_images_to_last_user_message(conversation_, model_images);
         conversation_seeded_ = true;
         if (goal_is_active(goal_)) inject_active_goal_control(false);
         publish_request_token_estimate();
@@ -2022,7 +2057,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         // user turns must append there so serialize_tool_request places them
         // after prior tool results (not between the seed goal and tools).
         if (goal_is_active(goal_)) inject_active_goal_control(false);
-        append_conversation_user_with_images(conversation_, text, payload.images);
+        append_conversation_user_with_images(conversation_, text, model_images);
         publish_request_token_estimate();
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =

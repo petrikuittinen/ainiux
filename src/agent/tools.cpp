@@ -6193,19 +6193,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         path = ascii_trim(path);
         if (path.empty())
             return tool_error_result("invalid_arguments", "path must not be empty");
-        if (!vision_hooks_.queue_image)
+        if (!vision_hooks_.queue_image && vision_hooks_.attachment_bag == nullptr)
             return tool_error_result(
                 "unsupported",
                 "attach_image is not available in this session");
-        if (vision_hooks_.validate_capability) {
-            const Error capability = vision_hooks_.validate_capability();
-            if (!capability.ok()) {
-                const std::string code =
-                    capability.code == ErrorCode::UnsupportedFeature ? "unsupported"
-                                                                     : error_code_string(capability.code);
-                return tool_error_result(code, capability.message);
-            }
-        }
+
         input::FileType type;
         Error type_error = input::classify_file_type(path, type);
         if (!type_error.ok() || type.kind != input::Kind::Image)
@@ -6257,8 +6249,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 {absolute.generic_u8string()}, true,
                 resolved_path_is_under_system_temp(absolute), false, false,
                 "ask_on_external_file_read",
-                "Attach this image outside the active project for vision?\nExact resolved "
-                "path: " +
+                "Attach this image outside the active project for this turn "
+                "(vision and/or MCP)?\nExact resolved path: " +
                     absolute.generic_u8string() +
                     "\nImage bytes are request-local for this turn only and are not stored "
                     "in the project.",
@@ -6290,27 +6282,61 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                    cancellation);
         if (!load_error.ok())
             return tool_error_result(error_code_string(load_error.code), load_error.message);
-        provider::ImageInput image{loaded.mime_type, std::move(loaded.base64_data)};
-        image.display_name = path;
-        image.source_ref = absolute.generic_u8string();
-        image.byte_size = static_cast<long long>(loaded.byte_size);
-        const Error queue_error = vision_hooks_.queue_image(std::move(image));
-        if (!queue_error.ok()) {
-            const std::string code =
-                queue_error.code == ErrorCode::UnsupportedFeature ? "limit_exceeded"
-                : queue_error.code == ErrorCode::BadArgs           ? "invalid_arguments"
-                                                                   : error_code_string(queue_error.code);
-            return tool_error_result(code, queue_error.message);
+
+        bool vision_ok = vision_hooks_.vision_capable && static_cast<bool>(vision_hooks_.queue_image);
+        if (vision_ok && vision_hooks_.validate_capability) {
+            const Error capability = vision_hooks_.validate_capability();
+            if (!capability.ok()) vision_ok = false;
         }
+
+        bool vision_queued = false;
+        if (vision_ok) {
+            provider::ImageInput image{loaded.mime_type, loaded.base64_data};
+            image.display_name = path;
+            image.source_ref = absolute.generic_u8string();
+            image.byte_size = static_cast<long long>(loaded.byte_size);
+            const Error queue_error = vision_hooks_.queue_image(std::move(image));
+            if (!queue_error.ok()) {
+                const std::string code =
+                    queue_error.code == ErrorCode::UnsupportedFeature ? "limit_exceeded"
+                    : queue_error.code == ErrorCode::BadArgs           ? "invalid_arguments"
+                                                                       : error_code_string(queue_error.code);
+                return tool_error_result(code, queue_error.message);
+            }
+            vision_queued = true;
+        }
+
+        if (vision_hooks_.attachment_bag != nullptr) {
+            const Error bag_error = vision_hooks_.attachment_bag->add_image(
+                absolute.generic_u8string(), path, loaded.mime_type, loaded.base64_data,
+                loaded.byte_size, AttachmentSource::AttachImageTool, vision_queued);
+            if (!bag_error.ok())
+                return tool_error_result(error_code_string(bag_error.code), bag_error.message);
+        } else if (!vision_queued) {
+            return tool_error_result(
+                "unsupported",
+                "attach_image requires a vision-capable model or an MCP attachment bag");
+        }
+
         json::Value data = object_value();
         data.object["path"] = string_value(path);
         data.object["resolved_path"] = string_value(absolute.generic_u8string());
         data.object["mime_type"] = string_value(type.mime_type);
         data.object["bytes"] = number_value(static_cast<double>(loaded.byte_size));
         data.object["scope"] = string_value("request_local_turn");
-        data.object["note"] = string_value(
-            "Image will be included on subsequent model rounds of this turn only; "
-            "it is not stored in agent.sqlite or project media.");
+        data.object["vision_queued"] = bool_value(vision_queued);
+        data.object["mcp_bag"] = bool_value(vision_hooks_.attachment_bag != nullptr);
+        if (vision_queued) {
+            data.object["note"] = string_value(
+                "Image will be included on subsequent model rounds of this turn only; "
+                "it is not stored in agent.sqlite or project media. "
+                "Pass this path in mcp__* tool args when calling image MCPs.");
+        } else {
+            data.object["note"] = string_value(
+                "Model is text-only: pixels were not sent to the LLM. Image is registered "
+                "for this turn's MCP tools — pass the path (or absolute path) in mcp__* "
+                "arguments; the host rewrites to base64 for remote HTTP MCPs.");
+        }
         return envelope(true, std::move(data), "", "", {}, false);
     }
 

@@ -330,15 +330,24 @@ int ainiux_main(int argc, char** argv) {
                 return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
             }
         }
-        if (options.prompt.empty() && options.prompt_file.empty()) {
+        if (options.prompt.empty() && options.prompt_file.empty() && !options.agent_run) {
             ainiux::app::print_error({ainiux::ErrorCode::BadArgs,
-                                      "--attach requires -p/--prompt or --prompt-file in non-interactive mode"});
+                                      "--attach requires -p/--prompt, --prompt-file, or --run/-r goal text"});
             return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
         }
-        if (options.editor || options.repl || options.tui || options.list_models) {
+        if (options.editor || options.repl || options.list_models) {
             ainiux::app::print_error(
                 {ainiux::ErrorCode::BadArgs,
-                 "--attach currently supports non-interactive prompt mode only; use /insert in the REPL or TUI"});
+                 "--attach is not supported with --editor/--repl/--list-models; "
+                 "use /attach in chat or agent TUI, or --attach with -p / --run"});
+            return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
+        }
+        // Interactive --agent: prefer in-session /attach; CLI --attach is still allowed
+        // and is applied on the first turn only when combined with a startup prompt.
+        if (options.tui && !options.agent) {
+            ainiux::app::print_error(
+                {ainiux::ErrorCode::BadArgs,
+                 "--attach with --chat is not supported; use /attach in the TUI"});
             return ainiux::app::exit_code_for(ainiux::ErrorCode::BadArgs);
         }
     }

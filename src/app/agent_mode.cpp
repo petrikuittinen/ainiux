@@ -12,6 +12,7 @@
 #include "app/index_progress.hpp"
 #include "fetch/fetch.hpp"
 #include "search/search.hpp"
+#include "input/input.hpp"
 #include "security/redact.hpp"
 #include "runtime/interrupt.hpp"
 
@@ -101,8 +102,65 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     }
     runtime.begin_background_index_freshness();
 
+    agent::AgentSessionRuntime::UserTurnPayload turn_payload;
+    turn_payload.text = goal;
+    for (const std::string& path : context.options.attachment_paths) {
+        if (path.empty()) continue;
+        input::FileType type;
+        Error type_err = input::classify_file_type(path, type);
+        if (!type_err.ok()) {
+            result.error = type_err;
+            result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - started)
+                                    .count();
+            return result;
+        }
+        if (type.kind == input::Kind::Image) {
+            const std::size_t limit =
+                context.options.max_image_bytes > 0
+                    ? static_cast<std::size_t>(context.options.max_image_bytes)
+                    : 20U * 1024U * 1024U;
+            input::ImageData loaded;
+            Error load_err =
+                input::load_image_file(path, type, limit, loaded, cancellation);
+            if (!load_err.ok()) {
+                result.error = load_err;
+                result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - started)
+                                        .count();
+                return result;
+            }
+            provider::ImageInput image{loaded.mime_type, std::move(loaded.base64_data)};
+            image.display_name = path;
+            image.source_ref = path;
+            image.byte_size = static_cast<long long>(loaded.byte_size);
+            turn_payload.images.push_back(std::move(image));
+            if (!context.options.quiet) {
+                std::cerr << "Attached image for agent turn: " << path << " ("
+                          << loaded.mime_type << ", " << loaded.byte_size << " bytes)\n";
+            }
+        } else {
+            // Text-like: fold a short notice into the goal (bounded).
+            LoadedDocument document;
+            Error doc_err =
+                load_text_context_file(context.options, path, "--attach", document);
+            if (!doc_err.ok()) {
+                result.error = doc_err;
+                result.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - started)
+                                        .count();
+                return result;
+            }
+            turn_payload.text +=
+                "\n\n----- attached: " + path + " -----\n" + document.converted;
+            if (!context.options.quiet) {
+                std::cerr << "Attached context for agent turn: " << path << "\n";
+            }
+        }
+    }
+
     agent::SessionTurnResult turn =
-        runtime.run_user_turn(context, goal, cancellation, interrupted);
+        runtime.run_user_turn(context, std::move(turn_payload), cancellation, interrupted);
     result.error = turn.error;
     result.final_text = turn.final_text;
     result.turns = turn.session_turns;

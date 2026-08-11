@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "agent/approval.hpp"
+#include "agent/attachment_bag.hpp"
 #include "agent/index/index.hpp"
 #include "common.hpp"
 #include "fetch/fetch.hpp"
@@ -70,7 +71,13 @@ struct VisionAttachHooks {
     std::size_t max_image_bytes = 20U * 1024U * 1024U;
     // Max successful attach_image calls per user turn (bounds context growth).
     std::size_t max_images_per_turn = 4;
+    // When false, attach_image still loads into the turn attachment bag for MCP
+    // rewrite but does not queue pixels for the model (text-only models).
+    bool vision_capable = true;
+    // Optional turn-scoped bag for MCP path/base64 rewrite (not owned).
+    AttachmentBag* attachment_bag = nullptr;
     // Validate Chat Completions + vision model (or image_capability allow).
+    // Only required when vision_capable is true.
     std::function<Error()> validate_capability;
     // Queue one request-local image for the next model round of this turn.
     std::function<Error(provider::ImageInput image)> queue_image;

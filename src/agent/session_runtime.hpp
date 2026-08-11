@@ -18,6 +18,7 @@
 #include "agent/review_log.hpp"
 #include "agent/session_store.hpp"
 #include "agent/tools.hpp"
+#include "agent/attachment_bag.hpp"
 #include "mcp/client.hpp"
 #include "mcp/tool_bridge.hpp"
 #include "common.hpp"
@@ -327,6 +328,8 @@ class AgentSessionRuntime {
     ReadToolRegistry tools_;
     std::shared_ptr<mcp::Manager> mcp_manager_;
     std::unique_ptr<mcp::ToolBridge> mcp_bridge_;
+    // Per user-turn bag for MCP image rewrite and optional vision.
+    AttachmentBag attachment_bag_;
     TrustedPrompts prompts_;
     AgentsMdBundle agents_md_;
     provider::ToolConversation conversation_;

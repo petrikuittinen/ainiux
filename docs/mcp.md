@@ -225,4 +225,41 @@ Catalogs: [mcpservers.org](https://mcpservers.org/), [modelcontextprotocol/serve
 - [CLI](cli.md)  
 - [Security](security.md)  
 - [Documentation index](README.md)  
-- [Project README](../README.md)  
+- [Project README](../README.md)
+
+## Images and attachments (agent + MCP)
+
+Ainiux keeps a **turn-scoped attachment bag** for agent modes. Images enter the bag via:
+
+| Source | Behavior |
+| --- | --- |
+| CLI `ainiux run … --attach photo.png -r "…"` | Image loaded for the one-shot turn |
+| Interactive `/attach PATH` (agent) | Queued like chat attach when wired through the turn |
+| Native tool `attach_image` | Always registers in the bag; **vision models** also get pixels on later rounds; **text-only models** get bag-only (no pixel inject) |
+
+There is no separate `attach_file` tool. Use **`attach_image`** for PNG/JPEG/GIF.
+
+### MCP argument rewrite
+
+Before each `mcp__*` `tools/call`, ainiux may rewrite string arguments that look like image paths:
+
+| Transport | Typical rewrite |
+| --- | --- |
+| **stdio** (local process) | Normalize to **absolute path** (server reads the file) |
+| **HTTP** (remote) | Load image and put **base64** in the argument field |
+
+Also used when the field name suggests binary (`image_base64`, `image`, `data`, …). Caps follow `--max-image-bytes` and a max JSON args size.
+
+**Blind model + image-to-text MCP example:**
+
+```sh
+# Text-only model; MCP does OCR/captioning
+ainiux --add-mcp ocr --mcp-url https://example/mcp   # or stdio server
+ainiux deepseek -m deepseek-chat -r "Use the OCR MCP on the attached image and summarize text." \
+  --attach ./scan.png
+```
+
+Or in agent: `attach_image` / `/attach`, then call `mcp__ocr__…` with `{"path":"scan.png"}`.
+
+MCP **results** remain text-first (`content[].type == "text"`). Image content blocks from MCP are not injected as vision.
+

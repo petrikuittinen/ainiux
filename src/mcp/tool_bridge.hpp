@@ -4,8 +4,10 @@
 #include <string>
 #include <vector>
 
+#include "agent/attachment_bag.hpp"
 #include "common.hpp"
 #include "mcp/client.hpp"
+#include "mcp/arg_rewrite.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
@@ -23,6 +25,12 @@ class ToolBridge {
     void set_manager(std::shared_ptr<Manager> manager);
     std::shared_ptr<Manager> manager() const;
 
+    // Optional turn-scoped bag for path→base64 / path normalize on MCP calls.
+    void set_attachment_bag(agent::AttachmentBag* bag) { attachment_bag_ = bag; }
+    agent::AttachmentBag* attachment_bag() const { return attachment_bag_; }
+
+    void set_arg_rewrite_caps(ArgRewriteCaps caps) { rewrite_caps_ = caps; }
+
     Error refresh(runtime::CancellationToken cancellation = {});
 
     std::vector<provider::FunctionDefinition> definitions() const;
@@ -36,6 +44,8 @@ class ToolBridge {
    private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    agent::AttachmentBag* attachment_bag_ = nullptr;
+    ArgRewriteCaps rewrite_caps_{};
 };
 
 }  // namespace ainiux::mcp
