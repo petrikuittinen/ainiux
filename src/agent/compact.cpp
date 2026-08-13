@@ -421,12 +421,13 @@ std::string reduce_stub(const std::string& tool_name,
                         const std::string& result_json, bool ok) {
     std::ostringstream content;
     content << "Tool: " << (tool_name.empty() ? "unknown" : tool_name) << "\n";
-    if (tool_name == "read_file" || tool_name == "read_many") {
+    if (tool_name == "read" || tool_name == "read_file" || tool_name == "read_many") {
         content << "Arguments: "
                 << (arguments_json.empty() ? std::string("{}") : arguments_json)
                 << "\n";
-    } else if (tool_name == "read_symbol" || tool_name == "file_outline" ||
-               tool_name == "get_skeleton" || tool_name == "search_symbol") {
+    } else if (tool_name == "read_symbol" || tool_name == "outline" ||
+               tool_name == "file_outline" || tool_name == "get_skeleton" ||
+               tool_name == "symbol" || tool_name == "search_symbol") {
         content << "Target: " << symbol_location_hint(arguments_json, result_json)
                 << "\n";
     } else if (tool_name == "grep" || tool_name == "search_text" ||
@@ -473,16 +474,17 @@ std::string reduce_digest(const std::string& tool_name,
         content << "Path: " << path << "\n";
     else
         content << "Arguments: " << args_preview(arguments_json, 160) << "\n";
-    if (tool_name == "edit_file" && args.error.ok() && args.value.is_object()) {
+    if ((tool_name == "edit" || tool_name == "edit_file") && args.error.ok() &&
+        args.value.is_object()) {
         if (const json::Value* ops = args.value.get("ops");
             ops != nullptr && ops->is_array())
             content << "Ops: " << ops->array.size() << "\n";
     }
     if (tool_name == "str_replace") content << "Op: str_replace\n";
-    if (tool_name == "write_file") content << "Op: write\n";
-    if (tool_name == "remove") content << "Op: remove\n";
-    if (tool_name == "create_directory") content << "Op: mkdir\n";
-    if (tool_name == "rename_path") content << "Op: rename\n";
+    if (tool_name == "write" || tool_name == "write_file") content << "Op: write\n";
+    if (tool_name == "rm" || tool_name == "remove") content << "Op: rm\n";
+    if (tool_name == "mkdir" || tool_name == "create_directory") content << "Op: mkdir\n";
+    if (tool_name == "mv" || tool_name == "rename_path") content << "Op: mv\n";
     if (tool_name == "apply_patch") content << "Op: apply_patch\n";
     if (result.error.ok()) {
         const json::Value* data = result_data_object(result.value);
@@ -521,7 +523,8 @@ std::string reduce_semantic(const std::string& tool_name,
     content << "Status: " << (ok ? "ok" : "failed");
     if (!ok && content.str().find("Error:") == std::string::npos)
         content << "\nError: " << bounded_error_from_result(result_json);
-    if (tool_name == "run_command" && command_looks_irreversible_git(arguments_json))
+    if ((tool_name == "run" || tool_name == "run_command") &&
+        command_looks_irreversible_git(arguments_json))
         content << "\nNote: git-like action (retain in checkpoint)";
     return content.str();
 }
@@ -549,15 +552,15 @@ std::string reduce_full_or_size(const std::string& tool_name,
 }
 
 bool is_read_tool(const std::string& name) {
-    return name == "read_file" || name == "read_many";
+    return name == "read" || name == "read_file" || name == "read_many";
 }
 
 bool is_explore_tool(const std::string& name) {
     // Include legacy names so historical transcripts still collapse explore runs.
     return name == "grep" || name == "search_text" || name == "find" ||
-           name == "list_dir" || name == "list_directory" || name == "glob" ||
-           name == "index_overview" || name == "project_overview" ||
-           name == "index_status";
+           name == "ls" || name == "list_dir" || name == "list_directory" ||
+           name == "glob" || name == "index" || name == "index_overview" ||
+           name == "project_overview" || name == "index_status";
 }
 
 bool is_digest_tool(const std::string& name) {
@@ -582,8 +585,8 @@ std::string keep_line_from_item(const CompactionLogicalItem& item) {
             return item.tool_name + " " + path +
                    (item.tool_ok ? " ok" : " failed");
         }
-        if (item.tool_name == "run_command" || item.tool_name == "git_status" ||
-            item.tool_name == "git_diff") {
+        if (item.tool_name == "run" || item.tool_name == "run_command" ||
+            item.tool_name == "git_status" || item.tool_name == "git_diff") {
             std::ostringstream line;
             line << item.tool_name;
             if (item.has_exit_status) line << " exit=" << item.exit_status;
@@ -677,27 +680,33 @@ long long estimate_transcript_tokens(
 ToolCompactionTier tool_compaction_tier(const std::string& tool_name) {
     // Prune: include removed/legacy names so old sessions still compact.
     if (tool_name == "index_status" || tool_name == "index_update" ||
-        tool_name == "index_rebuild" || tool_name == "list_dir" ||
-        tool_name == "list_directory" || tool_name == "glob" ||
+        tool_name == "index_rebuild" || tool_name == "ls" ||
+        tool_name == "list_dir" || tool_name == "list_directory" ||
+        tool_name == "glob" || tool_name == "index" ||
         tool_name == "index_overview" || tool_name == "project_overview")
         return ToolCompactionTier::Prune;
-    if (tool_name == "read_file" || tool_name == "read_many" ||
-        tool_name == "read_symbol" || tool_name == "file_outline" ||
-        tool_name == "get_skeleton" || tool_name == "search_symbol" ||
-        tool_name == "grep" || tool_name == "search_text" ||
-        tool_name == "find" || tool_name == "find_tests" ||
-        tool_name == "inspect_code_task" || tool_name == "fetch_url" ||
+    if (tool_name == "read" || tool_name == "read_file" ||
+        tool_name == "read_many" || tool_name == "read_symbol" ||
+        tool_name == "outline" || tool_name == "file_outline" ||
+        tool_name == "get_skeleton" || tool_name == "symbol" ||
+        tool_name == "search_symbol" || tool_name == "grep" ||
+        tool_name == "search_text" || tool_name == "find" ||
+        tool_name == "find_tests" || tool_name == "inspect_code_task" ||
+        tool_name == "fetch" || tool_name == "fetch_url" ||
         tool_name == "web_search" || tool_name == "search_web")
         return ToolCompactionTier::Stub;
-    if (tool_name == "edit_file" || tool_name == "write_file" ||
+    if (tool_name == "edit" || tool_name == "edit_file" ||
+        tool_name == "write" || tool_name == "write_file" ||
         tool_name == "str_replace" || tool_name == "apply_patch" ||
-        tool_name == "rename_path" || tool_name == "remove" ||
+        tool_name == "mv" || tool_name == "rename_path" || tool_name == "rm" ||
+        tool_name == "remove" || tool_name == "mkdir" ||
         tool_name == "create_directory")
         return ToolCompactionTier::Digest;
     if (tool_name == "git_status" || tool_name == "git_diff" ||
-        tool_name == "run_command")
+        tool_name == "run" || tool_name == "run_command")
         return ToolCompactionTier::Semantic;
-    if (tool_name == "goal_met" || tool_name == "attach_image")
+    if (tool_name == "goal_met" || tool_name == "attach" ||
+        tool_name == "attach_image")
         return ToolCompactionTier::Digest;
     return ToolCompactionTier::Full;
 }
@@ -861,18 +870,21 @@ CompactionPartition partition_compaction_timeline(
 void pre_shrink_compaction_middle(std::vector<CompactionLogicalItem>& middle) {
     if (middle.size() < 2) return;
 
-    // 1) Merge consecutive read_file into a synthetic read_many stub.
+    // 1) Merge consecutive read / read_file into a synthetic read stub.
     {
         std::vector<CompactionLogicalItem> merged;
         merged.reserve(middle.size());
         for (std::size_t i = 0; i < middle.size();) {
-            if (middle[i].role == "tool" && middle[i].tool_name == "read_file") {
+            if (middle[i].role == "tool" &&
+                (middle[i].tool_name == "read" ||
+                 middle[i].tool_name == "read_file")) {
                 std::vector<std::string> paths;
                 long long first_seq = middle[i].seq;
                 bool all_ok = true;
                 std::size_t j = i;
                 while (j < middle.size() && middle[j].role == "tool" &&
-                       middle[j].tool_name == "read_file" &&
+                       (middle[j].tool_name == "read" ||
+                        middle[j].tool_name == "read_file") &&
                        paths.size() < kReadMergeMaxItems) {
                     std::string key = middle[j].primary_path;
                     if (key.empty())
@@ -899,10 +911,10 @@ void pre_shrink_compaction_middle(std::vector<CompactionLogicalItem>& middle) {
                     CompactionLogicalItem item;
                     item.seq = first_seq;
                     item.role = "tool";
-                    item.tool_name = "read_many";
+                    item.tool_name = "read";
                     item.tool_ok = all_ok;
                     std::ostringstream content;
-                    content << "Tool: read_many\nArguments: [merged "
+                    content << "Tool: read\nArguments: [merged "
                             << paths.size() << " reads]\nPaths: ";
                     for (std::size_t p = 0; p < paths.size(); ++p) {
                         if (p) content << ", ";
@@ -988,7 +1000,8 @@ void pre_shrink_compaction_middle(std::vector<CompactionLogicalItem>& middle) {
         filtered.reserve(middle.size());
         for (std::size_t i = 0; i < middle.size(); ++i) {
             if (i + 1 < middle.size() && middle[i].role == "tool" &&
-                middle[i].tool_name == "read_file" &&
+                (middle[i].tool_name == "read" ||
+                 middle[i].tool_name == "read_file") &&
                 middle[i + 1].role == "tool" &&
                 is_digest_tool(middle[i + 1].tool_name)) {
                 const std::string& read_path = middle[i].primary_path;
@@ -1068,24 +1081,26 @@ CompactionKeepList harvest_compaction_keep_list(
             if (!line.empty()) keep.lines.push_back(std::move(line));
             continue;
         }
-        if (item.tool_name == "run_command" || item.tool_name == "git_status" ||
-            item.tool_name == "git_diff") {
+        if (item.tool_name == "run" || item.tool_name == "run_command" ||
+            item.tool_name == "git_status" || item.tool_name == "git_diff") {
             const bool failed =
                 !item.tool_ok ||
                 (item.has_exit_status && item.exit_status != 0);
             const bool git_action =
                 item.content.find("git-like action") != std::string::npos ||
                 item.tool_name == "git_status" || item.tool_name == "git_diff";
-            if (have_last_command && item.tool_name == "run_command" &&
+            if (have_last_command &&
+                (item.tool_name == "run" || item.tool_name == "run_command") &&
                 item.has_exit_status && last_command_exit != 0 &&
                 item.exit_status == 0) {
-                keep.lines.push_back("run_command transition: fail -> pass");
+                keep.lines.push_back("run transition: fail -> pass");
             }
             if (failed || git_action) {
                 std::string line = keep_line_from_item(item);
                 if (!line.empty()) keep.lines.push_back(std::move(line));
             }
-            if (item.tool_name == "run_command" && item.has_exit_status) {
+            if ((item.tool_name == "run" || item.tool_name == "run_command") &&
+                item.has_exit_status) {
                 last_command_exit = item.exit_status;
                 have_last_command = true;
             }
@@ -1320,8 +1335,8 @@ std::string compaction_summary_schema_prompt(const std::string& user_preamble) {
            "and large command output are stubs or digests — do not try to recover "
            "omitted bodies.\n"
            "Preserve the user's language and never reproduce credentials or secrets.\n"
-           "Reloadable tool policy: do not treat read_file, read_many, read_symbol, "
-           "file_outline, grep/search_symbol, fetch_url, or web_search results as "
+           "Reloadable tool policy: do not treat read, outline, grep/symbol, fetch, "
+           "or web_search results as "
            "vital durable content. Bodies can be "
            "reloaded from the workspace, index, or network. At most note that a path "
            "or query was used. Never paste source code, file dumps, search match text, "

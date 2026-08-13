@@ -152,7 +152,7 @@ void test_apply_patch_tool() {
 
     // Same-session read sees updated file.
     const std::string read = tools.execute(
-        "read_file", R"JSON({"path":"src/a.cpp","start_line":1,"end_line":10,"max_bytes":4096})JSON");
+        "read", R"JSON({"path":"src/a.cpp","start_line":1,"end_line":10,"max_bytes":4096})JSON");
     check(json_ok(read), "read after apply_patch: " + read);
 
     // input alias works.

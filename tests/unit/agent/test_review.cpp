@@ -84,29 +84,29 @@ void test_read_tools_and_policy() {
         const ainiux::json::ParseResult schema = ainiux::json::parse(definition.parameters_json);
         check(schema.error.ok() && schema.value.is_object(), "native read tool schema is valid: " + definition.name);
     }
-    std::string result = tools.execute("read_file", R"({"path":"src/main.cpp","start_line":1,"end_line":2,"max_bytes":4096})");
+    std::string result = tools.execute("read", R"({"path":"src/main.cpp","start_line":1,"end_line":2,"max_bytes":4096})");
     check(result_ok(result) && result.find("[REDACTED]") != std::string::npos &&
               result.find("SECRET_TOKEN") == std::string::npos && result.find("1: ") != std::string::npos,
           "read_file returns numbered fingerprinted source with configured secrets redacted");
-    result = tools.execute("ReadFile",
+    result = tools.execute("Read",
                            "```json\n{\"path\":\"src/main.cpp\",\"start_line\":1,\"end_line\":1}\n```");
     check(result_ok(result),
           "read tools accept case-repaired names and fenced argument JSON");
-    result = tools.execute("project_overview", "");
+    result = tools.execute("index", "");
     check(result_ok(result), "tools with no required args accept empty argument text as {}");
-    result = tools.execute("read_file", "definitely-not-json");
+    result = tools.execute("read", "definitely-not-json");
     check(!result_ok(result) && result.find("received_arguments") != std::string::npos &&
               result.find("definitely-not-json") != std::string::npos,
           "invalid tool arguments return a rich error containing the original text");
-    check(!result_ok(tools.execute("read_file", R"({"path":"../outside.cpp"})")),
+    check(!result_ok(tools.execute("read", R"({"path":"../outside.cpp"})")),
           "read_file rejects traversal");
-    check(!result_ok(tools.execute("read_file", R"({"path":"ignored.cpp"})")),
+    check(!result_ok(tools.execute("read", R"({"path":"ignored.cpp"})")),
           "read_file rejects ignored files");
-    check(!result_ok(tools.execute("read_file", R"({"path":"escape.cpp"})")),
+    check(!result_ok(tools.execute("read", R"({"path":"escape.cpp"})")),
           "read_file rejects symlink escapes");
-    check(!result_ok(tools.execute("read_file", R"({"path":"bad.py"})")),
+    check(!result_ok(tools.execute("read", R"({"path":"bad.py"})")),
           "read_file rejects binary files recorded as skipped");
-    result = tools.execute("read_file", R"({"path":"src/empty.cpp"})");
+    result = tools.execute("read", R"({"path":"src/empty.cpp"})");
     check(result_ok(result) && result.find("\"line_end\":0") != std::string::npos,
           "read_file supports empty indexed files with an explicit empty range");
 
@@ -114,15 +114,15 @@ void test_read_tools_and_policy() {
     check(result_ok(result) && result.find("src/main.cpp") != std::string::npos &&
               result.find("src/extra.hpp") != std::string::npos,
           "glob supports brace alternatives over eligible indexed paths");
-    check(!result_ok(tools.execute("search_text", R"({"query":"(" ,"regex":true})")),
+    check(!result_ok(tools.execute("grep", R"({"query":"(" ,"regex":true})")),
           "search_text returns a structured invalid-regex error");
     result = tools.execute("grep", R"({"query":"helper","glob":"src/**","context":1})");
     check(result_ok(result) && result.find("src/main.cpp") != std::string::npos,
           "grep routes to bounded content search");
-    result = tools.execute("search_symbol", R"({"query":"help"})");
+    result = tools.execute("symbol", R"({"query":"help"})");
     check(result_ok(result) && result.find("helper") != std::string::npos,
           "search_symbol ranks prefix matches from indexed symbol rows");
-    result = tools.execute("get_skeleton", R"({"path":"src/main.cpp"})");
+    result = tools.execute("outline", R"({"path":"src/main.cpp"})");
     check(result_ok(result) && result.find("line_start") != std::string::npos,
           "get_skeleton returns ordered declarations and ranges");
     long long symbol_id = 0;
@@ -130,35 +130,35 @@ void test_read_tools_and_policy() {
         if (symbol.path == "src/main.cpp") { symbol_id = symbol.id; break; }
     }
     check(symbol_id != 0, "main source symbol is available for fingerprint test");
-    result = tools.execute("read_symbol", "{\"symbol_id\":" + std::to_string(symbol_id) + "}");
+    result = tools.execute("read", R"({"path":"src/main.cpp","start_line":1,"end_line":20})");
     check(result_ok(result) && result.find("range_hash") != std::string::npos,
-          "read_symbol verifies and returns actual source with hashes");
-    result = tools.execute("read_many", R"({"items":[{"path":"src/main.cpp"},{"path":"src/extra.hpp"}],"max_bytes":20})");
+          "read verifies and returns actual source with hashes");
+    result = tools.execute("read", R"({"items":[{"path":"src/main.cpp"},{"path":"src/extra.hpp"}],"max_bytes":20})");
     check(result_ok(result) && result.find("\"truncated\":true") != std::string::npos,
           "read_many reports aggregate truncation explicitly");
-    result = tools.execute("project_overview", "{}");
+    result = tools.execute("index", "{}");
     check(result_ok(result) && result.find("index_fresh") != std::string::npos &&
               result.find("languages") != std::string::npos,
           "project_overview reports language totals and freshness");
     check(!result_ok(tools.execute("unknown", "{}")), "unknown native tool returns a structured error");
-    result = tools.execute("run_command", R"({"command":"ls ignored.cpp"})");
+    result = tools.execute("run", R"({"command":"ls ignored.cpp"})");
     check(!result_ok(result) && result.find("policy_denied") != std::string::npos,
           "run_command rejects explicit paths outside the eligible index snapshot");
-    result = tools.execute("run_command", R"({"command":"find . -maxdepth 2 -print"})");
+    result = tools.execute("run", R"({"command":"find . -maxdepth 2 -print"})");
     check(result_ok(result) && result.find("ignored.cpp") == std::string::npos &&
               result.find(".ainiux-pr") == std::string::npos,
           "run_command filters find output to eligible indexed paths");
 
     write_file(root / "src/main.cpp", "int changed() { return 2; }\n");
-    result = tools.execute("read_symbol", "{\"symbol_id\":" + std::to_string(symbol_id) + "}");
+    result = tools.execute("read", R"({"path":"src/main.cpp"})");
     check(!result_ok(result) && result.find("changed after the snapshot") != std::string::npos,
-          "read_symbol rejects stale indexed fingerprints");
+          "security-review read rejects stale indexed fingerprints");
 
     tools.set_mutation_policy(ainiux::agent::MutationPolicy::PlanningDocuments);
     const std::vector<ainiux::provider::FunctionDefinition> plan_definitions =
         tools.definitions();
     const std::string plan_remove =
-        tools.execute("remove", R"({"path":"src/extra.hpp"})");
+        tools.execute("rm", R"({"path":"src/extra.hpp"})");
     check(!result_ok(plan_remove) &&
               plan_remove.find("policy_denied") != std::string::npos,
           "stable Plan superset does not elevate Act-only remove");
@@ -177,7 +177,7 @@ void test_read_tools_and_policy() {
     const auto run_definition =
         std::find_if(plan_definitions.begin(), plan_definitions.end(),
                      [](const ainiux::provider::FunctionDefinition& definition) {
-                         return definition.name == "run_command";
+                         return definition.name == "run";
                      });
     check(run_definition != plan_definitions.end() &&
               run_definition->parameters_json.find("\"maximum\":120000") !=
@@ -246,19 +246,19 @@ void test_prompts_and_report() {
     std::string word;
     while (words >> word) ++word_count;
     check(error.ok() && security_system == prompts.master + "\n" + prompts.security &&
-              security_system.size() == 7214 &&
-              ainiux::agent::index::content_hash(security_system) == "5b830225ee16a198" &&
+              security_system.size() == 7135 &&
+              ainiux::agent::index::content_hash(security_system) == "be951e155369e03f" &&
               prompts.security.find("submit_security_review") != std::string::npos &&
               prompts.security.find("EXPECTED_COVERAGE") != std::string::npos &&
               prompts.security.find("Review the supplied source batch") != std::string::npos &&
               prompts.agent.size() <= 4096 && word_count <= 600 &&
               prompts.agent.find("## Trust") != std::string::npos &&
-              prompts.agent.find("read_many") != std::string::npos &&
+              prompts.agent.find("items") != std::string::npos &&
               prompts.agent.find("two or more independent paths") !=
                   std::string::npos &&
-              prompts.agent.find("native parallel calls") !=
+              prompts.agent.find("native parallel tool calls") !=
                   std::string::npos &&
-              prompts.agent.find("not serial or parallel read_file calls") !=
+              prompts.agent.find("not serial or parallel single-path") !=
                   std::string::npos &&
               prompts.agent.find(
                   R"({"items":[{"path":"src/a.cpp")") !=
@@ -266,7 +266,7 @@ void test_prompts_and_report() {
               prompts.agent.find("JSON strings") != std::string::npos &&
               prompts.agent.find("regex:true") != std::string::npos &&
               prompts.agent.find("Plan:") != std::string::npos &&
-              prompts.agent.find("edit_file") != std::string::npos &&
+              prompts.agent.find("edit") != std::string::npos &&
               prompts.agent.find("tests") != std::string::npos &&
               prompts.agent.find("refactoring") != std::string::npos &&
               prompts.agent.find("4.5:1") != std::string::npos,
@@ -281,15 +281,15 @@ void test_prompts_and_report() {
               agent_native.find("4.5:1") != std::string::npos &&
               agent_native.find("Active channel: native tools") != std::string::npos &&
               agent_native.find("submit_security_review") == std::string::npos &&
-              agent_native.find("not serial or parallel read_file calls") !=
+              agent_native.find("not serial or parallel single-path") !=
                   std::string::npos &&
               agent_native.find("Do not create commits") != std::string::npos,
           "agent native system prompt is merged base plus native protocol");
     check(agent_xml.find("Active channel: XML tool markup") != std::string::npos &&
               agent_xml.find("<tool_call>") != std::string::npos &&
-              agent_xml.find("<name>read_many</name>") != std::string::npos &&
+              agent_xml.find("<name>read</name>") != std::string::npos &&
               agent_xml.find("<name>read_file</name>") == std::string::npos &&
-              agent_xml.find("not serial or parallel read_file calls") !=
+              agent_xml.find("not serial or parallel single-path") !=
                   std::string::npos &&
               agent_xml.find("exactly one") != std::string::npos,
           "agent XML prompt anchors the one-block contract with read_many");
@@ -569,16 +569,16 @@ void test_tool_argument_pipeline() {
               args.get("items")->is_array() && args.get("items")->array.size() == 1,
           "schema-aware coercion converts bool/number strings and scalar arrays");
 
-    const std::vector<std::string> known = {"read_file", "search_text", "project_overview"};
-    check(repair_tool_name("read_file", known) == "read_file", "exact tool name matches");
-    check(repair_tool_name("Read_File", known) == "read_file", "case-insensitive tool name repair");
-    check(repair_tool_name("readFile", known) == "read_file", "camelCase tool name repair");
+    const std::vector<std::string> known = {"read", "grep", "index"};
+    check(repair_tool_name("read", known) == "read", "exact tool name matches");
+    check(repair_tool_name("Read", known) == "read", "case-insensitive tool name repair");
+    check(repair_tool_name("READ", known) == "read", "uppercase tool name repair");
     check(repair_tool_name("nope", known).empty(), "unknown tool names are not fuzzy-matched");
 
     auto xml = parse_xml_tool_call(
-        "prefix\n<tool_call>\n<name>read_file</name>\n"
+        "prefix\n<tool_call>\n<name>read</name>\n"
         "<args>{\"path\":\"src/main.cpp\"}</args>\n</tool_call>\n");
-    check(xml.error.ok() && xml.found && xml.name == "read_file" &&
+    check(xml.error.ok() && xml.found && xml.name == "read" &&
               xml.arguments_text.find("src/main.cpp") != std::string::npos,
           "XML tool channel extracts one name/args block");
     auto multi = parse_xml_tool_call(

@@ -146,7 +146,7 @@ On failure, `ok` is false and `error` is `{ "code": "...", "message": "..." }`. 
 
 Hidden when indexing is disabled. **No live fallback** for the symbol/meta features themselves.
 
-#### `index_overview` (silent execute alias: `project_overview`)
+#### `index` (formerly `index_overview`)
 
 | | |
 | --- | --- |
@@ -155,7 +155,7 @@ Hidden when indexing is disabled. **No live fallback** for the symbol/meta featu
 | **Fallback** | None → `indexing_disabled` |
 | **Returns** | `workspace`, `updated_at`, `languages[]` (`language`, `files`, `lines`, `bytes`), aggregate `files` / `lines` / `bytes`, `important_files[]`, `entry_points[]` (`path`, `symbol`, `line`), `important_symbols[]` (`path`, `symbol_id`, `symbol`, `line`, `importance`), `likely_test_commands[]`, `index_fresh` |
 
-#### `search_symbol`
+#### `symbol` (formerly `search_symbol`)
 
 | | |
 | --- | --- |
@@ -164,7 +164,7 @@ Hidden when indexing is disabled. **No live fallback** for the symbol/meta featu
 | **Fallback** | None |
 | **Returns** | Array of `{ id, path, kind, name (qualified), signature, line_start, line_end, importance }` |
 
-#### `file_outline` (silent execute alias: `get_skeleton`)
+#### `outline` (formerly `file_outline`)
 
 | | |
 | --- | --- |
@@ -173,16 +173,7 @@ Hidden when indexing is disabled. **No live fallback** for the symbol/meta featu
 | **Fallback** | None (`not_found` if not indexed) |
 | **Returns** | Array of `{ id, kind, name, signature, line_start, line_end, documentation, importance }` |
 
-#### `read_symbol`
-
-| | |
-| --- | --- |
-| **Params** | `symbol_id` (required, ≥ 1) |
-| **Uses index** | Symbol row → line range; then **reads live source** for that range |
-| **Fallback** | None for lookup; content always from disk after id resolve |
-| **Returns** | `{ symbol_id, path, line_start, line_end, content, file_hash, range_hash, importance }` |
-
-#### `edit_file` op `replace_symbol` (only when indexing on)
+#### `edit` op `replace_symbol` (only when indexing on)
 
 | | |
 | --- | --- |
@@ -206,7 +197,7 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 | **Without / lazy fail** | `index::discover_source_files()` then same glob match |
 | **Returns** | Array of path strings |
 
-#### `grep` (silent execute aliases: `search_text`, `find`)
+#### `grep`
 
 | | |
 | --- | --- |
@@ -223,7 +214,7 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 
 ### 5.C Live filesystem first (index optional / secondary)
 
-#### `list_dir` (silent execute alias: `list_directory`)
+#### `ls` (formerly `list_dir`)
 
 | | |
 | --- | --- |
@@ -232,7 +223,7 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 | **Fallback** | Always real `readdir` (empty dirs, non-source names, unusual filenames) |
 | **Returns** | Array of `{ name, type, size, indexed, empty? }` |
 
-#### `read_file`
+#### `read`
 
 | | |
 | --- | --- |
@@ -242,13 +233,7 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 | **External** | Outside project with Guard approval |
 | **Returns** | `{ path, line_start, line_end, content (line-numbered), file_hash, range_hash, bytes }` |
 
-#### `read_many`
-
-| | |
-| --- | --- |
-| **Params** | `items[]` (1–100 of the same shape as `read_file`), `max_bytes` aggregate (def/max 262144) |
-| **Same dual path as `read_file`** | Index-bound in security-review; live FS in agent |
-| **Returns** | Array of per-item range objects + metadata: `requested_items`, `returned_items`, `byte_cap`, `bytes_remaining` |
+Batch form: pass `items` (1–100 of the same shape as a single `read`) instead of `path`. Same dual path (index-bound in security-review; live FS in agent).
 
 #### Mutations that **update** the index when present
 

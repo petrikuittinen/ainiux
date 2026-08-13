@@ -120,4 +120,4 @@ ainiux lmstudio -m MODEL -a    # then /list-mcp; model tools look like mcp__cata
 
 Interactive agent slash commands: `/list-mcp`, `/enable-mcp NAME`, `/disable-mcp NAME`, `/remove-mcp NAME`. `/add-mcp` posts CLI install help (HTTP and stdio examples); install itself is CLI-only. After registry changes, start a new turn or restart agent so prepare reloads tools.
 
-Images: `attach_image` / `--attach` fill a turn bag; vision models get pixels, text-only models keep images for MCP path/base64 rewrite. Full guide: [MCP servers](mcp.md).
+Images: `attach` / `--attach` fill a turn bag; vision models get pixels, text-only models keep images for MCP path/base64 rewrite. Full guide: [MCP servers](mcp.md).

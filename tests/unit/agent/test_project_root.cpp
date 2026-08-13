@@ -203,13 +203,13 @@ void test_compaction_strategies_timeline_and_partition() {
     message(2, "notice", "display only");
     message(3, "assistant", "inspect");
     message(4, "thinking", "hidden thought");
-    message(5, "tool", "compact duplicate", "read_file");
+    message(5, "tool", "compact duplicate", "read");
     for (long long seq = 7; seq <= 14; ++seq)
         message(seq, seq % 2 ? "user" : "assistant",
                 "message " + std::to_string(seq));
     agent::AgentToolEventRecord tool;
     tool.seq = 6;
-    tool.tool_name = "read_file";
+    tool.tool_name = "read";
     tool.arguments = R"({"path":"src/main.cpp"})";
     tool.result = R"({"ok":true,"content":"main"})";
 
@@ -223,7 +223,7 @@ void test_compaction_strategies_timeline_and_partition() {
                       item.role == "thinking" || item.role == "index";
         if (item.role == "tool") {
             ++tool_items;
-            if (item.tool_name == "read_file") read_file_body = item.content;
+            if (item.tool_name == "read") read_file_body = item.content;
         }
     }
     check(!saw_display && tool_items == 1,
@@ -254,14 +254,14 @@ void test_compaction_strategies_timeline_and_partition() {
     const std::string large_body(8000, 'x');
     agent::AgentToolEventRecord large_read;
     large_read.seq = 100;
-    large_read.tool_name = "read_file";
+    large_read.tool_name = "read";
     large_read.arguments = R"({"path":"src/big.cpp","start_line":1,"end_line":400})";
     large_read.result =
         std::string(R"({"ok":true,"content":")") + large_body + "\"}";
     large_read.ok = true;
     agent::AgentToolEventRecord many_read;
     many_read.seq = 101;
-    many_read.tool_name = "read_many";
+    many_read.tool_name = "read";
     many_read.arguments =
         R"({"items":[{"path":"a.cpp"},{"path":"b.cpp"}]})";
     many_read.result =
@@ -269,14 +269,14 @@ void test_compaction_strategies_timeline_and_partition() {
     many_read.ok = true;
     agent::AgentToolEventRecord failed_read;
     failed_read.seq = 102;
-    failed_read.tool_name = "read_file";
+    failed_read.tool_name = "read";
     failed_read.arguments = R"({"path":"missing.cpp"})";
     failed_read.result =
         R"({"ok":false,"error":{"code":"not_found","message":"file not found: missing.cpp"}})";
     failed_read.ok = false;
     agent::AgentToolEventRecord command;
     command.seq = 103;
-    command.tool_name = "run_command";
+    command.tool_name = "run";
     command.arguments = R"({"command":"echo hi"})";
     command.result =
         R"({"ok":true,"data":{"stdout":"hi\n","stderr":"","exit_status":0}})";
@@ -284,7 +284,7 @@ void test_compaction_strategies_timeline_and_partition() {
     const std::string search_blob(4000, 'm');
     agent::AgentToolEventRecord search;
     search.seq = 104;
-    search.tool_name = "search_text";
+    search.tool_name = "grep";
     search.arguments = R"({"query":"TODO"})";
     search.result = std::string(R"({"ok":true,"data":[)") +
                     R"({"path":"src/a.cpp","line":10,"text":")" + search_blob +
@@ -292,7 +292,7 @@ void test_compaction_strategies_timeline_and_partition() {
     search.ok = true;
     agent::AgentToolEventRecord edit;
     edit.seq = 105;
-    edit.tool_name = "edit_file";
+    edit.tool_name = "edit";
     edit.arguments =
         R"({"path":"src/a.cpp","ops":[{"type":"replace_text","old_text":"a","new_text":"b"}]})";
     edit.result =
@@ -300,7 +300,7 @@ void test_compaction_strategies_timeline_and_partition() {
     edit.ok = true;
     agent::AgentToolEventRecord list_dir;
     list_dir.seq = 106;
-    list_dir.tool_name = "list_directory";
+    list_dir.tool_name = "ls";
     list_dir.arguments = R"({"path":"src"})";
     list_dir.result =
         R"({"ok":true,"data":{"entries":["a.cpp","b.cpp","c.cpp","d.cpp"]}})";
@@ -318,42 +318,45 @@ void test_compaction_strategies_timeline_and_partition() {
              unknown});
     check(stubbed.size() == 8, "eight tool events become eight timeline items");
     for (const auto& item : stubbed) {
-        if (item.tool_name == "read_file" && item.tool_ok) {
+        if (item.tool_name == "read" && item.tool_ok &&
+            item.content.find("big.cpp") != std::string::npos) {
             check(item.content.find(large_body) == std::string::npos &&
                       item.content.find("src/big.cpp") != std::string::npos &&
                       item.content.find("Status: ok") != std::string::npos,
                   "large successful read_file is stubbed without body");
-        } else if (item.tool_name == "read_many") {
+        } else if (item.tool_name == "read" &&
+                   item.content.find("a.cpp") != std::string::npos &&
+                   item.content.find("b.cpp") != std::string::npos) {
             check(item.content.find("\"content\":\"aaa\"") == std::string::npos &&
                       item.content.find("a.cpp") != std::string::npos &&
                       item.content.find("reloadable") != std::string::npos,
                   "read_many keeps paths and drops result bodies");
-        } else if (item.tool_name == "read_file" && !item.tool_ok) {
+        } else if (item.tool_name == "read" && !item.tool_ok) {
             check(item.content.find("file not found: missing.cpp") !=
                       std::string::npos &&
                       item.content.find("Status: failed") != std::string::npos &&
                       item.content.find(large_body) == std::string::npos,
                   "failed read_file keeps a bounded error and omits file body");
-        } else if (item.tool_name == "run_command") {
+        } else if (item.tool_name == "run") {
             check(item.content.find("hi") != std::string::npos &&
                       item.content.find("Exit: 0") != std::string::npos,
                   "semantic run_command keeps a short exit-aware digest");
-        } else if (item.tool_name == "search_text") {
+        } else if (item.tool_name == "grep") {
             check(item.content.find(search_blob) == std::string::npos &&
                       item.content.find("src/a.cpp") != std::string::npos &&
                       item.content.find("reloadable") != std::string::npos,
                   "search_text keeps hit paths and drops match bodies");
-        } else if (item.tool_name == "edit_file") {
+        } else if (item.tool_name == "edit") {
             check(item.content.find("src/a.cpp") != std::string::npos &&
                       item.content.find("new_text") == std::string::npos &&
                       item.content.find("Status: ok") != std::string::npos &&
                       item.primary_path == "src/a.cpp",
                   "edit_file digest keeps path and drops op bodies");
-        } else if (item.tool_name == "list_directory") {
-            check(item.content.find("list_directory") != std::string::npos &&
+        } else if (item.tool_name == "ls") {
+            check(item.content.find("ls(") != std::string::npos &&
                       item.content.find("-> ok") != std::string::npos &&
                       item.content.find("c.cpp") == std::string::npos,
-                  "list_directory is pruned to one status line");
+                  "ls is pruned to one status line");
         } else if (item.tool_name == "mystery_tool") {
             check(item.content.find(huge_unknown) == std::string::npos &&
                       item.content.find("re-run to reload") != std::string::npos,
@@ -365,8 +368,8 @@ void test_compaction_strategies_timeline_and_partition() {
     agent::CompactionPartition render_partition;
     for (const auto& item : stubbed) {
         if (agent::is_reloadable_file_read_tool(item.tool_name) ||
-            item.tool_name == "run_command" || item.tool_name == "edit_file" ||
-            item.tool_name == "list_directory" || item.tool_name == "mystery_tool")
+            item.tool_name == "run" || item.tool_name == "edit" ||
+            item.tool_name == "ls" || item.tool_name == "mystery_tool")
             render_partition.middle.push_back(item);
     }
     const std::string source = agent::render_compaction_source(render_partition);
@@ -386,32 +389,32 @@ void test_compaction_strategies_timeline_and_partition() {
     // Middle pre-shrink: consecutive reads merge; lone read-then-edit drops read.
     agent::AgentToolEventRecord read_a;
     read_a.seq = 200;
-    read_a.tool_name = "read_file";
+    read_a.tool_name = "read";
     read_a.arguments = R"({"path":"src/a.cpp"})";
     read_a.result = R"({"ok":true,"data":{"path":"src/a.cpp","content":"A"}})";
     read_a.ok = true;
     agent::AgentToolEventRecord read_b;
     read_b.seq = 201;
-    read_b.tool_name = "read_file";
+    read_b.tool_name = "read";
     read_b.arguments = R"({"path":"src/b.cpp"})";
     read_b.result = R"({"ok":true,"data":{"path":"src/b.cpp","content":"B"}})";
     read_b.ok = true;
     agent::AgentToolEventRecord read_c;
     read_c.seq = 202;
-    read_c.tool_name = "read_file";
+    read_c.tool_name = "read";
     read_c.arguments = R"({"path":"src/c.cpp"})";
     read_c.result = R"({"ok":true,"data":{"path":"src/c.cpp","content":"C"}})";
     read_c.ok = true;
     agent::AgentToolEventRecord edit_c;
     edit_c.seq = 203;
-    edit_c.tool_name = "edit_file";
+    edit_c.tool_name = "edit";
     edit_c.arguments = R"({"path":"src/c.cpp","ops":[{"type":"insert_at","line":1,"new_text":"x"}]})";
     edit_c.result =
         R"({"ok":true,"data":{"path":"src/c.cpp","new_file_hash":"deadbeef"}})";
     edit_c.ok = true;
     agent::AgentToolEventRecord fail_cmd;
     fail_cmd.seq = 204;
-    fail_cmd.tool_name = "run_command";
+    fail_cmd.tool_name = "run";
     fail_cmd.arguments = R"({"command":"make test"})";
     fail_cmd.result =
         R"({"ok":false,"data":{"stdout":"","stderr":"error: undefined reference to foo\n","exit_status":2}})";
@@ -434,13 +437,13 @@ void test_compaction_strategies_timeline_and_partition() {
     bool saw_lone_read_c = false;
     bool saw_edit_c = false;
     for (const auto& item : merge_timeline) {
-        if (item.tool_name == "read_many" &&
+        if (item.tool_name == "read" &&
             item.content.find("merged") != std::string::npos)
             saw_merged_reads = true;
-        if (item.tool_name == "read_file" &&
+        if (item.tool_name == "read" &&
             item.primary_path == "src/c.cpp")
             saw_lone_read_c = true;
-        if (item.tool_name == "edit_file" && item.primary_path == "src/c.cpp")
+        if (item.tool_name == "edit" && item.primary_path == "src/c.cpp")
             saw_edit_c = true;
     }
     check(saw_merged_reads && saw_edit_c && !saw_lone_read_c,
@@ -449,16 +452,16 @@ void test_compaction_strategies_timeline_and_partition() {
     bool keep_has_edit = false;
     bool keep_has_fail = false;
     for (const auto& line : keep.lines) {
-        keep_has_edit = keep_has_edit || line.find("edit_file") != std::string::npos;
+        keep_has_edit = keep_has_edit || line.find("edit") != std::string::npos;
         keep_has_fail =
-            keep_has_fail || line.find("run_command") != std::string::npos;
+            keep_has_fail || line.find("run") != std::string::npos;
     }
     check(keep_has_edit && keep_has_fail,
           "keep-list harvests mutation digests and failed commands");
     const std::string guidance = agent::compaction_summary_user_guidance(keep);
     check(guidance.find("Verified facts") != std::string::npos &&
               guidance.find("## Active Task") != std::string::npos &&
-              guidance.find("edit_file") != std::string::npos,
+              guidance.find("edit") != std::string::npos,
           "summary user guidance seeds verified facts and heading skeleton");
 
     const auto partition =
@@ -521,8 +524,8 @@ void test_compaction_strategies_timeline_and_partition() {
           "summary reasoning prefers disabling then minimal catalogue values");
     const std::string schema =
         agent::compaction_summary_schema_prompt("user goal");
-    check(schema.find("read_file") != std::string::npos &&
-              schema.find("read_many") != std::string::npos &&
+    check(schema.find("read") != std::string::npos &&
+              schema.find("outline") != std::string::npos &&
               schema.find("grep") != std::string::npos &&
               schema.find("Never paste source") != std::string::npos &&
               schema.find("verified-facts") != std::string::npos &&
@@ -559,17 +562,17 @@ void test_compaction_strategies_timeline_and_partition() {
 
 void test_tool_display_format() {
     const std::string line = agent::format_compact_tool_line(
-        1, "read_file", R"({"path":"example.txt"})", R"({"ok":true})", 150, 80);
-    check(line.find("1: read_file(") != std::string::npos, "index and name");
+        1, "read", R"({"path":"example.txt"})", R"({"ok":true})", 150, 80);
+    check(line.find("1: read(") != std::string::npos, "index and name");
     check(line.find("example.txt") != std::string::npos, "path preview");
     check(line.find("→ ok") != std::string::npos || line.find("ok") != std::string::npos, "ok status");
     check(line.find("in 150 ms") != std::string::npos, "independent tool duration");
 
     const std::string many = agent::format_compact_tool_line(
-        2, "read_many",
+        2, "read",
         R"({"items":[{"path":"README.md"},{"path":"AGENTS.md"}],"max_bytes":131072})",
         R"({"ok":true})", 240, 120);
-    check(many.find("read_many(2 reads:") != std::string::npos &&
+    check(many.find("read(2 reads:") != std::string::npos &&
               many.find("README.md") != std::string::npos &&
               many.find("AGENTS.md") != std::string::npos,
           "read_many compact activity shows one batch with its paths: " + many);
@@ -579,7 +582,7 @@ void test_tool_display_clips_to_width() {
     const std::string long_path(200, 'x');
     const std::string args = std::string(R"({"path":")") + long_path + R"("})";
     const std::string line =
-        agent::format_compact_tool_line(12, "read_file", args, R"({"ok":true})", 7, 40);
+        agent::format_compact_tool_line(12, "read", args, R"({"ok":true})", 7, 40);
     check(line.size() <= 40, "tool line clipped to 40 cells");
     check(line.find("...") != std::string::npos, "ellipsis when clipped");
     check(agent::clip_to_cells("hello world", 5) == "he...", "clip_to_cells short");
@@ -633,7 +636,7 @@ void test_prior_session_context_includes_recent_work() {
     messages[0].content = "write a game";
     messages[1].role = "tool";
     messages[1].content = "1: write_file(\"game.py\") → ok";
-    messages[1].tool_name = "write_file";
+    messages[1].tool_name = "write";
     messages[2].role = "assistant";
     messages[2].content = "created game.py";
     messages[3].role = "notice";

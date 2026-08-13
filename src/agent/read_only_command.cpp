@@ -532,4 +532,144 @@ ReadOnlyCommandAssessment assess_read_only_command(
     return assess_passive(args);
 }
 
+namespace {
+
+WorkspaceFsCommandAssessment reject_fs(const std::string& reason) {
+    WorkspaceFsCommandAssessment result;
+    result.reason = reason;
+    return result;
+}
+
+WorkspaceFsCommandAssessment accept_fs(std::vector<std::string> paths,
+                                       bool recursive_rm) {
+    WorkspaceFsCommandAssessment result;
+    result.classified = true;
+    result.recursive_rm = recursive_rm;
+    result.path_operands = std::move(paths);
+    return result;
+}
+
+bool short_flags_only(const std::string& arg, const char* allowed) {
+    if (arg.size() < 2 || arg[0] != '-' || arg[1] == '-') return false;
+    for (std::size_t i = 1; i < arg.size(); ++i) {
+        bool ok = false;
+        for (const char* p = allowed; *p != '\0'; ++p) {
+            if (arg[i] == *p) {
+                ok = true;
+                break;
+            }
+        }
+        if (!ok) return false;
+    }
+    return true;
+}
+
+bool short_flags_contain(const std::string& arg, char flag) {
+    if (arg.size() < 2 || arg[0] != '-' || arg[1] == '-') return false;
+    return arg.find(flag) != std::string::npos;
+}
+
+}  // namespace
+
+WorkspaceFsCommandAssessment assess_workspace_fs_command(
+    const std::vector<std::string>& args) {
+    if (args.empty()) return reject_fs("command is empty");
+    const std::string& command = args[0];
+    std::vector<std::string> paths;
+    bool seen_double_dash = false;
+    auto take_operand = [&](const std::string& arg) {
+        if (arg.empty() || arg == "-") return false;
+        paths.push_back(arg);
+        return true;
+    };
+
+    if (command == "mkdir") {
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            const std::string& arg = args[i];
+            if (!seen_double_dash && arg == "--") {
+                seen_double_dash = true;
+                continue;
+            }
+            if (!seen_double_dash && (arg == "-p" || arg == "--parents" ||
+                                      arg == "-v" || arg == "--verbose"))
+                continue;
+            if (!seen_double_dash && !arg.empty() && arg[0] == '-')
+                return reject_fs("mkdir flag is not classified");
+            if (!take_operand(arg)) return reject_fs("mkdir operand is invalid");
+        }
+        if (paths.empty()) return reject_fs("mkdir requires a path");
+        return accept_fs(std::move(paths), false);
+    }
+
+    if (command == "rmdir") {
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            const std::string& arg = args[i];
+            if (!seen_double_dash && arg == "--") {
+                seen_double_dash = true;
+                continue;
+            }
+            if (!seen_double_dash &&
+                (arg == "-p" || arg == "--parents" || arg == "-v" ||
+                 arg == "--verbose" || arg == "--ignore-fail-on-non-empty"))
+                continue;
+            if (!seen_double_dash && !arg.empty() && arg[0] == '-')
+                return reject_fs("rmdir flag is not classified");
+            if (!take_operand(arg)) return reject_fs("rmdir operand is invalid");
+        }
+        if (paths.empty()) return reject_fs("rmdir requires a path");
+        return accept_fs(std::move(paths), false);
+    }
+
+    if (command == "rm") {
+        bool recursive = false;
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            const std::string& arg = args[i];
+            if (!seen_double_dash && arg == "--") {
+                seen_double_dash = true;
+                continue;
+            }
+            if (!seen_double_dash && (arg == "-r" || arg == "-R" ||
+                                      arg == "--recursive")) {
+                recursive = true;
+                continue;
+            }
+            if (!seen_double_dash && (arg == "-f" || arg == "--force" ||
+                                      arg == "-v" || arg == "--verbose"))
+                continue;
+            if (!seen_double_dash && short_flags_only(arg, "rRfv")) {
+                if (short_flags_contain(arg, 'r') || short_flags_contain(arg, 'R'))
+                    recursive = true;
+                continue;
+            }
+            if (!seen_double_dash && !arg.empty() && arg[0] == '-')
+                return reject_fs("rm flag is not classified");
+            if (!take_operand(arg)) return reject_fs("rm operand is invalid");
+        }
+        if (paths.empty()) return reject_fs("rm requires a path");
+        return accept_fs(std::move(paths), recursive);
+    }
+
+    if (command == "mv") {
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            const std::string& arg = args[i];
+            if (!seen_double_dash && arg == "--") {
+                seen_double_dash = true;
+                continue;
+            }
+            if (!seen_double_dash &&
+                (arg == "-f" || arg == "--force" || arg == "-n" ||
+                 arg == "--no-clobber" || arg == "-v" || arg == "--verbose"))
+                continue;
+            if (!seen_double_dash && short_flags_only(arg, "fnv")) continue;
+            if (!seen_double_dash && !arg.empty() && arg[0] == '-')
+                return reject_fs("mv flag is not classified");
+            if (!take_operand(arg)) return reject_fs("mv operand is invalid");
+        }
+        if (paths.size() < 2) return reject_fs("mv requires source and destination");
+        return accept_fs(std::move(paths), false);
+    }
+
+    return reject_fs("not a classified workspace filesystem command");
+}
+
 }  // namespace ainiux::agent

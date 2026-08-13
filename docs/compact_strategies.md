@@ -172,10 +172,10 @@ For each model-projected message and each tool event (sorted by `seq`):
 
 | Tier | Tools | Reduced form |
 | --- | --- | --- |
-| **Prune** | `list_dir` (+ legacy `list_directory`), `glob`, `index_overview` (+ legacy `project_overview`); also legacy removed `index_*` names | One line: `tool(args) -> ok\|fail` |
-| **Stub** | `read_file`, `read_many`, `read_symbol`, `file_outline` (+ legacy `get_skeleton`), `search_symbol`, `grep` (+ legacy `search_text`/`find`), `fetch_url`, `web_search` (+ legacy `search_web`); also legacy removed macro tools | Args/target + status; bodies omitted (“reloadable”); searches keep hit paths + line numbers when parseable; failures keep ≤ **400** error bytes |
-| **Digest** | `edit_file`, `write_file`, `str_replace`, `apply_patch`, `rename_path`, `remove`, `create_directory` | Path(s) + op + status; drop content/diff bodies |
-| **Semantic** | `git_status`, `git_diff`, `run_command` | Exit status + failure-oriented lines (or a short pass head); git-like irreversible actions annotated |
+| **Prune** | `ls` (+ legacy `list_dir` / `list_directory`), `glob`, `index` (+ legacy `index_overview` / `project_overview`); also legacy removed `index_*` names | One line: `tool(args) -> ok\|fail` |
+| **Stub** | `read` (+ legacy `read_file` / `read_many` / `read_symbol`), `outline` (+ legacy `file_outline` / `get_skeleton`), `symbol` (+ legacy `search_symbol`), `grep` (+ legacy `search_text`/`find`), `fetch` (+ legacy `fetch_url`), `web_search` (+ legacy `search_web`); also legacy removed macro tools | Args/target + status; bodies omitted (“reloadable”); searches keep hit paths + line numbers when parseable; failures keep ≤ **400** error bytes |
+| **Digest** | `edit` / `write` / `rm` / `mkdir` / `mv` / `apply_patch` / `attach` / `goal_met` (+ legacy `edit_file`, `write_file`, `str_replace`, `rename_path`, `remove`, `create_directory`, `attach_image`) | Path(s) + op + status; drop content/diff bodies |
+| **Semantic** | `run` (+ legacy `run_command`, `git_status`, `git_diff`) | Exit status + failure-oriented lines (or a short pass head); git-like irreversible actions annotated |
 | **Full / size** | other tools | Keep full text if result ≤ **1024** bytes; else args + 200 head/tail excerpt + “re-run to reload” |
 
 Orphan display tool rows with content **> 512** bytes are also reduced

@@ -56,7 +56,7 @@ const char* native_protocol_appendix() {
     return R"AINIUX_NATIVE(
 ## Active channel: native tools
 
-This session uses provider-native tool calling. Use the provided tools only. Prefer native filesystem and Git tools over run_command equivalents: they are faster, structured, bounded, and easier to validate. Do not describe tool calls in prose, and do not emit XML-style <tool_call> markup.
+This session uses provider-native tool calling. Use the provided tools only. Prefer native filesystem and Git tools over run equivalents: they are faster, structured, bounded, and easier to validate. Do not describe tool calls in prose, and do not emit XML-style <tool_call> markup.
 )AINIUX_NATIVE";
 }
 
@@ -64,12 +64,12 @@ const char* xml_protocol_appendix() {
     return R"AINIUX_XML(
 ## Active channel: XML tool markup
 
-This session does not use provider-native tool calling. Prefer native filesystem and Git tools over run_command equivalents: they are faster, structured, bounded, and easier to validate. Emit exactly one <tool_call> block per assistant turn, nothing after it. Arguments must be one valid JSON object. Do not wrap the block in Markdown code fences.
+This session does not use provider-native tool calling. Prefer native filesystem and Git tools over run equivalents: they are faster, structured, bounded, and easier to validate. Emit exactly one <tool_call> block per assistant turn, nothing after it. Arguments must be one valid JSON object. Do not wrap the block in Markdown code fences.
 
 Example:
 
 <tool_call>
-<name>read_many</name>
+<name>read</name>
 <args>{"items":[{"path":"src/main.cpp"},{"path":"src/main.hpp","start_line":1,"end_line":120}]}</args>
 </tool_call>
 )AINIUX_XML";

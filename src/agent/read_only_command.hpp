@@ -18,4 +18,17 @@ struct ReadOnlyCommandAssessment {
 ReadOnlyCommandAssessment assess_read_only_command(
     const std::vector<std::string>& arguments);
 
+// Conservative argv classifier for in-project mkdir/rmdir/rm/mv. Used by Smart
+// so those run invocations do not prompt unless rm -r targets a non-empty tree.
+// Unknown flags or shapes are not classified (Smart still asks).
+struct WorkspaceFsCommandAssessment {
+    bool classified = false;
+    bool recursive_rm = false;
+    std::vector<std::string> path_operands;
+    std::string reason;
+};
+
+WorkspaceFsCommandAssessment assess_workspace_fs_command(
+    const std::vector<std::string>& arguments);
+
 }  // namespace ainiux::agent

@@ -134,16 +134,16 @@ void test_prepare_and_history_hygiene() {
     using ainiux::agent::AgentLoopState;
 
     std::vector<provider::ToolCall> calls = {
-        {"call_1", "read_file", "not-json", 0},
-        {"call_2", "ReadFile", R"({"path":"a.cpp"})", 1},
+        {"call_1", "read", "not-json", 0},
+        {"call_2", "Read", R"({"path":"a.cpp"})", 1},
     };
-    const std::vector<std::string> known = {"read_file", "search_text"};
+    const std::vector<std::string> known = {"read", "grep"};
     auto prepared = prepare_tool_calls(calls, known);
     check(prepared.size() == 2 && prepared[0].arguments_invalid &&
               prepared[0].history_arguments == "{}" &&
               prepared[0].original_arguments == "not-json",
           "invalid args keep original and serialize {} for history");
-    check(prepared[1].name == "read_file" && !prepared[1].arguments_invalid,
+    check(prepared[1].name == "read" && !prepared[1].arguments_invalid,
           "case-repaired tool names are applied during prepare");
 
     provider::ToolRoundResult round;
@@ -225,7 +225,7 @@ void test_loop_limits_and_no_tool_retry() {
         provider::ToolRoundResult round;
         provider::ToolCall call;
         call.id = id;
-        call.name = "read_file";
+        call.name = "read";
         call.arguments_json = R"({"path":"same.cpp"})";
         round.tool_calls.push_back(call);
         json::Value assistant;
@@ -255,7 +255,7 @@ void test_loop_limits_and_no_tool_retry() {
 
     AgentLoopState state;
     provider::ToolConversation conversation;
-    const std::vector<std::string> known = {"read_file"};
+    const std::vector<std::string> known = {"read"};
     provider::RequestContext context = chat_context();
 
     AgentRoundOutcome third;
@@ -286,7 +286,7 @@ void test_loop_limits_and_no_tool_retry() {
         provider::ToolRoundResult round;
         provider::ToolCall call;
         call.id = "v" + std::to_string(n);
-        call.name = "read_file";
+        call.name = "read";
         call.arguments_json = std::string(R"({"path":"file)") + std::to_string(n) + R"(.cpp"})";
         round.tool_calls.push_back(call);
         json::Value assistant;
@@ -402,7 +402,7 @@ void test_invalid_args_not_executed() {
     provider::ToolRoundResult round;
     provider::ToolCall call;
     call.id = "bad1";
-    call.name = "read_file";
+    call.name = "read";
     call.arguments_json = "@@@";
     round.tool_calls.push_back(call);
     json::Value assistant;
@@ -567,7 +567,7 @@ void test_scripted_turn_cap() {
         provider::ToolRoundResult round;
         provider::ToolCall call;
         call.id = "t" + std::to_string(n);
-        call.name = "project_overview";
+        call.name = "index";
         call.arguments_json = "{}";
         round.tool_calls.push_back(call);
         json::Value assistant;

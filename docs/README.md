@@ -26,6 +26,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 
 - [Decisions](decisions.md) records design rationale.
 - [Code index and tool calls explained](code_index_and_tool_calls_explained.md) describes the current definitions-only index and agent navigation behavior.
+- [Agent tool inventory](tool_calls.md) lists native tools advertised in agent mode, verbatim descriptions, and per-tool token estimates.
 - [Agent compaction strategies](compact_strategies.md) documents the current `fast`, `smart`, and `summary` implementation in detail.
 - [Unicode license](unicode-license.txt) covers generated Unicode data.
 - [Project roadmap](../PLANS.md), [open work](../TODO.md), and [agent constraints](../AGENTS.md) govern future work.

@@ -236,17 +236,6 @@ bool get_size(const json::Value& object, const std::string& key, std::size_t fal
     return true;
 }
 
-// Map silent legacy aliases to advertised canonical tool names. Old names stay
-// executable (zero schema cost) so prior transcripts and habit-trained models work.
-std::string canonical_native_tool_name(const std::string& name) {
-    if (name == "search_text" || name == "find") return "grep";
-    if (name == "list_directory") return "list_dir";
-    if (name == "project_overview") return "index_overview";
-    if (name == "get_skeleton") return "file_outline";
-    if (name == "search_web") return "web_search";
-    return name;
-}
-
 std::string schema(const std::string& properties, const std::string& required = "") {
     return "{\"type\":\"object\",\"properties\":{" + properties + "},\"required\":[" + required +
            "],\"additionalProperties\":false}";
@@ -994,6 +983,31 @@ Error validate_command_workspace_paths(const index::Snapshot& snapshot,
     return ok_error();
 }
 
+bool recursive_rm_targets_nonempty_directory(const index::Snapshot& snapshot,
+                                             const std::string& cwd,
+                                             const std::vector<std::string>& operands) {
+    std::error_code ec;
+    const fs::path root = fs::canonical(snapshot.workspace, ec);
+    if (ec || root.empty()) return false;
+    fs::path requested_cwd =
+        cwd.empty() ? root
+                    : (fs::u8path(cwd).is_absolute() ? fs::u8path(cwd) : root / fs::u8path(cwd));
+    const fs::path canonical_cwd = fs::canonical(requested_cwd, ec);
+    if (ec || !fs::is_directory(canonical_cwd, ec)) return false;
+    for (const std::string& operand : operands) {
+        if (operand.empty() || operand == "-") continue;
+        const fs::path supplied = fs::u8path(operand);
+        const fs::path requested =
+            supplied.is_absolute() ? supplied : canonical_cwd / supplied;
+        const fs::file_status status = fs::symlink_status(requested, ec);
+        if (ec || status.type() == fs::file_type::not_found || fs::is_symlink(status))
+            continue;
+        if (!fs::is_directory(status)) continue;
+        if (!fs::is_empty(requested, ec) && !ec) return true;
+    }
+    return false;
+}
+
 Error validate_vetted_read_only_paths(const index::Snapshot& snapshot,
                                       const ReadOnlyCommandAssessment& assessment,
                                       const std::string& cwd,
@@ -1386,9 +1400,9 @@ GuardApprovalDecision ReadToolRegistry::request_permission(
     }
     bool ask = false;
     if (permission_mode_ == PermissionMode::Confirm)
-        ask = write || outside_project || destructive || tool_name == "run_command";
+        ask = write || outside_project || destructive || tool_name == "run";
     else if (permission_mode_ == PermissionMode::Smart)
-        ask = destructive || tool_name == "run_command" ||
+        ask = destructive || tool_name == "run" ||
               (outside_project && !under_system_temp);
     if (!ask) return GuardApprovalDecision::Allow;
 
@@ -1398,13 +1412,13 @@ GuardApprovalDecision ReadToolRegistry::request_permission(
     request.rule_id =
         !specific_rule.empty()
             ? specific_rule
-            : (tool_name == "run_command"
+            : (tool_name == "run"
                    ? "ask_on_model_command"
                    : (outside_project ? "ask_on_external_native_access"
                                       : "ask_on_confirm_mode_write"));
     if (!specific_message.empty()) {
         request.message = specific_message;
-    } else if (tool_name == "run_command") {
+    } else if (tool_name == "run") {
         request.message =
             "Run this model-issued command? Commands always require approval in " +
             std::string(permission_mode_name(permission_mode_)) + " mode.";
@@ -1733,12 +1747,12 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
     Error policy_error = validate_mutation_path(relative_path, create_dirs, false);
     if (!policy_error.ok()) return policy_error;
     if (content.find('\0') != std::string::npos)
-        return {ErrorCode::BadArgs, "write_file content must be UTF-8 text without NUL bytes"};
+        return {ErrorCode::BadArgs, "write content must be UTF-8 text without NUL bytes"};
     if (!html::is_valid_utf8(content))
-        return {ErrorCode::BadArgs, "write_file content must be valid UTF-8"};
+        return {ErrorCode::BadArgs, "write content must be valid UTF-8"};
     if (content.size() > index_options_.max_source_code_file_size)
         return {ErrorCode::BadArgs,
-                "write_file content exceeds max_source_code_file_size (" +
+                "write content exceeds max_source_code_file_size (" +
                     std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
 
     std::string write_mode = mode.empty() ? "overwrite" : mode;
@@ -1794,7 +1808,7 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
                 const std::string parent_rel =
                     fs::u8path(relative_path).parent_path().generic_u8string();
                 GuardApprovalRequest ask;
-                ask.tool_name = "write_file";
+                ask.tool_name = "write";
                 ask.command_preview = "create_directories " + parent_rel;
                 ask.rule_id = "ask_on_create_dirs";
                 ask.message =
@@ -2133,7 +2147,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                 if (i) message += ", ";
                 message += suggestions[i];
             }
-            message += "? Filenames may include literal # characters—use list_dir and the exact name.";
+            message += "? Filenames may include literal # characters—use ls and the exact name.";
         }
         return {ErrorCode::FileRead, message};
     }
@@ -2145,7 +2159,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
     if (is_database_path(generic)) {
         guard_rule_id = "ask_on_database_delete";
         GuardApprovalRequest ask;
-        ask.tool_name = "remove";
+        ask.tool_name = "rm";
         ask.command_preview = "remove " + generic;
         ask.rule_id = guard_rule_id;
         ask.message = "delete database file: " + generic;
@@ -2179,9 +2193,9 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
             suggestions.insert(suggestions.begin(), basename);
         return {ErrorCode::FileWrite,
                 "ambiguous remove: both \"" + basename +
-                    "\" and a #…# sibling exist. If you intend the plain name, re-call remove with "
+                    "\" and a #…# sibling exist. If you intend the plain name, re-call rm with "
                     "confirm=true. If the user named a #wrapped# file, use that exact path "
-                    "(list_dir first). Do not strip # from filenames."};
+                    "(ls first). Do not strip # from filenames."};
     }
     if (has_hash_wrapped_sibling(parent, basename)) {
         warnings.push_back(
@@ -2227,7 +2241,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
                     (is_database_path(name) || is_database_path(rel))) {
                     guard_rule_id = "ask_on_database_delete";
                     GuardApprovalRequest ask;
-                    ask.tool_name = "remove";
+                    ask.tool_name = "rm";
                     ask.command_preview = "remove -r " + generic + " (includes " + rel + ")";
                     ask.rule_id = guard_rule_id;
                     ask.message = "recursive remove would delete database file: " + rel;
@@ -2262,7 +2276,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
             if (permission_controls_ && !db_delete_approved) {
                 guard_rule_id = "ask_on_recursive_delete";
                 GuardApprovalRequest ask;
-                ask.tool_name = "remove";
+                ask.tool_name = "rm";
                 ask.command_preview = "remove -r " + generic;
                 ask.rule_id = guard_rule_id;
                 ask.message = "recursively delete directory tree: " + generic;
@@ -2288,7 +2302,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
         if (!recursive && permission_mode_ == PermissionMode::Confirm &&
             permission_controls_ && !permission_approved) {
             GuardApprovalRequest ask;
-            ask.tool_name = "remove";
+            ask.tool_name = "rm";
             ask.command_preview = "remove " + generic;
             ask.rule_id = "ask_on_confirm_mode_write";
             ask.message = "Delete this empty project directory?";
@@ -2329,7 +2343,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
     if (permission_mode_ == PermissionMode::Confirm && permission_controls_ &&
         !permission_approved) {
         GuardApprovalRequest ask;
-        ask.tool_name = "remove";
+        ask.tool_name = "rm";
         ask.command_preview = "remove " + generic;
         ask.rule_id = "ask_on_confirm_mode_write";
         ask.message = "Delete this project file?";
@@ -2843,15 +2857,15 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
         if (!policy_error.ok()) return policy_error;
     }
     if (!ops.is_array() || ops.array.empty())
-        return {ErrorCode::BadArgs, "edit_file requires a non-empty ops array"};
+        return {ErrorCode::BadArgs, "edit requires a non-empty ops array"};
     if (ops.array.size() > 100)
-        return {ErrorCode::BadArgs, "edit_file supports at most 100 operations per call"};
+        return {ErrorCode::BadArgs, "edit supports at most 100 operations per call"};
 
     // Normalize nested/aliased op shapes once so create-file detection and parsing agree.
     std::vector<json::Value> normalized_ops;
     normalized_ops.reserve(ops.array.size());
     for (const json::Value& raw_op : ops.array) {
-        if (!raw_op.is_object()) return {ErrorCode::BadArgs, "each edit_file op must be an object"};
+        if (!raw_op.is_object()) return {ErrorCode::BadArgs, "each edit op must be an object"};
         json::Value normalized = normalize_edit_op_shape(raw_op);
         const json::Value* type = normalized.get("type");
         if (type == nullptr) type = normalized.get("op");
@@ -2886,7 +2900,7 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
         const std::string type = infer_edit_op_type(op);
         if (type.empty())
             return {ErrorCode::BadArgs,
-                    "each edit_file op requires type/op or enough fields to infer the operation "
+                    "each edit op requires type/op or enough fields to infer the operation "
                     "(replace_range needs start_line+end_line+new_text; replace_text needs "
                     "old_text+new_text; insert_at needs line+new_text; delete_range needs "
                     "start_line+end_line). Nested shapes like "
@@ -2900,18 +2914,18 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
             if (text == nullptr || !text->is_string())
                 return {ErrorCode::BadArgs, "create_file requires new_text"};
             if (saw_create && !create_content.empty() && create_content != text->string)
-                return {ErrorCode::BadArgs, "edit_file allows only one create_file content"};
+                return {ErrorCode::BadArgs, "edit allows only one create_file content"};
             create_content = text->string;
         } else {
             create_file_only = false;
         }
     }
     if (saw_create && !create_file_only)
-        return {ErrorCode::BadArgs, "create_file cannot be combined with other edit_file ops"};
+        return {ErrorCode::BadArgs, "create_file cannot be combined with other edit ops"};
     if (saw_create && create_file_only) {
         if (external)
             return {ErrorCode::UnsupportedFeature,
-                    "external edit_file create_file is unsupported; use write_file"};
+                    "external edit create_file is unsupported; use write"};
         bool created = false;
         const Error create_error =
             write_workspace_file(relative_path, create_content, create_dirs, "create_new",
@@ -2930,7 +2944,7 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
         const std::string type = infer_edit_op_type(op);
         if (type.empty())
             return {ErrorCode::BadArgs,
-                    "each edit_file op requires type/op or enough fields to infer the operation"};
+                    "each edit op requires type/op or enough fields to infer the operation"};
         LineEditOp item;
         item.original_index = index;
         const json::Value* expected = op.get("expected_hash");
@@ -3032,16 +3046,16 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
             // Handled above.
             continue;
         } else {
-            return {ErrorCode::BadArgs, "unknown edit_file op type: " + type};
+            return {ErrorCode::BadArgs, "unknown edit op type: " + type};
         }
         if (item.text.find('\0') != std::string::npos || item.old_text.find('\0') != std::string::npos)
-            return {ErrorCode::BadArgs, "edit_file text must not contain NUL bytes"};
+            return {ErrorCode::BadArgs, "edit text must not contain NUL bytes"};
         if ((!item.text.empty() && !html::is_valid_utf8(item.text)) ||
             (!item.old_text.empty() && !html::is_valid_utf8(item.old_text)))
-            return {ErrorCode::BadArgs, "edit_file text must be valid UTF-8"};
+            return {ErrorCode::BadArgs, "edit text must be valid UTF-8"};
         parsed.push_back(std::move(item));
     }
-    if (parsed.empty()) return {ErrorCode::BadArgs, "edit_file ops produced no applicable operations"};
+    if (parsed.empty()) return {ErrorCode::BadArgs, "edit ops produced no applicable operations"};
 
     fs::path absolute;
     Error error;
@@ -3235,7 +3249,7 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
 
     if (content.size() > index_options_.max_source_code_file_size)
         return {ErrorCode::BadArgs,
-                "edit_file result exceeds max_source_code_file_size (" +
+                "edit result exceeds max_source_code_file_size (" +
                     std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
 
     // Re-apply create_dirs only if needed for... not for existing files.
@@ -3307,13 +3321,13 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},"
         "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}";
     std::vector<provider::FunctionDefinition> tools = {
-        {"index_overview",
+        {"index",
          "Summarize the code index (languages, file counts, freshness). Not a full "
-         "filesystem listing—use list_dir for on-disk layout.",
+         "filesystem listing—use ls for on-disk layout.",
          schema("")},
-        {"list_dir",
+        {"ls",
          "List real filesystem entries in a workspace-relative directory (literal names, "
-         "including empty dirs and non-source files). Prefer before remove.",
+         "including empty dirs and non-source files). Prefer before rm.",
          schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
         {"glob",
          "Match eligible workspace source paths (*, ?, **, braces).",
@@ -3324,57 +3338,40 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
          "omitted. path=one file or directory root; glob=name/type filter (*.ts, "
          "**/*.{cpp,hpp}); combine them to search a subtree. pattern aliases query.",
          schema(search_fields, "\"query\"")},
-        {"search_symbol",
+        {"symbol",
          "Rank indexed symbols by lexical match, then static importance.",
          schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
-        {"file_outline",
+        {"outline",
          "Indexed declarations, signatures, ranges, and docs for one file.",
          schema(path, "\"path\"")},
-        {"read_symbol",
-         "Verify and read the indexed source range for a symbol_id.",
-         schema("\"symbol_id\":{\"type\":\"integer\",\"minimum\":1}", "\"symbol_id\"")},
-        {"read_many",
+        {"read",
          !agent_session
-             ? "Preferred file reader for two or more known paths/ranges (including when "
-               "native parallel tool calls are available). Batch-read 1–100 indexed ranges "
-               "with line numbers and hashes under one byte cap."
-             : "Preferred file reader for two or more known paths/ranges (including when "
-               "native parallel tool calls are available). Batch-read 1–100 live exact-path "
-               "files with line numbers and hashes under one byte cap.",
-         schema("\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,\"items\":" + schema(range, "\"path\"") + "},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":262144}", "\"items\"")},
-        {"read_file",
-         !agent_session
-             ? "Single-target fallback: read one bounded indexed UTF-8 range with hashes/"
-               "line numbers. Do not issue multiple parallel read_file calls when read_many "
-               "can batch the known reads."
-             : "Single-target fallback: read one exact-path live UTF-8 file (need not be "
-               "indexed). Do not issue multiple parallel read_file calls when read_many can "
-               "batch. PNG/JPEG/GIF are not text—use attach_image for pixels.",
-         schema(range, "\"path\"")},
-        {"run_command",
+             ? "Read one indexed UTF-8 range (path) or batch 1–100 (items) with line "
+               "numbers and hashes. Use items when two or more paths/ranges are known."
+             : "Read one live UTF-8 file (path) or batch 1–100 (items) with line numbers "
+               "and hashes. Use items when two or more paths/ranges are known. "
+               "PNG/JPEG/GIF are not text—use attach.",
+         schema(range + ",\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,\"items\":" +
+                    schema(range, "\"path\"") +
+                    "}",
+                "")},
+        {"run",
          agent_session
              ? "Run one workspace command without a real shell (argv exec). Bare PATH names "
                "(`make`, `python3`) or project scripts (`./script.sh`, `bash script.sh`). "
-               "No unquoted pipes/redirects/chaining. Act uses Guard; Plan allows vetted "
-               "read-only forms. Prefer native filesystem/Git tools when available."
+               "No unquoted pipes/redirects/chaining. Prefer mkdir/mv/rm/ls over equivalents. "
+               "Delete directories with rmdir (empty) or rm -r (non-empty asks in Smart). "
+               "Act uses Guard; Plan allows vetted read-only forms."
              : "Run one read-only inspection command without a shell "
                "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":" +
                     std::string(agent_session ? "120000" : "10000") + "}",
                 "\"command\"")},
-        {"git_status",
-         "Compact git status (short + branch by default). Prefer over run_command.",
-         schema("\"short\":{\"type\":\"boolean\"},\"include_branch\":{\"type\":\"boolean\"}")},
-        {"git_diff",
-         "Bounded git diff (optional path, --cached, --stat).",
-         schema("\"path\":{\"type\":\"string\"},\"cached\":{\"type\":\"boolean\"},"
-                "\"stat\":{\"type\":\"boolean\"},"
-                "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":524288}")},
     };
     if (!indexing_enabled_) {
         static const std::set<std::string> hidden = {
-            "index_overview", "search_symbol", "file_outline", "read_symbol"};
+            "index", "symbol", "outline"};
         tools.erase(
             std::remove_if(
                 tools.begin(), tools.end(),
@@ -3385,7 +3382,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     }
     if (allow_network_) {
         tools.push_back(
-            {"fetch_url",
+            {"fetch",
              "Fetch one http(s) URL as UTF-8 Markdown/text (never raw HTML). Private/"
              "loopback blocked unless configured. Prefer top search hits only.",
              schema("\"url\":{\"type\":\"string\"},"
@@ -3411,7 +3408,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              "non-empty evidence. Rejected when no goal is active.",
              schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")});
         tools.push_back(
-            {"attach_image",
+            {"attach",
              "Attach one local PNG/JPEG/GIF for vision on the next model round of this turn "
              "(request-local, not stored). Vision-capable Chat Completions model required; "
              "per-turn limits apply.",
@@ -3419,8 +3416,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
     }
     if (allow_mutations()) {
         tools.push_back(
-            {"edit_file",
-             "Preferred in-file edit (not whole-file delete—use remove). Flat ops only—"
+            {"edit",
+             "Preferred in-file edit (not whole-file delete—use rm). Flat ops only—"
              "set type/op on the op object (do not nest empty replace_range/… shells). "
              "Ops: insert_at (e.g. {\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
              "replace_range, delete_range, replace_text"
@@ -3434,46 +3431,33 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                            edit_op_item + "}",
                     "\"path\",\"ops\"")});
         tools.push_back(
-            {"write_file",
-             "Create or overwrite a UTF-8 file. Prefer edit_file for project edits.",
+            {"write",
+             "Create or overwrite a UTF-8 file. Prefer edit for project edits.",
              schema(path + ",\"content\":{\"type\":\"string\"},"
                            "\"create_dirs\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"},"
                            "\"mode\":{\"type\":\"string\",\"enum\":[\"overwrite\",\"create_new\"]}",
                     "\"path\",\"content\"")});
         tools.push_back(
-            {"create_directory",
+            {"mkdir",
              "Act-only mkdir; parents=true creates missing parents. Plan: policy_denied.",
              schema(path + ",\"parents\":{\"type\":\"boolean\"}", "\"path\"")});
         tools.push_back(
-            {"rename_path",
+            {"mv",
              "Act-only rename; destination must not exist. Plan: policy_denied.",
              schema("\"source\":{\"type\":\"string\"},"
                     "\"destination\":{\"type\":\"string\"}",
                     "\"source\",\"destination\"")});
         tools.push_back(
-            {"str_replace",
-             "Exact (then optional fuzzy) text replace in one file. Prefer edit_file. "
-             "Fails on 0 or ambiguous multi-match without replace_all/line_range_hint.",
-             schema(path + ",\"old_text\":{\"type\":\"string\"},\"new_text\":{\"type\":\"string\"},"
-                           "\"replace_all\":{\"type\":\"boolean\"},"
-                           "\"fuzzy\":{\"type\":\"boolean\"},"
-                           "\"line_range_hint\":{\"type\":\"object\",\"properties\":{"
-                           "\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
-                           "\"end_line\":{\"type\":\"integer\",\"minimum\":1}}},"
-                           "\"expected_file_hash\":{\"type\":\"string\"}",
-                    "\"path\",\"old_text\",\"new_text\"")});
-        tools.push_back(
-            {"remove",
-             "Act-only delete file or empty dir (recursive=true for non-empty). Use exact "
-             "name from list_dir. Plan: policy_denied. Prefer over edit_file for deletes.",
-             schema(path + ",\"recursive\":{\"type\":\"boolean\"},"
-                           "\"confirm\":{\"type\":\"boolean\"},"
+            {"rm",
+             "Act-only delete one regular file. Use exact name from ls. Directories: run "
+             "rmdir (empty) or run rm -r (non-empty asks in Smart). Plan: policy_denied.",
+             schema(path + ",\"confirm\":{\"type\":\"boolean\"},"
                            "\"expected_file_hash\":{\"type\":\"string\"}",
                     "\"path\"")});
         tools.push_back(
             {"apply_patch",
-             "OpenAI/Codex multi-file patch (prefer edit_file/str_replace for simple "
+             "OpenAI/Codex multi-file patch (prefer edit for simple "
              "single-file edits). Hunk context must match; @@ -line,count helps. "
              "Args: patch|diff|input. fuzzy=true default. Preferred form:\n"
              "*** Begin Patch\n"
@@ -3534,7 +3518,7 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
                     description + " is a PNG/JPEG/GIF image, not UTF-8 text: " +
                         absolute_path.generic_u8string() +
                         ". Do not use Python/PIL or shell tools to open it. "
-                        "Call attach_image with this path when you need pixel content "
+                        "Call attach with this path when you need pixel content "
                         "(vision model required), or ask the user to /attach the file."};
         }
         return {ErrorCode::FileRead,
@@ -3657,10 +3641,10 @@ Error ReadToolRegistry::write_external_file(const fs::path& absolute_path,
                 "outside-project writes require interactive Act mode"};
     if (content.find('\0') != std::string::npos || !html::is_valid_utf8(content))
         return {ErrorCode::BadArgs,
-                "write_file content must be valid UTF-8 text without NUL bytes"};
+                "write content must be valid UTF-8 text without NUL bytes"};
     if (content.size() > index_options_.max_source_code_file_size)
         return {ErrorCode::BadArgs,
-                "write_file content exceeds max_source_code_file_size (" +
+                "write content exceeds max_source_code_file_size (" +
                     std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
     const std::string write_mode = mode.empty() ? "overwrite" : mode;
     if (write_mode != "overwrite" && write_mode != "create_new")
@@ -3749,7 +3733,7 @@ Error ReadToolRegistry::read_source(const std::string& path,
         if (input::path_has_supported_image_extension(record.path)) {
             return {ErrorCode::UnsupportedFeature,
                     "indexed path is a PNG/JPEG/GIF image, not UTF-8 text: " + record.path +
-                        ". Do not use Python/PIL; call attach_image when pixel content is "
+                        ". Do not use Python/PIL; call attach when pixel content is "
                         "required, or ask the user to /attach the file."};
         }
         return {ErrorCode::FileRead, "indexed file is no longer valid UTF-8 text: " + record.path};
@@ -3817,27 +3801,20 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
     if (cancellation.cancelled()) return tool_error_result("cancelled", "tool call cancelled");
 
-    // Stage 7: silent legacy aliases first (not advertised), then case/snake-camel
-    // repair against the registry (+ legacy names so typo repair still works).
-    std::string name = canonical_native_tool_name(requested_name);
+    // Case/snake-camel repair against advertised names only. Old names are not
+    // aliases and are not repair targets.
+    std::string name = requested_name;
     {
         std::vector<std::string> known;
         known.reserve(24);
         for (const provider::FunctionDefinition& definition : definitions())
             known.push_back(definition.name);
-        // Legacy names remain repair targets but are not in definitions().
-        known.push_back("search_text");
-        known.push_back("find");
-        known.push_back("list_directory");
-        known.push_back("project_overview");
-        known.push_back("get_skeleton");
-        known.push_back("search_web");
         const std::string repaired = repair_tool_name(requested_name, known);
-        if (!repaired.empty()) name = canonical_native_tool_name(repaired);
+        if (!repaired.empty()) name = repaired;
     }
     if (!indexing_enabled_) {
         static const std::set<std::string> disabled = {
-            "index_overview", "search_symbol", "file_outline", "read_symbol"};
+            "index", "symbol", "outline"};
         if (disabled.find(name) != disabled.end())
             return tool_error_result(
                 "indexing_disabled",
@@ -3873,9 +3850,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     std::string validation_error;
     bool lazy_live_fallback = false;
     static const std::set<std::string> snapshot_tools = {
-        "index_overview", "glob",         "grep",
-        "search_symbol",  "file_outline", "read_symbol",
-        "edit_file"};
+        "index", "glob", "grep", "symbol", "outline", "edit"};
     if (snapshot_tools.find(name) != snapshot_tools.end()) {
         if (index_access_mode_ == IndexAccessMode::LazyHints &&
             index_refresh_) {
@@ -3909,14 +3884,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         snapshot_.language_totals.clear();
         snapshot_.updated_at = 0;
         const bool need_files =
-            name == "index_overview" || name == "glob" || name == "grep" ||
-            name == "file_outline" || name == "edit_file";
+            name == "index" || name == "glob" || name == "grep" ||
+            name == "outline" || name == "edit";
         Error query_error = ok_error();
         if (need_files)
             query_error =
                 index::query_files(query_options, snapshot_.files);
         if (query_error.ok() &&
-            name == "index_overview") {
+            name == "index") {
             index::QueryTotals totals;
             query_error = index::query_totals(query_options, totals);
             if (query_error.ok()) {
@@ -3924,29 +3899,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 snapshot_.language_totals = std::move(totals.languages);
             }
         }
-        if (query_error.ok() && name == "file_outline") {
+        if (query_error.ok() && name == "outline") {
             std::string path;
             if (get_string(args, "path", path, true, validation_error))
                 query_error = index::query_symbols(
                     query_options,
                     {fs::u8path(path).generic_u8string()},
                     snapshot_.symbols);
-        } else if (query_error.ok() && name == "read_symbol") {
-            std::size_t id = 0;
-            if (get_size(args, "symbol_id", 0,
-                         static_cast<std::size_t>(
-                             std::numeric_limits<int>::max()),
-                         id, validation_error) &&
-                id > 0) {
-                index::IndexedSymbol symbol;
-                bool found = false;
-                query_error = index::query_symbol(
-                    query_options, static_cast<long long>(id), symbol,
-                    found);
-                if (query_error.ok() && found)
-                    snapshot_.symbols.push_back(std::move(symbol));
-            }
-        } else if (query_error.ok() && name == "search_symbol") {
+        } else if (query_error.ok() && name == "symbol") {
             std::string query;
             std::size_t maximum = 50;
             (void)get_string(args, "query", query, true,
@@ -3961,10 +3921,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 for (index::OwnedRankedSymbol& item : ranked)
                     snapshot_.symbols.push_back(std::move(item.symbol));
             }
-        } else if (query_error.ok() && name == "index_overview") {
+        } else if (query_error.ok() && name == "index") {
             query_error = index::query_symbols(
                 query_options, {}, snapshot_.symbols, 4096);
-        } else if (query_error.ok() && name == "edit_file") {
+        } else if (query_error.ok() && name == "edit") {
             const json::Value* ops = args.get("ops");
             if (ops != nullptr && ops->is_array()) {
                 for (const json::Value& op : ops->array) {
@@ -4014,7 +3974,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         rebuild_file_map();
     }
 
-    if (name == "index_overview") {
+    if (name == "index") {
         json::Value data = object_value();
         data.object["workspace"] = string_value(snapshot_.workspace);
         data.object["updated_at"] = number_value(static_cast<double>(snapshot_.updated_at));
@@ -4089,7 +4049,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "list_dir") {
+    if (name == "ls") {
         std::string path;
         std::size_t maximum = 200;
         if (!get_string(args, "path", path, false, validation_error) ||
@@ -4104,7 +4064,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result("policy_denied", resolved.message);
             external = true;
             const GuardApprovalDecision decision = request_permission(
-                "list_dir", "list_dir " + absolute.generic_u8string(),
+                "ls", "ls " + absolute.generic_u8string(),
                 {absolute.generic_u8string()}, true,
                 resolved_path_is_under_system_temp(absolute), false, false,
                 "ask_on_external_directory_read",
@@ -4116,7 +4076,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     decision == GuardApprovalDecision::Cancelled ? "cancelled"
                                                                  : "policy_denied",
                     decision == GuardApprovalDecision::Cancelled
-                        ? "list_dir approval cancelled"
+                        ? "ls approval cancelled"
                         : "external directory listing requires user approval");
             Error stable = ensure_approved_external_path_unchanged(
                 absolute, "list directory", ErrorCode::FileRead);
@@ -4141,7 +4101,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     return tool_error_result("not_found", "directory does not exist: " + path);
                 if (fs::is_symlink(status))
                     return tool_error_result("policy_denied",
-                                            "refusing symlink path in list_dir: " + path);
+                                            "refusing symlink path in ls: " + path);
             }
             if (!fs::is_directory(absolute, ec) || ec)
                 return tool_error_result("not_found", "path is not a directory: " + path);
@@ -4281,7 +4241,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, truncated);
     }
 
-    if (name == "search_symbol") {
+    if (name == "symbol") {
         std::string query;
         std::size_t maximum = 50;
         if (!get_string(args, "query", query, true, validation_error) ||
@@ -4303,7 +4263,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, truncated);
     }
 
-    if (name == "file_outline") {
+    if (name == "outline") {
         std::string path;
         if (!get_string(args, "path", path, true, validation_error)) return tool_error_result("invalid_arguments", validation_error);
         const auto file = files_.find(fs::u8path(path).generic_u8string());
@@ -4320,26 +4280,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, false);
     }
 
-    if (name == "read_symbol") {
-        std::size_t id = 0;
-        if (!get_size(args, "symbol_id", 0, static_cast<std::size_t>(std::numeric_limits<int>::max()), id, validation_error) || id == 0)
-            return tool_error_result("invalid_arguments", validation_error.empty() ? "symbol_id must be positive" : validation_error);
-        const index::IndexedSymbol* found = nullptr;
-        for (const index::IndexedSymbol& symbol : snapshot_.symbols) if (symbol.id == static_cast<long long>(id)) { found = &symbol; break; }
-        if (found == nullptr) return tool_error_result("not_found", "indexed symbol id was not found");
-        SourceRange range;
-        const Error error = read_source(found->path, found->symbol.line_start, found->symbol.line_end, 262144, range);
-        if (!error.ok()) return tool_error_result(error_code_string(error.code), error.message);
-        json::Value data = object_value(); data.object["symbol_id"] = number_value(found->id); data.object["path"] = string_value(range.path);
-        data.object["line_start"] = number_value(range.start_line); data.object["line_end"] = number_value(range.end_line);
-        data.object["content"] = string_value(range.content); data.object["file_hash"] = string_value(range.file_hash); data.object["range_hash"] = string_value(range.range_hash);
-        data.object["importance"] =
-            number_value(found->symbol.importance);
-        std::vector<std::string> warnings; if (range.redacted) warnings.push_back("configured credential value was redacted");
-        return envelope(true, std::move(data), "", "", warnings, range.truncated);
-    }
-
-    if (name == "read_file") {
+    if (name == "read") {
+        const json::Value* items = args.get("items");
+        if (items != nullptr && items->is_array() && !items->array.empty()) {
+            // Batch form is handled below.
+        } else {
         std::string path;
         std::size_t start = 1, end = 0, maximum = 65536;
         if (!get_string(args, "path", path, true, validation_error) ||
@@ -4359,7 +4304,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (error.ok()) {
                 const GuardApprovalDecision decision =
                     request_permission(
-                        "read_file", "read_file " + absolute.generic_u8string(),
+                        "read", "read " + absolute.generic_u8string(),
                         {absolute.generic_u8string()}, true,
                         resolved_path_is_under_system_temp(absolute), false, false,
                         "ask_on_external_file_read",
@@ -4404,9 +4349,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["range_hash"] = string_value(range.range_hash); data.object["bytes"] = number_value(range.bytes);
         std::vector<std::string> warnings; if (range.redacted) warnings.push_back("configured credential value was redacted");
         return envelope(true, std::move(data), "", "", warnings, range.truncated);
+        }
     }
 
-    if (name == "read_many") {
+    if (name == "read") {
         const json::Value* items = args.get("items");
         std::size_t maximum = 262144;
         if (items == nullptr || !items->is_array() || items->array.empty() ||
@@ -4440,11 +4386,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             for (const auto& item : external_paths)
                 exact_paths.push_back(item.second.generic_u8string());
             const GuardApprovalDecision decision = request_permission(
-                "read_many",
-                "read_many " + std::to_string(external_paths.size()) +
+                "read",
+                "read " + std::to_string(external_paths.size()) +
                     " outside-project file(s)",
                 exact_paths, true, all_external_under_temp, false, false,
-                "ask_on_external_read_many",
+                "ask_on_external_read",
                 "Read these exact files outside the active project? One approval covers all " +
                     std::to_string(external_paths.size()) +
                     " validated paths; returned text remains bounded and credential-redacted.",
@@ -4454,14 +4400,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     decision == GuardApprovalDecision::Cancelled ? "cancelled"
                                                                  : "policy_denied",
                     decision == GuardApprovalDecision::Cancelled
-                        ? "read_many approval cancelled"
-                        : "read_many external paths require user approval");
+                        ? "read approval cancelled"
+                        : "read external paths require user approval");
         }
         json::Value data = array_value(); std::vector<std::string> warnings; std::size_t remaining = maximum;
         bool truncated = false;
         for (std::size_t index = 0; index < items->array.size(); ++index) {
             if (cancellation.cancelled())
-                return tool_error_result("cancelled", "read_many cancelled");
+                return tool_error_result("cancelled", "read cancelled");
             if (remaining == 0) { warnings.push_back("omitted item " + std::to_string(index) + " because the aggregate cap was reached"); truncated = true; continue; }
             const json::Value& item = items->array[index];
             if (!item.is_object()) { warnings.push_back("omitted item " + std::to_string(index) + ": range must be an object"); truncated = true; continue; }
@@ -4898,7 +4844,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                                   : "builtin_live");
     }
 
-    if (name == "run_command") {
+    if (name == "run") {
         std::string command, cwd;
         const bool full = mutation_policy_ == MutationPolicy::Full;
         const bool agent_session =
@@ -4960,29 +4906,50 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result("policy_denied", policy_error.message);
             uses_external = uses_external || read_only_uses_external;
         }
+        const WorkspaceFsCommandAssessment fs_cmd =
+            assess_workspace_fs_command(parsed_arguments);
+        const bool nonempty_tree =
+            fs_cmd.classified && fs_cmd.recursive_rm &&
+            recursive_rm_targets_nonempty_directory(snapshot_, cwd,
+                                                    fs_cmd.path_operands);
         const bool smart_read_only_exemption =
             permission_controls_ && permission_mode_ == PermissionMode::Smart &&
             read_only.vetted && !uses_external && guard_rule_id.empty();
-        const GuardApprovalDecision permission =
-            smart_read_only_exemption
-                ? GuardApprovalDecision::Allow
-                : request_permission(
-                      "run_command", format_command_preview(parsed_arguments),
-                      parsed_arguments, uses_external, false, !read_only.vetted,
-                      !guard_rule_id.empty(), guard_rule_id,
-                      guard_rule_id.empty()
-                          ? std::string()
-                          : "This command also matched Guard rule " +
-                                guard_rule_id +
-                                ". One approval covers the complete validated command call.",
-                      cancellation);
+        const bool smart_fs_exemption =
+            permission_controls_ && permission_mode_ == PermissionMode::Smart &&
+            fs_cmd.classified && !uses_external && !nonempty_tree &&
+            guard_rule_id.empty();
+        GuardApprovalDecision permission = GuardApprovalDecision::Allow;
+        if (nonempty_tree && permission_mode_ != PermissionMode::Yolo) {
+            GuardApprovalRequest ask;
+            ask.tool_name = "run";
+            ask.command_preview = format_command_preview(parsed_arguments);
+            ask.rule_id = "ask_on_recursive_delete";
+            ask.message =
+                "recursively delete a non-empty directory tree via run rm -r";
+            ask.arguments = parsed_arguments;
+            permission = request_guard_approval(ask, cancellation);
+        } else if (smart_read_only_exemption || smart_fs_exemption) {
+            permission = GuardApprovalDecision::Allow;
+        } else {
+            permission = request_permission(
+                "run", format_command_preview(parsed_arguments),
+                parsed_arguments, uses_external, false, !read_only.vetted,
+                !guard_rule_id.empty(), guard_rule_id,
+                guard_rule_id.empty()
+                    ? std::string()
+                    : "This command also matched Guard rule " +
+                          guard_rule_id +
+                          ". One approval covers the complete validated command call.",
+                cancellation);
+        }
         if (permission != GuardApprovalDecision::Allow) {
             return tool_error_result(
                 permission == GuardApprovalDecision::Cancelled ? "cancelled"
                                                                : "policy_denied",
                 permission == GuardApprovalDecision::Cancelled
-                    ? "run_command approval cancelled"
-                    : "run_command requires user approval in " +
+                    ? "run approval cancelled"
+                    : "run requires user approval in " +
                           std::string(permission_mode_name(permission_mode_)) + " mode");
         }
         ProcessOptions options;
@@ -5071,18 +5038,18 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         process.stdout_truncated || process.stderr_truncated);
     }
 
-    if (name == "edit_file") {
+    if (name == "edit") {
         if (!allow_mutations())
-            return tool_error_result("policy_denied", "edit_file is not enabled in this session");
+            return tool_error_result("policy_denied", "edit is not enabled in this session");
         // Models (esp. under natural-language goals) often nest path inside ops[i]
-        // instead of the top-level edit_file.path required by the schema. Promote
+        // instead of the top-level edit.path required by the schema. Promote
         // common top-level fields from ops when missing so the call still works.
         // Weaker tool callers (observed: glm-5.2 via OpenRouter) also omit the ops
         // array and put a single replace_text/replace_range payload at the top
         // level — wrap that into ops when present.
         json::Value edit_args = args;
         if (!edit_args.is_object())
-            return tool_error_result("invalid_arguments", "edit_file arguments must be an object");
+            return tool_error_result("invalid_arguments", "edit arguments must be an object");
         json::Value* ops_value = nullptr;
         {
             auto it = edit_args.object.find("ops");
@@ -5114,7 +5081,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
         }
         if (ops_value == nullptr || !ops_value->is_array())
-            return tool_error_result("invalid_arguments", "edit_file requires ops array");
+            return tool_error_result("invalid_arguments", "edit requires ops array");
 
         auto top_string = [&](const char* key) -> std::string {
             const json::Value* value = edit_args.get(key);
@@ -5197,7 +5164,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::vector<std::string> summary;
         std::vector<std::string> warnings;
         const GuardApprovalDecision permission = request_permission(
-            "edit_file", "edit_file " + path, {path}, external,
+            "edit", "edit " + path, {path}, external,
             external && resolved_path_is_under_system_temp(external_path), true, false,
             external ? "ask_on_external_file_write" : std::string(),
             external
@@ -5214,8 +5181,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                             ? ErrorCode::Cancelled
                             : ErrorCode::UnsupportedFeature,
                         permission == GuardApprovalDecision::Cancelled
-                            ? "edit_file approval cancelled"
-                            : "edit_file requires user approval"};
+                            ? "edit approval cancelled"
+                            : "edit requires user approval"};
         json::Value data = object_value();
         data.object["path"] = string_value(fs::u8path(path).generic_u8string());
         data.object["applied"] = bool_value(error.ok());
@@ -5245,9 +5212,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "write_file") {
+    if (name == "write") {
         if (!allow_mutations())
-            return tool_error_result("policy_denied", "write_file is not enabled in this session");
+            return tool_error_result("policy_denied", "write is not enabled in this session");
         std::string path, content, mode, expected_hash;
         bool create_dirs = false;
         if (!get_string(args, "path", path, true, validation_error) ||
@@ -5268,8 +5235,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (error.ok()) {
             path = std::move(relative_path);
             const GuardApprovalDecision decision = request_permission(
-                "write_file",
-                "write_file " + path + " (" + std::to_string(content.size()) + " bytes)",
+                "write",
+                "write " + path + " (" + std::to_string(content.size()) + " bytes)",
                 {path, mode, create_dirs ? "create_dirs=true" : "create_dirs=false"},
                 false, false, true, false, {}, {}, cancellation);
             if (decision == GuardApprovalDecision::Allow)
@@ -5280,16 +5247,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                              ? ErrorCode::Cancelled
                              : ErrorCode::UnsupportedFeature,
                          decision == GuardApprovalDecision::Cancelled
-                             ? "write_file approval cancelled"
-                             : "write_file requires user approval"};
+                             ? "write approval cancelled"
+                             : "write requires user approval"};
         } else if (mutation_policy_ == MutationPolicy::Full) {
             error = resolve_external_file_path(snapshot_.workspace, path, false, external_path);
             if (error.ok()) {
                 external = true;
                 const GuardApprovalDecision decision =
                     request_permission(
-                        "write_file",
-                        "write_file " + external_path.generic_u8string() + " (" +
+                        "write",
+                        "write " + external_path.generic_u8string() + " (" +
                             std::to_string(content.size()) + " bytes)",
                         {external_path.generic_u8string(), mode,
                          create_dirs ? "create_dirs=true" : "create_dirs=false"},
@@ -5358,10 +5325,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "create_directory") {
+    if (name == "mkdir") {
         if (!allow_mutations())
             return tool_error_result("policy_denied",
-                                     "create_directory is not enabled in this session");
+                                     "mkdir is not enabled in this session");
         std::string path;
         bool parents = false;
         if (!get_string(args, "path", path, true, validation_error) ||
@@ -5383,7 +5350,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const GuardApprovalDecision decision =
             error.ok()
                 ? request_permission(
-                      "create_directory", "create_directory " + target.generic_u8string(),
+                      "mkdir", "mkdir " + target.generic_u8string(),
                       {target.generic_u8string(), parents ? "parents=true" : "parents=false"},
                       external, external && resolved_path_is_under_system_temp(target), true,
                       false, {}, {}, cancellation)
@@ -5393,8 +5360,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                          ? ErrorCode::Cancelled
                          : ErrorCode::UnsupportedFeature,
                      decision == GuardApprovalDecision::Cancelled
-                         ? "create_directory approval cancelled"
-                         : "create_directory requires user approval"};
+                         ? "mkdir approval cancelled"
+                         : "mkdir requires user approval"};
         if (error.ok()) {
             fs::path current_target;
             bool current_external = false;
@@ -5410,7 +5377,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::error_code ec;
             if (fs::exists(target, ec))
                 error = {ErrorCode::FileWrite,
-                         "create_directory destination already exists: " +
+                         "mkdir destination already exists: " +
                              target.generic_u8string()};
             else {
                 const bool created =
@@ -5435,10 +5402,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                               error.message, {}, false);
     }
 
-    if (name == "rename_path") {
+    if (name == "mv") {
         if (mutation_policy_ != MutationPolicy::Full)
             return tool_error_result("policy_denied",
-                                     "rename_path is enabled only in Act mode");
+                                     "mv is enabled only in Act mode");
         std::string source_text, destination_text;
         if (!get_string(args, "source", source_text, true, validation_error) ||
             !get_string(args, "destination", destination_text, true, validation_error))
@@ -5457,8 +5424,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const GuardApprovalDecision decision =
             error.ok()
                 ? request_permission(
-                      "rename_path",
-                      "rename_path " + source.generic_u8string() + " -> " +
+                      "mv",
+                      "mv " + source.generic_u8string() + " -> " +
                           destination.generic_u8string(),
                       {source.generic_u8string(), destination.generic_u8string()}, external,
                       under_temp, true, false, {}, {}, cancellation)
@@ -5468,8 +5435,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                          ? ErrorCode::Cancelled
                          : ErrorCode::UnsupportedFeature,
                      decision == GuardApprovalDecision::Cancelled
-                         ? "rename_path approval cancelled"
-                         : "rename_path requires user approval"};
+                         ? "mv approval cancelled"
+                         : "mv requires user approval"};
         if (error.ok()) {
             Error stable = ensure_approved_external_path_unchanged(
                 source, "rename", ErrorCode::FileWrite);
@@ -5492,7 +5459,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::error_code ec;
             if (fs::exists(destination, ec))
                 error = {ErrorCode::FileWrite,
-                         "rename_path destination already exists: " +
+                         "mv destination already exists: " +
                              destination.generic_u8string()};
             else {
                 fs::rename(source, destination, ec);
@@ -5532,7 +5499,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                               error.message, {}, false);
     }
 
-    if (name == "str_replace") {
+    if (false && name == "str_replace") {
         if (!allow_mutations())
             return tool_error_result("policy_denied", "str_replace is not enabled in this session");
         std::string path, old_text, new_text, expected_hash;
@@ -5707,9 +5674,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", success_warnings, false);
     }
 
-    if (name == "remove") {
+    if (name == "rm") {
         if (mutation_policy_ != MutationPolicy::Full)
-            return tool_error_result("policy_denied", "remove is not enabled in this session");
+            return tool_error_result("policy_denied", "rm is not enabled in this session");
         std::string path, expected_hash;
         bool recursive = false;
         bool confirm = false;
@@ -5718,6 +5685,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_bool(args, "confirm", false, confirm, validation_error) ||
             !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        if (recursive)
+            return tool_error_result(
+                "invalid_arguments",
+                "rm deletes one regular file. For directories use run rmdir (empty) "
+                "or run rm -r (non-empty asks in Smart).");
         std::string relative_path;
         Error normalize_error = normalize_mutation_path(path, relative_path);
         std::string history_path, old_hash, guard_decision, guard_rule_id;
@@ -5729,6 +5701,17 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         Error error;
         if (normalize_error.ok()) {
             path = std::move(relative_path);
+            {
+                fs::path absolute;
+                Error resolved = resolve_writable_path(path, absolute);
+                std::error_code dir_ec;
+                if (resolved.ok() && fs::is_directory(fs::symlink_status(absolute, dir_ec)) &&
+                    !dir_ec)
+                    error = {ErrorCode::BadArgs,
+                             "rm deletes one regular file. For directories use run rmdir "
+                             "(empty) or run rm -r (non-empty asks in Smart)."};
+            }
+            if (error.ok())
             error = remove_workspace_path(path, recursive, confirm, expected_hash,
                                           history_path, was_directory, guard_decision,
                                           guard_rule_id, old_hash, suggestions, warnings);
@@ -5750,10 +5733,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                          "refusing to remove symlink path: " +
                              external_path.generic_u8string()};
             was_directory = error.ok() && fs::is_directory(status);
-            if (error.ok() && was_directory && !recursive &&
-                !fs::is_empty(external_path, ec))
-                error = {ErrorCode::FileWrite,
-                         "directory is not empty; pass recursive=true to remove it"};
+            if (error.ok() && was_directory)
+                error = {ErrorCode::BadArgs,
+                         "rm deletes one regular file. For directories use run rmdir "
+                         "(empty) or run rm -r (non-empty asks in Smart)."};
             bool tree_has_database = is_database_path(external_path.generic_u8string());
             if (error.ok() && was_directory && recursive) {
                 for (fs::recursive_directory_iterator it(external_path, ec), end;
@@ -5775,7 +5758,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (error.ok()) {
                 const bool destructive = recursive || tree_has_database;
                 const GuardApprovalDecision decision = request_permission(
-                    "remove",
+                    "rm",
                     std::string(recursive ? "remove -r " : "remove ") +
                         external_path.generic_u8string(),
                     {external_path.generic_u8string(),
@@ -5798,7 +5781,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             if (error.ok()) {
                 Error stable = ensure_approved_external_path_unchanged(
-                    external_path, "remove", ErrorCode::FileWrite);
+                    external_path, "rm", ErrorCode::FileWrite);
                 if (!stable.ok()) error = stable;
             }
             if (error.ok()) {
@@ -5928,7 +5911,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "git_status") {
+    if (false && name == "git_status") {
         bool short_form = true;
         bool include_branch = true;
         if (!get_bool(args, "short", true, short_form, validation_error) ||
@@ -5968,7 +5951,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         process.stdout_truncated || process.stderr_truncated);
     }
 
-    if (name == "git_diff") {
+    if (false && name == "git_diff") {
         std::string path;
         bool cached = false;
         bool stat_only = false;
@@ -6021,9 +6004,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         process.stdout_truncated || process.stderr_truncated);
     }
 
-    if (name == "fetch_url") {
+    if (name == "fetch") {
         if (!allow_network_)
-            return tool_error_result("policy_denied", "fetch_url is not enabled in this session");
+            return tool_error_result("policy_denied", "fetch is not enabled in this session");
         std::string url;
         // max_bytes limits the returned Markdown/text size (what the model sees), not the
         // raw HTML download. Download uses a larger safety ceiling so typical pages convert.
@@ -6065,7 +6048,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::vector<std::string> warnings;
         if (args.get("extract_text") != nullptr)
             warnings.push_back(
-                "extract_text is ignored; fetch_url always returns Markdown or plain text");
+                "extract_text is ignored; fetch always returns Markdown or plain text");
         bool truncated = false;
         if (error.ok() && body.size() > max_output_bytes) {
             // Truncate at a UTF-8 code-unit boundary so JSON stays well-formed.
@@ -6190,10 +6173,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, false);
     }
 
-    if (name == "attach_image") {
+    if (name == "attach") {
         if (mutation_policy_ == MutationPolicy::Disabled)
             return tool_error_result("policy_denied",
-                                    "attach_image is only available in agent sessions");
+                                    "attach is only available in agent sessions");
         std::string path;
         if (!get_string(args, "path", path, true, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
@@ -6203,7 +6186,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!vision_hooks_.queue_image && vision_hooks_.attachment_bag == nullptr)
             return tool_error_result(
                 "unsupported",
-                "attach_image is not available in this session");
+                "attach is not available in this session");
 
         input::FileType type;
         Error type_error = input::classify_file_type(path, type);
@@ -6229,11 +6212,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (fs::is_symlink(status))
                     return tool_error_result(
                         "policy_denied",
-                        "refusing symlink path for attach_image: " + path);
+                        "refusing symlink path for attach: " + path);
             }
             if (!fs::is_regular_file(current, ec) || ec)
                 return tool_error_result(
-                    "file_read", "attach_image path must be a regular file: " + path);
+                    "file_read", "attach path must be a regular file: " + path);
             absolute = fs::canonical(current, ec);
             if (ec || absolute.empty())
                 return tool_error_result(
@@ -6252,7 +6235,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result(error_code_string(resolve_error.code),
                                          resolve_error.message);
             const GuardApprovalDecision decision = request_permission(
-                "attach_image", "attach_image " + absolute.generic_u8string(),
+                "attach", "attach " + absolute.generic_u8string(),
                 {absolute.generic_u8string()}, true,
                 resolved_path_is_under_system_temp(absolute), false, false,
                 "ask_on_external_file_read",
@@ -6279,7 +6262,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
         }
         if (cancellation.cancelled())
-            return tool_error_result("cancelled", "attach_image cancelled");
+            return tool_error_result("cancelled", "attach cancelled");
         const std::size_t limit = vision_hooks_.max_image_bytes > 0
                                       ? vision_hooks_.max_image_bytes
                                       : 20U * 1024U * 1024U;
@@ -6322,7 +6305,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         } else if (!vision_queued) {
             return tool_error_result(
                 "unsupported",
-                "attach_image requires a vision-capable model or an MCP attachment bag");
+                "attach requires a vision-capable model or an MCP attachment bag");
         }
 
         json::Value data = object_value();

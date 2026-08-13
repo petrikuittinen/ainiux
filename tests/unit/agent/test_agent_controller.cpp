@@ -81,7 +81,7 @@ void test_guard_notify_posts_event() {
     ainiux::agent::AgentController controller;
     controller.arm_guard_notify();
     ainiux::agent::GuardApprovalRequest request;
-    request.tool_name = "write_file";
+    request.tool_name = "write";
     request.command_preview = "docs/x.md";
     request.rule_id = "test";
     request.message = "needs approval";
@@ -105,7 +105,7 @@ void test_guard_notify_posts_event() {
     check(got, "guard notify posts GuardApproval event");
     check(event.type == ainiux::agent::AgentSurfaceEvent::Type::GuardApproval,
           "event type is GuardApproval");
-    check(event.guard_tool_name == "write_file", "guard tool name is forwarded");
+    check(event.guard_tool_name == "write", "guard tool name is forwarded");
     controller.approval_gate()->resolve(ainiux::agent::GuardApprovalDecision::Allow);
     worker.join();
 }

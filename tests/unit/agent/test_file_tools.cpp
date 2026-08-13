@@ -1,5 +1,6 @@
 #include "agent/test_file_tools.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <atomic>
 #include <filesystem>
@@ -158,13 +159,13 @@ void test_external_file_access_requires_one_shot_approval() {
     const std::string read_args =
         std::string("{\"path\":") + json_string(outside_read.generic_string()) +
         ",\"max_bytes\":4096}";
-    const std::string denied_read = headless.execute("read_file", read_args);
+    const std::string denied_read = headless.execute("read", read_args);
     check(!json_ok(denied_read) && denied_read.find("approval") != std::string::npos,
           "headless external read is denied without approval: " + denied_read);
     const std::string write_args =
         std::string("{\"path\":") + json_string(outside_write.generic_string()) +
         ",\"content\":\"approved write\\n\",\"mode\":\"create_new\"}";
-    const std::string denied_write = headless.execute("write_file", write_args);
+    const std::string denied_write = headless.execute("write", write_args);
     check(!json_ok(denied_write) && !fs::exists(outside_write),
           "headless external write is denied without touching the file");
 
@@ -180,12 +181,12 @@ void test_external_file_access_requires_one_shot_approval() {
                   "external approval is explicitly one-shot");
             return agent::GuardApprovalDecision::Allow;
         });
-    const std::string allowed_read = approved.execute("read_file", read_args);
+    const std::string allowed_read = approved.execute("read", read_args);
     check(json_ok(allowed_read) &&
               allowed_read.find("outside line one") != std::string::npos &&
               !asked_rules.empty() && asked_rules.back() == "ask_on_external_file_read",
           "approved external read returns bounded file content: " + allowed_read);
-    const std::string allowed_write = approved.execute("write_file", write_args);
+    const std::string allowed_write = approved.execute("write", write_args);
     check(json_ok(allowed_write) && read_text(outside_write) == "approved write\n" &&
               asked_rules.size() == 2 &&
               asked_rules.back() == "ask_on_external_file_write",
@@ -205,7 +206,7 @@ void test_external_file_access_requires_one_shot_approval() {
     const std::string plan_args =
         std::string("{\"path\":") + json_string(plan_target.generic_string()) +
         ",\"content\":\"no\\n\"}";
-    check(!json_ok(plan.execute("write_file", plan_args)) && plan_asks == 0 &&
+    check(!json_ok(plan.execute("write", plan_args)) && plan_asks == 0 &&
               !fs::exists(plan_target),
           "Plan mode cannot approve or perform outside-project writes");
 
@@ -220,7 +221,7 @@ void test_external_file_access_requires_one_shot_approval() {
         std::string("{\"path\":") + json_string(denied_target.generic_string()) +
         ",\"content\":\"no\\n\"}";
     const std::string user_denied_result =
-        user_denied.execute("write_file", user_denied_args);
+        user_denied.execute("write", user_denied_args);
     check(!json_ok(user_denied_result) && !fs::exists(denied_target),
           "selecting No leaves the outside file untouched");
 
@@ -240,11 +241,11 @@ void test_permission_modes_and_native_path_tools() {
         make_registry(workspace, agent::MutationPolicy::Full, false, allow,
                       agent::PermissionMode::Confirm, true);
     const std::string confirmed = confirm.execute(
-        "write_file", R"({"path":"confirmed.txt","content":"ok\n"})");
+        "write", R"({"path":"confirmed.txt","content":"ok\n"})");
     check(json_ok(confirmed) && asks.load() == 1,
           "confirm mode asks once for project-native write");
     const std::string confirmed_command =
-        confirm.execute("run_command", R"({"command":"pwd"})");
+        confirm.execute("run", R"({"command":"pwd"})");
     check(json_ok(confirmed_command) && asks.load() == 2,
           "confirm mode asks once for every model-issued command");
 
@@ -257,14 +258,14 @@ void test_permission_modes_and_native_path_tools() {
     std::error_code ec;
     fs::remove_all(temp_parent, ec);
     const std::string created = smart.execute(
-        "create_directory",
+        "mkdir",
         "{\"path\":" + json_string((temp_parent / "nested").string()) +
             ",\"parents\":true}");
     check(json_ok(created) && fs::is_directory(temp_parent / "nested"),
           "smart mode permits native directory creation under system temp");
     write_text(temp_parent / "nested" / "from.txt", "hello\n");
     const std::string renamed = smart.execute(
-        "rename_path",
+        "mv",
         "{\"source\":" +
             json_string((temp_parent / "nested" / "from.txt").string()) +
             ",\"destination\":" +
@@ -272,21 +273,37 @@ void test_permission_modes_and_native_path_tools() {
     check(json_ok(renamed) && fs::exists(temp_parent / "nested" / "to.txt"),
           "rename_path renames an external temp file without copy fallback");
     const std::string listed = smart.execute(
-        "list_dir",
+        "ls",
         "{\"path\":" + json_string((temp_parent / "nested").string()) + "}");
     check(json_ok(listed) && listed.find("to.txt") != std::string::npos,
           "list_dir supports an exact external directory under temp");
     const std::string smart_command =
-        smart.execute("run_command", R"({"command":"pwd"})");
+        smart.execute("run", R"({"command":"pwd"})");
     check(json_ok(smart_command),
           "smart mode auto-approves a vetted read-only project command");
+    const std::string smart_mkdir =
+        smart.execute("run", R"({"command":"mkdir smart_mkdir_dir"})");
+    check(json_ok(smart_mkdir) &&
+              fs::is_directory(fs::path(workspace) / "smart_mkdir_dir"),
+          "smart mode auto-approves in-project run mkdir");
+    const std::string smart_rmdir =
+        smart.execute("run", R"({"command":"rmdir smart_mkdir_dir"})");
+    check(json_ok(smart_rmdir) &&
+              !fs::exists(fs::path(workspace) / "smart_mkdir_dir"),
+          "smart mode auto-approves in-project run rmdir of an empty dir");
+    fs::create_directories(fs::path(workspace) / "smart_tree" / "child");
+    write_text(fs::path(workspace) / "smart_tree" / "child" / "f.txt", "x\n");
+    const std::string smart_rm_tree =
+        smart.execute("run", R"({"command":"rm -r smart_tree"})");
+    check(!json_ok(smart_rm_tree),
+          "smart mode still requires approval for nonempty rm -r");
     const std::string smart_build =
-        smart.execute("run_command", R"({"command":"make test"})");
+        smart.execute("run", R"({"command":"make test"})");
     check(!json_ok(smart_build) &&
               json_error_code(smart_build) == "policy_denied",
           "smart mode still requires approval for builds and tests");
     const std::string smart_external = smart.execute(
-        "run_command",
+        "run",
         "{\"command\":\"pwd\",\"cwd\":" +
             json_string((temp_parent / "nested").string()) + "}");
     check(!json_ok(smart_external) &&
@@ -302,21 +319,21 @@ void test_permission_modes_and_native_path_tools() {
         },
         agent::PermissionMode::Smart, true);
     check(json_ok(smart_prompting.execute(
-              "run_command", R"({"command":"ls -laFg src"})")) &&
+              "run", R"({"command":"ls -laFg src"})")) &&
               smart_asks.load() == 0,
           "smart mode does not prompt for a vetted project read");
     check(!json_ok(smart_prompting.execute(
-              "run_command", R"({"command":"make test"})")) &&
+              "run", R"({"command":"make test"})")) &&
               smart_asks.load() == 1,
           "smart mode prompts for a non-vetted command");
     check(!json_ok(smart_prompting.execute(
-              "run_command",
+              "run",
               "{\"command\":\"pwd\",\"cwd\":" +
                   json_string((temp_parent / "nested").string()) + "}")) &&
               smart_asks.load() == 2,
           "smart mode prompts for an external-path read-only command");
     const std::string absolute_project_file = smart.execute(
-        "run_command",
+        "run",
         "{\"command\":" +
             json_string("cat " + (fs::path(workspace) / "src" / "hello.cpp").string()) +
             "}");
@@ -324,20 +341,20 @@ void test_permission_modes_and_native_path_tools() {
               absolute_project_file.find("int main") != std::string::npos,
           "smart mode accepts a canonical absolute in-project read operand");
     check(!json_ok(smart.execute(
-              "run_command", R"({"command":"cat ../outside.txt"})")),
+              "run", R"({"command":"cat ../outside.txt"})")),
           "smart mode rejects traversal before approval");
     check(!json_ok(smart.execute(
-              "run_command", R"({"command":"ls .ainiux-pr"})")),
+              "run", R"({"command":"ls .ainiux-pr"})")),
           "smart mode rejects protected metadata before approval");
     fs::create_symlink(temp_parent / "nested" / "to.txt",
                        fs::path(workspace) / "escape-link", ec);
     check(!json_ok(smart.execute(
-              "run_command", R"({"command":"cat escape-link"})")),
+              "run", R"({"command":"cat escape-link"})")),
           "smart mode rejects symlink operands before approval");
     check(!json_ok(smart.execute(
-              "run_command", R"({"command":"pwd > owned"})")) &&
+              "run", R"({"command":"pwd > owned"})")) &&
               !json_ok(smart.execute(
-                  "run_command", "{\"command\":\"pwd $(whoami)\"}")),
+                  "run", "{\"command\":\"pwd $(whoami)\"}")),
           "redirects and substitutions remain structurally denied");
 
     agent::ReadToolRegistry yolo =
@@ -347,20 +364,20 @@ void test_permission_modes_and_native_path_tools() {
     // shell-free rules (unquoted | & ;) still apply because run_command never
     // spawns a real shell.
     const std::string yolo_sudo =
-        yolo.execute("run_command", R"({"command":"sudo true"})");
+        yolo.execute("run", R"({"command":"sudo true"})");
     check(json_ok(yolo_sudo) ||
               yolo_sudo.find("not found") != std::string::npos ||
               yolo_sudo.find("\"exit_status\"") != std::string::npos,
           "yolo elevates hard Guard denials (sudo runs or fails as a process): " +
               yolo_sudo);
     check(!json_ok(yolo.execute(
-              "run_command", R"({"command":"echo hi | wc -l"})")),
+              "run", R"({"command":"echo hi | wc -l"})")),
           "yolo still rejects unquoted shell control operators");
     check(json_ok(yolo.execute(
-              "run_command", R"({"command":"echo yolo-non-vetted"})")),
+              "run", R"({"command":"echo yolo-non-vetted"})")),
           "yolo remains prompt-free for other validated commands");
     const std::string external_cwd = yolo.execute(
-        "run_command",
+        "run",
         "{\"command\":\"pwd\",\"cwd\":" +
             json_string((temp_parent / "nested").string()) + "}");
     check(json_ok(external_cwd) &&
@@ -368,17 +385,16 @@ void test_permission_modes_and_native_path_tools() {
                   std::string::npos,
           "yolo run_command supports a validated canonical external cwd");
     const std::string external_operand = yolo.execute(
-        "run_command",
+        "run",
         "{\"command\":" +
             json_string("stat " + (temp_parent / "nested" / "to.txt").string()) + "}");
     check(json_ok(external_operand),
           "yolo run_command supports an authorized standalone external path operand");
     const std::string removed = yolo.execute(
-        "remove",
-        "{\"path\":" + json_string(temp_parent.string()) +
-            ",\"recursive\":true}");
-    check(json_ok(removed) && !fs::exists(temp_parent),
-          "yolo permits validated recursive external removal");
+        "rm",
+        "{\"path\":" + json_string((temp_parent / "nested" / "to.txt").string()) + "}");
+    check(json_ok(removed) && !fs::exists(temp_parent / "nested" / "to.txt"),
+          "yolo permits validated external file removal");
     fs::remove_all(workspace, ec);
 }
 
@@ -455,7 +471,7 @@ void test_tool_schemas_gemini_compatible() {
         check(parsed.error.ok() && parsed.value.is_object(),
               "tool schema parses for " + definition.name + ": " + definition.parameters_json);
         assert_schema_arrays_have_items(parsed.value, definition.name, failures);
-        if (definition.name == "edit_file") {
+        if (definition.name == "edit") {
             saw_edit = true;
             const json::Value* properties = parsed.value.get("properties");
             check(properties != nullptr && properties->is_object(), "edit_file has properties");
@@ -520,20 +536,20 @@ void test_read_only_registry_hides_writes() {
     bool has_remove = false;
     bool has_edit = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
-        if (definition.name == "write_file") has_write = true;
+        if (definition.name == "write") has_write = true;
         if (definition.name == "str_replace") has_replace = true;
-        if (definition.name == "remove") has_remove = true;
-        if (definition.name == "edit_file") has_edit = true;
+        if (definition.name == "rm") has_remove = true;
+        if (definition.name == "edit") has_edit = true;
     }
     check(!has_write && !has_replace && !has_remove && !has_edit,
           "read-only registry omits mutation tools");
     const std::string denied =
-        tools.execute("write_file", R"({"path":"src/x.cpp","content":"x\n"})");
+        tools.execute("write", R"({"path":"src/x.cpp","content":"x\n"})");
     check(!json_ok(denied) && json_error_code(denied) == "policy_denied",
           "write_file denied without mutations");
     write_text(fs::path(workspace) / "after-snapshot.txt", "not review eligible\n");
     const std::string unindexed_read = tools.execute(
-        "read_file", R"({"path":"after-snapshot.txt","max_bytes":4096})");
+        "read", R"({"path":"after-snapshot.txt","max_bytes":4096})");
     check(!json_ok(unindexed_read),
           "security-review registry retains index-only read scope");
     std::error_code ec;
@@ -546,11 +562,11 @@ void test_write_file_create_and_readback() {
     agent::ReadToolRegistry tools = make_registry(workspace, true, false);
     bool has_write = false;
     for (const provider::FunctionDefinition& definition : tools.definitions())
-        if (definition.name == "write_file") has_write = true;
+        if (definition.name == "write") has_write = true;
     check(has_write, "mutation registry exposes write_file");
 
     const std::string created = tools.execute(
-        "write_file",
+        "write",
         R"({"path":"src/new_note.md","content":"# hello\n","mode":"create_new","create_dirs":false})");
     check(json_ok(created), "write_file create_new succeeds: " + created);
     check(read_text(fs::path(workspace) / "src" / "new_note.md") == "# hello\n",
@@ -572,16 +588,16 @@ void test_write_file_create_and_readback() {
 
     // Same-session read must see the new snapshot hash.
     const std::string read = tools.execute(
-        "read_file", R"({"path":"src/new_note.md","start_line":1,"end_line":10,"max_bytes":4096})");
+        "read", R"({"path":"src/new_note.md","start_line":1,"end_line":10,"max_bytes":4096})");
     check(json_ok(read), "read_file after write uses updated snapshot: " + read);
 
     const std::string exists = tools.execute(
-        "write_file",
+        "write",
         R"({"path":"src/new_note.md","content":"nope\n","mode":"create_new"})");
     check(!json_ok(exists), "create_new fails when file exists");
 
     const std::string stale = tools.execute(
-        "write_file",
+        "write",
         R"({"path":"src/new_note.md","content":"stale\n","expected_file_hash":"not-the-hash"})");
     check(!json_ok(stale) && json_error_code(stale) == "stale_file",
           "stale expected_file_hash is rejected");
@@ -592,7 +608,7 @@ void test_write_file_create_and_readback() {
           "chmod test file to 0640");
 #endif
     const std::string overwrite = tools.execute(
-        "write_file",
+        "write",
         ("{\"path\":\"src/new_note.md\",\"content\":\"# next\\n\",\"expected_file_hash\":\"" +
          new_hash + "\"}")
             .c_str());
@@ -614,7 +630,7 @@ void test_write_file_create_and_readback() {
 
     // Headless create_dirs without approval must fail (no silent mkdir -p).
     const std::string nested_denied = tools.execute(
-        "write_file",
+        "write",
         R"({"path":"src/deep/nested/file.txt","content":"nested\n","create_dirs":true,"mode":"create_new"})");
     check(!json_ok(nested_denied), "headless create_dirs denied without Ask: " + nested_denied);
     check(nested_denied.find("create directories") != std::string::npos ||
@@ -627,25 +643,25 @@ void test_write_file_create_and_readback() {
     // With interactive-style approval of ask_on_create_dirs only.
     agent::ReadToolRegistry approved = make_registry(workspace, true, true);
     const std::string nested = approved.execute(
-        "write_file",
+        "write",
         R"({"path":"src/deep/nested/file.txt","content":"nested\n","create_dirs":true,"mode":"create_new"})");
     check(json_ok(nested), "create_dirs after approval creates parents: " + nested);
     check(read_text(fs::path(workspace) / "src" / "deep" / "nested" / "file.txt") == "nested\n",
           "nested create wrote content");
 
     const std::string escape =
-        tools.execute("write_file", R"({"path":"../outside.txt","content":"x\n"})");
+        tools.execute("write", R"({"path":"../outside.txt","content":"x\n"})");
     check(!json_ok(escape), "path escape is denied");
     check(escape.find("outside the project directory") != std::string::npos,
           "escape error is user-facing: " + escape);
     const std::string absolute =
-        tools.execute("write_file", R"({"path":"/tmp/evil.txt","content":"x\n"})");
+        tools.execute("write", R"({"path":"/tmp/evil.txt","content":"x\n"})");
     check(!json_ok(absolute), "absolute path is denied");
     check(absolute.find("outside the project directory") != std::string::npos,
           "absolute path error is user-facing: " + absolute);
     // Critical regression: "~/…" must not create "$workspace/~/…"
     const std::string tilde =
-        tools.execute("write_file",
+        tools.execute("write",
                       R"({"path":"~/code/empty.txt","content":"","create_dirs":true})");
     check(!json_ok(tilde), "tilde home path is denied: " + tilde);
     check(tilde.find("outside the project") != std::string::npos ||
@@ -654,10 +670,10 @@ void test_write_file_create_and_readback() {
     check(!fs::exists(fs::path(workspace) / "~" / "code" / "empty.txt"),
           "tilde path must not create literal ~/ under workspace");
     const std::string tilde_mid =
-        tools.execute("write_file", R"({"path":"src/~/evil.txt","content":"x"})");
+        tools.execute("write", R"({"path":"src/~/evil.txt","content":"x"})");
     check(!json_ok(tilde_mid), "tilde as path component is denied");
     const std::string protected_path =
-        tools.execute("write_file", R"({"path":".ainiux-pr/evil.txt","content":"x\n"})");
+        tools.execute("write", R"({"path":".ainiux-pr/evil.txt","content":"x\n"})");
     check(!json_ok(protected_path), "protected metadata path is denied");
 
     std::error_code ec;
@@ -671,28 +687,28 @@ void test_str_replace_exact() {
     agent::ReadToolRegistry tools = make_registry(workspace, true);
 
     const std::string ambiguous = tools.execute(
-        "str_replace",
-        R"({"path":"src/hello.cpp","old_text":"return 1;","new_text":"return 0;"})");
+        "edit",
+        R"({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"return 1;","new_text":"return 0;"}]})");
     check(!json_ok(ambiguous) && json_error_code(ambiguous) == "ambiguous_match",
-          "ambiguous str_replace without replace_all fails");
+          "ambiguous replace_text without replace_all fails");
 
     const std::string replaced = tools.execute(
-        "str_replace",
-        R"({"path":"src/hello.cpp","old_text":"return 1;","new_text":"return 0;","replace_all":true})");
+        "edit",
+        R"({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"return 1;","new_text":"return 0;","replace_all":true}]})");
     check(json_ok(replaced), "replace_all succeeds: " + replaced);
     check(read_text(fs::path(workspace) / "src" / "hello.cpp") ==
               "int main() {\n  return 0;\n  return 0;\n}\n",
           "replace_all updated both matches");
 
     const std::string missing = tools.execute(
-        "str_replace",
-        R"({"path":"src/hello.cpp","old_text":"does-not-exist","new_text":"x"})");
+        "edit",
+        R"({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"does-not-exist","new_text":"x"}]})");
     check(!json_ok(missing) && json_error_code(missing) == "not_found",
           "missing old_text fails");
 
     const std::string single = tools.execute(
-        "str_replace",
-        R"JSON({"path":"src/hello.cpp","old_text":"int main()","new_text":"int entry()"})JSON");
+        "edit",
+        R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"int main()","new_text":"int entry()"}]})JSON");
     check(json_ok(single), "single exact replace succeeds: " + single);
     check(read_text(fs::path(workspace) / "src" / "hello.cpp").find("int entry()") !=
               std::string::npos,
@@ -700,7 +716,7 @@ void test_str_replace_exact() {
 
     // Read after replace must not claim the snapshot is stale.
     const std::string read = tools.execute(
-        "read_file", R"({"path":"src/hello.cpp","start_line":1,"end_line":20,"max_bytes":4096})");
+        "read", R"({"path":"src/hello.cpp","start_line":1,"end_line":20,"max_bytes":4096})");
     check(json_ok(read), "read_file after str_replace uses updated hash: " + read);
 
     std::error_code ec;
@@ -716,7 +732,7 @@ void test_edit_file_ops() {
     bool has_edit = false;
     bool edit_documents_line = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
-        if (definition.name == "edit_file") {
+        if (definition.name == "edit") {
             has_edit = true;
             edit_documents_line =
                 definition.description.find("\"line\":2") != std::string::npos;
@@ -726,14 +742,14 @@ void test_edit_file_ops() {
     check(edit_documents_line, "edit_file description shows the canonical insert_at line field");
 
     const std::string replaced = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_range","start_line":2,"end_line":3,"replacement":"LINE2\nLINE3\n"}]})JSON");
     check(json_ok(replaced), "replace_range succeeds: " + replaced);
     check(read_text(fs::path(workspace) / "src" / "hello.cpp") == "line1\nLINE2\nLINE3\nline4\n",
           "replace_range rewrote middle lines");
 
     const std::string inserted = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/hello.cpp","ops":[{"type":"insert_at","line":2,"new_text":"inserted\n"}]})JSON");
     check(json_ok(inserted), "insert_at succeeds: " + inserted);
     check(read_text(fs::path(workspace) / "src" / "hello.cpp") ==
@@ -741,7 +757,7 @@ void test_edit_file_ops() {
           "insert_at inserted before line 2");
 
     const std::string inserted_with_start_line = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/hello.cpp","ops":[{"op":"insert_at","start_line":3,"new_text":"aliased\n"}]})JSON");
     check(json_ok(inserted_with_start_line),
           "insert_at accepts local-model start_line alias: " + inserted_with_start_line);
@@ -750,7 +766,7 @@ void test_edit_file_ops() {
           "insert_at start_line alias inserts before the requested line");
 
     const std::string deleted = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/hello.cpp","ops":[{"type":"delete_range","start_line":4,"end_line":5}]})JSON");
     check(json_ok(deleted), "delete_range succeeds: " + deleted);
     check(read_text(fs::path(workspace) / "src" / "hello.cpp") ==
@@ -758,7 +774,7 @@ void test_edit_file_ops() {
           "delete_range removed lines");
 
     const std::string multi = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/hello.cpp","ops":[
           {"type":"replace_range","start_line":1,"end_line":1,"replacement":"A\n"},
           {"type":"replace_range","start_line":4,"end_line":4,"replacement":"C\n"}
@@ -768,14 +784,14 @@ void test_edit_file_ops() {
           "multi replace_range applied correctly");
 
     const std::string text_op = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"inserted","new_text":"B"}]})JSON");
     check(json_ok(text_op), "replace_text succeeds: " + text_op);
     check(read_text(fs::path(workspace) / "src" / "hello.cpp") == "A\nB\naliased\nC\n",
           "replace_text updated content");
 
     const std::string created = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/brand_new.txt","create_dirs":true,"ops":[{"type":"create_file","new_text":"hello\n"}]})JSON");
     check(json_ok(created), "create_file op succeeds: " + created);
     check(read_text(fs::path(workspace) / "src" / "brand_new.txt") == "hello\n",
@@ -783,7 +799,7 @@ void test_edit_file_ops() {
 
     const std::string denied =
         make_registry(workspace, false)
-            .execute("edit_file",
+            .execute("edit",
                      R"JSON({"path":"src/hello.cpp","ops":[{"type":"delete_range","start_line":1,"end_line":1}]})JSON");
     check(!json_ok(denied), "read-only registry denies edit_file");
 
@@ -792,7 +808,7 @@ void test_edit_file_ops() {
     // Re-create registry after write outside tools so snapshot sees the file.
     tools = make_registry(workspace, true);
     const std::string alias = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/alias.cpp","ops":[{"op":"replace_range","start_line":1,"end_line":1,"replacement":"ALPHA\n"}]})JSON");
     check(json_ok(alias), "edit_file accepts op alias for type: " + alias);
     check(read_text(fs::path(workspace) / "src" / "alias.cpp") == "ALPHA\nbeta\n",
@@ -802,7 +818,7 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "flat.cpp", "hello world\n");
     tools = make_registry(workspace, true);
     const std::string flat = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/flat.cpp","old_text":"hello world","new_text":"hello there","op":"replace_text"})JSON");
     check(json_ok(flat), "edit_file wraps flat replace_text into ops: " + flat);
     check(read_text(fs::path(workspace) / "src" / "flat.cpp") == "hello there\n",
@@ -812,7 +828,7 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "line_only.cpp", "one\ntwo\nthree\n");
     tools = make_registry(workspace, true);
     const std::string line_only = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/line_only.cpp","ops":[{"op":"replace_range","line":2,"new_text":"TWO"}]})JSON");
     check(json_ok(line_only),
           "edit_file promotes replace_range line to start_line/end_line: " + line_only);
@@ -823,7 +839,7 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "infer.cpp", "one\ntwo\n");
     tools = make_registry(workspace, true);
     const std::string inferred = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/infer.cpp","ops":[{"start_line":1,"end_line":1,"new_text":"ONE"}]})JSON");
     check(json_ok(inferred), "edit_file infers replace_range without type: " + inferred);
     // Missing trailing newline in new_text must not glue to the next line.
@@ -834,7 +850,7 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "nested.cpp", "old\nkeep\n");
     tools = make_registry(workspace, true);
     const std::string nested = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/nested.cpp","ops":[{"replace_range":{"start_line":1,"end_line":1},"text":"NEW"}]})JSON");
     check(json_ok(nested), "edit_file accepts nested replace_range object: " + nested);
     check(read_text(fs::path(workspace) / "src" / "nested.cpp") == "NEW\nkeep\n",
@@ -844,7 +860,7 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "nested2.cpp", "aaa\nbbb\n");
     tools = make_registry(workspace, true);
     const std::string nested2 = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/nested2.cpp","ops":[{"replace_range":{"start_line":1,"end_line":1,"new_text":"AAA"}}]})JSON");
     check(json_ok(nested2), "edit_file accepts nested replace_range with inner new_text: " + nested2);
     check(read_text(fs::path(workspace) / "src" / "nested2.cpp") == "AAA\nbbb\n",
@@ -854,13 +870,13 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "hashy.cpp", "line1\nline2\n");
     tools = make_registry(workspace, true);
     const std::string read_hash = tools.execute(
-        "read_file", R"JSON({"path":"src/hashy.cpp","start_line":1,"end_line":2,"max_bytes":4096})JSON");
+        "read", R"JSON({"path":"src/hashy.cpp","start_line":1,"end_line":2,"max_bytes":4096})JSON");
     check(json_ok(read_hash), "read hashy for file hash");
     const json::ParseResult read_parsed = json::parse(read_hash);
     const std::string file_hash =
         read_parsed.value.get("data")->get("file_hash")->string;
     const std::string wrong_range =
-        tools.execute("edit_file",
+        tools.execute("edit",
                       ("{\"path\":\"src/hashy.cpp\",\"expected_file_hash\":\"" + file_hash +
                        "\",\"ops\":[{\"type\":\"replace_range\",\"start_line\":1,\"end_line\":1,"
                        "\"expected_hash\":\"deadbeefcafebabe\",\"new_text\":\"LINE1\"}]}")
@@ -878,7 +894,7 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "strict.cpp", "s1\ns2\n");
     tools = make_registry(workspace, true);
     const std::string strict = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/strict.cpp","ops":[{"type":"replace_range","start_line":1,"end_line":1,"expected_hash":"deadbeefcafebabe","new_text":"S1"}]})JSON");
     check(!json_ok(strict) && json_error_code(strict) == "stale_range",
           "wrong expected_hash without file hash still fails: " + strict);
@@ -889,7 +905,7 @@ void test_edit_file_ops() {
     write_text(fs::path(workspace) / "src" / "nested_path.py", "# first\nprint(1)\n");
     tools = make_registry(workspace, true);
     const std::string nested_path = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"ops":[{"op":"replace_range","path":"src/nested_path.py","start_line":1,"end_line":1,"new_text":"# first\n# second line\n"}]})JSON");
     check(json_ok(nested_path),
           "edit_file promotes path from ops when top-level path is missing: " + nested_path);
@@ -902,7 +918,7 @@ void test_edit_file_ops() {
                "#define MAX_BODY 1\n#define OUTPUT_CHUNK 2\n");
     tools = make_registry(workspace, true);
     const std::string gpt5_polluted = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({
           "path":"src/gpt5.cpp",
           "ops":[{
@@ -929,7 +945,7 @@ void test_edit_file_ops() {
     // Schema must not advertise nested op objects (they trigger GPT-5 filling).
     bool schema_is_flat = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
-        if (definition.name == "edit_file") {
+        if (definition.name == "edit") {
             schema_is_flat =
                 definition.parameters_json.find("\"replace_range\":{\"type\":\"object\"") ==
                     std::string::npos &&
@@ -951,10 +967,10 @@ void test_str_replace_fuzzy_whitespace_and_indent() {
 
     // Needle has different internal whitespace than the file.
     const std::string ws = tools.execute(
-        "str_replace",
-        R"JSON({"path":"src/ws.cpp","old_text":"int add(int a, int b)","new_text":"int add(int x, int y)"})JSON");
+        "edit",
+        R"JSON({"path":"src/ws.cpp","ops":[{"type":"replace_text","old_text":"int add(int a, int b)","new_text":"int add(int x, int y)"}]})JSON");
     check(json_ok(ws), "normalized whitespace str_replace succeeds: " + ws);
-    check(json_data_string(ws, "match_mode") == "normalized_whitespace",
+    check(ws.find("normalized_whitespace") != std::string::npos,
           "match_mode reports normalized_whitespace: " + ws);
     check(read_text(fs::path(workspace) / "src" / "ws.cpp").find("int add(int x, int y)") !=
               std::string::npos,
@@ -965,12 +981,12 @@ void test_str_replace_fuzzy_whitespace_and_indent() {
                "void f() {\n    if (true) {\n        do_work();\n    }\n}\n");
     tools = make_registry(workspace, true);
     const std::string indent = tools.execute(
-        "str_replace",
-        R"JSON({"path":"src/indent.cpp","old_text":"if (true) {\n    do_work();\n}","new_text":"if (ready) {\n    do_work();\n}"})JSON");
+        "edit",
+        R"JSON({"path":"src/indent.cpp","ops":[{"type":"replace_text","old_text":"if (true) {\n    do_work();\n}","new_text":"if (ready) {\n    do_work();\n}"}]})JSON");
     check(json_ok(indent), "indent-stripped str_replace succeeds: " + indent);
     // May resolve via normalized_whitespace or indent_stripped depending on snippet shape.
-    check(json_data_string(indent, "match_mode") == "indent_stripped" ||
-              json_data_string(indent, "match_mode") == "normalized_whitespace",
+    check(indent.find("indent_stripped") != std::string::npos ||
+              indent.find("normalized_whitespace") != std::string::npos,
           "match_mode reports a fuzzy mode: " + indent);
     check(read_text(fs::path(workspace) / "src" / "indent.cpp").find("if (ready)") !=
               std::string::npos,
@@ -980,8 +996,8 @@ void test_str_replace_fuzzy_whitespace_and_indent() {
     write_text(fs::path(workspace) / "src" / "exact_only.cpp", "foo(  1,  2 )\n");
     tools = make_registry(workspace, true);
     const std::string no_fuzzy = tools.execute(
-        "str_replace",
-        R"JSON({"path":"src/exact_only.cpp","old_text":"foo(1, 2)","new_text":"foo(3, 4)","fuzzy":false})JSON");
+        "edit",
+        R"JSON({"path":"src/exact_only.cpp","ops":[{"type":"replace_text","old_text":"foo(1, 2)","new_text":"foo(3, 4)","fuzzy":false}]})JSON");
     check(!json_ok(no_fuzzy) && json_error_code(no_fuzzy) == "not_found",
           "fuzzy=false rejects whitespace-only mismatch: " + no_fuzzy);
 
@@ -989,7 +1005,7 @@ void test_str_replace_fuzzy_whitespace_and_indent() {
     write_text(fs::path(workspace) / "src" / "edit_ws.cpp", "print(  'hi'  )\n");
     tools = make_registry(workspace, true);
     const std::string edit_ws = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/edit_ws.cpp","ops":[{"type":"replace_text","old_text":"print('hi')","new_text":"print('ok')"}]})JSON");
     check(json_ok(edit_ws), "edit_file replace_text fuzzy succeeds: " + edit_ws);
     check(read_text(fs::path(workspace) / "src" / "edit_ws.cpp") == "print('ok')\n",
@@ -1010,30 +1026,33 @@ void test_remove_tool() {
 
     bool has_remove = false;
     for (const provider::FunctionDefinition& definition : tools.definitions())
-        if (definition.name == "remove") has_remove = true;
+        if (definition.name == "rm") has_remove = true;
     check(has_remove, "mutation registry exposes remove");
 
     const std::string removed =
-        tools.execute("remove", R"JSON({"path":"src/gone.cpp"})JSON");
+        tools.execute("rm", R"JSON({"path":"src/gone.cpp"})JSON");
     check(json_ok(removed), "remove file succeeds: " + removed);
     check(!fs::exists(fs::path(workspace) / "src" / "gone.cpp"), "file was removed");
     check(!json_data_string(removed, "history_path").empty(), "remove records history for text");
 
     const std::string empty =
-        tools.execute("remove", R"JSON({"path":"src/empty_dir"})JSON");
-    check(json_ok(empty), "remove empty directory succeeds: " + empty);
+        tools.execute("rm", R"JSON({"path":"src/empty_dir"})JSON");
+    check(!json_ok(empty), "native rm refuses directories: " + empty);
 
     const std::string nonempty =
-        tools.execute("remove", R"JSON({"path":"src/full_dir"})JSON");
-    check(!json_ok(nonempty), "non-empty directory without recursive fails: " + nonempty);
+        tools.execute("rm", R"JSON({"path":"src/full_dir"})JSON");
+    check(!json_ok(nonempty), "native rm refuses a non-empty directory: " + nonempty);
 
     const std::string recursive =
-        tools.execute("remove", R"JSON({"path":"src/full_dir","recursive":true})JSON");
-    check(json_ok(recursive), "recursive remove succeeds: " + recursive);
-    check(!fs::exists(fs::path(workspace) / "src" / "full_dir"), "directory tree removed");
+        tools.execute("rm", R"JSON({"path":"src/full_dir","recursive":true})JSON");
+    check(!json_ok(recursive), "native rm rejects recursive=true: " + recursive);
+    const std::string rmdir_empty =
+        tools.execute("run", R"JSON({"command":"rmdir src/empty_dir"})JSON");
+    check(json_ok(rmdir_empty), "run rmdir removes an empty directory: " + rmdir_empty);
+    check(!fs::exists(fs::path(workspace) / "src" / "empty_dir"), "empty dir removed via rmdir");
 
     const std::string db =
-        tools.execute("remove", R"JSON({"path":"data.sqlite"})JSON");
+        tools.execute("rm", R"JSON({"path":"data.sqlite"})JSON");
     check(!json_ok(db) && json_error_code(db) == "policy_denied",
           "database file remove denied in headless mode: " + db);
     check(fs::exists(fs::path(workspace) / "data.sqlite"), "database file still present");
@@ -1043,19 +1062,19 @@ void test_remove_tool() {
     write_text(fs::path(workspace) / "#plain.txt#", "backup\n");
     tools = make_registry(workspace, true);
     const std::string missing =
-        tools.execute("remove", R"JSON({"path":"nope.txt"})JSON");
+        tools.execute("rm", R"JSON({"path":"nope.txt"})JSON");
     check(!json_ok(missing) && json_error_code(missing) == "not_found",
           "missing path fails: " + missing);
 
     // Plain name blocked when #plain.txt# also exists unless confirm=true.
     const std::string ambiguous =
-        tools.execute("remove", R"JSON({"path":"plain.txt"})JSON");
+        tools.execute("rm", R"JSON({"path":"plain.txt"})JSON");
     check(!json_ok(ambiguous) && json_error_code(ambiguous) == "ambiguous_match",
           "plain remove blocked when #sibling# exists: " + ambiguous);
     check(fs::exists(fs::path(workspace) / "plain.txt"), "plain file kept without confirm");
 
     const std::string hash_name =
-        tools.execute("remove", R"JSON({"path":"#plain.txt#"})JSON");
+        tools.execute("rm", R"JSON({"path":"#plain.txt#"})JSON");
     check(json_ok(hash_name), "exact #wrapped# remove succeeds: " + hash_name);
     check(!fs::exists(fs::path(workspace) / "#plain.txt#"), "hash-wrapped file removed");
     check(fs::exists(fs::path(workspace) / "plain.txt"), "plain sibling still present");
@@ -1064,12 +1083,12 @@ void test_remove_tool() {
     write_text(fs::path(workspace) / "#plain.txt#", "backup2\n");
     tools = make_registry(workspace, true);
     const std::string confirmed =
-        tools.execute("remove", R"JSON({"path":"plain.txt","confirm":true})JSON");
+        tools.execute("rm", R"JSON({"path":"plain.txt","confirm":true})JSON");
     check(json_ok(confirmed), "confirm=true removes plain when sibling exists: " + confirmed);
     check(!fs::exists(fs::path(workspace) / "plain.txt"), "plain removed with confirm");
 
     const std::string denied =
-        make_registry(workspace, false).execute("remove", R"JSON({"path":"src/hello.cpp"})JSON");
+        make_registry(workspace, false).execute("rm", R"JSON({"path":"src/hello.cpp"})JSON");
     check(!json_ok(denied) && json_error_code(denied) == "policy_denied",
           "read-only registry denies remove");
 
@@ -1086,7 +1105,7 @@ void test_list_dir_filesystem() {
     write_text(fs::path(workspace) / "notes.txt", "not indexed as code if unknown? may be skipped\n");
     agent::ReadToolRegistry tools = make_registry(workspace, false);
 
-    const std::string root = tools.execute("list_dir", R"JSON({"path":"."})JSON");
+    const std::string root = tools.execute("ls", R"JSON({"path":"."})JSON");
     check(json_ok(root), "list_dir root succeeds: " + root);
     check(json_array_contains_string_field(root, "name", "you_can_remove_me") ||
               root.find("you_can_remove_me") != std::string::npos,
@@ -1098,7 +1117,7 @@ void test_list_dir_filesystem() {
 
     // Parent dir is not empty (has del_me); del_me itself is empty.
     const std::string nested =
-        tools.execute("list_dir", R"JSON({"path":"you_can_remove_me"})JSON");
+        tools.execute("ls", R"JSON({"path":"you_can_remove_me"})JSON");
     check(json_ok(nested) && nested.find("del_me") != std::string::npos,
           "lists nested directory entry: " + nested);
     check(nested.find("\"empty\":true") != std::string::npos ||
@@ -1106,7 +1125,7 @@ void test_list_dir_filesystem() {
           "marks empty child directory: " + nested);
 
     const std::string empty_leaf =
-        tools.execute("list_dir", R"JSON({"path":"you_can_remove_me/del_me"})JSON");
+        tools.execute("ls", R"JSON({"path":"you_can_remove_me/del_me"})JSON");
     check(json_ok(empty_leaf), "list empty directory succeeds: " + empty_leaf);
 
     std::error_code ec;
@@ -1132,12 +1151,12 @@ void test_smart_act_native_tools_accept_unindexed_project_paths() {
     fs::create_directory(fs::path(workspace) / "unindexed-dir");
 
     const std::string read = tools.execute(
-        "read_file",
+        "read",
         R"JSON({"path":"names.txt","start_line":1,"end_line":20,"max_bytes":4096})JSON");
     check(json_ok(read) && read.find("Ada") != std::string::npos,
           "Smart Act read_file reads an unindexed project file: " + read);
     const std::string many = tools.execute(
-        "read_many",
+        "read",
         R"JSON({"items":[{"path":"names.txt","start_line":1,"end_line":20},{"path":"languages.txt","start_line":1,"end_line":20}],"max_bytes":4096})JSON");
     const json::ParseResult many_parsed = json::parse(many);
     const json::Value* many_data =
@@ -1157,23 +1176,23 @@ void test_smart_act_native_tools_accept_unindexed_project_paths() {
               many);
 
     const std::string edited = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"names.txt","ops":[{"type":"replace_text","old_text":"Linus","new_text":"Grace"}]})JSON");
     check(json_ok(edited) &&
               read_text(fs::path(workspace) / "names.txt") == "Ada\nGrace\n",
           "Smart Act edit_file modifies an unindexed project file: " + edited);
     const std::string created = tools.execute(
-        "write_file",
+        "write",
         R"JSON({"path":"unindexed-dir/created.txt","content":"created\n","mode":"create_new"})JSON");
     check(json_ok(created), "Smart Act write_file creates under an unindexed directory: " + created);
     const std::string renamed = tools.execute(
-        "rename_path",
+        "mv",
         R"JSON({"source":"unindexed-dir","destination":"renamed-dir"})JSON");
     check(json_ok(renamed) &&
               fs::exists(fs::path(workspace) / "renamed-dir" / "created.txt"),
           "Smart Act rename_path renames an unindexed project directory: " + renamed);
     const std::string removed = tools.execute(
-        "remove", R"JSON({"path":"remove-me.txt"})JSON");
+        "rm", R"JSON({"path":"remove-me.txt"})JSON");
     check(json_ok(removed) && !fs::exists(fs::path(workspace) / "remove-me.txt"),
           "Smart Act remove deletes an unindexed project file: " + removed);
     check(asks.load() == 0,
@@ -1206,9 +1225,9 @@ void test_agent_command_output_keeps_unindexed_project_paths() {
     const std::string late_name = "late-unindexed-output.txt";
     write_text(fs::path(workspace) / late_name, "visible\n");
     const std::string command = R"JSON({"command":"ls -laFg"})JSON";
-    const std::string confirmed = confirm.execute("run_command", command);
-    const std::string smart_result = smart.execute("run_command", command);
-    const std::string yolo_result = yolo.execute("run_command", command);
+    const std::string confirmed = confirm.execute("run", command);
+    const std::string smart_result = smart.execute("run", command);
+    const std::string yolo_result = yolo.execute("run", command);
     check(json_ok(confirmed) && confirmed.find(late_name) != std::string::npos &&
               confirm_asks.load() == 1,
           "Confirm preserves unindexed long-format ls output after approval: " +
@@ -1238,7 +1257,7 @@ void test_replace_symbol() {
     agent::ReadToolRegistry tools = make_registry(workspace, true);
 
     const std::string search =
-        tools.execute("search_symbol", R"JSON({"query":"alpha","max_results":10})JSON");
+        tools.execute("symbol", R"JSON({"query":"alpha","max_results":10})JSON");
     check(json_ok(search), "search_symbol finds alpha: " + search);
     const json::ParseResult parsed = json::parse(search);
     check(parsed.error.ok() && parsed.value.get("data") != nullptr &&
@@ -1252,7 +1271,7 @@ void test_replace_symbol() {
     const long long symbol_id = static_cast<long long>(id_value->number);
 
     const std::string replaced = tools.execute(
-        "edit_file",
+        "edit",
         ("{\"path\":\"src/sym.cpp\",\"ops\":[{\"type\":\"replace_symbol\",\"symbol_id\":" +
          std::to_string(symbol_id) +
          ",\"replacement\":\"int alpha() {\\n  return 42;\\n}\\n\"}]}")
@@ -1278,7 +1297,7 @@ void test_replace_symbol() {
           "touched-file persistence keeps the edited symbol definition");
 
     const std::string missing = tools.execute(
-        "edit_file",
+        "edit",
         R"JSON({"path":"src/sym.cpp","ops":[{"type":"replace_symbol","symbol_id":999999,"replacement":"x"}]})JSON");
     check(!json_ok(missing), "unknown symbol_id fails: " + missing);
 
@@ -1361,19 +1380,19 @@ void test_indexing_disabled_registry_is_strict_and_live() {
     bool advertises_replace_symbol = false;
     for (const provider::FunctionDefinition& definition :
          tools.definitions()) {
-        has_list = has_list || definition.name == "list_dir";
-        has_read = has_read || definition.name == "read_file";
-        has_edit = has_edit || definition.name == "edit_file";
+        has_list = has_list || definition.name == "ls";
+        has_read = has_read || definition.name == "read";
+        has_edit = has_edit || definition.name == "edit";
         has_glob = has_glob || definition.name == "glob";
         has_grep = has_grep || definition.name == "grep";
         has_search_text = has_search_text || definition.name == "search_text";
         has_find = has_find || definition.name == "find";
         has_index_tool =
-            has_index_tool || definition.name == "index_overview" ||
-            definition.name == "search_symbol" ||
-            definition.name == "file_outline" ||
+            has_index_tool || definition.name == "index" ||
+            definition.name == "symbol" ||
+            definition.name == "outline" ||
             definition.name == "read_symbol";
-        if (definition.name == "edit_file")
+        if (definition.name == "edit")
             advertises_replace_symbol =
                 definition.description.find("replace_symbol") !=
                     std::string::npos ||
@@ -1385,9 +1404,9 @@ void test_indexing_disabled_registry_is_strict_and_live() {
               !advertises_replace_symbol,
           "indexing-off definitions retain live search/edit tools and hide index tools");
     check(json_ok(tools.execute(
-              "list_dir", R"JSON({"path":"src"})JSON")) &&
+              "ls", R"JSON({"path":"src"})JSON")) &&
               json_ok(tools.execute(
-                  "read_file", R"JSON({"path":"src/hello.cpp"})JSON")),
+                  "read", R"JSON({"path":"src/hello.cpp"})JSON")),
           "indexing-off registry retains live directory and exact-path reads");
     const std::string live_glob =
         tools.execute("glob", R"JSON({"pattern":"**/*.{cpp,py}"})JSON");
@@ -1487,14 +1506,14 @@ void test_indexing_disabled_registry_is_strict_and_live() {
               "grep", R"JSON({"query":"(","regex":true})JSON")),
           "indexing-off search returns structured invalid-regex errors");
     check(json_ok(tools.execute(
-              "edit_file",
+              "edit",
               R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"return 0","new_text":"return 7"}]})JSON")),
           "indexing-off registry retains ordinary edits");
     check(json_ok(tools.execute("grep",
                                 R"JSON({"query":"return 7","glob":"src/hello.cpp"})JSON")) &&
-              !json_ok(tools.execute("index_overview", "{}")) &&
+              !json_ok(tools.execute("index", "{}")) &&
               !json_ok(tools.execute(
-                  "edit_file",
+                  "edit",
                   R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_symbol","symbol_id":1,"replacement":"x"}]})JSON")),
           "indexing-off search sees writes while index tools and replace_symbol stay denied");
     check(tools.refresh_persistent_index(true).ok() &&
@@ -1513,8 +1532,8 @@ void test_indexing_disabled_registry_is_strict_and_live() {
     bool has_replace_symbol = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
         has_index_overview =
-            has_index_overview || definition.name == "index_overview";
-        if (definition.name != "edit_file") continue;
+            has_index_overview || definition.name == "index";
+        if (definition.name != "edit") continue;
         has_replace_symbol =
             definition.parameters_json.find("replace_symbol") !=
             std::string::npos;
@@ -1538,26 +1557,18 @@ void test_read_many_preference_limits_and_serialization() {
 
     const std::vector<provider::FunctionDefinition> definitions =
         tools.definitions();
-    std::size_t read_many_index = definitions.size();
-    std::size_t read_file_index = definitions.size();
-    for (std::size_t index = 0; index < definitions.size(); ++index) {
-        if (definitions[index].name == "read_many") read_many_index = index;
-        if (definitions[index].name == "read_file") read_file_index = index;
-    }
-    check(read_many_index < read_file_index &&
-              definitions[read_many_index].description.find(
-                  "Preferred file reader") != std::string::npos &&
-              definitions[read_many_index].description.find(
-                  "native parallel tool calls") != std::string::npos &&
-              definitions[read_file_index].description.find(
-                  "Single-target fallback") != std::string::npos &&
-              definitions[read_file_index].description.find(
-                  "Do not issue multiple parallel read_file") !=
-                  std::string::npos,
-          "indexed Agent definitions advertise read_many before the read_file fallback");
+    const auto read_def = std::find_if(
+        definitions.begin(), definitions.end(),
+        [](const provider::FunctionDefinition& definition) {
+            return definition.name == "read";
+        });
+    check(read_def != definitions.end() &&
+              read_def->parameters_json.find("\"items\"") != std::string::npos &&
+              read_def->description.find("items") != std::string::npos,
+          "indexed Agent definitions advertise one read tool with batch items");
 
     const std::string limited = tools.execute(
-        "read_many",
+        "read",
         R"JSON({"items":[{"path":"src/lines.txt","start_line":2,"end_line":3,"max_bytes":5},{"path":"src/large.txt"}]})JSON");
     const json::ParseResult limited_json = json::parse(limited);
     const json::Value* limited_data =
@@ -1589,7 +1600,7 @@ void test_read_many_preference_limits_and_serialization() {
               limited);
 
     const std::string aggregate = tools.execute(
-        "read_many",
+        "read",
         R"JSON({"items":[{"path":"src/lines.txt","max_bytes":10},{"path":"src/large.txt","max_bytes":10}],"max_bytes":12})JSON");
     const json::ParseResult aggregate_json = json::parse(aggregate);
     const json::Value* aggregate_data =
@@ -1609,7 +1620,7 @@ void test_read_many_preference_limits_and_serialization() {
               aggregate);
 
     const std::string partial = tools.execute(
-        "read_many",
+        "read",
         R"JSON({"items":[{"path":"src/lines.txt"},{"path":"src/missing.txt"}]})JSON");
     const json::ParseResult partial_json = json::parse(partial);
     const json::Value* partial_data =
@@ -1620,7 +1631,7 @@ void test_read_many_preference_limits_and_serialization() {
               partial.find("\"truncated\":true") != std::string::npos,
           "read_many preserves successful items and warnings after a partial failure: " +
               partial);
-    check(!json_ok(tools.execute("read_many", R"JSON({"items":[]})JSON")),
+    check(!json_ok(tools.execute("read", R"JSON({"items":[]})JSON")),
           "read_many rejects an empty batch");
     std::string oversized_batch = R"JSON({"items":[)JSON";
     for (std::size_t index = 0; index < 101; ++index) {
@@ -1628,7 +1639,7 @@ void test_read_many_preference_limits_and_serialization() {
         oversized_batch += R"JSON({"path":"src/lines.txt"})JSON";
     }
     oversized_batch += "]}";
-    check(!json_ok(tools.execute("read_many", oversized_batch)),
+    check(!json_ok(tools.execute("read", oversized_batch)),
           "read_many rejects more than 100 items");
 
     provider::RequestContext context;
@@ -1642,37 +1653,23 @@ void test_read_many_preference_limits_and_serialization() {
             provider::serialize_tool_request(context, conversation, definitions));
         const json::Value* serialized_tools =
             request.error.ok() ? request.value.get("tools") : nullptr;
-        const json::Value* serialized_many =
-            serialized_tools != nullptr ? serialized_tools->at(read_many_index)
-                                        : nullptr;
-        const json::Value* serialized_file =
-            serialized_tools != nullptr ? serialized_tools->at(read_file_index)
-                                        : nullptr;
-        const json::Value* many_name =
-            serialized_many == nullptr
-                ? nullptr
-                : (api == provider::ApiKind::Responses
-                       ? serialized_many->get("name")
-                       : (serialized_many->get("function") == nullptr
-                              ? nullptr
-                              : serialized_many->get("function")->get("name")));
-        const json::Value* file_name =
-            serialized_file == nullptr
-                ? nullptr
-                : (api == provider::ApiKind::Responses
-                       ? serialized_file->get("name")
-                       : (serialized_file->get("function") == nullptr
-                              ? nullptr
-                              : serialized_file->get("function")->get("name")));
-        check(request.error.ok() && serialized_tools != nullptr &&
-                  serialized_tools->is_array() &&
-                  many_name != nullptr && many_name->is_string() &&
-                  many_name->string == "read_many" &&
-                  file_name != nullptr && file_name->is_string() &&
-                  file_name->string == "read_file",
+        bool saw_read = false;
+        if (serialized_tools != nullptr && serialized_tools->is_array()) {
+            for (const json::Value& item : serialized_tools->array) {
+                const json::Value* name =
+                    api == provider::ApiKind::Responses
+                        ? item.get("name")
+                        : (item.get("function") == nullptr
+                               ? nullptr
+                               : item.get("function")->get("name"));
+                if (name != nullptr && name->is_string() && name->string == "read")
+                    saw_read = true;
+            }
+        }
+        check(request.error.ok() && serialized_tools != nullptr && saw_read,
               std::string(api == provider::ApiKind::Responses ? "Responses"
                                                               : "Chat Completions") +
-                  " serializes read_many before read_file");
+                  " serializes the unified read tool");
     }
 
     agent::ToolRegistryOptions live_options;
@@ -1688,18 +1685,14 @@ void test_read_many_preference_limits_and_serialization() {
           "create indexing-disabled registry for read tool ordering");
     const std::vector<provider::FunctionDefinition> live_definitions =
         live_tools.definitions();
-    std::size_t live_many = live_definitions.size();
-    std::size_t live_file = live_definitions.size();
-    for (std::size_t index = 0; index < live_definitions.size(); ++index) {
-        if (live_definitions[index].name == "read_many") live_many = index;
-        if (live_definitions[index].name == "read_file") live_file = index;
+    bool live_has_read = false;
+    for (const provider::FunctionDefinition& definition : live_definitions) {
+        if (definition.name == "read" &&
+            definition.parameters_json.find("\"items\"") != std::string::npos)
+            live_has_read = true;
     }
-    check(live_many < live_file &&
-              live_definitions[live_many].description.find(
-                  "Preferred file reader") != std::string::npos &&
-              live_definitions[live_file].description.find(
-                  "Single-target fallback") != std::string::npos,
-          "indexing-disabled Agent definitions retain read_many preference and order");
+    check(live_has_read,
+          "indexing-disabled Agent definitions retain unified read with items");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -1727,11 +1720,12 @@ void test_removed_index_and_macro_tools_not_advertised() {
         if (def.name == "grep") saw_grep = true;
         if (def.name == "search_text") saw_search_text = true;
         if (def.name == "find") saw_find = true;
-        if (def.name == "list_dir") saw_list_dir = true;
-        if (def.name == "list_directory") saw_list_directory = true;
-        if (def.name == "index_overview") saw_index_overview = true;
-        if (def.name == "file_outline") saw_file_outline = true;
-        if (def.name == "edit_file") {
+        if (def.name == "ls") saw_list_dir = true;
+        if (def.name == "list_directory" || def.name == "list_dir")
+            saw_list_directory = true;
+        if (def.name == "index") saw_index_overview = true;
+        if (def.name == "outline") saw_file_outline = true;
+        if (def.name == "edit") {
             check(def.parameters_json.find("replace_range") != std::string::npos &&
                       def.description.find("Flat ops") != std::string::npos,
                   "edit_file schema keeps flat-op compatibility cues");
@@ -1740,7 +1734,7 @@ void test_removed_index_and_macro_tools_not_advertised() {
             check(def.description.find("*** Begin Patch") != std::string::npos,
                   "apply_patch description keeps Codex markers");
         }
-        if (def.name == "run_command") {
+        if (def.name == "run") {
             check(def.description.find("without a real shell") != std::string::npos ||
                       def.description.find("without a shell") != std::string::npos,
                   "run_command description keeps shell-free guidance");
@@ -1757,18 +1751,18 @@ void test_removed_index_and_macro_tools_not_advertised() {
               std::to_string(schema_chars) + " ~tokens=" +
               std::to_string(schema_chars / 4));
 
-    // Silent execute aliases for renames still work.
-    check(json_ok(tools.execute("search_text", R"JSON({"query":"main","max_results":3})JSON")),
-          "silent search_text alias still executes as grep");
-    check(json_ok(tools.execute("list_directory", R"JSON({"path":"."})JSON")),
-          "silent list_directory alias still executes as list_dir");
-    check(json_ok(tools.execute("project_overview", "{}")),
-          "silent project_overview alias still executes as index_overview");
-    check(json_ok(tools.execute("get_skeleton", R"JSON({"path":"src/hello.cpp"})JSON")) ||
-              !json_error_code(tools.execute("get_skeleton",
-                                             R"JSON({"path":"src/hello.cpp"})JSON"))
-                   .empty(),
-          "silent get_skeleton alias is accepted (may fail only on missing path shape)");
+    check(!json_ok(tools.execute("search_text", R"JSON({"query":"main","max_results":3})JSON")),
+          "search_text alias is not accepted");
+    check(!json_ok(tools.execute("list_directory", R"JSON({"path":"."})JSON")),
+          "list_directory alias is not accepted");
+    check(!json_ok(tools.execute("project_overview", "{}")),
+          "project_overview alias is not accepted");
+    check(!json_ok(tools.execute("get_skeleton", R"JSON({"path":"src/hello.cpp"})JSON")),
+          "get_skeleton alias is not accepted");
+    check(!json_ok(tools.execute("read_file", R"JSON({"path":"src/hello.cpp"})JSON")),
+          "read_file alias is not accepted");
+    check(!json_ok(tools.execute("run_command", R"JSON({"command":"pwd"})JSON")),
+          "run_command alias is not accepted");
 
     // Removed tools are hard-rejected.
     check(!json_ok(tools.execute("index_status", "{}")),
@@ -1792,23 +1786,23 @@ void test_lazy_index_tools_and_touched_overlay() {
                "int alpha() { return 1; }\n");
     agent::ReadToolRegistry tools = make_lazy_registry(workspace);
 
-    check(json_ok(tools.execute("index_overview", "{}")) &&
+    check(json_ok(tools.execute("index", "{}")) &&
               json_ok(tools.execute(
                   "glob", R"JSON({"pattern":"src/*.cpp"})JSON")) &&
               json_ok(tools.execute(
                   "grep", R"JSON({"query":"alpha"})JSON")) &&
               json_ok(tools.execute(
-                  "search_symbol", R"JSON({"query":"alpha"})JSON")) &&
+                  "symbol", R"JSON({"query":"alpha"})JSON")) &&
               json_ok(tools.execute(
-                  "file_outline",
+                  "outline",
                   R"JSON({"path":"src/symbols.cpp"})JSON")),
           "lazy Agent queries cover overview, files, symbols, and outlines");
 
     const std::string write = tools.execute(
-        "write_file",
+        "write",
         R"JSON({"path":"src/touched.cpp","content":"int touched_symbol() { return 2; }\n"})JSON");
     const std::string touched = tools.execute(
-        "search_symbol", R"JSON({"query":"touched_symbol"})JSON");
+        "symbol", R"JSON({"query":"touched_symbol"})JSON");
     check(json_ok(write) && json_ok(touched) &&
               touched.find("touched_symbol") != std::string::npos,
           "touched-path overlay exposes a native write before/through persistence");
@@ -1816,7 +1810,7 @@ void test_lazy_index_tools_and_touched_overlay() {
           "lazy touched-path revision flushes to SQLite");
 
     const std::string removed = tools.execute(
-        "remove",
+        "rm",
         R"JSON({"path":"src/touched.cpp","confirm":true})JSON");
     const std::string after_remove = tools.execute(
         "glob", R"JSON({"pattern":"src/touched.cpp"})JSON");
@@ -1860,29 +1854,23 @@ void test_git_and_network_tools_policy() {
                   .ok(),
               "create network-enabled registry");
 
-        const std::string status = net_tools.execute("git_status", R"JSON({})JSON");
-        // git may be missing in some environments; accept ok or unavailable.
+        const std::string status =
+            net_tools.execute("run", R"JSON({"command":"git status --short --branch"})JSON");
         check(json_ok(status) || json_error_code(status) == "unavailable" ||
                   json_error_code(status) == "FileRead" ||
-                  json_error_code(status) == "file_read",
-              "git_status runs or reports missing git: " + status);
-
-        const std::string diff =
-            net_tools.execute("git_diff", R"JSON({"stat":true})JSON");
-        check(json_ok(diff) || json_error_code(diff) == "unavailable" ||
-                  json_error_code(diff) == "FileRead" ||
-                  json_error_code(diff) == "file_read",
-              "git_diff runs or reports missing git: " + diff);
+                  json_error_code(status) == "file_read" ||
+                  json_error_code(status) == "policy_denied",
+              "run git status is structured: " + status);
 
         // Private URL should be blocked by default fetch policy.
         const std::string fetch =
-            net_tools.execute("fetch_url", R"JSON({"url":"http://127.0.0.1/"})JSON");
+            net_tools.execute("fetch", R"JSON({"url":"http://127.0.0.1/"})JSON");
         check(!json_ok(fetch), "fetch_url blocks loopback by default: " + fetch);
 
         // Schema must not invite raw HTML; extract_text is not a declared parameter.
         bool fetch_schema_ok = false;
         for (const provider::FunctionDefinition& def : net_tools.definitions()) {
-            if (def.name != "fetch_url") continue;
+            if (def.name != "fetch") continue;
             check(def.parameters_json.find("extract_text") == std::string::npos,
                   "fetch_url schema omits extract_text (Markdown-only tool)");
             check(def.description.find("Markdown") != std::string::npos ||
@@ -1894,7 +1882,7 @@ void test_git_and_network_tools_policy() {
 
         // Legacy extract_text=false must not open a raw-HTML path (still blocks loopback).
         const std::string fetch_legacy = net_tools.execute(
-            "fetch_url", R"JSON({"url":"http://127.0.0.1/","extract_text":false})JSON");
+            "fetch", R"JSON({"url":"http://127.0.0.1/","extract_text":false})JSON");
         check(!json_ok(fetch_legacy), "fetch_url with extract_text=false still policy-safe");
 
         const std::string search =
@@ -1906,7 +1894,7 @@ void test_git_and_network_tools_policy() {
 
     agent::ReadToolRegistry review = make_registry(workspace, false);
     const std::string no_fetch =
-        review.execute("fetch_url", R"JSON({"url":"https://example.com/"})JSON");
+        review.execute("fetch", R"JSON({"url":"https://example.com/"})JSON");
     check(!json_ok(no_fetch), "review registry does not expose fetch_url");
     const std::string no_search =
         review.execute("web_search", R"JSON({"term":"x"})JSON");
@@ -1914,17 +1902,18 @@ void test_git_and_network_tools_policy() {
 
     // Schema list includes git tools and compact index overview in agent mode.
     bool saw_git = false;
-    bool saw_index_overview = false;
+    bool saw_index = false;
     bool saw_removed = false;
     for (const provider::FunctionDefinition& def : tools.definitions()) {
         if (def.name == "git_status" || def.name == "git_diff") saw_git = true;
-        if (def.name == "index_overview") saw_index_overview = true;
+        if (def.name == "index") saw_index = true;
         if (def.name == "index_status" || def.name == "inspect_code_task" ||
-            def.name == "find_tests")
+            def.name == "find_tests" || def.name == "str_replace" ||
+            def.name == "read_many" || def.name == "read_symbol")
             saw_removed = true;
     }
-    check(saw_git && saw_index_overview && !saw_removed,
-          "agent definitions include git/index_overview and omit removed tools");
+    check(!saw_git && saw_index && !saw_removed,
+          "agent definitions include index and omit removed git/read_many tools");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -2021,7 +2010,7 @@ void test_plan_document_mutation_policy() {
         json::quote((fs::path(workspace) / "PLANS.md").string()) +
         ",\"content\":\"absolute plan\\n\"}";
     const std::string absolute_plans_result =
-        tools.execute("write_file", absolute_plans_args);
+        tools.execute("write", absolute_plans_args);
     check(json_ok(absolute_plans_result) &&
               json_data_string(absolute_plans_result, "path") == "PLANS.md" &&
               read_text(fs::path(workspace) / "PLANS.md") == "absolute plan\n",
@@ -2031,70 +2020,70 @@ void test_plan_document_mutation_policy() {
         std::string("{\"path\":") +
         json::quote((fs::temp_directory_path() / "ainiux-outside-PLANS.md").string()) +
         ",\"content\":\"outside\\n\"}";
-    check(!json_ok(tools.execute("write_file", outside_args)),
+    check(!json_ok(tools.execute("write", outside_args)),
           "Plan policy still denies absolute paths outside the project");
 
     check(json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"PLAN.md","content":"new plan\n","mode":"create_new"})JSON")),
           "Plan policy allows approved root plan creation");
     check(json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"docs/plans/existing/design.md","content":"design\n","mode":"create_new"})JSON")),
           "Plan policy allows lowercase .md below existing docs/plans tree");
     check(!json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"README.md","content":"changed\n"})JSON")) &&
               read_text(fs::path(workspace) / "README.md") == "readme\n",
           "Plan policy denies arbitrary root Markdown");
     check(!json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"src/plan.md","content":"changed\n"})JSON")),
           "Plan policy denies Markdown outside docs/plans");
     check(!json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"docs/plans/existing/WRONG.MD","content":"changed\n"})JSON")),
           "Plan policy enforces case-sensitive .md extension");
     check(!json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"docs/plans/missing/design.md","content":"changed\n","create_dirs":true})JSON")),
           "Plan policy cannot create destination directories");
     check(!json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"../PLAN.md","content":"changed\n"})JSON")),
           "Plan policy denies traversal targets");
     fs::create_directory_symlink(fs::path(workspace) / "docs" / "plans" / "existing",
                                  fs::path(workspace) / "docs" / "plans" / "linked", ec);
     check(!json_ok(tools.execute(
-              "write_file",
+              "write",
               R"JSON({"path":"docs/plans/linked/design.md","content":"changed\n"})JSON")),
           "Plan policy denies symlink path components");
     check(!json_ok(tools.execute(
-              "remove", R"JSON({"path":"PLANS.md"})JSON")),
+              "rm", R"JSON({"path":"PLANS.md"})JSON")),
           "Plan policy hides and defensively denies remove");
     check(!json_ok(tools.execute(
               "apply_patch",
               R"JSON({"patch":"*** Begin Patch\n*** Delete File: PLANS.md\n*** End Patch\n"})JSON")),
           "Plan policy denies patch delete operations");
     check(!json_ok(tools.execute(
-              "run_command", R"JSON({"command":"touch PLAN.md"})JSON")),
+              "run", R"JSON({"command":"touch PLAN.md"})JSON")),
           "Plan run_command denies non-vetted commands");
     check(json_ok(tools.execute(
-              "run_command", R"JSON({"command":"stat -c %y PLANS.md"})JSON")),
+              "run", R"JSON({"command":"stat -c %y PLANS.md"})JSON")),
           "Plan run_command accepts the expanded vetted read-only set");
     check(json_ok(tools.execute(
-              "run_command",
+              "run",
               std::string("{\"command\":") +
                   json::quote("cat " +
                               (fs::path(workspace) / "PLANS.md").string()) +
                   "}")),
           "Plan run_command accepts a canonical absolute in-project read path");
     check(!json_ok(tools.execute(
-              "run_command", R"JSON({"command":"tail -f PLANS.md"})JSON")) &&
+              "run", R"JSON({"command":"tail -f PLANS.md"})JSON")) &&
               !json_ok(tools.execute(
-                  "run_command", R"JSON({"command":"find . -exec touch owned ;"})JSON")) &&
+                  "run", R"JSON({"command":"find . -exec touch owned ;"})JSON")) &&
               !json_ok(tools.execute(
-                  "run_command", R"JSON({"command":"rg --pre cat plan ."})JSON")),
+                  "run", R"JSON({"command":"rg --pre cat plan ."})JSON")),
           "Plan denies following, execution, and external-preprocessor forms");
 
     const std::string mixed =
@@ -2119,10 +2108,10 @@ void test_plan_document_mutation_policy() {
     bool saw_remove = false;
     bool saw_rebuild = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
-        if (definition.name == "edit_file" || definition.name == "write_file" ||
+        if (definition.name == "edit" || definition.name == "write" ||
             definition.name == "str_replace" || definition.name == "apply_patch")
             saw_edit = true;
-        if (definition.name == "remove") saw_remove = true;
+        if (definition.name == "rm") saw_remove = true;
         if (definition.name == "index_rebuild") saw_rebuild = true;
     }
     check(saw_edit && saw_remove && !saw_rebuild,
@@ -2236,7 +2225,7 @@ void test_attach_image_tool_hooks() {
 
     bool has_attach = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
-        if (definition.name == "attach_image") {
+        if (definition.name == "attach") {
             has_attach = true;
             check(definition.parameters_json.find("path") != std::string::npos,
                   "attach_image schema requires path");
@@ -2245,30 +2234,30 @@ void test_attach_image_tool_hooks() {
     check(has_attach, "agent registry advertises attach_image");
 
     std::string result =
-        tools.execute("attach_image", R"JSON({"path":"shot.png"})JSON");
+        tools.execute("attach", R"JSON({"path":"shot.png"})JSON");
     check(json_ok(result) && queued.size() == 1 &&
               queued[0].mime_type == "image/png" && !queued[0].base64_data.empty(),
           "attach_image queues a request-local PNG: " + result);
 
-    result = tools.execute("attach_image", R"JSON({"path":"missing.jpg"})JSON");
+    result = tools.execute("attach", R"JSON({"path":"missing.jpg"})JSON");
     check(!json_ok(result), "attach_image rejects missing files");
 
-    result = tools.execute("attach_image", R"JSON({"path":"shot.png"})JSON");
+    result = tools.execute("attach", R"JSON({"path":"shot.png"})JSON");
     check(json_ok(result) && queued.size() == 2, "second attach_image succeeds under limit");
-    result = tools.execute("attach_image", R"JSON({"path":"shot.png"})JSON");
+    result = tools.execute("attach", R"JSON({"path":"shot.png"})JSON");
     check(!json_ok(result) && json_error_code(result) == "limit_exceeded",
           "third attach_image hits per-turn limit");
 
     // Image path via read_file should not invite Python/PIL.
-    result = tools.execute("read_file", R"JSON({"path":"shot.png"})JSON");
-    check(!json_ok(result) && result.find("attach_image") != std::string::npos,
-          "read_file on image points to attach_image");
+    result = tools.execute("read", R"JSON({"path":"shot.png"})JSON");
+    check(!json_ok(result) && result.find("attach") != std::string::npos,
+          "read on image points to attach");
 
     agent::ReadToolRegistry readonly =
         make_registry(workspace, agent::MutationPolicy::Disabled);
     has_attach = false;
     for (const provider::FunctionDefinition& definition : readonly.definitions()) {
-        if (definition.name == "attach_image") has_attach = true;
+        if (definition.name == "attach") has_attach = true;
     }
     check(!has_attach, "read-only registry does not advertise attach_image");
 

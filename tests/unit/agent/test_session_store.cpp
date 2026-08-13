@@ -50,10 +50,10 @@ void test_open_singleton_append_compact_load() {
 
     error = store.append_message("user", "fix the thing");
     check(error.ok(), "append user message");
-    error = store.append_message("tool", "1: read_file(\"a.cpp\") → ok", "read_file", true,
+    error = store.append_message("tool", "1: read(\"a.cpp\") → ok", "read", true,
                                  "\"a.cpp\"");
     check(error.ok(), "append tool line");
-    error = store.append_tool_event(1, 1, "call-1", "read_file", R"({"path":"a.cpp"})",
+    error = store.append_tool_event(1, 1, "call-1", "read", R"({"path":"a.cpp"})",
                                     R"({"ok":true})", true);
     check(error.ok(), "append tool event");
     error = store.append_message("assistant", "done");
@@ -69,7 +69,7 @@ void test_open_singleton_append_compact_load() {
     check(error.ok(), "load session: " + error.message);
     check(loaded.status == "idle" || loaded.status == "success", "loaded status");
     check(messages.size() >= 3, "messages stored");
-    check(tools.size() == 1 && tools[0].tool_name == "read_file" && tools[0].ok, "one tool event");
+    check(tools.size() == 1 && tools[0].tool_name == "read" && tools[0].ok, "one tool event");
 
     const std::size_t transcript_size_before_compact = messages.size();
     // Compaction records a summary but preserves the complete transcript.
@@ -159,7 +159,7 @@ void test_record_and_load_approvals() {
     check(error.ok(), "open project for approvals");
 
     agent::AgentApprovalRecord row;
-    row.tool_name = "run_command";
+    row.tool_name = "run";
     row.command_preview = "git reset --hard";
     row.rule_id = "ask_on_destructive_git";
     row.decision = "allow";
@@ -180,7 +180,7 @@ void test_record_and_load_approvals() {
     check(error.ok() && loaded.size() == 2, "load two approvals: " + error.message);
     check(loaded[0].decision == "allow" && loaded[0].rule_id == "ask_on_destructive_git",
           "first approval content");
-    check(loaded[1].decision == "deny" && loaded[1].tool_name == "run_command",
+    check(loaded[1].decision == "deny" && loaded[1].tool_name == "run",
           "second approval content");
 
     // Soft-add path: reopen and record again.
@@ -190,7 +190,7 @@ void test_record_and_load_approvals() {
     row.decision = "cancelled";
     row.command_preview = "remove data.sqlite";
     row.rule_id = "ask_on_database_delete";
-    row.tool_name = "remove";
+    row.tool_name = "rm";
     check(again.record_approval(row).ok(), "record after reopen");
     loaded.clear();
     check(again.load_approvals(loaded).ok() && loaded.size() == 3, "three approvals total");

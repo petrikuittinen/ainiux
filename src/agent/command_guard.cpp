@@ -36,21 +36,6 @@ bool has_flag(const std::vector<std::string>& args, const char* flag) {
     return false;
 }
 
-// Combined short options like -rf, -fr, -rR.
-bool has_combined_recursive_force(const std::vector<std::string>& args) {
-    for (const std::string& arg : args) {
-        if (arg.size() < 2 || arg[0] != '-' || arg[1] == '-') continue;
-        bool has_r = false;
-        bool has_f = false;
-        for (std::size_t i = 1; i < arg.size(); ++i) {
-            if (arg[i] == 'r' || arg[i] == 'R') has_r = true;
-            if (arg[i] == 'f') has_f = true;
-        }
-        if (has_r && has_f) return true;
-    }
-    return false;
-}
-
 bool is_database_name(const std::string& path) {
     const std::string lower = lowercase(path);
     static const char* kSuffixes[] = {".sqlite", ".sqlite3", ".db", ".db3", ".duckdb"};
@@ -97,7 +82,9 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
                    "refusing Windows file deletion via del/erase; use the remove tool for "
                    "workspace paths");
     }
-    if (command == "rmdir" || command == "rd") {
+    if (command == "rd" ||
+        (command == "rmdir" &&
+         (has_flag(arguments, "/s") || has_flag(arguments, "/S")))) {
         const bool recursive = has_flag(arguments, "/s") || has_flag(arguments, "/S");
         return ask(recursive ? "ask_on_recursive_delete" : "ask_on_windows_delete",
                    recursive ? "refusing recursive Windows rmdir /s"
@@ -140,22 +127,10 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
                        "refusing destructive PowerShell command: " + command);
     }
 
-    // Recursive force delete variants.
+    // File rm and empty-dir rmdir/rm -r are classified later. Ask here only for
+    // database-looking operands. Non-empty tree deletes are prompted in the run
+    // tool after the path is resolved (Smart/Confirm; headless Deny).
     if (command == "rm") {
-        const bool recursive =
-            has_flag(arguments, "-r") || has_flag(arguments, "-R") || has_flag(arguments, "--recursive") ||
-            has_combined_recursive_force(arguments);
-        const bool force =
-            has_flag(arguments, "-f") || has_flag(arguments, "--force") ||
-            has_combined_recursive_force(arguments);
-        if (recursive && force)
-            return ask("ask_on_recursive_force_delete",
-                       "refusing recursive force delete (rm -rf/-fr/…); use remove tool for "
-                       "workspace paths or confirm interactively later");
-        if (recursive)
-            return ask("ask_on_recursive_delete",
-                       "refusing recursive rm; use the remove tool with recursive=true for "
-                       "workspace directories");
         for (std::size_t i = 1; i < arguments.size(); ++i) {
             if (!arguments[i].empty() && arguments[i].front() == '-') continue;
             if (is_database_name(arguments[i]))

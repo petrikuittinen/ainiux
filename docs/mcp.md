@@ -10,7 +10,7 @@ Ainiux can use tools from [Model Context Protocol](https://modelcontextprotocol.
 
 **Not loaded in:** ordinary `--chat`, standalone `--editor`, REPL, or `--security-review`.
 
-MCP does not replace native workspace tools (`read_file`, `edit_file`, `run_command`, …). It adds **external** tools from servers you install.
+MCP does not replace native workspace tools (`read`, `edit`, `run`, …). It adds **external** tools from servers you install.
 
 ---
 
@@ -212,7 +212,9 @@ Catalogs: [mcpservers.org](https://mcpservers.org/), [modelcontextprotocol/serve
 
 Ainiux ships a stdlib Python helper that exposes a local vision model as an MCP tool. Use it when the **agent model is text-only** (e.g. DeepSeek) but you still want OCR/captions via a **vision-capable** OpenAI-compatible endpoint (llama.cpp, vLLM, LM Studio, …).
 
-Script: [`scripts/image_mcp_server.py`](../scripts/image_mcp_server.py) (Python 3.8+, no extra packages).
+Script: [`scripts/image_mcp_server.py`](../scripts/image_mcp_server.py) (Python 3.8+ stdlib core).
+
+Optional large-image downscale uses **Pillow** (if importable) or **`ffmpeg` on PATH** — not linked into the ainiux C++ binary.
 
 ### Workflow
 
@@ -220,10 +222,11 @@ Script: [`scripts/image_mcp_server.py`](../scripts/image_mcp_server.py) (Python 
 # Terminal 1 — vision LLM already serving Chat Completions (example :30000)
 # llama-server / vLLM / LM Studio with a multimodal model
 
-# Terminal 2 — MCP bridge (loopback by default)
+# Terminal 2 — MCP bridge (loopback by default; auto-resize large images)
 python3 scripts/image_mcp_server.py http://localhost:30000 --port 8765
 
-# Optional connectivity check (no MCP install required)
+# Optional checks (no ainiux install required)
+python3 scripts/image_mcp_server.py --self-test-resize tests/image_files/MathAssignment2.png
 python3 scripts/image_mcp_server.py http://localhost:30000 \
   --self-test tests/image_files/temperature_meter.jpg
 
@@ -249,13 +252,43 @@ The model should call `mcp__local-image__describe_image` (name depends on the in
 ```text
 image_mcp_server.py BASE_URL [--host 127.0.0.1] [-p|--port 8765] [-m MODEL]
   [--api-key KEY] [--timeout 120] [--max-tokens 1024] [--max-image-bytes N]
-  [--mode legacy|stateless|both] [--enable-thinking] [--self-test IMAGE]
+  [--resize auto|pillow|ffmpeg|none] [--max-edge 1024] [--soft-bytes 524288]
+  [--jpeg-quality 85] [--ffmpeg PATH]
+  [--mode legacy|stateless|both] [--enable-thinking]
+  [--self-test IMAGE] [--self-test-resize IMAGE]
 ```
 
-- `BASE_URL` accepts `http://host:port` or `…/v1`; normalized to `{base}/v1/chat/completions`.
+- `BASE_URL` accepts `http://host:port` or `…/v1`; normalized to `{base}/v1/chat/completions`. Not required with `--self-test-resize`.
 - `-m` defaults to the first id from `/v1/models`.
 - **Thinking is off by default** (`chat_template_kwargs.enable_thinking=false`) so Qwen-style local servers return `message.content` instead of filling only `reasoning_content`. Pass `--enable-thinking` if you want chain-of-thought (raise `--max-tokens` accordingly). Empty `content` still falls back to `reasoning_content` / `reasoning` / `thinking` when present.
 - Bind stays on loopback unless you pass a non-loopback `--host` (not recommended).
+
+### Large images and resize (Phase 1)
+
+Ainiux’s default **`--max-image-bytes` (20 MiB)** is a **file-size** cap, not a guarantee the payload fits a provider context window. Base64 expands ~4/3; multi-megabyte screenshots are poor for OCR/VQA and expensive in tokens.
+
+The vision bridge **downscales by default** when:
+
+- raw bytes exceed `--soft-bytes` (default 512 KiB), or
+- Pillow can read dimensions and the long edge exceeds `--max-edge` (default 1024)
+
+| `--resize` | Behavior |
+| --- | --- |
+| `auto` (default) | Pillow if importable, else `ffmpeg` on PATH |
+| `pillow` | Require Pillow only |
+| `ffmpeg` | Require ffmpeg only |
+| `none` | Never resize (full decoded image to the vision endpoint) |
+
+Output of a resize is **JPEG** (first frame of animated GIF/WebP). Formats the bridge accepts for input: **PNG, JPEG, GIF, WebP** (plus whatever ffmpeg/Pillow can open).
+
+Manual preprocess without the bridge:
+
+```sh
+ffmpeg -hide_banner -loglevel error -y -i huge.png \
+  -vf "scale='min(1024,iw)':-2" -frames:v 1 /tmp/small.jpg
+```
+
+**Not in core yet:** optional resize inside the ainiux C++ attach path for multimodal models. See deferred work in `PLANS.md` (image preprocess phases).
 
 ### Install reminder
 
@@ -263,8 +296,7 @@ Private/loopback MCP URLs need **`--mcp-allow-private`** (or global private URL 
 
 ### Vision quality
 
-Caption quality and language depend entirely on the upstream vision model. Ainiux’s blind agent model only sees the **text** tool result.
-
+Caption quality and language depend entirely on the upstream vision model. Ainiux’s blind agent model only sees the **text** tool result (plus a short `[resized via …]` note when downscale ran).
 ---
 
 ## Non-goals (this release)
@@ -294,9 +326,9 @@ Ainiux keeps a **turn-scoped attachment bag** for agent modes. Images enter the 
 | --- | --- |
 | CLI `ainiux run … --attach photo.png -r "…"` | Image loaded for the one-shot turn |
 | Interactive `/attach PATH` (agent) | Queued like chat attach when wired through the turn |
-| Native tool `attach_image` | Always registers in the bag; **vision models** also get pixels on later rounds; **text-only models** get bag-only (no pixel inject) |
+| Native tool `attach` | Always registers in the bag; **vision models** also get pixels on later rounds; **text-only models** get bag-only (no pixel inject) |
 
-There is no separate `attach_file` tool. Use **`attach_image`** for PNG/JPEG/GIF.
+There is no separate `attach_file` tool. Use **`attach`** for PNG/JPEG/GIF.
 
 ### MCP argument rewrite
 
@@ -320,7 +352,7 @@ ainiux deepseek -m deepseek-v4-flash -r "Use mcp__local-image__describe_image on
   --attach tests/image_files/sea_view.jpg
 ```
 
-Or in agent: `attach_image` / `/attach`, then call `mcp__local-image__describe_image` with `{"path":"…"}` or let HTTP rewrite supply `image_base64`.
+Or in agent: `attach` / `/attach`, then call `mcp__local-image__describe_image` with `{"path":"…"}` or let HTTP rewrite supply `image_base64`.
 
 MCP **results** remain text-first (`content[].type == "text"`). Image content blocks from MCP are not injected as vision.
 

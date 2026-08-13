@@ -101,7 +101,7 @@ The project index remains a fast, optional definitions-only navigation aid acros
 
 Lexical relevance is authoritative: full-name matches rank above exact identifier components, which rank above component-prefix matches. Multi-token coverage is preserved, importance orders only otherwise comparable hits, and path/line/ID ties are deterministic. `index_overview`, `search_symbol`, `file_outline`, `read_symbol`, and `replace_symbol` remain available (index management / find_tests / inspect_code_task agent tools removed); caller/callee tools and automatic provider-context hints are absent.
 
-Agent navigation prefers one `read_many` call whenever two or more independent paths or ranges are known, including with native parallel tool calling; `read_file` remains the single-target fallback. Batched items have independent 64 KiB default limits, line-numbered content and hashes, within the 256 KiB aggregate cap.
+Agent navigation prefers one `read` call with `items` whenever two or more independent paths or ranges are known, including with native parallel tool calling; `path` remains the single-target form. Batched items have independent 64 KiB default limits, line-numbered content and hashes, within the 256 KiB aggregate cap.
 
 Agent startup performs a cheap read-only index probe and never prompts, creates an index, loads a full snapshot, or waits for freshness. Missing/corrupt indexes become ready with live filesystem tools and a display-only `/index-code` hint. Existing completed indexes are queried lazily through short-lived read-only SQLite transactions and refreshed in the background only after readiness. `/index-code` explicitly creates/enables an index, while `/show-index` refreshes and appends the compact totals table without adding it to model context. Native mutations keep a touched-path overlay until their coalesced SQLite revision completes; task completion runs a full-tree freshness pass that reparses only added or changed files. Security review alone retains an eager immutable authorization snapshot. Query/refresh failures preserve the previous completed database and fall back to live tools where applicable.
 
@@ -127,6 +127,28 @@ Continue in small, test-backed slices:
 - syntax-theme contrast warnings and remaining editor reformat/PTY coverage
 
 These are maintenance tracks, not a reason to delay v1.1 definitions-index tuning indefinitely.
+
+## Deferred: large-image preprocess for attach / MCP vision
+
+**Landed (docs + vision bridge):** `scripts/image_mcp_server.py` optional downscale
+(`--resize auto|pillow|ffmpeg|none`, `--max-edge` default 1024, `--soft-bytes`) using
+**Pillow** if importable or **ffmpeg** on PATH. Input formats for the bridge: PNG, JPEG,
+GIF, WebP (first frame when animated). Core ainiux attach remains PNG/JPEG/GIF only;
+WebP stays disabled in C++ until a separate capability decision. See `docs/mcp.md`.
+
+**Not started — Phase 2 (core optional preprocess):** optional shell-free spawn of
+ffmpeg/ImageMagick from `src/input/` (or similar) before base64 for Chat Completions
+vision inject, agent `attach_image`, and remote HTTP MCP `image_base64` rewrite. Prefer
+loopback absolute paths without base64 when possible. Zero new link-time image libraries.
+Config knobs such as `image.resize_backend` / `--image-max-edge`. Store originals in
+TUI media; resize only at request time. Fixed argv, timeouts, RAII temp cleanup.
+
+**Not started — Phase 3 (polish):** cache resized variants by
+`(sha256, max_edge, quality)`; `ffprobe`/identify for dimension-only decisions; consider
+agent-only soft defaults; ImageMagick as secondary auto backend; optional PNG retention
+when alpha must be preserved.
+
+Do not implement full JPEG/PNG/GIF/WebP codecs inside the ainiux binary for this work.
 
 ## v0.90 local OpenAI-compatible server
 

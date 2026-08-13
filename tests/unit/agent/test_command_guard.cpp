@@ -35,9 +35,18 @@ void test_guard_patterns() {
             agent::finalize_guard_for_headless(agent::evaluate_command_guard(args));
         return result.decision == agent::GuardDecision::Deny;
     };
-    check(deny({"rm", "-rf", "build"}), "rm -rf denied");
-    check(deny({"rm", "-fr", "build"}), "rm -fr denied");
-    check(deny({"rm", "-r", "-f", "build"}), "rm -r -f denied");
+    check(agent::evaluate_command_guard({"rm", "-rf", "build"}).decision ==
+              agent::GuardDecision::Allow,
+          "rm -rf is not a hard Guard deny; Smart asks only for non-empty trees");
+    check(agent::evaluate_command_guard({"rm", "-fr", "build"}).decision ==
+              agent::GuardDecision::Allow,
+          "rm -fr is classified later for emptiness");
+    check(agent::evaluate_command_guard({"rm", "-r", "-f", "build"}).decision ==
+              agent::GuardDecision::Allow,
+          "rm -r -f is classified later for emptiness");
+    check(agent::finalize_guard_for_headless(agent::evaluate_command_guard(
+              {"rm", "app.sqlite"})).decision == agent::GuardDecision::Deny,
+          "rm of a database-looking file still Asks/denies headless");
     check(deny({"git", "reset", "--hard"}), "git reset --hard denied");
     check(deny({"git", "clean", "-fdx"}), "git clean -fdx denied");
     check(deny({"git", "push", "--force"}), "git push --force denied");
@@ -108,7 +117,9 @@ void test_parse_policies() {
     check(args.size() == 2 && args[0] == "python3" && args[1] == "hello.py", "python3 argv");
 
     error = agent::parse_command("rm -rf build", args, agent::CommandPolicy::Agent, rule);
-    check(!error.ok() && !rule.empty(), "agent policy guards rm -rf: " + error.message);
+    check(error.ok() && rule.empty(),
+          "agent parse accepts rm -rf; emptiness is checked at execute: " +
+              error.message);
 
     // Agent default-allow: ordinary tools/options are not option-allowlisted.
     error = agent::parse_command("ls -laFg tic_tac_toe.py", args, agent::CommandPolicy::Agent, rule);
@@ -251,6 +262,20 @@ void test_read_only_command_classifier() {
     check(!vetted({"ping", "localhost"}) && !vetted({"top"}) &&
               !vetted({"git", "status"}) && !vetted({"make", "test"}),
           "classifier: intentionally non-vetted command families");
+
+    auto fs_ok = [](std::initializer_list<const char*> words) {
+        std::vector<std::string> args;
+        for (const char* word : words) args.emplace_back(word);
+        return agent::assess_workspace_fs_command(args).classified;
+    };
+    check(fs_ok({"mkdir", "-p", "src/out"}), "fs classifier: mkdir -p");
+    check(fs_ok({"rmdir", "src/empty"}), "fs classifier: rmdir");
+    check(fs_ok({"rm", "src/a.cpp"}), "fs classifier: rm file");
+    check(fs_ok({"rm", "-rf", "build"}), "fs classifier: rm -rf");
+    check(fs_ok({"mv", "src/a.cpp", "src/b.cpp"}), "fs classifier: mv");
+    check(!fs_ok({"rm", "--one-file-system", "src"}),
+          "fs classifier rejects unknown rm flags");
+    check(!fs_ok({"make", "test"}), "fs classifier ignores builds");
 }
 
 std::string temp_workspace(const std::string& name) {
@@ -295,13 +320,13 @@ void test_tool_agent_python_and_security_deny() {
     const std::string workspace = temp_workspace("tool");
     agent::ReadToolRegistry agent_tools = make_registry(workspace, true);
     const std::string py =
-        agent_tools.execute("run_command", R"JSON({"command":"python3 hello.py"})JSON");
+        agent_tools.execute("run", R"JSON({"command":"python3 hello.py"})JSON");
     check(json_ok(py), "agent run_command python3 hello.py: " + py);
     check(py.find("ok") != std::string::npos || py.find("\"exit_status\":0") != std::string::npos,
           "python output/status: " + py);
 
     const std::string lookup =
-        agent_tools.execute("run_command", R"JSON({"command":"command -v ls"})JSON");
+        agent_tools.execute("run", R"JSON({"command":"command -v ls"})JSON");
     check(json_ok(lookup) &&
 #if defined(_WIN32)
               lookup.find("ls.exe") != std::string::npos,
@@ -310,7 +335,7 @@ void test_tool_agent_python_and_security_deny() {
 #endif
           "agent run_command emulates command -v without a shell: " + lookup);
     const std::string missing = agent_tools.execute(
-        "run_command",
+        "run",
         R"JSON({"command":"command -v ainiux-definitely-missing-command"})JSON");
     check(json_ok(missing) && missing.find("\"exit_status\":1") != std::string::npos,
           "command -v reports a missing executable as process status, not a tool error: " +
@@ -318,19 +343,28 @@ void test_tool_agent_python_and_security_deny() {
 
     agent::ReadToolRegistry review = make_registry(workspace, false);
     const std::string denied =
-        review.execute("run_command", R"JSON({"command":"python3 hello.py"})JSON");
+        review.execute("run", R"JSON({"command":"python3 hello.py"})JSON");
     check(!json_ok(denied), "security-review still denies python3: " + denied);
     check(denied.find("security-review") != std::string::npos ||
               denied.find("inspection allowlist") != std::string::npos,
           "error mentions inspection allowlist: " + denied);
 
+    fs::create_directories(fs::path(workspace) / "build" / "obj");
+    {
+        std::ofstream out(fs::path(workspace) / "build" / "obj" / "a.o");
+        out << "x\n";
+    }
     const std::string rm =
-        agent_tools.execute("run_command", R"JSON({"command":"rm -rf build"})JSON");
+        agent_tools.execute("run", R"JSON({"command":"rm -rf build"})JSON");
     check(!json_ok(rm) && rm.find("policy_denied") != std::string::npos,
-          "agent denies rm -rf headless: " + rm);
+          "agent denies nonempty rm -rf headless: " + rm);
     check(rm.find("headless") != std::string::npos || rm.find("Ask") != std::string::npos ||
-              rm.find("refusing") != std::string::npos,
+              rm.find("refusing") != std::string::npos ||
+              rm.find("non-empty") != std::string::npos ||
+              rm.find("approval") != std::string::npos,
           "rm -rf error mentions guard/headless: " + rm);
+    check(fs::exists(fs::path(workspace) / "build" / "obj" / "a.o"),
+          "nonempty tree remains after denied rm -rf");
 
     std::error_code ec;
     fs::remove_all(workspace, ec);
@@ -431,7 +465,7 @@ void test_interactive_approval_allows_then_denies() {
         [&](const agent::GuardApprovalRequest& request,
             runtime::CancellationToken) -> agent::GuardApprovalDecision {
         const int n = ++ask_count;
-        check(request.tool_name == "run_command", "ask tool is run_command");
+        check(request.tool_name == "run", "ask tool is run_command");
         check(!request.rule_id.empty(), "ask has rule_id");
         if (n == 1) {
             check(request.command_preview.find("rm") != std::string::npos,
@@ -448,9 +482,14 @@ void test_interactive_approval_allows_then_denies() {
               .ok(),
           "create tools with ask callback");
 
-    // Allow: rm -rf should proceed (exit may be non-zero if path missing — still not policy_denied).
+    fs::create_directories(fs::path(workspace) / "missing_build_dir" / "obj");
+    {
+        std::ofstream out(fs::path(workspace) / "missing_build_dir" / "obj" / "a.o");
+        out << "x\n";
+    }
+    // Allow: nonempty rm -rf asks once, then proceeds.
     const std::string allowed =
-        tools.execute("run_command", R"JSON({"command":"rm -rf missing_build_dir"})JSON");
+        tools.execute("run", R"JSON({"command":"rm -rf missing_build_dir"})JSON");
     check(ask_count.load() >= 1, "approval callback invoked");
     check(allowed.find("policy_denied") == std::string::npos ||
               allowed.find("\"ok\":true") != std::string::npos ||
@@ -459,7 +498,7 @@ void test_interactive_approval_allows_then_denies() {
 
     // Deny path: second destructive Ask.
     const std::string denied =
-        tools.execute("run_command", R"JSON({"command":"git reset --hard"})JSON");
+        tools.execute("run", R"JSON({"command":"git reset --hard"})JSON");
     check(!json_ok(denied), "denied git reset --hard after user deny: " + denied);
     check(denied.find("denied") != std::string::npos ||
               denied.find("policy_denied") != std::string::npos ||
@@ -479,7 +518,7 @@ void test_approval_gate_resolve_and_cancel() {
     });
 
     agent::GuardApprovalRequest req;
-    req.tool_name = "run_command";
+    req.tool_name = "run";
     req.command_preview = "git reset --hard";
     req.rule_id = "ask_on_destructive_git";
     req.message = "test";
