@@ -1336,6 +1336,9 @@ void test_indexing_disabled_registry_is_strict_and_live() {
                "def LiveMarker():\n    return 'Needle'\n");
     write_text(fs::path(workspace) / "src" / "other.py",
                "def OtherMarker():\n    return 'Needle'\n");
+    fs::create_directories(fs::path(workspace) / "src-extra");
+    write_text(fs::path(workspace) / "src-extra" / "leak.py",
+               "def LeakMarker():\n    return 'Needle'\n");
     agent::ToolRegistryOptions options;
     options.mutation_policy = agent::MutationPolicy::Full;
     options.indexing_enabled = false;
@@ -1443,10 +1446,36 @@ void test_indexing_disabled_registry_is_strict_and_live() {
                   std::string::npos,
           "grep does not infer alternation for a logical-or token: " +
               logical_or_search);
-    check(!json_ok(tools.execute(
-              "grep",
-              R"JSON({"query":"Needle","path":"src/live.py","glob":"*.py"})JSON")),
-          "grep rejects ambiguous exact-path and glob filters");
+    const std::string dir_and_glob = tools.execute(
+        "grep",
+        R"JSON({"query":"Needle","path":"src","glob":"*.py","max_results":20})JSON");
+    check(json_ok(dir_and_glob) &&
+              dir_and_glob.find("src/live.py") != std::string::npos &&
+              dir_and_glob.find("src/other.py") != std::string::npos &&
+              dir_and_glob.find("src/hello.cpp") == std::string::npos &&
+              dir_and_glob.find("src-extra/leak.py") == std::string::npos,
+          "grep combines directory path with a name/type glob: " + dir_and_glob);
+    const std::string dir_only = tools.execute(
+        "grep", R"JSON({"query":"Needle","path":"src","max_results":20})JSON");
+    check(json_ok(dir_only) &&
+              dir_only.find("src/live.py") != std::string::npos &&
+              dir_only.find("src/other.py") != std::string::npos &&
+              dir_only.find("src-extra/leak.py") == std::string::npos,
+          "grep treats path as a directory root: " + dir_only);
+    const std::string file_and_glob = tools.execute(
+        "grep",
+        R"JSON({"query":"Needle","path":"src/live.py","glob":"*.py"})JSON");
+    check(json_ok(file_and_glob) &&
+              file_and_glob.find("src/live.py") != std::string::npos &&
+              file_and_glob.find("src/other.py") == std::string::npos,
+          "grep accepts an exact file plus a matching glob: " + file_and_glob);
+    const std::string file_glob_miss = tools.execute(
+        "grep",
+        R"JSON({"query":"Needle","path":"src/live.py","glob":"*.cpp"})JSON");
+    check(json_ok(file_glob_miss) &&
+              file_glob_miss.find("\"data\":[]") != std::string::npos,
+          "grep returns empty when an exact file misses the glob: " +
+              file_glob_miss);
     const std::string repaired_glob_search = tools.execute(
         "grep",
         R"JSON({"query":"Needle","glob": *.py,"max_results":5})JSON");
@@ -1909,6 +1938,8 @@ void test_grep_uses_rg_when_available_else_builtin() {
                "int gamma_unique_xyz = 3;\n");
     write_text(fs::path(workspace) / "src" / "other.cpp",
                "int delta_marker = 4;\n");
+    write_text(fs::path(workspace) / "src" / "notes.md",
+               "delta_marker mentioned in markdown\n");
     agent::index::Options index_options;
     index_options.workspace = fs::canonical(workspace).string();
     agent::index::RefreshStats stats;
@@ -1963,6 +1994,14 @@ void test_grep_uses_rg_when_available_else_builtin() {
               live_result.find("src/other.cpp") != std::string::npos &&
               live_result.find("delta_marker") != std::string::npos,
           "indexing-off grep still works with rg/builtin: " + live_result);
+    const std::string scoped = tools.execute(
+        "grep",
+        R"JSON({"query":"delta_marker","path":"src","glob":"*.cpp","max_results":10})JSON");
+    check(json_ok(scoped) &&
+              scoped.find("src/other.cpp") != std::string::npos &&
+              scoped.find("src/notes.md") == std::string::npos &&
+              scoped.find("\"search_backend\"") != std::string::npos,
+          "grep path+glob finds cpp hits and skips other types: " + scoped);
 
     std::error_code ec;
     fs::remove_all(workspace, ec);

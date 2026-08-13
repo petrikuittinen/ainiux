@@ -210,9 +210,9 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 
 | | |
 | --- | --- |
-| **Params** | `query` (required; `pattern` is a compatibility alias), `regex`, `case_sensitive`, `word`, `path` (exact file), `glob` (file set; not with `path`), `context` (0–10), `max_results` (def 50, max 500) |
+| **Params** | `query` (required; `pattern` is a compatibility alias), `regex`, `case_sensitive`, `word`, `path` (one file or directory root), `glob` (name/type filter; combines with `path`), `context` (0–10), `max_results` (def 50, max 500) |
 | **Backend order** | **1)** system **`rg`** if present; **2)** built-in scan over **indexed** candidates when indexing is on; **3)** built-in scan over **live discovery** when indexing is off or the index is unavailable |
-| **Eligible set** | Index on → `status=indexed` paths from the snapshot/lazy query. Index off → live `discover_source_files()`. Exact `path` / tool `glob` further restrict. |
+| **Eligible set** | Index on → `status=indexed` paths from the snapshot/lazy query. Index off → live `discover_source_files()`. `path` further restricts to that file or its descendants; `glob` further restricts names/types. They combine. |
 | **`rg` details** | Soft dependency resolved only on the fixed process PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` (not the caller’s `PATH`). Invoked via `run_argv` / `fork`+`execve` (shell-free), with `--no-config`, line-oriented flags, optional `-F`/`-i`/`-w`/`-C`, and a per-file `--max-count`. Hits are **post-filtered** to the eligible set so security-review and agent semantics match the built-in path. Cancel/timeout apply to the child. |
 | **Fallback** | If `rg` is missing, fails, times out, or exits with status &gt; 1 → portable built-in scanner (open eligible files, `std::string::find` or ECMAScript `std::regex`). May add a short warning; never hard-fails solely because `rg` is absent. |
 | **Portability** | No new library deps (still libcurl + sqlite3). Most Windows machines lack `rg`; they use builtin only. Invalid ECMAScript patterns still return `invalid_regex` before either backend runs. |

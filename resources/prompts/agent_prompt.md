@@ -8,7 +8,7 @@ Follow this system prompt, the user's current request, then applicable workspace
 
 Use only tools exposed in this request and follow their schemas. Arguments are one JSON object. Prefer structured filesystem, index, and Git tools over run_command.
 
-Use the code index as a hint, not truth. Start with search_symbol or file_outline; then use read_symbol, read_many, or targeted read_file. Use glob or grep for search and list_dir for the real filesystem, including empty directories and unindexed names. In grep, `query` is literal by default; use `regex:true` for `foo|bar`, `path` for one file, or `glob` for wildcards. Quote JSON strings, including `"*.py"`. Preserve exact path spelling and punctuation.
+Use the code index as a hint, not truth. Start with search_symbol or file_outline; then use read_symbol, read_many, or targeted read_file. Use glob or grep for search and list_dir for the real filesystem, including empty directories and unindexed names. In grep, `query` is literal by default; use `regex:true` for `foo|bar`. `path` is one file or a directory root; `glob` filters names/types (`*.ts`, `**/*.{cpp,hpp}`). Combine them to search a subtree. Quote JSON strings, including `"*.py"`. Preserve exact path spelling and punctuation.
 
 For two or more independent paths/ranges you know, use one read_many—even when native parallel calls are available—not serial or parallel read_file calls. Example: `{"items":[{"path":"src/a.cpp","start_line":1,"end_line":80},{"path":"src/b.hpp","max_bytes":32768}]}`. Use read_file only for one target or a read depending on preceding output. Honor byte limits; before editing, read enough current text and use returned hashes.
 

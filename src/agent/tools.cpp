@@ -735,6 +735,17 @@ bool glob_matches(const std::string& path, const std::string& pattern) {
     return false;
 }
 
+// True when file is the search root itself or a contained descendant.
+// "src" matches "src" and "src/a.ts"; not "src-extra/a.ts".
+bool path_in_search_root(const std::string& file, const std::string& root) {
+    if (root.empty() || root == ".") return true;
+    const std::string normalized = normalize_glob_path(file);
+    if (normalized == root) return true;
+    return normalized.size() > root.size() &&
+           normalized.compare(0, root.size(), root) == 0 &&
+           normalized[root.size()] == '/';
+}
+
 bool has_unescaped_alternation(const std::string& query) {
     bool escaped = false;
     for (std::size_t index = 0; index < query.size(); ++index) {
@@ -3310,7 +3321,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         {"grep",
          "Search workspace UTF-8 sources (rg when available, else index/live scan). "
          "query is literal unless regex=true; unescaped | infers regex only when regex is "
-         "omitted. path=one file or glob=wildcards (not both). pattern aliases query.",
+         "omitted. path=one file or directory root; glob=name/type filter (*.ts, "
+         "**/*.{cpp,hpp}); combine them to search a subtree. pattern aliases query.",
          schema(search_fields, "\"query\"")},
         {"search_symbol",
          "Rank indexed symbols by lexical match, then static importance.",
@@ -4518,14 +4530,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result(
                 "invalid_arguments",
                 "missing required non-empty string argument: query (pattern is accepted as an alias)");
-        if (!path.empty() && !glob.empty())
-            return tool_error_result(
-                "invalid_arguments",
-                "path and glob cannot be combined; use path for one exact file or glob for a wildcard set");
         if (!path.empty() && !safe_relative_path(path))
             return tool_error_result("policy_denied",
                                      unsafe_path_message(path, "search"));
-        const std::string exact_path = normalize_glob_path(path);
+        const std::string search_root = normalize_glob_path(path);
         const bool regex_was_supplied = args.get("regex") != nullptr;
         const bool inferred_regex =
             !regex_was_supplied && has_unescaped_alternation(query);
@@ -4605,12 +4613,19 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         auto finish_search = [&](const char* backend) {
             json::Value metadata = object_value();
             metadata.object["search_backend"] = string_value(backend);
-            if (!exact_path.empty() &&
-                eligible_paths.find(exact_path) == eligible_paths.end())
-                warnings.push_back(
-                    "exact path is not an eligible source file in the current "
-                    "workspace: " +
-                    exact_path);
+            if (!search_root.empty()) {
+                bool any_in_root = false;
+                for (const std::string& candidate : eligible_paths) {
+                    if (path_in_search_root(candidate, search_root)) {
+                        any_in_root = true;
+                        break;
+                    }
+                }
+                if (!any_in_root)
+                    warnings.push_back(
+                        "path is not an eligible source file or directory: " +
+                        search_root);
+            }
             return envelope(true, std::move(data), "", "", warnings, truncated,
                             std::move(metadata));
         };
@@ -4641,8 +4656,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             argv.push_back("--");
             argv.push_back(query);
-            if (!exact_path.empty())
-                argv.push_back(exact_path);
+            if (!search_root.empty())
+                argv.push_back(search_root);
             else
                 argv.push_back(".");
 
@@ -4692,7 +4707,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     if (!parse_rg_output_line(line, hit_path, hit_line, hit_text,
                                              is_match))
                         continue;
-                    if (!exact_path.empty() && hit_path != exact_path) continue;
+                    if (!path_in_search_root(hit_path, search_root)) continue;
                     if (!glob.empty() && !glob_matches(hit_path, glob)) continue;
                     // Keep results inside the eligible index/discovery universe so
                     // security-review and agent semantics match the built-in path.
@@ -4829,14 +4844,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
 
         // --- Built-in portable scanner (index candidates, else live discovery). ---
-        bool exact_path_seen = exact_path.empty();
         for (const SearchFile& file : candidates) {
             if (cancellation.cancelled())
                 return tool_error_result("cancelled", "text search cancelled");
-            if (!exact_path.empty() &&
-                normalize_glob_path(file.path) != exact_path)
-                continue;
-            exact_path_seen = true;
+            if (!path_in_search_root(file.path, search_root)) continue;
             if (!glob.empty() && !glob_matches(file.path, glob)) continue;
             SourceRange source;
             const std::size_t read_cap = std::max<std::size_t>(
@@ -4882,10 +4893,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 data.array.push_back(std::move(match));
             }
             if (truncated) break;
-        }
-        if (!exact_path_seen && !exact_path.empty() &&
-            eligible_paths.find(exact_path) == eligible_paths.end()) {
-            // finish_search also warns; avoid duplicate when path missing.
         }
         return finish_search(use_index_candidates ? "builtin_index"
                                                   : "builtin_live");
