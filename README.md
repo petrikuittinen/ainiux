@@ -6,7 +6,7 @@ Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compati
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.17**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.18**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -93,11 +93,13 @@ ainiux deepseek -m "deepseek-v4-flash" -a
 
 Chat, editor, and agent share terminal presentation and selectors, but not semantics. Switch explicitly with `/chat`, `/editor`, `/agent`, `/mode`, `/cycle`, or `Ctrl+G`. From an interactive agent turn you can hop to the editor or dired with `Ctrl+G` / `F4` without cancelling the turn; temporary editor hops keep the project session open. Leaving for chat or quitting finishes the agent session and disarms tools.
 
-I have tested Ainiux using mostly the following local models: Qwen3.6-35B-A3B, Qwen3.6-27B, Gemma-4-26-A4B and Gemma-4-31B.
+Ainiux works especially well with **DeepSeek-V4-Flash**, **DeepSeek-V4-Pro**,
+**GPT-5.6**, and local **Qwen3.6** and **Gemma-4** model series. These are the
+families used most heavily while developing and testing the current agent,
+reasoning, tool-calling, and local OpenAI-compatible server paths. Exact model
+availability and identifiers still depend on the selected provider or local server.
 
-From cloud models I have mostly relied on Deepseek-V4-Flash via official Deepseek API and lots of models Openrouter e.g. gpt-5.6-luna to gpt-5.6-sol to gemini-3.6-flash and gemini-3.5-lite.
-
-## Current v1.17 capabilities
+## Current v1.18 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -171,6 +173,12 @@ In a measured audit on the current 20-core ARM64 system, 437 files and 11,631 de
 
 See [Agent workflows](docs/agent.md), [MCP servers](docs/mcp.md), [code-index internals](docs/code_index_and_tool_calls_explained.md), and [Security](docs/security.md).
 
+The native tool API is deliberately compact: `index`, `ls`, `glob`, `grep`,
+`symbol`, `outline`, `read`, `run`, `fetch`, `web_search`, `goal_met`, `attach`,
+`edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch` as applicable to the
+session. Removed long names and aliases are not silently accepted. See the
+[native tool inventory](docs/tool_calls.md) for availability and policy details.
+
 ### MCP tools (agent only)
 
 Install servers into `~/.ainiux/mcp/registry.json` (CLI; no model key required), then use them from `-a` / `--run` / `--plan`:
@@ -183,7 +191,8 @@ ainiux --add-mcp time --mcp-transport stdio -- npx -y @modelcontextprotocol/serv
 
 Tools appear as `mcp__<server>__<tool>`. In agent: `/list-mcp`, `/enable-mcp`, `/disable-mcp`, `/remove-mcp`; `/add-mcp` shows CLI install examples (install stays CLI-only). Full guide: [docs/mcp.md](docs/mcp.md).
 
-For a **text-only agent model + local vision LLM**, use the bundled bridge:
+For a **text-only agent model + local vision LLM**, use the bundled bridge
+(optional Pillow/`ffmpeg` downscale to ~1024px long edge for large PNG/JPEG/GIF/WebP):
 
 ```sh
 python3 scripts/image_mcp_server.py http://localhost:30000 --port 8765
@@ -311,7 +320,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.17 history](docs/version-history.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.18 history](docs/version-history.md).
 
 For the complete current option list, run:
 

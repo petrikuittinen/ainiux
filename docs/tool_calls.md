@@ -1,4 +1,4 @@
-# Agent-mode native tool inventory
+# Agent-mode native tool inventory (v1.18)
 
 Current advertised names from `ReadToolRegistry::definitions()` in
 `src/agent/tools.cpp`. Silent execute aliases are gone: old names such as

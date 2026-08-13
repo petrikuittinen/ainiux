@@ -172,10 +172,10 @@ For each model-projected message and each tool event (sorted by `seq`):
 
 | Tier | Tools | Reduced form |
 | --- | --- | --- |
-| **Prune** | `ls` (+ legacy `list_dir` / `list_directory`), `glob`, `index` (+ legacy `index_overview` / `project_overview`); also legacy removed `index_*` names | One line: `tool(args) -> ok\|fail` |
-| **Stub** | `read` (+ legacy `read_file` / `read_many` / `read_symbol`), `outline` (+ legacy `file_outline` / `get_skeleton`), `symbol` (+ legacy `search_symbol`), `grep` (+ legacy `search_text`/`find`), `fetch` (+ legacy `fetch_url`), `web_search` (+ legacy `search_web`); also legacy removed macro tools | Args/target + status; bodies omitted (“reloadable”); searches keep hit paths + line numbers when parseable; failures keep ≤ **400** error bytes |
-| **Digest** | `edit` / `write` / `rm` / `mkdir` / `mv` / `apply_patch` / `attach` / `goal_met` (+ legacy `edit_file`, `write_file`, `str_replace`, `rename_path`, `remove`, `create_directory`, `attach_image`) | Path(s) + op + status; drop content/diff bodies |
-| **Semantic** | `run` (+ legacy `run_command`, `git_status`, `git_diff`) | Exit status + failure-oriented lines (or a short pass head); git-like irreversible actions annotated |
+| **Prune** | `ls`, `glob`, `index`; old transcript-only names such as `list_dir` and `index_overview` are recognized for migration | One line: `tool(args) -> ok\|fail` |
+| **Stub** | `read`, `outline`, `symbol`, `grep`, `fetch`, `web_search`; removed names are recognized only when compacting an older transcript | Args/target + status; bodies omitted (“reloadable”); searches keep hit paths + line numbers when parseable; failures keep ≤ **400** error bytes |
+| **Digest** | `edit` / `write` / `rm` / `mkdir` / `mv` / `apply_patch` / `attach` / `goal_met`; removed mutation names are recognized only in old transcripts | Path(s) + op + status; drop content/diff bodies |
+| **Semantic** | `run`; removed command/Git tool names are recognized only in old transcripts | Exit status + failure-oriented lines (or a short pass head); git-like irreversible actions annotated |
 | **Full / size** | other tools | Keep full text if result ≤ **1024** bytes; else args + 200 head/tail excerpt + “re-run to reload” |
 
 Orphan display tool rows with content **> 512** bytes are also reduced
@@ -259,10 +259,10 @@ So for a known window, the checkpoint text is bounded by roughly
 
 **Middle pre-shrink** (after partition, before fast/summary):
 
-1. Consecutive `read_file` stubs → one synthetic `read_many` (≤100 paths).
-2. Consecutive explore tools (`grep` / `list_dir` / `glob` /
-   `index_overview`, plus legacy names) → one `explored: …` line.
-3. `read_file(path)` immediately followed by a Digest mutation on the same
+1. Consecutive `read` stubs → one synthetic batched-read summary (≤100 paths).
+2. Consecutive explore tools (`grep` / `ls` / `glob` / `index`, including
+   their old transcript names) → one `explored: …` line.
+3. `read(path)` immediately followed by a Digest mutation on the same
    path → drop the read (edit digest already names the file).
 4. Hash dedupe of identical stub re-reads (keep newest, annotate `×N`).
 5. Empty/short assistant tool-only turns collapse to one line.

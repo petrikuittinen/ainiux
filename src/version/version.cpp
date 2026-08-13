@@ -10,7 +10,7 @@ namespace ainiux {
 
 const char appName[] = "Ainiux";
 
-const char versionNumber[] = "1.17";
+const char versionNumber[] = "1.18";
 
 const char kCopyright[] = "Copyright (c) 2026 Petri Kuittinen";
 

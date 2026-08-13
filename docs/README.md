@@ -20,7 +20,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
 | [Security](security.md) | Credential, persistence, fetch, attachment, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
-| [Version history](version-history.md) | Compact v0.0–v1.17 release timeline plus unreleased work |
+| [Version history](version-history.md) | Compact v0.0–v1.18 release timeline plus unreleased work |
 
 ## Architecture and implementation references
 
@@ -46,4 +46,3 @@ These documents preserve audit context. Their dates and code references matter; 
 - [License](../LICENSE) contains the Modified MIT terms and no-warranty language.
 
 Every Markdown document under `docs/` is linked from this index. Topical guides also link back here so readers can distinguish current instructions from historical or internal material.
-

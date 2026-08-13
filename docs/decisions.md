@@ -90,7 +90,7 @@ The first agent-like runtime is deliberately a single explicit non-interactive m
 
 `src/agent/agent_loop.*` is the reusable v1.0 agent turn engine. `src/agent/session_runtime.*` owns a prepared multi-turn workspace session (index refresh, mutation tools, `agent.sqlite`, AGENTS.md, tool conversation). Headless one-shot entry is `ainiux run` / `--run` / `-r` via `src/app/agent_mode.cpp` (`run_agent_goal` → one prepared turn); interactive entry is `ainiux agent` / `--agent` / `-a` via `InteractiveMode::Agent` reusing the same runtime across user messages. It owns history hygiene (invalid tool `arguments` are stored locally for error results but rewritten to `"{}"` in provider continuation items; dangling call ids get synthetic `cancelled` results), separate transport retry budgets (3 attempts with 1s/2s/4s backoff; immediate fail on 400/401/403/404 and deterministic schema/auth errors; never auto re-run tools), loop limits (identical-call soft notice at 3 / hard abort at 5; consecutive all-failed abort at 3 for non-identical thrashing; 50-turn scripted cap with interactive continue), and native→XML protocol downgrade after two consecutive leaked `<tool_call>` markup turns on the native channel. Mid-session protocol downgrade injects a user notice and does not rewrite the system prompt, so provider-side prompt caching stays valid.
 
-## User-initiated shell vs agent `run_command`
+## User-initiated shell vs agent `run`
 
 Interactive chat, agent TUI, and REPL offer user shell for the human operator via
 `src/app/user_shell.*`: `/bin/sh -c` on POSIX, or built-in Windows PowerShell 5.1
@@ -100,7 +100,7 @@ closed stdin, bounded pipes, timeout, cancellation, and a sanitized environment:
 - `/shell` / `!` → display-only `notice` (filtered from provider payloads and chat SQLite).
 - `/shell-stdout` / `!!` → pure redacted stdout replaces the TUI input draft; the user must submit explicitly (Enter/Ctrl+S). Safer than auto-injecting shell output as a user message.
 
-This is intentionally **not** the agent tool path. Agent `run_command`
+This is intentionally **not** the agent tool path. Agent `run`
 (`src/agent/process.*`) is direct argv execution with structural argument safety
 and a **denylist / Guard** for dangerous forms. POSIX uses fixed-PATH `execve`;
 Windows resolves absolute executables from inherited absolute PATH entries,
@@ -111,9 +111,9 @@ across platform toolchains.
 
 ## Guard Ask approvals (interactive only)
 
-Destructive-command Guard returns Allow, Deny, or Ask. Hard Deny (shell wrappers, sudo, disk destroyers, `find -delete`) is never elevatable. Ask is for high-risk-but-sometimes-legitimate actions (`git reset --hard`, force push, recursive `rm`, database-file `remove`, **creating missing parent directories** via `create_dirs`).
+Destructive-command Guard returns Allow, Deny, or Ask. Hard Deny (shell wrappers, sudo, disk destroyers, `find -delete`) is never elevatable. Ask is for high-risk-but-sometimes-legitimate actions (`git reset --hard`, force push, recursive `rm`, database-file deletion, **creating missing parent directories** via `create_dirs`).
 
-Interactive Agent layers a project-persisted `confirm`/`smart`/`yolo` permission policy above Guard. The registry validates a complete tool call before requesting one consolidated decision, then revalidates canonical external targets before mutation. Native exact-path tools are preferred over command equivalents because they are structured, bounded, cancellable, and easier to validate. External changes intentionally receive no project history/index entry. `run_command` stays fixed-PATH direct argv execution; approval never enables shell composition.
+Interactive Agent layers a project-persisted `confirm`/`smart`/`yolo` permission policy above Guard. The registry validates a complete tool call before requesting one consolidated decision, then revalidates canonical external targets before mutation. Native exact-path tools are preferred over command equivalents because they are structured, bounded, cancellable, and easier to validate. External changes intentionally receive no project history/index entry. `run` stays fixed-PATH direct argv execution; approval never enables shell composition.
 
 Provider account-credit display is likewise registry-driven and optional. A profile may expose one official authenticated credit URL; the provider adapter owns its response schema and normalized currency/amount result, while a cancellable runtime job delivers that result to the TUI event queue. The UI stores only the formatted in-memory label, silently omits unavailable balances, and never persists raw billing responses.
 
@@ -130,7 +130,7 @@ absolute—it is a relative component—so rejecting only
 dirs, or absolutes are rejected. Identity-based containment anchors a new target
 to its canonical existing parent and verifies existing targets by filesystem
 identity. Windows additionally applies its lexical path rules and rejects any
-link/reparse component in sensitive operations. `create_directories` never
+link/reparse component in sensitive operations. `mkdir` never
 replaces existing non-directories and never deletes trees.
 
 ## Chat vs interactive agent (shared shell, separate modes)
@@ -149,13 +149,13 @@ Shared code lives under `src/tui/` and `src/ui/`; mode identity is `InteractiveM
 
 Trusted prompts: agent sessions use the bounded `resources/prompts/agent_prompt.md` plus a static native/XML appendix. The initial Act/Plan state is a separate Ainiux control message; later switches append controls and, only when changed, refreshed framed root `AGENTS.md` instructions. They never rewrite the earlier model-visible prefix. Compaction rebuilds the stable base with only the active mode. Native Act and Plan requests advertise the same ordered tool superset, while `MutationPolicy` enforces mode authority. `master_prompt.md` and `security_prompt.md` are retained exclusively for security review and still compose with the historical exact `master + "\n" + security` byte sequence. Security-review keeps its own bounded finalization loop and retry helper so its acceptance behavior stays stable. Diagnostic JSONL logging is shared (`ReviewLogger`) with a run-kind parameter so security-review and agent logs live under separate directories with the same live-flush / finalize semantics.
 
-Agent tool authorization uses `MutationPolicy::{Disabled,PlanningDocuments,Full}`. `run_command` has three distinct policies: security-review retains its narrow index-snapshot inspection allowlist, Plan permits only complete argv forms accepted by a conservative built-in read-only classifier, and Act retains the broad Guard-controlled direct runner. Smart reuses the Plan classifier solely as an approval exemption after Guard and canonical command-aware path validation; Confirm still asks for every executable command and Yolo is unchanged. Unknown commands/options therefore ask in Act/Smart but cannot be elevated in Plan. Redirects, substitutions, pipes, and other shell syntax remain structural errors rather than inputs to a partial shell/output-path parser. Plan retains configured network tools and preflights every edit/patch destination before mutation. Its only writable destinations are root `PLANS.md`, `PLAN.md`, `TODO.md`, `AGENTS.md`, and case-sensitive `.md` files under an existing `docs/plans/` tree.
+Agent tool authorization uses `MutationPolicy::{Disabled,PlanningDocuments,Full}`. `run` has three distinct policies: security-review retains its narrow index-snapshot inspection allowlist, Plan permits only complete argv forms accepted by a conservative built-in read-only classifier, and Act retains the broad Guard-controlled direct runner. Smart reuses the Plan classifier solely as an approval exemption after Guard and canonical command-aware path validation; Confirm still asks for every executable command and Yolo is unchanged. Unknown commands/options therefore ask in Act/Smart but cannot be elevated in Plan. Redirects, substitutions, pipes, and other shell syntax remain structural errors rather than inputs to a partial shell/output-path parser. Plan retains configured network tools and preflights every edit/patch destination before mutation. Its only writable destinations are root `PLANS.md`, `PLAN.md`, `TODO.md`, `AGENTS.md`, and case-sensitive `.md` files under an existing `docs/plans/` tree.
 
 Review workers receive an explicit per-batch `EXPECTED_COVERAGE` array and normally terminate with a schema-defined `submit_security_review` call. The loop has a bounded finalization phase: it reminds an over-exploring model after round 12, exposes only submission from round 16, and stops after round 20 or 64 calls. Free-form final content is retained for compatible endpoints, but normalization only extracts one already-valid JSON object from common preamble/fence framing; it never repairs syntax and rejects multiple objects.
 
 Security-review diagnostic logs append each JSONL event to a live `*.jsonl.partial` path and flush after every record so operators can `tail -f` progress. The path is printed on `stderr` at start; graceful completion renames the file to the final `*.jsonl` name.
 
-Security-review read tools are views over narrow index snapshot records, not SQLite handles. Index file/symbol rows remain hints; review source ranges are accepted only after reading the real file once and matching its indexed hash. The virtual snapshot tree is the security-review authorization list, so ignored, unsupported, generated, VCS, state, traversal, and symlink paths do not become review-readable. Agent mode keeps index/search/symbol tools on that snapshot but routes exact-path `read_file` and `read_many` through the same validated live-filesystem layer as its native mutation tools, allowing safe unindexed project files without broadening protected metadata or symlink access. A shared native process runner exists because inspection command lifecycle, process trees, bounded pipes, cancellation, and Git hardening are reusable concerns; the security-review policy is a conservative read-only allowlist and never uses `system`, `popen`, or an unrestricted shell.
+Security-review read tools are views over narrow index snapshot records, not SQLite handles. Index file/symbol rows remain hints; review source ranges are accepted only after reading the real file once and matching its indexed hash. The virtual snapshot tree is the security-review authorization list, so ignored, unsupported, generated, VCS, state, traversal, and symlink paths do not become review-readable. Agent mode keeps index/search/symbol tools on that snapshot but routes exact-path `read` calls, including `items` batches, through the same validated live-filesystem layer as its native mutation tools, allowing safe unindexed project files without broadening protected metadata or symlink access. A shared native process runner exists because inspection command lifecycle, process trees, bounded pipes, cancellation, and Git hardening are reusable concerns; the security-review policy is a conservative read-only allowlist and never uses `system`, `popen`, or an unrestricted shell.
 
 The security-review command runner post-filters path-listing/search stdout against its index snapshot. Agent Act/Plan does not apply that output filter: after command and canonical path validation, stdout represents the live project filesystem in every interactive permission mode. Besides being the intended live-filesystem behavior, this avoids incorrectly treating formatted rows such as `ls -l` output as literal filenames.
 
@@ -276,7 +276,7 @@ Image input is Chat Completions-only. Non-interactive repeated `--attach` remain
 
 Interactive agent (`ainiux agent` / `--agent`) reuses the same `/attach` chrome as chat, but image (and new text) attachments are **request-local for that user turn only**. Bytes are base64-encoded in RAM, placed on the tool-conversation user message for every model/tool round of the turn, then stripped when the turn ends. They are never written to `.ainiux-pr/agent.sqlite`, never imported into `~/.ainiux/media`, and do not survive `/compact` or session restart—the user re-attaches from disk if the model needs the image again. Durable transcript keeps only text provenance (paths / “Attached images” lines). Chat Completions capability gates (`validate_image_input`) still apply; Responses multimodal remains unsupported.
 
-The agent also exposes `attach_image` so the model can opt into vision only when needed: load one local PNG/JPEG/GIF under the project (or an approved external path), queue it, and inject a multimodal user item after that tool round for subsequent rounds of the same turn. A per-turn cap (default 4) and `--max-image-bytes` bound context growth. Paths mentioned in free text are **not** auto-attached—that would easily overfill context with large screenshots. Models must not use Python/PIL to open images; `read_file` on an image returns a clear redirect to `attach_image` or user `/attach`.
+The agent also exposes `attach` so the model can opt into vision only when needed: load one local PNG/JPEG/GIF under the project (or an approved external path), queue it, and inject a multimodal user item after that tool round for subsequent rounds of the same turn. A per-turn cap (default 4) and `--max-image-bytes` bound context growth. Paths mentioned in free text are **not** auto-attached—that would easily overfill context with large screenshots. Models must not use Python/PIL to open images; `read` on an image returns a clear redirect to `attach` or user `/attach`.
 
 Managed-media expiration uses the media object's last successful thread-save time. TUI `/cleanup` applies `[media] expiration_days` and protects the currently open thread; chat startup applies the longer `[media] auto_expiration_days`. Zero disables the corresponding path. Expiration tombstones the media object instead of breaking database foreign keys, marks every affected live thread read-only, then removes the raw file. A missing file discovered during thread loading applies the same read-only lock. Read-only threads remain viewable and exportable but cannot be continued or have their transcript mutated. Content-addressed objects without a message reference, such as an attachment abandoned before prompt submission, become eligible by the same age rule.
 
@@ -298,7 +298,7 @@ Provider selection is client-side and independent from LLM provider profiles. Co
 
 The module reuses the existing libcurl HTTP wrapper. Google HTML scraping was removed: modern Google search pages return JavaScript-only shells to non-browser clients, so free Google SERP access is not reliable without a browser stack or a paid API. DuckDuckGo HTML is the supported keyless path (title, URL, snippet). Result URLs longer than 512 bytes are truncated (prefer dropping query/fragment). Agent-mode `web_search` hard-caps at 3 results so models do not fetch large SERPs. URL fetch sends a desktop Firefox User-Agent plus browser-like Accept/Sec-Fetch headers. A more reliable free search provider remains open work (see TODO.md).
 
-Agent `fetch_url` always converts HTML to Markdown (or keeps `text/plain`) via `fetch_text` + `src/html/`. Raw HTML is never returned in tool results: full pages carry scripts/styles/hidden markup (prompt-injection risk) and waste tokens. CLI `--fetch-url` may still print HTML for local export. Legacy `extract_text=false` is ignored if a model still sends it. Tool `max_bytes` caps the **Markdown output** the model sees; the raw download uses a larger ceiling so HTML→MD is not aborted on bloated pages. HTTP redirects are followed (bounded) with the same private-address socket checks on each hop—trailing-slash 301s from WordPress-style hosts are common and previously failed as bare “HTTP 301”.
+Agent `fetch` always converts HTML to Markdown (or keeps `text/plain`) via `fetch_text` + `src/html/`. Raw HTML is never returned in tool results: full pages carry scripts/styles/hidden markup (prompt-injection risk) and waste tokens. CLI `--fetch-url` may still print HTML for local export. Legacy `extract_text=false` is ignored if a model still sends it. Tool `max_bytes` caps the **Markdown output** the model sees; the raw download uses a larger ceiling so HTML→MD is not aborted on bloated pages. HTTP redirects are followed (bounded) with the same private-address socket checks on each hop—trailing-slash 301s from WordPress-style hosts are common and previously failed as bare “HTTP 301”.
 
 ## Request-Only Context Policies
 
@@ -358,7 +358,7 @@ Lock metadata uses a bounded, versioned, hex-encoded line format so arbitrary ca
 
 The ENOSPC fault launcher preserves the ordinary `posix_io_mock.so` preload for normal binaries. For sanitizer binaries it detects the ASan dependency, resolves the compiler's runtime, and places that runtime first in `LD_PRELOAD`; an unresolved sanitizer runtime is an explicit unsupported-toolchain failure. The aggregate `test` target invokes integration tests only after unit and fault tests complete, including under parallel make.
 
-## Compact native agent tool schemas (v1.17+)
+## Compact native agent tool schemas (v1.18)
 
 Native tool definitions are sent on every tool-capable model request and were
 exceeding ~4k tokens for a full Act session. The registry was slimmed by:
@@ -366,16 +366,12 @@ exceeding ~4k tokens for a full Act session. The registry was slimmed by:
 1. **Removing unused tools** from the advertised set: `index_status`,
    `index_update`, `index_rebuild`, `find_tests`, `inspect_code_task` (index
    lifecycle remains CLI/mutation-driven).
-2. **Renaming for industry alignment** (Claude Code / OpenCode / OpenAI / Hermes):
-   - `search_text` → **`grep`** (primary; drop duplicate `find` schema)
-   - `search_web` → **`web_search`**
-   - `list_directory` → **`list_dir`**
-   - `project_overview` → **`index_overview`**
-   - `get_skeleton` → **`file_outline`**
-   - Keep `fetch_url`, `attach_image`, `edit_file`, `apply_patch`, `run_command`
+2. **Renaming for industry alignment:** the final advertised native set uses
+   `index`, `ls`, `glob`, `grep`, `symbol`, `outline`, `read`, `run`, `fetch`,
+   `web_search`, `goal_met`, `attach`, `edit`, `write`, `mkdir`, `mv`, `rm`,
+   and `apply_patch`, subject to session policy.
 3. **Compacting tool descriptions** while preserving wire schemas and critical
-   compatibility cues for `edit_file` (flat ops), `apply_patch` (Codex markers),
-   and `run_command` (shell-free argv).
-4. **Silent execute-time aliases** for old names so prior transcripts and
-   habit-trained models still work without paying schema tokens.
-
+   compatibility cues for `edit` (flat ops), `apply_patch` (Codex markers),
+   and `run` (shell-free argv).
+4. **Removing execute-time aliases.** Old names are not advertised or accepted;
+   compaction alone can still recognize them in transcripts created by older releases.

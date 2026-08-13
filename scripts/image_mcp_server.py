@@ -12,7 +12,8 @@ Example:
   ainiux deepseek -m deepseek-v4-flash -r "Describe the attached image." \\
     --attach tests/image_files/sea_view.jpg
 
-Stdlib only (Python 3.8+).
+Core server is stdlib-only (Python 3.8+). Optional large-image downscale uses
+Pillow (if importable) or ffmpeg on PATH — see --resize / --max-edge.
 """
 
 from __future__ import annotations
@@ -22,7 +23,10 @@ import base64
 import json
 import mimetypes
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,9 +36,12 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 SERVER_NAME = "ainiux-image-mcp"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
 
 DEFAULT_PROMPT = "Describe this image in detail. Be specific about objects, text, colors, and layout."
+DEFAULT_MAX_EDGE = 1024
+DEFAULT_SOFT_BYTES = 512 * 1024
+DEFAULT_JPEG_QUALITY = 85
 
 
 def tool_result_text(text: str, is_error: bool = False) -> Dict[str, Any]:
@@ -152,6 +159,198 @@ def load_image_from_args(
         raw = fh.read()
     mime = str(args.get("mime_type") or args.get("mime") or mime_from_path(path))
     return base64.b64encode(raw).decode("ascii"), mime, None
+
+
+class ResizePolicy:
+    """Optional downscale before sending pixels to the vision endpoint."""
+
+    def __init__(
+        self,
+        backend: str = "auto",
+        max_edge: int = DEFAULT_MAX_EDGE,
+        soft_bytes: int = DEFAULT_SOFT_BYTES,
+        jpeg_quality: int = DEFAULT_JPEG_QUALITY,
+        ffmpeg_path: str = "",
+    ) -> None:
+        self.backend = backend  # auto|pillow|ffmpeg|none
+        self.max_edge = max(0, int(max_edge))
+        self.soft_bytes = max(0, int(soft_bytes))
+        self.jpeg_quality = max(1, min(95, int(jpeg_quality)))
+        self.ffmpeg_path = ffmpeg_path.strip() or "ffmpeg"
+
+    def resolve_backend(self) -> str:
+        if self.backend == "none":
+            return "none"
+        if self.backend == "pillow":
+            return "pillow" if _pillow_available() else ""
+        if self.backend == "ffmpeg":
+            return "ffmpeg" if _ffmpeg_available(self.ffmpeg_path) else ""
+        # auto: Pillow first (no process spawn), then ffmpeg
+        if _pillow_available():
+            return "pillow"
+        if _ffmpeg_available(self.ffmpeg_path):
+            return "ffmpeg"
+        return ""
+
+
+def _pillow_available() -> bool:
+    try:
+        from PIL import Image  # noqa: F401
+
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _ffmpeg_available(ffmpeg_path: str) -> bool:
+    path = shutil.which(ffmpeg_path) if ffmpeg_path else None
+    return bool(path)
+
+
+def _image_size_pillow(raw: bytes) -> Optional[Tuple[int, int]]:
+    try:
+        from PIL import Image
+        import io
+
+        with Image.open(io.BytesIO(raw)) as im:
+            return int(im.width), int(im.height)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def needs_resize(raw: bytes, policy: ResizePolicy) -> bool:
+    if policy.backend == "none" or policy.max_edge <= 0:
+        return False
+    if policy.soft_bytes > 0 and len(raw) > policy.soft_bytes:
+        return True
+    dims = _image_size_pillow(raw)
+    if dims is not None:
+        return max(dims[0], dims[1]) > policy.max_edge
+    # Unknown dims without Pillow: only soft-byte trigger applies above.
+    return False
+
+
+def resize_with_pillow(raw: bytes, policy: ResizePolicy) -> Tuple[bytes, str]:
+    from PIL import Image
+    import io
+
+    with Image.open(io.BytesIO(raw)) as im:
+        # First frame only for animated GIF/WebP
+        if getattr(im, "n_frames", 1) > 1:
+            im.seek(0)
+        im = im.convert("RGB")
+        w, h = im.size
+        edge = max(w, h)
+        if edge > policy.max_edge > 0:
+            scale = policy.max_edge / float(edge)
+            new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+            # LANCZOS is the usual downscale filter; fall back for older Pillow.
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            im = im.resize(new_size, resample)
+        out = io.BytesIO()
+        im.save(out, format="JPEG", quality=policy.jpeg_quality, optimize=True)
+        return out.getvalue(), "image/jpeg"
+
+
+def resize_with_ffmpeg(raw: bytes, mime: str, policy: ResizePolicy) -> Tuple[bytes, str]:
+    ext = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+    }.get(mime.lower() if mime else "", ".bin")
+    ffmpeg = shutil.which(policy.ffmpeg_path) or policy.ffmpeg_path
+    in_path = out_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as fh_in:
+            fh_in.write(raw)
+            in_path = fh_in.name
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as fh_out:
+            out_path = fh_out.name
+        # Cap whichever input dimension is longer; -2 preserves aspect ratio and
+        # keeps the derived dimension even for encoders that require it.
+        vf = (
+            "scale="
+            f"'if(gt(iw,ih),min({policy.max_edge},iw),-2)':"
+            f"'if(gt(iw,ih),-2,min({policy.max_edge},ih))'"
+        )
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            in_path,
+            "-vf",
+            vf,
+            "-frames:v",
+            "1",
+            "-q:v",
+            str(max(2, min(31, int(round((100 - policy.jpeg_quality) * 31 / 100)) or 2))),
+            out_path,
+        ]
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        if proc.returncode != 0 or not os.path.isfile(out_path):
+            err = (proc.stderr or b"").decode("utf-8", errors="replace")[:400]
+            raise RuntimeError(f"ffmpeg resize failed (exit {proc.returncode}): {err}")
+        with open(out_path, "rb") as fh:
+            data = fh.read()
+        if not data:
+            raise RuntimeError("ffmpeg produced empty output")
+        return data, "image/jpeg"
+    finally:
+        for p in (in_path, out_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
+def maybe_downscale(
+    b64: str, mime: str, policy: ResizePolicy
+) -> Tuple[str, str, Optional[str], Optional[str]]:
+    """Return (b64, mime, note, error). note is informational; error aborts the tool."""
+    try:
+        raw = base64.b64decode(b64, validate=False)
+    except Exception as exc:  # noqa: BLE001
+        return b64, mime, None, f"invalid base64 before resize: {exc}"
+
+    if not needs_resize(raw, policy):
+        return b64, mime, None, None
+
+    backend = policy.resolve_backend()
+    if not backend:
+        if policy.backend == "none":
+            return b64, mime, None, None
+        return (
+            b64,
+            mime,
+            None,
+            "image is large (over soft-bytes or max-edge) but no resize backend is available; "
+            "install Pillow (pip/python3-pil) or ffmpeg, or pass --resize none to force full size",
+        )
+
+    try:
+        if backend == "pillow":
+            out_raw, out_mime = resize_with_pillow(raw, policy)
+        else:
+            out_raw, out_mime = resize_with_ffmpeg(raw, mime, policy)
+    except Exception as exc:  # noqa: BLE001
+        return b64, mime, None, f"image resize failed ({backend}): {exc}"
+
+    note = (
+        f"resized via {backend}: {len(raw)} → {len(out_raw)} bytes, "
+        f"max_edge={policy.max_edge}, mime={out_mime}"
+    )
+    return base64.b64encode(out_raw).decode("ascii"), out_mime, note, None
 
 
 def extract_message_text(message: Dict[str, Any]) -> str:
@@ -296,11 +495,13 @@ class ServerConfig:
         mode: str,
         max_image_bytes: int,
         require_session: bool,
+        resize: Optional[ResizePolicy] = None,
     ) -> None:
         self.vision = vision
         self.mode = mode
         self.max_image_bytes = max_image_bytes
         self.require_session = require_session
+        self.resize = resize or ResizePolicy(backend="none")
         self.sessions: Dict[str, bool] = {}
         self.lock = threading.Lock()
 
@@ -309,7 +510,10 @@ def tools_list() -> List[Dict[str, Any]]:
     props = {
         "path": {
             "type": "string",
-            "description": "Absolute filesystem path to a PNG/JPEG/GIF (or WebP if the endpoint allows).",
+            "description": (
+                "Absolute filesystem path to a PNG/JPEG/GIF/WebP image "
+                "(WebP/GIF use first frame when resized)."
+            ),
         },
         "image_base64": {
             "type": "string",
@@ -357,6 +561,11 @@ def handle_describe(cfg: ServerConfig, args: Dict[str, Any]) -> Dict[str, Any]:
     b64, mime, err = load_image_from_args(args, cfg.max_image_bytes)
     if err or not b64 or not mime:
         return tool_result_text(err or "failed to load image", is_error=True)
+
+    b64, mime, resize_note, resize_err = maybe_downscale(b64, mime, cfg.resize)
+    if resize_err:
+        return tool_result_text(resize_err, is_error=True)
+
     prompt = args.get("prompt") or args.get("question") or DEFAULT_PROMPT
     if not isinstance(prompt, str) or not prompt.strip():
         prompt = DEFAULT_PROMPT
@@ -371,6 +580,9 @@ def handle_describe(cfg: ServerConfig, args: Dict[str, Any]) -> Dict[str, Any]:
         return tool_result_text(str(exc), is_error=True)
     if not text:
         return tool_result_text("vision model returned empty content", is_error=True)
+    if resize_note:
+        # Keep the model-facing answer clean; note only in non-error path as suffix.
+        text = text.rstrip() + f"\n\n[{resize_note}]"
     return tool_result_text(text)
 
 
@@ -521,6 +733,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path in ("/", "/health"):
+            backend = self.config.resize.resolve_backend() or (
+                "none" if self.config.resize.backend == "none" else "unavailable"
+            )
             self._send_json(
                 200,
                 {
@@ -530,6 +745,9 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": self.config.mode,
                     "upstream": self.config.vision.base_v1,
                     "model": self.config.vision.model,
+                    "resize": self.config.resize.backend,
+                    "resize_backend": backend,
+                    "max_edge": self.config.resize.max_edge,
                 },
             )
             return
@@ -630,13 +848,39 @@ def run_self_test(cfg: ServerConfig, image_path: str) -> int:
     return 0
 
 
+def run_self_test_resize(image_path: str, max_image_bytes: int, policy: ResizePolicy) -> int:
+    b64, mime, err = load_image_from_args({"path": image_path}, max_image_bytes)
+    if err or not b64 or not mime:
+        print("self-test-resize FAILED:", err or "load failed", file=sys.stderr)
+        return 1
+    raw_len = len(base64.b64decode(b64, validate=False))
+    out_b64, out_mime, note, resize_err = maybe_downscale(b64, mime, policy)
+    if resize_err:
+        print("self-test-resize FAILED:", resize_err, file=sys.stderr)
+        return 1
+    out_len = len(base64.b64decode(out_b64, validate=False))
+    backend = policy.resolve_backend() or "none"
+    print(
+        f"self-test-resize OK: path={image_path} in_bytes={raw_len} out_bytes={out_len} "
+        f"out_mime={out_mime} backend={policy.backend}/{backend}"
+    )
+    if note:
+        print(note)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Local OpenAI-compatible vision bridge as an MCP server for ainiux"
     )
     parser.add_argument(
         "base_url",
-        help="OpenAI-compatible base (e.g. http://localhost:30000 or http://localhost:30000/v1)",
+        nargs="?",
+        default="",
+        help=(
+            "OpenAI-compatible base (e.g. http://localhost:30000 or http://localhost:30000/v1). "
+            "Optional with --self-test-resize."
+        ),
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind address (default loopback)")
     parser.add_argument(
@@ -668,7 +912,42 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--max-image-bytes",
         type=int,
         default=20 * 1024 * 1024,
-        help="Max image file / decoded size",
+        help="Max image file / decoded size (default 20 MiB)",
+    )
+    parser.add_argument(
+        "--resize",
+        choices=("auto", "pillow", "ffmpeg", "none"),
+        default="auto",
+        help=(
+            "Downscale large images before the vision call (default auto: "
+            "Pillow if importable, else ffmpeg). Formats: PNG/JPEG/GIF/WebP."
+        ),
+    )
+    parser.add_argument(
+        "--max-edge",
+        type=int,
+        default=DEFAULT_MAX_EDGE,
+        help=f"Max long-edge pixels after resize (default {DEFAULT_MAX_EDGE}; 0 disables dim check)",
+    )
+    parser.add_argument(
+        "--soft-bytes",
+        type=int,
+        default=DEFAULT_SOFT_BYTES,
+        help=(
+            f"Resize when raw image exceeds this many bytes "
+            f"(default {DEFAULT_SOFT_BYTES}; 0 = only dimension trigger)"
+        ),
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=DEFAULT_JPEG_QUALITY,
+        help=f"JPEG quality for resized output (default {DEFAULT_JPEG_QUALITY})",
+    )
+    parser.add_argument(
+        "--ffmpeg",
+        default="ffmpeg",
+        help="ffmpeg executable name or path (default: ffmpeg on PATH)",
     )
     parser.add_argument(
         "--mode",
@@ -694,7 +973,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="IMAGE_PATH",
         help="Call the upstream vision model once with IMAGE_PATH and exit",
     )
+    parser.add_argument(
+        "--self-test-resize",
+        metavar="IMAGE_PATH",
+        help="Only test load+resize (no vision HTTP); print sizes and exit",
+    )
     args = parser.parse_args(argv)
+
+    resize = ResizePolicy(
+        backend=args.resize,
+        max_edge=args.max_edge,
+        soft_bytes=args.soft_bytes,
+        jpeg_quality=args.jpeg_quality,
+        ffmpeg_path=args.ffmpeg,
+    )
+
+    if args.self_test_resize:
+        return run_self_test_resize(args.self_test_resize, args.max_image_bytes, resize)
+
+    if not args.base_url:
+        print(
+            "error: base_url is required unless using --self-test-resize",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         base_v1 = normalize_base_url(args.base_url)
@@ -725,6 +1027,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         mode=args.mode,
         max_image_bytes=args.max_image_bytes,
         require_session=args.require_session,
+        resize=resize,
     )
 
     if args.self_test:
@@ -734,9 +1037,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     host, port = server.server_address[:2]
     thinking = "on" if vision.enable_thinking else "off"
+    backend = resize.resolve_backend() or (
+        "none" if resize.backend == "none" else "unavailable"
+    )
     print(
         f"ainiux-image-mcp listening on http://{host}:{port}/mcp "
-        f"→ {vision.base_v1} model={vision.model} mode={args.mode} thinking={thinking}",
+        f"→ {vision.base_v1} model={vision.model} mode={args.mode} "
+        f"thinking={thinking} resize={resize.backend}/{backend} "
+        f"max_edge={resize.max_edge}",
         flush=True,
     )
     print(

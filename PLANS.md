@@ -41,6 +41,7 @@ error layers should serve:
 | v1.0–v1.15 | Local agent foundation, hardening, and documentation overhaul | Landed through v1.15 |
 | v1.16 | Editor dired directory browser (`--dired`, F4, Ctrl+X d) | Landed |
 | v1.17 | Mid-turn agent↔editor/dired review, dired history line-diff, agent chrome/tool polish, Apple Silicon builds | Landed |
+| v1.18 | Short native tool API without legacy aliases, MCP client/vision bridge, and combined grep filters | Landed |
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
@@ -51,7 +52,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-08-10): **v1.17**.
+Implementation status (2026-08-13): **v1.18**.
 
 The shipped product includes:
 
@@ -71,7 +72,8 @@ The shipped product includes:
 - compact live tool rows, bounded first-thought reasoning previews, request-token chrome,
   and transcript-preserving three-strategy `/compact`: local-only `fast`, loss-aware default
   `smart`, and active-model `summary`, with a universal 75% automatic threshold
-- compact native agent tool schemas with industry-aligned names and silent execute aliases
+- compact native agent tool schemas with short industry-aligned names and no legacy execute aliases
+- explicitly installed HTTP/stdio MCP tools in agent, run, and plan modes, including the bundled local vision bridge
 - shared list pickers with `/` multi-character find and `.` alphabetical sort
 - OpenRouter, OpenAI, and DeepSeek credit display when the selected key can query it
 - a fast project-local symbol index with incremental discovery and lightweight scanners
@@ -90,7 +92,7 @@ older Windows, and mintty full-screen operation are explicit non-goals.
 
 ## Release history
 
-The compact v0.0–v1.17 timeline lives in `docs/version-history.md`. Historical
+The compact v0.0–v1.18 timeline lives in `docs/version-history.md`. Historical
 implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing
@@ -99,7 +101,7 @@ implementation details remain available in Git history and `docs/decisions.md`.
 
 The project index remains a fast, optional definitions-only navigation aid across every v1.00 scanner language. SQLite stores metadata, files, and symbols with a compact 0–100 static importance score computed during the existing definition scan from declaration kind, visibility, and scope. It stores no references, evidence, call edges, caller counts, or graph scores.
 
-Lexical relevance is authoritative: full-name matches rank above exact identifier components, which rank above component-prefix matches. Multi-token coverage is preserved, importance orders only otherwise comparable hits, and path/line/ID ties are deterministic. `index_overview`, `search_symbol`, `file_outline`, `read_symbol`, and `replace_symbol` remain available (index management / find_tests / inspect_code_task agent tools removed); caller/callee tools and automatic provider-context hints are absent.
+Lexical relevance is authoritative: full-name matches rank above exact identifier components, which rank above component-prefix matches. Multi-token coverage is preserved, importance orders only otherwise comparable hits, and path/line/ID ties are deterministic. `index`, `symbol`, and `outline` expose index summaries and definitions; `read` verifies live source and supports `items` batching; `edit` supports `replace_symbol` while indexing is enabled. Legacy long names and index-management tools are absent; caller/callee tools and automatic provider-context hints are also absent.
 
 Agent navigation prefers one `read` call with `items` whenever two or more independent paths or ranges are known, including with native parallel tool calling; `path` remains the single-target form. Batched items have independent 64 KiB default limits, line-numbered content and hashes, within the 256 KiB aggregate cap.
 
@@ -138,7 +140,7 @@ WebP stays disabled in C++ until a separate capability decision. See `docs/mcp.m
 
 **Not started — Phase 2 (core optional preprocess):** optional shell-free spawn of
 ffmpeg/ImageMagick from `src/input/` (or similar) before base64 for Chat Completions
-vision inject, agent `attach_image`, and remote HTTP MCP `image_base64` rewrite. Prefer
+vision inject, agent `attach`, and remote HTTP MCP `image_base64` rewrite. Prefer
 loopback absolute paths without base64 when possible. Zero new link-time image libraries.
 Config knobs such as `image.resize_backend` / `--image-max-edge`. Store originals in
 TUI media; resize only at request time. Fixed argv, timeouts, RAII temp cleanup.

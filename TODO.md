@@ -32,7 +32,7 @@
 - **Later:** evaluate a more reliable free/casual web search provider (or optional lightweight local proxy) without requiring paid APIs for everyday use. Keep optional Tavily/Exa/Firecrawl/Searxng for power users.
 - Agent `web_search` returns at most **3** results; tool text steers the model to fetch only the top few URLs. Search result URLs are truncated when extremely long.
 - Fetch converts ISO-8859-1 / Windows-1252 pages to UTF-8 so tool results stay valid JSON for local model servers; JSON string escape also refuses raw ill-formed UTF-8 bytes.
-- Agent `fetch_url` is Markdown/plain-text only (no raw HTML to the model); HTML→MD strips scripts/styles.
+- Agent `fetch` is Markdown/plain-text only (no raw HTML to the model); HTML→MD strips scripts/styles.
 
 ## Syntax Highlighting
 

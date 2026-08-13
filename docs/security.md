@@ -4,7 +4,7 @@
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
 - LM Studio authentication is optional by default.
-- Local web mode is not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `run` / `--run` (interactive `agent` / `--agent`) with ordinary workspace mutation tools. Agent **tools** are shell-free direct argv execution. Security-review `run_command` stays on a strict read-only allowlist; agent `run_command` applies structural checks and denylists shells, elevation, package installs, disk destroyers, and destructive Windows/PowerShell forms. Unrestricted shell is only available as an explicit **user** UI command (below).
+- Local web mode is not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `run` / `--run` (interactive `agent` / `--agent`) with ordinary workspace mutation tools. Agent **tools** are shell-free direct argv execution. Security-review `run` stays on a strict read-only allowlist; agent `run` applies structural checks and denylists shells, elevation, package installs, disk destroyers, and destructive Windows/PowerShell forms. Unrestricted shell is only available as an explicit **user** UI command (below).
 
 ## User-initiated interactive shell (`/shell` and `!`)
 
@@ -15,7 +15,7 @@ Chat TUI, agent TUI, and REPL accept user-typed shell commands:
 
 On POSIX both forms run **`/bin/sh -c`** (or `/usr/bin/sh`). On Windows they run built-in Windows PowerShell 5.1 with `-NoLogo -NoProfile -NonInteractive` and an encoded UTF-16 command; PowerShell and native-command output are set to UTF-8 and the final command status is propagated. They are **not** agent tools: the model cannot invoke them. Stdin is closed. Output is byte-capped, timed (default 60s, or CLI/config `--timeout`), Esc-cancellable in the TUI, and known configured credentials are redacted before display or draft fill.
 
-This is full local shell power for the person at the keyboard. Do not confuse it with agent `run_command`, which never invokes a shell and uses denylist + structural safety rather than listing every harmless binary.
+This is full local shell power for the person at the keyboard. Do not confuse it with agent `run`, which never invokes a shell and uses denylist + structural safety rather than listing every harmless binary.
 
 ## Headless Security Review
 
@@ -58,10 +58,10 @@ Interactive Agent may use the selected OpenRouter, OpenAI, or DeepSeek API key f
 - Code-index lifecycle is CLI/mutation-driven (`--index-code`, write-side refresh); agent mode no longer exposes `index_status` / `index_update` / `index_rebuild` tools.
 - `fetch` and `web_search` reuse `src/fetch/` and `src/search/` safety (timeouts, size caps, private/loopback blocking unless explicitly allowed).
 - Agent `fetch` **always** returns UTF-8 **Markdown or plain text** (HTML→MD via `src/html/`, scripts/styles stripped). It never returns raw HTML/CSS/JS to the model: full pages are a prompt-injection and token-cost hazard. CLI `--fetch-url` may still export HTML for local use.
-- Path escape, absolute paths, `~/…` / `~user/…` / `$ENV` components, `.ainiux-pr` / `.ainiux` / `.git` components, and symlink components are refused for ordinary workspace writes. On POSIX `~` is a relative path component: without this check `~/code/x` would incorrectly create `$workspace/~/code/x`. After resolve, every ordinary write path is re-checked to stay under the project workspace root. The narrow exception is interactive Act-mode `write_file`: Ainiux resolves and displays the exact external target, blocks the worker for a one-shot Yes/No decision, and writes only after Yes. No/Esc, cancellation, headless operation, and Plan mode deny it. Approved external writes do not create `.ainiux-pr/history` backups or update the project index.
+- Path escape, absolute paths, `~/…` / `~user/…` / `$ENV` components, `.ainiux-pr` / `.ainiux` / `.git` components, and symlink components are refused for ordinary workspace writes. On POSIX `~` is a relative path component: without this check `~/code/x` would incorrectly create `$workspace/~/code/x`. After resolve, every ordinary write path is re-checked to stay under the project workspace root. The narrow exception is interactive Act-mode `write`: Ainiux resolves and displays the exact external target, blocks the worker for a one-shot Yes/No decision, and writes only after Yes. No/Esc, cancellation, headless operation, and Plan mode deny it. Approved external writes do not create `.ainiux-pr/history` backups or update the project index.
 - `read` follows the same one-shot approval rule for an exact outside-project regular file. The usual UTF-8, size, line-range, output cap, and configured-secret redaction checks still apply. Other read/search/index tools remain workspace-contained.
 - Inside the active project, `read` accepts any safe regular file on the live filesystem, including ignored, unsupported, generated, or newly created files absent from the code index. Protected metadata, traversal, symlink paths, non-UTF-8 files, and configured size limits remain denied.
-- `create_dirs=true` never silently `mkdir -p`: creating missing parent directories requires interactive Guard **y/n** approval (`ask_on_create_dirs`). Headless `run` denies directory creation (create parents first, or use interactive agent). `create_directories` never deletes existing trees; if a parent path exists as a non-directory, the write fails.
+- `create_dirs=true` never silently `mkdir -p`: creating missing parent directories requires interactive Guard **y/n** approval (`ask_on_create_dirs`). Headless `run` denies directory creation (create parents first, or use interactive agent). It never deletes existing trees; if a parent path exists as a non-directory, the write fails.
 - Optional `expected_file_hash` / per-op `expected_hash` rejects stale concurrent edits.
 - Pre-overwrite copies are stored under `.ainiux-pr/history/` (project-local; private mode `0600` / protected DACL). Ordinary workspace `write` / editor saves use shared atomic writes: new files get `0666` masked by the process umask (typically `0644` or `0664`); overwrites preserve the existing file mode.
 - The live touched-file index view is updated after a successful native write so later reads in the same run stay consistent. Exact touched paths are coalesced into a cancellable definitions refresh; readers consume only a completed database generation, and cancellation preserves the prior SQLite transaction.
@@ -75,7 +75,7 @@ Each project persists one interactive Agent permission mode in `settings_json`: 
 
 Confirm/Smart cannot elevate hard Guard denials, Plan-policy denials, protected metadata access, or unsafe symlink/path races. Yolo intentionally does elevate Guard denials (user risk). User-entered `/shell` and `!` remain explicit user actions and do not receive a second permission prompt.
 
-High-risk tool actions can return Guard decision **Ask** (for example `git reset --hard`, force push, recursive `rm`, deleting `*.sqlite`/`*.db` via `remove`). Behavior:
+High-risk tool actions can return Guard decision **Ask** (for example `git reset --hard`, force push, recursive `rm`, or deleting `*.sqlite`/`*.db`). Behavior:
 
 - **Headless** `ainiux run` / `--run`: Ask is always **Deny**. The tool result explains that interactive agent is required for approval. The model must replan; it cannot self-approve.
 - **Interactive** `ainiux agent` / `--agent`: the tool worker blocks and the TUI shows a Guard approval panel. The user presses **y** (allow once) or **n**/Esc (deny). Job cancel also cancels a pending Ask. Approvals are **one-shot** (not sticky across later tools).
@@ -124,7 +124,7 @@ Defaults:
 - content type: accepts empty content type, `text/html`, `application/xhtml+xml`, and (for text fetch) `text/plain`
 - body encoding: non-UTF-8 bodies are converted when possible (ISO-8859-1 / Windows-1252 via Content-Type or meta); tool results are always valid UTF-8
 - private/loopback/link-local/multicast/common metadata literal hosts and resolved socket addresses are refused unless `--allow-private-url-fetch` is set
-- agent `fetch_url` `max_bytes` limits the **returned Markdown/text** size; raw HTML may download under a larger safety ceiling before conversion
+- agent `fetch` `max_bytes` limits the **returned Markdown/text** size; raw HTML may download under a larger safety ceiling before conversion
 
 Resolved IPv4 and IPv6 addresses are checked in libcurl's socket-open callback before a connection is created, so a public-looking hostname cannot connect to a private result. URL fetching through `--proxy` is refused without `--allow-private-url-fetch`, because the client cannot verify target DNS performed by a proxy. The override deliberately disables both literal and resolved-address blocking.
 

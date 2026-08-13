@@ -1,4 +1,4 @@
-# ainiux Editor Help v1.17
+# ainiux Editor Help v1.18
 
 Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured. Start in the directory browser with `ainiux -d` / `ainiux --dired [PATH]` (PATH defaults to the current directory; `q` leaves dired for the editor, `Ctrl+Q` quits ainiux). The full dired guide is [dired-mode.md](dired-mode.md).
 

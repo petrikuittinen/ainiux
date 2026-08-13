@@ -22,6 +22,20 @@ Act is the default task policy. It can inspect the workspace and perform ordinar
 
 Plan keeps read and research tools but code-enforces writes to planning documents. One-shot Plan accepts `plan "goal"`, `--plan`, and `--plan-file`. It is not a promise that every model will produce a good plan; review the document before executing it.
 
+## Native tools
+
+The current native names are `index`, `ls`, `glob`, `grep`, `symbol`, `outline`,
+`read`, `run`, `fetch`, `web_search`, `goal_met`, `attach`, `edit`, `write`,
+`mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on index, network,
+session, and mutation policy. `read` accepts either one `path` or an `items` batch
+of 1–100 ranges. `grep` can combine a file/directory `path` with a name/type
+`glob` filter.
+
+Old long names and aliases such as `read_file`, `run_command`, `edit_file`,
+`write_file`, `list_dir`, `search_text`, and `str_replace` are not advertised or
+executed. MCP tools remain separately qualified as `mcp__server__tool`. See the
+[native tool inventory](tool_calls.md) for the exact policy-dependent set.
+
 ## Permissions and Guard
 
 Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; headless Ask decisions are denied.
