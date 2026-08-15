@@ -122,6 +122,7 @@ struct SessionRuntimeOptions {
     int compact_limit = 0;  // 0 = derive from window
     // Auto-continuations while a session goal is Active (tool-less FinalText).
     int max_goal_turns = 20;
+    int max_agent_turns = 250;
     // Injected by tests and embedders. Empty uses the active provider/model.
     CompactionSummaryCall summary_call;
     enum class IndexMode {

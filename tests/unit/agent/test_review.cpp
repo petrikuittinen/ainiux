@@ -251,8 +251,16 @@ void test_prompts_and_report() {
               prompts.security.find("submit_security_review") != std::string::npos &&
               prompts.security.find("EXPECTED_COVERAGE") != std::string::npos &&
               prompts.security.find("Review the supplied source batch") != std::string::npos &&
-              prompts.agent.size() <= 4096 && word_count <= 600 &&
+              prompts.agent.size() <= 5120 && word_count <= 700 &&
               prompts.agent.find("## Trust") != std::string::npos &&
+              prompts.agent.find("Use the code index as a hint, not truth") !=
+                  std::string::npos &&
+              prompts.agent.find("Start with symbol or outline") !=
+                  std::string::npos &&
+              prompts.agent.find("Use glob or grep for search") !=
+                  std::string::npos &&
+              prompts.agent.find("ls for the real filesystem") !=
+                  std::string::npos &&
               prompts.agent.find("items") != std::string::npos &&
               prompts.agent.find("two or more independent paths") !=
                   std::string::npos &&
@@ -266,9 +274,22 @@ void test_prompts_and_report() {
               prompts.agent.find("JSON strings") != std::string::npos &&
               prompts.agent.find("regex:true") != std::string::npos &&
               prompts.agent.find("Plan:") != std::string::npos &&
+              prompts.agent.find(
+                  "Make decisions that are good in the long term without expanding "
+                  "the requested scope") !=
+                  std::string::npos &&
+              prompts.agent.find("workspace- Ask") == std::string::npos &&
+              prompts.agent.find("directoroes") == std::string::npos &&
               prompts.agent.find("edit") != std::string::npos &&
               prompts.agent.find("tests") != std::string::npos &&
               prompts.agent.find("refactoring") != std::string::npos &&
+              prompts.agent.find("appropriate input/error checking") !=
+                  std::string::npos &&
+              prompts.agent.find("examine algorithms and data structures") !=
+                  std::string::npos &&
+              prompts.agent.find(
+                  "measured, bounded precomputation or RAM/SSD caching") !=
+                  std::string::npos &&
               prompts.agent.find("4.5:1") != std::string::npos,
           "merged agent prompt is bounded and security prompt bytes remain unchanged");
     const std::string agent_native =

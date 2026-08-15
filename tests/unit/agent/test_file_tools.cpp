@@ -1,11 +1,13 @@
 #include "agent/test_file_tools.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 #if !defined(_WIN32)
 #include <sys/stat.h>
@@ -13,6 +15,7 @@
 
 #include "agent/index/index.hpp"
 #include "agent/process.hpp"
+#include "agent/session_store.hpp"
 #include "agent/tools.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
@@ -86,7 +89,8 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
                                       agent::GuardApprovalCallback on_guard_ask = {},
                                       agent::PermissionMode permission_mode =
                                           agent::PermissionMode::Smart,
-                                      bool permission_controls = false) {
+                                      bool permission_controls = false,
+                                      agent::AgentSessionStore* session_store = nullptr) {
     agent::index::Options options;
     options.workspace = workspace;
     options.max_source_code_file_size = 1024 * 1024;
@@ -101,6 +105,7 @@ agent::ReadToolRegistry make_registry(const std::string& workspace,
     tool_options.mutation_policy = mutation_policy;
     tool_options.permission_mode = permission_mode;
     tool_options.permission_controls = permission_controls;
+    tool_options.session_store = session_store;
     if (on_guard_ask) {
         tool_options.on_guard_ask = std::move(on_guard_ask);
     } else if (auto_approve_create_dirs) {
@@ -1593,10 +1598,11 @@ void test_read_many_preference_limits_and_serialization() {
               first->get("line_start") != nullptr &&
               first->get("line_end") != nullptr &&
               second != nullptr && second->get("bytes") != nullptr &&
-              second->get("bytes")->number == 65536 &&
+              second->get("bytes")->number == 70001 &&
               second->get("truncated") != nullptr &&
-              second->get("truncated")->boolean,
-          "read_many honors item max_bytes, defaults each item to 64 KiB, and returns numbered hash/range metadata: " +
+              second->get("truncated")->boolean == false &&
+              second->get("truncated_lines") != nullptr,
+          "read_many honors item max_bytes, defaults each item to 128 KiB, and returns numbered hash/range metadata: " +
               limited);
 
     const std::string aggregate = tools.execute(
@@ -1954,6 +1960,17 @@ void test_grep_uses_rg_when_available_else_builtin() {
           "grep finds the rare needle: " + result);
     check(result.find("\"search_backend\"") != std::string::npos,
           "grep reports search_backend metadata: " + result);
+    const std::string first_page = tools.execute(
+        "grep",
+        R"JSON({"query":"marker","path":"src","glob":"*.cpp","max_results":1})JSON");
+    const std::string second_page = tools.execute(
+        "grep",
+        R"JSON({"query":"marker","path":"src","glob":"*.cpp","max_results":1,"offset":1})JSON");
+    check(json_ok(first_page) && first_page.find("\"next_offset\":1") != std::string::npos,
+          "grep exposes a continuation offset for truncated pages: " + first_page);
+    check(json_ok(second_page) && second_page.find("\"offset\":1") != std::string::npos &&
+              second_page.find("src/needle.cpp") != std::string::npos,
+          "grep offset returns the next deterministic page: " + second_page);
     if (agent::ripgrep_available()) {
         check(result.find("\"search_backend\":\"rg\"") != std::string::npos ||
                   result.find("\"search_backend\": \"rg\"") != std::string::npos,
@@ -2265,6 +2282,313 @@ void test_attach_image_tool_hooks() {
     fs::remove_all(workspace, ec);
 }
 
+void test_managed_scripts_storage_trust_and_execution() {
+    const std::string workspace = write_temp_workspace("managed-scripts");
+    agent::AgentSessionStore store;
+    check(store.open(workspace).ok(), "open managed-script trust store");
+    agent::AgentProjectRecord project;
+    project.workspace = workspace;
+    project.status = "running";
+    check(store.open_project(project).ok(), "open managed-script project row");
+
+    int smart_asks = 0;
+    agent::ReadToolRegistry smart = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [&](const agent::GuardApprovalRequest& request,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            ++smart_asks;
+            check(request.rule_id == "ask_on_managed_script_content" &&
+                      request.message.find("Name: count.sh") != std::string::npos &&
+                      request.message.find("Interpreter: sh") != std::string::npos &&
+                      request.message.find("Arguments:") != std::string::npos &&
+                      request.message.find("Content hash:") != std::string::npos &&
+                      request.message.find("printf") != std::string::npos,
+                  "Smart managed-script approval shows exact bytes and identity");
+            return agent::GuardApprovalDecision::Allow;
+        },
+        agent::PermissionMode::Smart, true, &store);
+
+    const std::string script_path = ".ainiux-pr/scripts/count.sh";
+    const std::string created = smart.execute(
+        "write",
+        R"JSON({"path":".ainiux-pr/scripts/count.sh","content":"printf '%s\\n' \"$1\"\n","mode":"create_new"})JSON");
+    check(json_ok(created), "create managed script: " + created);
+    const fs::path scripts = fs::path(workspace) / ".ainiux-pr" / "scripts";
+    const fs::path script = scripts / "count.sh";
+    check(fs::is_regular_file(script), "managed script stored as regular direct child");
+#if !defined(_WIN32)
+    struct stat directory_info {};
+    struct stat file_info {};
+    check(::stat(scripts.c_str(), &directory_info) == 0 &&
+              (directory_info.st_mode & 0777) == 0700,
+          "managed scripts directory is private 0700");
+    check(::stat(script.c_str(), &file_info) == 0 &&
+              (file_info.st_mode & 0777) == 0600,
+          "managed script file is private 0600");
+#endif
+    check(json_data_string(created, "history_path").empty(),
+          "managed script writes never create source history backups");
+    check(std::none_of(smart.snapshot().files.begin(), smart.snapshot().files.end(),
+                       [&](const agent::index::IndexedFile& file) {
+                           return file.path == script_path;
+                       }),
+          "managed script is excluded from live code-index overlay");
+
+    const std::string listed = smart.execute(
+        "ls", R"JSON({"path":".ainiux-pr/scripts"})JSON");
+    check(json_ok(listed) && listed.find("count.sh") != std::string::npos,
+          "ls exposes only managed script direct children: " + listed);
+    const std::string read = smart.execute(
+        "read", R"JSON({"path":".ainiux-pr/scripts/count.sh"})JSON");
+    check(json_ok(read) && read.find("printf") != std::string::npos,
+          "read permits managed script direct child: " + read);
+    const std::string edited = smart.execute(
+        "edit",
+        R"JSON({"path":".ainiux-pr/scripts/count.sh","ops":[{"type":"replace_text","old_text":"$1","new_text":"${1}"}]})JSON");
+    check(json_ok(edited) &&
+              read_text(script).find("${1}") != std::string::npos &&
+              json_data_string(edited, "history_path").empty(),
+          "edit permits one managed direct child without source history: " + edited);
+
+    check(!json_ok(smart.execute(
+              "read", R"JSON({"path":".ainiux-pr/agent.sqlite"})JSON")),
+          "read still denies protected state siblings");
+    check(!json_ok(smart.execute(
+              "write",
+              R"JSON({"path":".ainiux-pr/scripts/nested/x.sh","content":"echo no\\n"})JSON")),
+          "nested managed script path is denied");
+    const std::string mixed_patch =
+        "*** Begin Patch\n"
+        "*** Update File: .ainiux-pr/scripts/count.sh\n"
+        "@@\n"
+        "-printf '%s\\n' \"$1\"\n"
+        "+printf '%s\\n' \"$1\"\n"
+        "*** Update File: src/hello.cpp\n"
+        "@@\n"
+        "-int main() { return 0; }\n"
+        "+int main() { return 1; }\n"
+        "*** End Patch\n";
+    const std::string mixed_result = smart.execute(
+        "apply_patch", "{\"patch\":" + json_string(mixed_patch) + "}");
+    check(!json_ok(mixed_result) &&
+              mixed_result.find("cannot mix managed scripts") != std::string::npos,
+          "apply_patch refuses mixed source and managed-script targets: " +
+              mixed_result);
+    check(!json_ok(smart.execute(
+              "run",
+              R"JSON({"command":"cat .ainiux-pr/scripts/count.sh"})JSON")),
+          "run does not expose managed state to other executables");
+    check(!json_ok(smart.execute(
+              "rm", R"JSON({"path":".ainiux-pr/scripts"})JSON")),
+          "rm cannot remove the managed scripts directory");
+    check(!json_ok(smart.execute(
+              "write",
+              R"JSON({"path":".ainiux-pr/scripts/nul.sh","content":"x\u0000y"})JSON")),
+          "managed script writes reject NUL bytes");
+
+    const std::string first = smart.execute(
+        "run",
+        R"JSON({"command":"sh .ainiux-pr/scripts/count.sh first"})JSON");
+    check(json_ok(first) && first.find("first\\n") != std::string::npos &&
+              smart_asks == 1,
+          "Smart asks once and executes approved bytes: " + first);
+    const std::string reused = smart.execute(
+        "run",
+        R"JSON({"command":"sh .ainiux-pr/scripts/count.sh second"})JSON");
+    check(json_ok(reused) && reused.find("second\\n") != std::string::npos &&
+              smart_asks == 1 && reused.find("\"trust_reused\":true") !=
+                                      std::string::npos,
+          "Smart reuses unchanged hash with different arguments: " + reused);
+
+    agent::ReadToolRegistry headless = make_registry(
+        workspace, agent::MutationPolicy::Full, false, {},
+        agent::PermissionMode::Smart, false, &store);
+    const std::string headless_reuse = headless.execute(
+        "run", R"JSON({"command":"sh .ainiux-pr/scripts/count.sh headless"})JSON");
+    check(json_ok(headless_reuse) && headless_reuse.find("headless\\n") !=
+                                         std::string::npos,
+          "headless Smart reuses previously approved unchanged content");
+
+    const std::string changed = headless.execute(
+        "write",
+        R"JSON({"path":".ainiux-pr/scripts/count.sh","content":"printf 'changed:%s\\n' \"$1\"\n"})JSON");
+    check(json_ok(changed), "managed script mutation succeeds and invalidates trust");
+    const std::string headless_denied = headless.execute(
+        "run", R"JSON({"command":"sh .ainiux-pr/scripts/count.sh denied"})JSON");
+    check(!json_ok(headless_denied) &&
+              json_error_code(headless_denied) == "policy_denied",
+          "headless Smart denies changed untrusted content: " + headless_denied);
+    std::vector<agent::AgentApprovalRecord> approval_rows;
+    check(store.load_approvals(approval_rows).ok() &&
+              std::any_of(approval_rows.begin(), approval_rows.end(),
+                          [](const agent::AgentApprovalRecord& row) {
+                              return row.rule_id ==
+                                         "ask_on_managed_script_content" &&
+                                     row.decision == "deny" &&
+                                     row.source == "headless" &&
+                                     row.message.find("changed:%s") !=
+                                         std::string::npos;
+                          }),
+          "headless managed-script denial records the exact redacted approval audit");
+
+    const std::string reapproved = smart.execute(
+        "run", R"JSON({"command":"sh .ainiux-pr/scripts/count.sh approved"})JSON");
+    check(json_ok(reapproved) && reapproved.find("changed:approved") !=
+                                     std::string::npos &&
+              smart_asks == 2,
+          "Smart asks again after content mutation: " + reapproved);
+
+    int confirm_asks = 0;
+    agent::ReadToolRegistry confirm = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [&](const agent::GuardApprovalRequest&,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            ++confirm_asks;
+            return agent::GuardApprovalDecision::Allow;
+        },
+        agent::PermissionMode::Confirm, true, &store);
+    check(json_ok(confirm.execute(
+              "run", R"JSON({"command":"sh .ainiux-pr/scripts/count.sh one"})JSON")) &&
+              json_ok(confirm.execute(
+                  "run", R"JSON({"command":"sh .ainiux-pr/scripts/count.sh two"})JSON")) &&
+              confirm_asks == 2,
+          "Confirm asks on every managed script execution");
+
+    agent::ReadToolRegistry yolo = make_registry(
+        workspace, agent::MutationPolicy::Full, false, {},
+        agent::PermissionMode::Yolo, true, &store);
+    check(json_ok(yolo.execute(
+              "run", R"JSON({"command":"sh .ainiux-pr/scripts/count.sh yolo"})JSON")),
+          "Yolo executes managed script without approval");
+
+    check(json_ok(yolo.execute(
+              "write",
+              R"JSON({"path":".ainiux-pr/scripts/patch.sh","content":"echo before\n","mode":"create_new"})JSON")),
+          "create script for managed-only apply_patch");
+    const std::string managed_patch =
+        "*** Begin Patch\n"
+        "*** Update File: .ainiux-pr/scripts/patch.sh\n"
+        "@@\n"
+        "-echo before\n"
+        "+echo after\n"
+        "*** End Patch\n";
+    const std::string patched = yolo.execute(
+        "apply_patch", "{\"patch\":" + json_string(managed_patch) + "}");
+    check(json_ok(patched) && read_text(scripts / "patch.sh") == "echo after\n" &&
+              patched.find("history") == std::string::npos,
+          "apply_patch updates only managed scripts with private atomic storage: " +
+              patched);
+#if !defined(_WIN32)
+    check(::stat((scripts / "patch.sh").c_str(), &file_info) == 0 &&
+              (file_info.st_mode & 0777) == 0600,
+          "managed apply_patch preserves private 0600 mode");
+#endif
+
+    const std::string renamed = yolo.execute(
+        "mv",
+        R"JSON({"source":".ainiux-pr/scripts/count.sh","destination":".ainiux-pr/scripts/rank.sh"})JSON");
+    check(json_ok(renamed) && !fs::exists(script) &&
+              fs::exists(scripts / "rank.sh"),
+          "mv permits only managed-script direct-child rename");
+    check(!json_ok(headless.execute(
+              "run", R"JSON({"command":"sh .ainiux-pr/scripts/rank.sh renamed"})JSON")),
+          "managed rename invalidates trust and headless Smart denies the new name");
+    check(!json_ok(yolo.execute(
+              "mv",
+              R"JSON({"source":".ainiux-pr/scripts/rank.sh","destination":"rank.sh"})JSON")),
+          "mv refuses managed-script/workspace crossing");
+
+    check(json_ok(yolo.execute(
+              "write",
+              R"JSON({"path":".ainiux-pr/scripts/spin.sh","content":"while :; do :; done\n"})JSON")),
+          "create timeout managed script");
+    const std::string timed_out = yolo.execute(
+        "run",
+        R"JSON({"command":"sh .ainiux-pr/scripts/spin.sh","timeout_ms":100})JSON");
+    check(!json_ok(timed_out) &&
+              json_error_code(timed_out) == "AINIUX_ERR_TIMEOUT",
+          "managed script timeout is reported: " + timed_out);
+    bool saw_temporary = false;
+    for (const fs::directory_entry& entry : fs::directory_iterator(scripts))
+        if (entry.path().filename().string().rfind(".ainiux-run-", 0) == 0)
+            saw_temporary = true;
+    check(!saw_temporary, "managed script temporary copy is cleaned after timeout");
+
+    runtime::CancellationSource cancelled;
+    std::thread cancel_thread([&cancelled] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        cancelled.cancel();
+    });
+    const std::string cancelled_result = yolo.execute(
+        "run", R"JSON({"command":"sh .ainiux-pr/scripts/spin.sh"})JSON",
+        cancelled.token());
+    cancel_thread.join();
+    check(!json_ok(cancelled_result) &&
+              json_error_code(cancelled_result) == "AINIUX_ERR_CANCELLED",
+          "managed script cancellation is reported: " + cancelled_result);
+    saw_temporary = false;
+    for (const fs::directory_entry& entry : fs::directory_iterator(scripts))
+        if (entry.path().filename().string().rfind(".ainiux-run-", 0) == 0)
+            saw_temporary = true;
+    check(!saw_temporary, "managed script temporary copy is cleaned after cancellation");
+
+    const std::string too_large(64U * 1024U + 1U, 'x');
+    const std::string large_result = yolo.execute(
+        "write", "{\"path\":\".ainiux-pr/scripts/large.sh\",\"content\":" +
+                     json_string(too_large) + "}");
+    check(!json_ok(large_result), "managed scripts enforce the 64 KiB cap");
+
+#if !defined(_WIN32)
+    std::error_code link_error;
+    fs::create_symlink(fs::path(workspace) / "src" / "hello.cpp",
+                       scripts / "linked.sh", link_error);
+    if (!link_error) {
+        check(!json_ok(yolo.execute(
+                  "read", R"JSON({"path":".ainiux-pr/scripts/linked.sh"})JSON")),
+              "managed script read rejects symlinks");
+        check(!json_ok(yolo.execute(
+                  "ls", R"JSON({"path":".ainiux-pr/scripts"})JSON")),
+              "managed script listing rejects symlinks and reparse points");
+        fs::remove(scripts / "linked.sh", link_error);
+    }
+#endif
+
+    agent::ProcessOptions process_options;
+    process_options.workspace = workspace;
+    agent::ProcessResult unsupported_interpreter;
+    const Error interpreter_error = agent::run_managed_script(
+        "zsh", (scripts / "patch.sh").string(), {}, process_options,
+        unsupported_interpreter);
+    check(!interpreter_error.ok() &&
+              interpreter_error.message.find("bash or sh") != std::string::npos,
+          "managed execution reports a precise unsupported interpreter error");
+
+    check(yolo.refresh_persistent_index(true).ok(),
+          "full-tree index freshness pass succeeds with managed scripts present");
+    agent::index::Options persisted_options;
+    persisted_options.workspace = workspace;
+    agent::index::Snapshot persisted;
+    check(agent::index::load_snapshot(persisted_options, persisted).ok() &&
+              std::none_of(persisted.files.begin(), persisted.files.end(),
+                           [](const agent::index::IndexedFile& file) {
+                               return file.path.rfind(".ainiux-pr/", 0) == 0;
+                           }),
+          "managed script storage remains excluded from persisted indexing");
+
+    const std::string removed = yolo.execute(
+        "rm", R"JSON({"path":".ainiux-pr/scripts/rank.sh"})JSON");
+    check(json_ok(removed) && !fs::exists(scripts / "rank.sh") &&
+              json_data_string(removed, "history_path").empty(),
+          "rm deletes one managed script without source history");
+    check(json_ok(yolo.execute(
+              "rm", R"JSON({"path":".ainiux-pr/scripts/patch.sh"})JSON")),
+          "rm removes another managed direct child");
+
+    std::error_code ec;
+    store.close();
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -2292,6 +2616,7 @@ void run_all() {
     test_plan_document_mutation_policy();
     test_goal_met_tool_hooks();
     test_attach_image_tool_hooks();
+    test_managed_scripts_storage_trust_and_execution();
 }
 
 }  // namespace ainiux::test::agent_file_tools

@@ -236,6 +236,7 @@ app::TuiRunResult run(provider::RequestContext context,
         options.auto_compact = context.options.agent_auto_compact;
         options.compact_strategy = context.options.agent_compact_strategy;
         options.compact_limit = context.options.agent_compact_limit;
+        options.max_agent_turns = context.options.agent_max_turns;
         options.index_mode =
             context.options.disable_indexing
                 ? agent::SessionRuntimeOptions::IndexMode::Disabled

@@ -205,6 +205,7 @@ Error AgentSessionStore::ensure_schema() {
             "DROP TABLE IF EXISTS tool_events;"
             "DROP TABLE IF EXISTS messages;"
             "DROP TABLE IF EXISTS approvals;"
+            "DROP TABLE IF EXISTS script_trust;"
             "DROP TABLE IF EXISTS sessions;"
             "DROP TABLE IF EXISTS project;"
             "DELETE FROM schema_migrations;");
@@ -215,6 +216,8 @@ Error AgentSessionStore::ensure_schema() {
     if (applied == kAgentSessionSchemaVersion) {
         // Soft extensions preserve existing v2 project transcripts.
         error = ensure_approvals_table();
+        if (!error.ok()) return error;
+        error = ensure_script_trust_table();
         if (!error.ok()) return error;
         return ensure_project_settings_columns();
     }
@@ -267,6 +270,13 @@ Error AgentSessionStore::ensure_schema() {
         "  source TEXT NOT NULL,"
         "  message TEXT"
         ");"
+        "CREATE TABLE IF NOT EXISTS script_trust("
+        "  script_name TEXT NOT NULL,"
+        "  interpreter TEXT NOT NULL,"
+        "  content_hash TEXT NOT NULL,"
+        "  approved_at INTEGER NOT NULL,"
+        "  PRIMARY KEY(script_name, interpreter)"
+        ");"
         "CREATE INDEX IF NOT EXISTS idx_agent_messages_seq ON messages(seq);"
         "CREATE INDEX IF NOT EXISTS idx_agent_tools_seq ON tool_events(seq);"
         "CREATE INDEX IF NOT EXISTS idx_agent_approvals_created ON approvals(created_at);");
@@ -305,6 +315,24 @@ Error AgentSessionStore::ensure_approvals_table() {
     const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
     sqlite3_free(message);
     return {ErrorCode::FileWrite, "agent approvals schema: " + detail};
+}
+
+Error AgentSessionStore::ensure_script_trust_table() {
+    char* message = nullptr;
+    const int rc = sqlite3_exec(
+        db_,
+        "CREATE TABLE IF NOT EXISTS script_trust("
+        "  script_name TEXT NOT NULL,"
+        "  interpreter TEXT NOT NULL,"
+        "  content_hash TEXT NOT NULL,"
+        "  approved_at INTEGER NOT NULL,"
+        "  PRIMARY KEY(script_name, interpreter)"
+        ");",
+        nullptr, nullptr, &message);
+    if (rc == SQLITE_OK) return ok_error();
+    const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+    sqlite3_free(message);
+    return {ErrorCode::FileWrite, "agent script trust schema: " + detail};
 }
 
 Error AgentSessionStore::ensure_project_settings_columns() {
@@ -808,6 +836,70 @@ Error AgentSessionStore::load_approvals(std::vector<AgentApprovalRecord>& approv
         approvals.push_back(std::move(row));
     }
     return ok_error();
+}
+
+Error AgentSessionStore::script_is_trusted(const std::string& script_name,
+                                           const std::string& interpreter,
+                                           const std::string& content_hash,
+                                           bool& trusted) const {
+    trusted = false;
+    if (!is_open()) return ok_error();
+    Statement statement;
+    Error error = statement.prepare(
+        db_, path_,
+        "SELECT content_hash FROM script_trust WHERE script_name=? AND interpreter=?");
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 1, script_name);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 2, interpreter);
+    if (!error.ok()) return error;
+    const int step = statement.step();
+    if (step == SQLITE_ROW)
+        trusted = statement.column_text(0) == content_hash;
+    else if (step != SQLITE_DONE)
+        return sqlite_error(db_, "could not read managed script trust", path_);
+    return ok_error();
+}
+
+Error AgentSessionStore::record_script_trust(const ScriptTrustRecord& record) {
+    if (!is_open()) return {ErrorCode::Internal, "agent session DB is not open"};
+    Error error = ensure_script_trust_table();
+    if (!error.ok()) return error;
+    Statement statement;
+    error = statement.prepare(
+        db_, path_,
+        "INSERT INTO script_trust(script_name, interpreter, content_hash, approved_at) "
+        "VALUES(?,?,?,?) ON CONFLICT(script_name, interpreter) DO UPDATE SET "
+        "content_hash=excluded.content_hash, approved_at=excluded.approved_at");
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 1, record.script_name);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 2, record.interpreter);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 3, record.content_hash);
+    if (!error.ok()) return error;
+    error = statement.bind_int64(
+        db_, path_, 4,
+        record.approved_at > 0 ? record.approved_at : now_unix_ms());
+    if (!error.ok()) return error;
+    if (statement.step() != SQLITE_DONE)
+        return sqlite_error(db_, "could not record managed script trust", path_);
+    return touch();
+}
+
+Error AgentSessionStore::invalidate_script_trust(const std::string& script_name) {
+    if (!is_open()) return ok_error();
+    Error error = ensure_script_trust_table();
+    if (!error.ok()) return error;
+    Statement statement;
+    error = statement.prepare(db_, path_,
+                              "DELETE FROM script_trust WHERE script_name=?");
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 1, script_name);
+    if (!error.ok()) return error;
+    if (statement.step() != SQLITE_DONE)
+        return sqlite_error(db_, "could not invalidate managed script trust", path_);
+    return touch();
 }
 
 }  // namespace ainiux::agent

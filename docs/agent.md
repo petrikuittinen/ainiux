@@ -14,6 +14,8 @@ Agent state belongs to the current project under `.ainiux-pr/`, including `agent
 
 Native tool-calling LLM rounds buffer the full HTTP response (including SSE framing) up to `agent.max_response_bytes` (default `32M`; CLI `--max-agent-response-bytes`). Long max-reasoning streams can hit this cap even when the useful text is much smaller. Set `0` to disable the cap.
 
+Agent tool rounds default to a maximum of 250 scripted rounds per user turn and can be configured with `[agent] max_turns` from 1 through 500. Interactive sessions ask before continuing at the cap; headless runs stop with a cap error. `read` defaults to 128 KiB per range (maximum 256 KiB), reports `next_start_line` when more lines remain, and bounds displayed lines to 2,000 UTF-8 characters. `grep` supports `offset` pagination and reports `next_offset` when more matches remain.
+
 The first interactive use may offer to build a code index. Declining leaves live filesystem tools available. Use `/new` explicitly for a new agent project; `Tab` and `Insert` do not create one.
 
 ## Act and Plan
@@ -41,6 +43,25 @@ executed. MCP tools remain separately qualified as `mcp__server__tool`. See the
 Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; headless Ask decisions are denied.
 
 Permissions do not expand workspace containment or turn chat/editor AI assist into agents. Model output and repository instructions remain untrusted. Keep unrelated work backed up, inspect diffs, and avoid Yolo in valuable or unfamiliar trees.
+
+### Managed scripts
+
+Act mode can keep reusable shell composition in private project-local files under
+`.ainiux-pr/scripts/`. Write an exact direct-child path such as
+`.ainiux-pr/scripts/check.sh`; the storage directory is created automatically, so
+do not create or inspect the protected `.ainiux-pr` parent. Script names must be
+portable flat filenames, and scripts must be valid UTF-8 without NUL bytes and no
+larger than 64 KiB. Run them only as `bash .ainiux-pr/scripts/NAME [args...]` or
+`sh .ainiux-pr/scripts/NAME [args...]`.
+
+The directory and files use private permissions and atomic writes. Managed
+scripts are excluded from the code index and agent history backups; other project
+state remains inaccessible to file tools and shell operands. Confirm asks before
+every execution. Smart asks when the script content or interpreter is new or has
+changed, then reuses approval for the same content hash; headless Smart denies an
+untrusted first execution. Yolo executes without approval. Ainiux runs a private
+temporary copy of the exact approved bytes and removes it after success, failure,
+timeout, or cancellation.
 
 On Windows, agent commands remain direct argv execution. Executable discovery
 uses inherited PATH but ignores empty/relative entries and never implicitly

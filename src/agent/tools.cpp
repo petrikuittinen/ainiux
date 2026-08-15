@@ -14,6 +14,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <numeric>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -25,6 +26,7 @@
 #include "agent/process.hpp"
 #include "agent/project_paths.hpp"
 #include "agent/read_only_command.hpp"
+#include "agent/session_store.hpp"
 #include "agent/text_match.hpp"
 #include "agent/tool_args.hpp"
 #include "fetch/fetch.hpp"
@@ -34,6 +36,7 @@
 #include "platform/environment.hpp"
 #include "platform/filesystem.hpp"
 #include "search/search.hpp"
+#include "security/hash.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::agent {
@@ -252,6 +255,119 @@ bool is_forbidden_path_component(const std::string& value) {
     if (is_protected_state_dir_name(value)) return true;
     return false;
 }
+
+constexpr std::size_t kManagedScriptMaxBytes = 64U * 1024U;
+
+bool portable_managed_script_name(const std::string& name) {
+    if (name.empty() || name.size() > 128 || name == "." || name == ".." ||
+        name.back() == '.' || name.back() == ' ')
+        return false;
+    for (unsigned char ch : name) {
+        const bool allowed = (ch >= 'a' && ch <= 'z') ||
+                             (ch >= 'A' && ch <= 'Z') ||
+                             (ch >= '0' && ch <= '9') || ch == '.' ||
+                             ch == '_' || ch == '-';
+        if (!allowed) return false;
+    }
+    return platform::validate_windows_path_syntax(name).ok();
+}
+
+bool managed_script_path(const std::string& path, std::string* name = nullptr) {
+#if defined(_WIN32)
+    if (!platform::validate_windows_path_syntax(path).ok()) return false;
+#endif
+    const fs::path candidate = fs::u8path(path);
+    if (candidate.is_absolute()) return false;
+    std::vector<std::string> components;
+    for (const fs::path& component : candidate)
+        components.push_back(component.u8string());
+    if (components.size() != 3 || components[0] != kProjectStateDirName ||
+        components[1] != "scripts" ||
+        !portable_managed_script_name(components[2]))
+        return false;
+    if (name != nullptr) *name = components[2];
+    return true;
+}
+
+bool managed_scripts_directory(const std::string& path) {
+    const std::string generic = fs::u8path(path).generic_u8string();
+    return generic == std::string(kProjectStateDirName) + "/scripts";
+}
+
+Error ensure_managed_scripts_directory(const std::string& workspace,
+                                       fs::path& directory) {
+    const fs::path state = fs::u8path(workspace) / kProjectStateDirName;
+    Error error = platform::ensure_private_directory(state.u8string(), true, true);
+    if (!error.ok()) return error;
+    directory = state / "scripts";
+    error = platform::ensure_private_directory(directory.u8string(), true, true);
+    if (!error.ok()) return error;
+    bool linked = false;
+    error = platform::path_contains_link_or_reparse(directory.u8string(), linked);
+    if (!error.ok()) return error;
+    if (linked)
+        return {ErrorCode::BadArgs,
+                "managed script storage contains a symlink or reparse point: " +
+                    directory.u8string()};
+    return ok_error();
+}
+
+Error resolve_managed_script(const std::string& workspace,
+                             const std::string& relative_path,
+                             bool must_exist,
+                             fs::path& absolute,
+                             std::string* script_name = nullptr) {
+    std::string name;
+    if (!managed_script_path(relative_path, &name))
+        return {ErrorCode::BadArgs,
+                "managed scripts must be direct portable filenames below "
+                ".ainiux-pr/scripts/"};
+    fs::path directory;
+    Error error = ensure_managed_scripts_directory(workspace, directory);
+    if (!error.ok()) return error;
+    absolute = directory / fs::u8path(name);
+    bool linked = false;
+    error = platform::path_contains_link_or_reparse(absolute.u8string(), linked);
+    if (!error.ok()) return error;
+    if (linked)
+        return {ErrorCode::BadArgs,
+                "refusing managed script symlink or reparse point: " + relative_path};
+    std::error_code ec;
+    const fs::file_status status = fs::symlink_status(absolute, ec);
+    if (ec && status.type() != fs::file_type::not_found)
+        return {ErrorCode::FileRead,
+                "could not inspect managed script " + relative_path + ": " + ec.message()};
+    if (must_exist) {
+        if (status.type() == fs::file_type::not_found)
+            return {ErrorCode::FileRead, "managed script does not exist: " + relative_path};
+        if (!fs::is_regular_file(status))
+            return {ErrorCode::FileRead,
+                    "managed script path is not a regular file: " + relative_path};
+    } else if (status.type() != fs::file_type::not_found &&
+               !fs::is_regular_file(status)) {
+        return {ErrorCode::FileWrite,
+                "managed script path is not a regular file: " + relative_path};
+    }
+    if (script_name != nullptr) *script_name = name;
+    return ok_error();
+}
+
+class ScopedManagedScriptCopy {
+   public:
+    ScopedManagedScriptCopy() = default;
+    ~ScopedManagedScriptCopy() {
+        if (path_.empty()) return;
+        std::error_code ignored;
+        fs::remove(path_, ignored);
+    }
+    ScopedManagedScriptCopy(const ScopedManagedScriptCopy&) = delete;
+    ScopedManagedScriptCopy& operator=(const ScopedManagedScriptCopy&) = delete;
+    void set(fs::path path) { path_ = std::move(path); }
+    const fs::path& path() const { return path_; }
+
+   private:
+    fs::path path_;
+};
 
 bool path_has_home_or_env_prefix(const std::string& path) {
     if (path.empty()) return false;
@@ -615,11 +731,42 @@ std::vector<std::string> split_lines(const std::string& source) {
     return lines;
 }
 
+std::size_t utf8_codepoint_count(const std::string& text) {
+    std::size_t count = 0;
+    for (unsigned char ch : text)
+        if ((ch & 0xC0U) != 0x80U) ++count;
+    return count;
+}
+
+std::string bounded_display_line(const std::string& line, bool& truncated) {
+    constexpr std::size_t kMaxDisplayCodepoints = 2000;
+    if (utf8_codepoint_count(line) <= kMaxDisplayCodepoints) return line;
+    std::size_t end = 0;
+    std::size_t points = 0;
+    while (end < line.size() && points < kMaxDisplayCodepoints) {
+        const unsigned char ch = static_cast<unsigned char>(line[end]);
+        const std::size_t width = (ch < 0x80U) ? 1U :
+                                  ((ch & 0xE0U) == 0xC0U) ? 2U :
+                                  ((ch & 0xF0U) == 0xE0U) ? 3U : 4U;
+        end = std::min(line.size(), end + width);
+        ++points;
+    }
+    truncated = true;
+    std::string result = line.substr(0, end);
+    if (!result.empty() && result.back() == '\n') result.pop_back();
+    result += "... [truncated]";
+    if (!line.empty() && line.back() == '\n') result.push_back('\n');
+    return result;
+}
+
 std::string number_source_lines(const SourceRange& range) {
     std::ostringstream numbered;
     const std::vector<std::string> lines = split_lines(range.content);
-    for (std::size_t index = 0; index < lines.size(); ++index)
-        numbered << (range.start_line + index) << ": " << lines[index];
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        bool line_truncated = false;
+        numbered << (range.start_line + index) << ": "
+                 << bounded_display_line(lines[index], line_truncated);
+    }
     return numbered.str();
 }
 
@@ -1134,6 +1281,7 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.vision_hooks_ = std::move(options.vision_hooks);
     loaded.permission_mode_ = options.permission_mode;
     loaded.permission_controls_ = options.permission_controls;
+    loaded.session_store_ = options.session_store;
     loaded.indexing_enabled_ = options.indexing_enabled;
     loaded.index_access_mode_ = options.index_access_mode;
     if (loaded.mutation_policy_ != MutationPolicy::Disabled &&
@@ -1434,6 +1582,9 @@ GuardApprovalDecision ReadToolRegistry::request_permission(
 
 Error ReadToolRegistry::resolve_writable_path(const std::string& relative_path,
                                               fs::path& absolute) const {
+    if (managed_script_path(relative_path))
+        return resolve_managed_script(snapshot_.workspace, relative_path, false,
+                                      absolute);
     if (relative_path.empty() || !safe_relative_path(relative_path))
         return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "create or modify")};
     const std::string generic = fs::u8path(relative_path).generic_u8string();
@@ -1478,7 +1629,7 @@ Error ReadToolRegistry::normalize_mutation_path(const std::string& input,
     const fs::path supplied = fs::u8path(input);
     if (!supplied.is_absolute()) {
         relative = supplied.generic_u8string();
-        if (!safe_relative_path(relative))
+        if (!safe_relative_path(relative) && !managed_script_path(relative))
             return {ErrorCode::BadArgs, unsafe_path_message(input, "create or modify")};
         return ok_error();
     }
@@ -1491,7 +1642,8 @@ Error ReadToolRegistry::normalize_mutation_path(const std::string& input,
     const fs::path normalized = supplied.lexically_normal();
     const fs::path within = normalized.lexically_relative(workspace);
     relative = within.generic_u8string();
-    if (relative.empty() || relative == "." || !safe_relative_path(relative)) {
+    if (relative.empty() || relative == "." ||
+        (!safe_relative_path(relative) && !managed_script_path(relative))) {
         relative.clear();
         return {ErrorCode::BadArgs,
                 "absolute path is outside the project directory: " + input +
@@ -1506,6 +1658,15 @@ Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
     if (mutation_policy_ == MutationPolicy::Disabled)
         return {ErrorCode::UnsupportedFeature,
                 "workspace writes are disabled for this tool session"};
+    if (managed_script_path(relative_path)) {
+        if (mutation_policy_ != MutationPolicy::Full)
+            return {ErrorCode::UnsupportedFeature,
+                    "managed scripts may be changed only in Act mode"};
+        if (create_dirs)
+            return {ErrorCode::BadArgs,
+                    "managed script storage is created automatically; omit create_dirs"};
+        return ok_error();
+    }
     if (mutation_policy_ == MutationPolicy::Full) return ok_error();
     if (deleting)
         return {ErrorCode::UnsupportedFeature,
@@ -1572,6 +1733,7 @@ Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
                                           const std::string& previous_content,
                                           std::string& history_path) const {
     history_path.clear();
+    if (managed_script_path(relative_path)) return ok_error();
     if (!history_backup_.enabled) return ok_error();
     if (history_backup_.max_bytes > 0 && previous_content.size() > history_backup_.max_bytes) {
         return ok_error();  // too large — skip without error
@@ -1598,6 +1760,7 @@ Error ReadToolRegistry::save_history_copy(const std::string& relative_path,
 
 void ReadToolRegistry::note_written_file(const std::string& relative_path,
                                          const std::string& content) const {
+    if (managed_script_path(relative_path)) return;
     if (!indexing_enabled_) return;
     const std::string generic = fs::u8path(relative_path).generic_u8string();
     const std::string hash = index::content_hash(content);
@@ -1679,6 +1842,7 @@ void ReadToolRegistry::note_written_file(const std::string& relative_path,
 }
 
 void ReadToolRegistry::note_removed_path(const std::string& relative_path) const {
+    if (managed_script_path(relative_path)) return;
     if (!indexing_enabled_) return;
     const std::string generic = fs::u8path(relative_path).generic_u8string();
     snapshot_.files.erase(
@@ -1704,6 +1868,15 @@ void ReadToolRegistry::note_removed_path(const std::string& relative_path) const
     overlay.removed = true;
     overlay.revision = queue_index_paths({generic});
     index_overlay_[generic] = std::move(overlay);
+}
+
+Error ReadToolRegistry::invalidate_managed_script_trust(
+    const std::string& relative_path) const {
+    std::string name;
+    if (!managed_script_path(relative_path, &name) || session_store_ == nullptr ||
+        !session_store_->is_open())
+        return ok_error();
+    return session_store_->invalidate_script_trust(name);
 }
 
 namespace {
@@ -1750,10 +1923,16 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
         return {ErrorCode::BadArgs, "write content must be UTF-8 text without NUL bytes"};
     if (!html::is_valid_utf8(content))
         return {ErrorCode::BadArgs, "write content must be valid UTF-8"};
-    if (content.size() > index_options_.max_source_code_file_size)
+    const bool managed = managed_script_path(relative_path);
+    const std::size_t content_cap =
+        managed ? kManagedScriptMaxBytes : index_options_.max_source_code_file_size;
+    if (content.size() > content_cap)
         return {ErrorCode::BadArgs,
-                "write content exceeds max_source_code_file_size (" +
-                    std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
+                managed
+                    ? "managed script content exceeds 65536 bytes"
+                    : "write content exceeds max_source_code_file_size (" +
+                          std::to_string(index_options_.max_source_code_file_size) +
+                          " bytes)"};
 
     std::string write_mode = mode.empty() ? "overwrite" : mode;
     if (write_mode != "overwrite" && write_mode != "create_new")
@@ -1858,7 +2037,13 @@ Error ReadToolRegistry::write_workspace_file(const std::string& relative_path,
         error = save_history_copy(relative_path, previous, history_path);
         if (!error.ok()) return error;
     }
-    error = write_bytes_atomic(absolute, content);
+    if (managed) {
+        error = invalidate_managed_script_trust(relative_path);
+        if (!error.ok()) return error;
+    }
+    error = managed
+                ? platform::atomic_write_private(absolute.u8string(), content, true)
+                : write_bytes_atomic(absolute, content);
     if (!error.ok()) return error;
     created = !exists;
     new_hash = index::content_hash(content);
@@ -2038,14 +2223,25 @@ Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_p
     const std::string updated =
         apply_text_replacements(previous, chosen, new_text, replace_all, replacements_made);
 
-    if (updated.size() > index_options_.max_source_code_file_size)
+    const bool managed = managed_script_path(relative_path);
+    const std::size_t result_cap =
+        managed ? kManagedScriptMaxBytes : index_options_.max_source_code_file_size;
+    if (updated.size() > result_cap)
         return {ErrorCode::BadArgs,
-                "str_replace result exceeds max_source_code_file_size (" +
-                    std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
+                managed ? "managed script edit exceeds 65536 bytes"
+                        : "str_replace result exceeds max_source_code_file_size (" +
+                              std::to_string(index_options_.max_source_code_file_size) +
+                              " bytes)"};
 
     error = save_history_copy(relative_path, previous, history_path);
     if (!error.ok()) return error;
-    error = write_bytes_atomic(absolute, updated);
+    if (managed) {
+        error = invalidate_managed_script_trust(relative_path);
+        if (!error.ok()) return error;
+    }
+    error = managed
+                ? platform::atomic_write_private(absolute.u8string(), updated, true)
+                : write_bytes_atomic(absolute, updated);
     if (!error.ok()) return error;
     new_hash = index::content_hash(updated);
     note_written_file(relative_path, updated);
@@ -2320,7 +2516,7 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
         if (ec) return {ErrorCode::FileWrite, "could not remove directory: " + ec.message()};
         guard_decision = "allow";
         note_removed_path(generic);
-        return ok_error();
+        return invalidate_managed_script_trust(generic);
     }
 
     // Regular file.
@@ -2362,6 +2558,8 @@ Error ReadToolRegistry::remove_workspace_path(const std::string& relative_path,
         error = save_history_copy(relative_path, previous, history_path);
         if (!error.ok()) return error;
     }
+    error = invalidate_managed_script_trust(relative_path);
+    if (!error.ok()) return error;
     fs::remove(absolute, ec);
     if (ec) return {ErrorCode::FileWrite, "could not remove file: " + ec.message()};
     guard_decision = "allow";
@@ -2390,14 +2588,23 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
     ParsedPatch parsed;
     Error error = parse_apply_patch(patch_text, parsed);
     if (!error.ok()) return error;
+    bool saw_managed_script = false;
+    bool saw_workspace_source = false;
     for (PatchFileOp& op : parsed.ops) {
         std::string relative;
         error = normalize_mutation_path(op.path, relative);
         if (!error.ok()) return error;
         op.path = std::move(relative);
+        if (managed_script_path(op.path))
+            saw_managed_script = true;
+        else
+            saw_workspace_source = true;
         error = validate_mutation_path(op.path, false, op.kind == PatchOpKind::DeleteFile);
         if (!error.ok()) return error;
     }
+    if (saw_managed_script && saw_workspace_source)
+        return {ErrorCode::BadArgs,
+                "apply_patch cannot mix managed scripts with workspace source files"};
 
     struct Planned {
         PatchOpKind kind = PatchOpKind::UpdateFile;
@@ -2428,7 +2635,8 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
         Planned item;
         item.kind = op.kind;
         item.path = fs::u8path(op.path).generic_u8string();
-        if (item.path.empty() || !safe_relative_path(item.path))
+        if (item.path.empty() ||
+            (!safe_relative_path(item.path) && !managed_script_path(item.path)))
             return {ErrorCode::BadArgs, unsafe_path_message(item.path.empty() ? op.path : item.path,
                                                             "patch")};
         if (is_database_path(item.path))
@@ -2458,8 +2666,14 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
                 return {ErrorCode::BadArgs, "Add File content must not contain NUL bytes"};
             if (!html::is_valid_utf8(op.add_content))
                 return {ErrorCode::BadArgs, "Add File content must be valid UTF-8"};
-            if (op.add_content.size() > index_options_.max_source_code_file_size)
-                return {ErrorCode::BadArgs, "Add File content exceeds max_source_code_file_size"};
+            const std::size_t cap = managed_script_path(item.path)
+                                        ? kManagedScriptMaxBytes
+                                        : index_options_.max_source_code_file_size;
+            if (op.add_content.size() > cap)
+                return {ErrorCode::BadArgs,
+                        managed_script_path(item.path)
+                            ? "managed script Add File content exceeds 65536 bytes"
+                            : "Add File content exceeds max_source_code_file_size"};
             item.existed = false;
             item.next = op.add_content;
             plan.push_back(std::move(item));
@@ -2511,9 +2725,15 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
                 error.message = item.path + ": " + error.message;
                 return error;
             }
-            if (chained.size() > index_options_.max_source_code_file_size)
+            const std::size_t cap = managed_script_path(item.path)
+                                        ? kManagedScriptMaxBytes
+                                        : index_options_.max_source_code_file_size;
+            if (chained.size() > cap)
                 return {ErrorCode::BadArgs,
-                        "Update File result exceeds max_source_code_file_size for " + item.path};
+                        managed_script_path(item.path)
+                            ? "managed script Update File result exceeds 65536 bytes"
+                            : "Update File result exceeds max_source_code_file_size for " +
+                                  item.path};
             if (!html::is_valid_utf8(chained))
                 return {ErrorCode::FileWrite,
                         "Update File result is not valid UTF-8 for " + item.path};
@@ -2534,9 +2754,15 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
             error.message = item.path + ": " + error.message;
             return error;
         }
-        if (item.next.size() > index_options_.max_source_code_file_size)
+        const std::size_t cap = managed_script_path(item.path)
+                                    ? kManagedScriptMaxBytes
+                                    : index_options_.max_source_code_file_size;
+        if (item.next.size() > cap)
             return {ErrorCode::BadArgs,
-                    "Update File result exceeds max_source_code_file_size for " + item.path};
+                    managed_script_path(item.path)
+                        ? "managed script Update File result exceeds 65536 bytes"
+                        : "Update File result exceeds max_source_code_file_size for " +
+                              item.path};
         if (!html::is_valid_utf8(item.next))
             return {ErrorCode::FileWrite, "Update File result is not valid UTF-8 for " + item.path};
         plan.push_back(std::move(item));
@@ -2545,6 +2771,18 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
     // Atomic by default: all plan entries validated before any mutation.
     // Non-atomic still applies in order but stops on first I/O failure after partial writes.
     (void)atomic;
+
+    // Invalidate every approved hash before the first managed-script mutation.
+    // A failed write is allowed to invalidate trust conservatively; a failed
+    // invalidation must never leave changed bytes carrying stale approval.
+    if (saw_managed_script) {
+        std::set<std::string> invalidated;
+        for (const Planned& item : plan) {
+            if (!invalidated.insert(item.path).second) continue;
+            error = invalidate_managed_script_trust(item.path);
+            if (!error.ok()) return error;
+        }
+    }
 
     for (const Planned& item : plan) {
         fs::path absolute;
@@ -2588,7 +2826,9 @@ Error ReadToolRegistry::apply_workspace_patch(const std::string& patch_text,
                                 ec.message()};
             }
         }
-        error = write_bytes_atomic(absolute, item.next);
+        error = managed_script_path(item.path)
+                    ? platform::atomic_write_private(absolute.u8string(), item.next, true)
+                    : write_bytes_atomic(absolute, item.next);
         if (!error.ok()) return error;
         note_written_file(item.path, item.next);
         new_hashes[item.path] = index::content_hash(item.next);
@@ -3247,17 +3487,28 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
         ++operations_applied;
     }
 
-    if (content.size() > index_options_.max_source_code_file_size)
+    const bool managed = !external && managed_script_path(relative_path);
+    const std::size_t result_cap =
+        managed ? kManagedScriptMaxBytes : index_options_.max_source_code_file_size;
+    if (content.size() > result_cap)
         return {ErrorCode::BadArgs,
-                "edit result exceeds max_source_code_file_size (" +
-                    std::to_string(index_options_.max_source_code_file_size) + " bytes)"};
+                managed ? "managed script edit exceeds 65536 bytes"
+                        : "edit result exceeds max_source_code_file_size (" +
+                              std::to_string(index_options_.max_source_code_file_size) +
+                              " bytes)"};
 
     // Re-apply create_dirs only if needed for... not for existing files.
     if (!external) {
         error = save_history_copy(relative_path, previous, history_path);
         if (!error.ok()) return error;
     }
-    error = write_bytes_atomic(absolute, content);
+    if (managed) {
+        error = invalidate_managed_script_trust(relative_path);
+        if (!error.ok()) return error;
+    }
+    error = managed
+                ? platform::atomic_write_private(absolute.u8string(), content, true)
+                : write_bytes_atomic(absolute, content);
     if (!error.ok()) return error;
     new_hash = index::content_hash(content);
     if (!external) note_written_file(relative_path, content);
@@ -3319,7 +3570,8 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"path\":{\"type\":\"string\"},"
         "\"glob\":{\"type\":\"string\"},"
         "\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},"
-        "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}";
+        "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500},"
+        "\"offset\":{\"type\":\"integer\",\"minimum\":0}";
     std::vector<provider::FunctionDefinition> tools = {
         {"index",
          "Summarize the code index (languages, file counts, freshness). Not a full "
@@ -3359,6 +3611,9 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
          agent_session
              ? "Run one workspace command without a real shell (argv exec). Bare PATH names "
                "(`make`, `python3`) or project scripts (`./script.sh`, `bash script.sh`). "
+               "Create reusable private scripts by writing exact "
+               ".ainiux-pr/scripts/NAME (storage is automatic; do not mkdir or inspect "
+               ".ainiux-pr itself), then run only as bash|sh that path [args]. "
                "No unquoted pipes/redirects/chaining. Prefer mkdir/mv/rm/ls over equivalents. "
                "Delete directories with rmdir (empty) or rm -r (non-empty asks in Smart). "
                "Act uses Guard; Plan allows vetted read-only forms."
@@ -3543,17 +3798,35 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
         range.end_line = 0;
         return ok_error();
     }
+    const std::size_t requested_end_line = end_line == 0 ? lines.size() :
+                                           std::min(end_line, lines.size());
     if (end_line == 0) end_line = lines.size();
     if (start_line > lines.size() || end_line < start_line)
         return {ErrorCode::BadArgs,
                 "requested line range is outside " + description + ": " + display_path};
     end_line = std::min(end_line, lines.size());
+    const std::size_t line_limited_end =
+        std::min(end_line, start_line + static_cast<std::size_t>(2000) - 1);
 
     std::string selected;
-    for (std::size_t line = start_line; line <= end_line && line != 0; ++line)
-        selected += lines[line - 1];
-    const bool truncated = selected.size() > max_bytes;
-    if (truncated) selected.resize(utf8_prefix(selected, max_bytes));
+    bool truncated = line_limited_end < end_line;
+    for (std::size_t line = start_line; line <= line_limited_end && line != 0; ++line) {
+        const std::string& source_line = lines[line - 1];
+        if (selected.size() + source_line.size() <= max_bytes) {
+            selected += source_line;
+            continue;
+        }
+        truncated = true;
+        if (selected.empty()) selected += source_line.substr(0, utf8_prefix(source_line, max_bytes));
+        break;
+    }
+    if (selected.size() < std::accumulate(lines.begin() + static_cast<std::ptrdiff_t>(start_line - 1),
+                                          lines.begin() + static_cast<std::ptrdiff_t>(line_limited_end),
+                                          std::size_t{0},
+                                          [](std::size_t total, const std::string& line) {
+                                              return total + line.size();
+                                          }))
+        truncated = true;
     const std::string raw_hash = index::content_hash(selected);
     const std::string redacted = redact_source_secrets(selected, secrets_);
     std::size_t returned_end_line =
@@ -3568,6 +3841,10 @@ Error ReadToolRegistry::read_external_source(const fs::path& absolute_path,
     range.end_line = truncated ? returned_end_line : end_line;
     range.bytes = redacted.size();
     range.truncated = truncated;
+    if (truncated && range.end_line < requested_end_line)
+        range.next_start_line = range.end_line + 1;
+    for (const std::string& line : split_lines(selected))
+        if (utf8_codepoint_count(line) > 2000) ++range.truncated_lines;
     range.redacted = redacted != selected;
     return ok_error();
 }
@@ -3577,6 +3854,20 @@ Error ReadToolRegistry::read_workspace_source(const std::string& relative_path,
                                               std::size_t end_line,
                                               std::size_t max_bytes,
                                               SourceRange& range) const {
+    if (managed_script_path(relative_path)) {
+        if (mutation_policy_ == MutationPolicy::Disabled)
+            return {ErrorCode::BadArgs,
+                    "managed scripts are unavailable outside agent sessions"};
+        fs::path absolute;
+        Error resolved = resolve_managed_script(snapshot_.workspace, relative_path,
+                                                true, absolute);
+        if (!resolved.ok()) return resolved;
+        Error error = read_external_source(absolute, start_line, end_line,
+                                           std::min(max_bytes, kManagedScriptMaxBytes),
+                                           range, false);
+        if (error.ok()) range.path = fs::u8path(relative_path).generic_u8string();
+        return error;
+    }
     if (relative_path.empty() || !safe_relative_path(relative_path))
         return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "read")};
 
@@ -4056,8 +4347,20 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_size(args, "max_entries", 200, 500, maximum, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
         bool external = false;
+        const bool managed_listing = managed_scripts_directory(path);
         fs::path absolute;
-        if (!safe_relative_path(path)) {
+        if (managed_listing) {
+            if (mutation_policy_ == MutationPolicy::Disabled)
+                return tool_error_result(
+                    "policy_denied",
+                    "managed script storage is unavailable outside agent sessions");
+            Error managed_error =
+                ensure_managed_scripts_directory(snapshot_.workspace, absolute);
+            if (!managed_error.ok())
+                return tool_error_result(error_code_string(managed_error.code),
+                                         managed_error.message);
+            path = std::string(kProjectStateDirName) + "/scripts";
+        } else if (!safe_relative_path(path)) {
             Error resolved =
                 resolve_external_directory_path(snapshot_.workspace, path, absolute);
             if (!resolved.ok())
@@ -4125,10 +4428,31 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             const std::string name = entry.path().filename().u8string();
             if (name.empty() || name == "." || name == "..") continue;
             if (is_protected_listing_name(name)) continue;
+            if (managed_listing) {
+                if (name.rfind(".ainiux-run-", 0) == 0) continue;
+                if (!portable_managed_script_name(name))
+                    return tool_error_result(
+                        "policy_denied",
+                        "managed script storage contains a non-portable filename: " +
+                            name);
+                bool linked = false;
+                const Error link_error = platform::path_is_link_or_reparse(
+                    entry.path().u8string(), linked);
+                if (!link_error.ok() || linked)
+                    return tool_error_result(
+                        "policy_denied",
+                        "refusing symlink or reparse point in managed script storage: " +
+                            name);
+            }
             // Skip hidden protected-style components only; other dotfiles remain visible.
             const fs::file_status status = entry.symlink_status(ec);
             if (ec) continue;
             if (fs::is_symlink(status)) {
+                if (managed_listing)
+                    return tool_error_result(
+                        "policy_denied",
+                        "refusing symlink or reparse point in managed script storage: " +
+                            name);
                 DirEntry item;
                 item.name = name;
                 item.type = "symlink";
@@ -4137,6 +4461,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             DirEntry item;
             item.name = name;
+            if (managed_listing && !fs::is_regular_file(status))
+                return tool_error_result(
+                    "policy_denied",
+                    "managed script storage contains a non-file entry: " + name);
             if (fs::is_directory(status)) {
                 item.type = "directory";
                 bool is_empty = true;
@@ -4286,15 +4614,15 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             // Batch form is handled below.
         } else {
         std::string path;
-        std::size_t start = 1, end = 0, maximum = 65536;
+        std::size_t start = 1, end = 0, maximum = 131072;
         if (!get_string(args, "path", path, true, validation_error) ||
             !get_size(args, "start_line", 1, 100000000, start, validation_error) ||
             !get_size(args, "end_line", 0, 100000000, end, validation_error) ||
-            !get_size(args, "max_bytes", 65536, 262144, maximum, validation_error) || maximum == 0)
+            !get_size(args, "max_bytes", 131072, 262144, maximum, validation_error) || maximum == 0)
             return tool_error_result("invalid_arguments", validation_error.empty() ? "max_bytes must be positive" : validation_error);
         SourceRange range;
         Error error;
-        if (safe_relative_path(path) && !path.empty()) {
+        if ((safe_relative_path(path) || managed_script_path(path)) && !path.empty()) {
             error = mutation_policy_ == MutationPolicy::Disabled
                         ? read_source(path, start, end, maximum, range)
                         : read_workspace_source(path, start, end, maximum, range);
@@ -4347,7 +4675,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         data.object["line_start"] = number_value(range.start_line); data.object["line_end"] = number_value(range.end_line);
         data.object["content"] = string_value(number_source_lines(range)); data.object["file_hash"] = string_value(range.file_hash);
         data.object["range_hash"] = string_value(range.range_hash); data.object["bytes"] = number_value(range.bytes);
-        std::vector<std::string> warnings; if (range.redacted) warnings.push_back("configured credential value was redacted");
+        if (range.next_start_line > 0)
+            data.object["next_start_line"] = number_value(range.next_start_line);
+        if (range.truncated_lines > 0)
+            data.object["truncated_lines"] = number_value(range.truncated_lines);
+        std::vector<std::string> warnings;
+        if (range.redacted) warnings.push_back("configured credential value was redacted");
+        if (range.truncated_lines > 0)
+            warnings.push_back("one or more returned lines were shortened to 2000 UTF-8 characters");
         return envelope(true, std::move(data), "", "", warnings, range.truncated);
         }
     }
@@ -4371,7 +4706,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::string item_path;
             std::string item_error;
             if (!get_string(item, "path", item_path, true, item_error)) continue;
-            if (safe_relative_path(item_path) && !item_path.empty()) continue;
+            if ((safe_relative_path(item_path) || managed_script_path(item_path)) &&
+                !item_path.empty())
+                continue;
             fs::path absolute;
             Error resolved =
                 resolve_external_file_path(snapshot_.workspace, item_path, true, absolute);
@@ -4412,11 +4749,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             const json::Value& item = items->array[index];
             if (!item.is_object()) { warnings.push_back("omitted item " + std::to_string(index) + ": range must be an object"); truncated = true; continue; }
             std::string path;
-            std::size_t start = 1, end = 0, item_maximum = 65536;
+            std::size_t start = 1, end = 0, item_maximum = 131072;
             if (!get_string(item, "path", path, true, validation_error) ||
                 !get_size(item, "start_line", 1, 100000000, start, validation_error) ||
                 !get_size(item, "end_line", 0, 100000000, end, validation_error) ||
-                !get_size(item, "max_bytes", 65536, 262144, item_maximum,
+                !get_size(item, "max_bytes", 131072, 262144, item_maximum,
                           validation_error) ||
                 item_maximum == 0) {
                 warnings.push_back("omitted item " + std::to_string(index) + ": " + validation_error); truncated = true; continue;
@@ -4440,9 +4777,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             output.object["content"] = string_value(number_source_lines(range)); output.object["file_hash"] = string_value(range.file_hash);
             output.object["range_hash"] = string_value(range.range_hash);
             output.object["bytes"] = number_value(range.bytes);
+            if (range.next_start_line > 0)
+                output.object["next_start_line"] = number_value(range.next_start_line);
+            if (range.truncated_lines > 0)
+                output.object["truncated_lines"] = number_value(range.truncated_lines);
             output.object["truncated"] = bool_value(range.truncated);
             data.array.push_back(std::move(output)); remaining -= std::min(remaining, range.bytes);
-            truncated = truncated || range.truncated; if (range.redacted) warnings.push_back(path + ": configured credential value was redacted");
+            truncated = truncated || range.truncated;
+            if (range.redacted) warnings.push_back(path + ": configured credential value was redacted");
+            if (range.truncated_lines > 0)
+                warnings.push_back(path + ": one or more returned lines were shortened to 2000 UTF-8 characters");
         }
         json::Value metadata = object_value();
         metadata.object["requested_items"] = number_value(items->array.size());
@@ -4455,7 +4799,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     if (name == "grep") {
         std::string query, pattern, path, glob;
         bool regex_mode = false, case_sensitive = false, word = false;
-        std::size_t context = 0, maximum = 50;
+        std::size_t context = 0, maximum = 50, offset = 0;
         if (!get_string(args, "query", query, false, validation_error) ||
             !get_string(args, "pattern", pattern, false, validation_error) ||
             !get_string(args, "path", path, false, validation_error) ||
@@ -4465,7 +4809,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                       validation_error) ||
             !get_bool(args, "word", false, word, validation_error) ||
             !get_size(args, "context", 0, 10, context, validation_error) ||
-            !get_size(args, "max_results", 50, 500, maximum, validation_error))
+            !get_size(args, "max_results", 50, 500, maximum, validation_error) ||
+            !get_size(args, "offset", 0, 100000000, offset, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
         if (!query.empty() && !pattern.empty() && query != pattern)
             return tool_error_result(
@@ -4545,10 +4890,15 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::set<std::string> eligible_paths;
         for (const SearchFile& file : candidates)
             eligible_paths.insert(normalize_glob_path(file.path));
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const SearchFile& left, const SearchFile& right) {
+                      return left.path < right.path;
+                  });
 
         json::Value data = array_value();
         std::vector<std::string> warnings;
         bool truncated = false;
+        std::size_t skipped = 0;
         if (inferred_regex)
             warnings.push_back(
                 "regex=true inferred because query contains an unescaped '|'");
@@ -4559,6 +4909,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         auto finish_search = [&](const char* backend) {
             json::Value metadata = object_value();
             metadata.object["search_backend"] = string_value(backend);
+            metadata.object["offset"] = number_value(offset);
+            metadata.object["returned_results"] = number_value(data.array.size());
+            if (truncated)
+                metadata.object["next_offset"] = number_value(offset + data.array.size());
             if (!search_root.empty()) {
                 bool any_in_root = false;
                 for (const std::string& candidate : eligible_paths) {
@@ -4582,6 +4936,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::vector<std::string> argv = {
                 "rg",          "--with-filename", "--line-number",
                 "--no-heading", "--color=never",  "--no-config"};
+            argv.push_back("--sort");
+            argv.push_back("path");
             if (!case_sensitive) argv.push_back("-i");
             if (word) argv.push_back("-w");
             if (!regex_mode) argv.push_back("-F");
@@ -4591,7 +4947,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             // Per-file cap; we also enforce a global max_results while parsing.
             argv.push_back("--max-count");
-            argv.push_back(std::to_string(maximum));
+            argv.push_back(std::to_string(std::min<std::size_t>(
+                100000001, offset + maximum + 1)));
             if (!glob.empty()) {
                 std::vector<std::string> alternatives;
                 expand_braces(normalize_glob_path(glob), alternatives);
@@ -4667,6 +5024,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         pending_context.push_back({hit_line, hit_text});
                         continue;
                     }
+                    if (skipped < offset) {
+                        ++skipped;
+                        continue;
+                    }
                     if (data.array.size() >= maximum) {
                         truncated = true;
                         break;
@@ -4674,14 +5035,22 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     json::Value match = object_value();
                     match.object["path"] = string_value(hit_path);
                     match.object["line"] = number_value(hit_line);
-                    match.object["text"] = string_value(hit_text);
+                    bool line_truncated = false;
+                    match.object["text"] = string_value(
+                        bounded_display_line(hit_text, line_truncated));
+                    if (line_truncated)
+                        warnings.push_back("one or more grep lines were shortened to 2000 UTF-8 characters");
                     if (context > 0) {
                         json::Value nearby = array_value();
                         for (const PendingContext& item : pending_context) {
                             if (item.line == hit_line) continue;
                             json::Value row = object_value();
                             row.object["line"] = number_value(item.line);
-                            row.object["text"] = string_value(item.text);
+                            bool line_truncated = false;
+                            row.object["text"] = string_value(
+                                bounded_display_line(item.text, line_truncated));
+                            if (line_truncated)
+                                warnings.push_back("one or more grep context lines were shortened to 2000 UTF-8 characters");
                             nearby.array.push_back(std::move(row));
                         }
                         // Following context lines arrive after the match until `--`.
@@ -4762,17 +5131,24 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         for (const auto& row : found->second) {
                             json::Value entry = object_value();
                             entry.object["line"] = number_value(row.first);
-                            entry.object["text"] = string_value(row.second);
+                            bool line_truncated = false;
+                            entry.object["text"] = string_value(
+                                bounded_display_line(row.second, line_truncated));
+                            if (line_truncated)
+                                warnings.push_back("one or more grep context lines were shortened to 2000 UTF-8 characters");
                             nearby.array.push_back(std::move(entry));
                         }
                         item.object["context"] = std::move(nearby);
                     }
                 }
-                if (process.stdout_truncated)
-                    warnings.push_back(
-                        "ripgrep output hit the internal capture limit; results "
-                        "may be incomplete");
-                return finish_search("rg");
+                if (!process.stdout_truncated)
+                    return finish_search("rg");
+                warnings.push_back(
+                    "ripgrep output hit the internal capture limit; used built-in "
+                    "text search for a complete paginated result");
+                data = array_value();
+                truncated = false;
+                skipped = 0;
             }
             // Soft failure: missing binary race, timeout, or unexpected exit →
             // portable built-in path.
@@ -4812,6 +5188,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     return tool_error_result("cancelled",
                                              "text search cancelled");
                 if (!matches_line(lines[line])) continue;
+                if (skipped < offset) {
+                    ++skipped;
+                    continue;
+                }
                 if (data.array.size() >= maximum) {
                     truncated = true;
                     break;
@@ -4819,7 +5199,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 json::Value match = object_value();
                 match.object["path"] = string_value(file.path);
                 match.object["line"] = number_value(line + 1);
-                match.object["text"] = string_value(lines[line]);
+                bool line_truncated = false;
+                match.object["text"] = string_value(
+                    bounded_display_line(lines[line], line_truncated));
+                if (line_truncated)
+                    warnings.push_back("one or more grep lines were shortened to 2000 UTF-8 characters");
                 if (context > 0) {
                     json::Value nearby = array_value();
                     const std::size_t begin =
@@ -4831,7 +5215,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         if (adjacent == line) continue;
                         json::Value item = object_value();
                         item.object["line"] = number_value(adjacent + 1);
-                        item.object["text"] = string_value(lines[adjacent]);
+                        bool line_truncated = false;
+                        item.object["text"] = string_value(
+                            bounded_display_line(lines[adjacent], line_truncated));
+                        if (line_truncated)
+                            warnings.push_back("one or more grep context lines were shortened to 2000 UTF-8 characters");
                         nearby.array.push_back(std::move(item));
                     }
                     match.object["context"] = std::move(nearby);
@@ -4873,7 +5261,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             permission_controls_ && permission_mode_ == PermissionMode::Yolo && full;
         Error policy_error =
             parse_command(command, parsed_arguments, policy, guard_rule_id, preview_ask,
-                          nullptr, cancellation, agent_session, unrestricted_yolo);
+                          nullptr, cancellation, agent_session, unrestricted_yolo, true);
         if (!policy_error.ok()) {
             const std::string code =
                 policy_error.message.find("refusing") != std::string::npos ||
@@ -4882,6 +5270,182 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     ? "policy_denied"
                     : error_code_string(policy_error.code);
             return tool_error_result(code, policy_error.message);
+        }
+        const bool managed_invocation =
+            parsed_arguments.size() >= 2 &&
+            (parsed_arguments[0] == "bash" || parsed_arguments[0] == "sh") &&
+            managed_script_path(parsed_arguments[1]);
+        if (managed_invocation) {
+            if (!full)
+                return tool_error_result(
+                    "policy_denied",
+                    "managed scripts may be executed only in Act mode");
+            if (!cwd.empty() && !safe_relative_path(cwd))
+                return tool_error_result(
+                    "policy_denied",
+                    "managed script cwd must be a safe project-relative directory");
+
+            fs::path script_path;
+            std::string script_name;
+            Error error = resolve_managed_script(
+                snapshot_.workspace, parsed_arguments[1], true, script_path,
+                &script_name);
+            std::string script_bytes;
+            if (error.ok())
+                error = platform::read_file_bounded(
+                    script_path.u8string(), kManagedScriptMaxBytes, script_bytes);
+            if (error.ok() &&
+                (script_bytes.find('\0') != std::string::npos ||
+                 !html::is_valid_utf8(script_bytes)))
+                error = {ErrorCode::BadArgs,
+                         "managed script must be valid UTF-8 text without NUL bytes and no "
+                         "larger than 65536 bytes"};
+            if (!error.ok())
+                return tool_error_result(error_code_string(error.code), error.message);
+
+            const std::string interpreter = parsed_arguments[0];
+            const std::string content_hash = security::sha256_hex(script_bytes);
+            std::vector<std::string> script_arguments(
+                parsed_arguments.begin() + 2, parsed_arguments.end());
+            bool trusted = false;
+            if (permission_mode_ == PermissionMode::Smart &&
+                session_store_ != nullptr && session_store_->is_open()) {
+                error = session_store_->script_is_trusted(
+                    script_name, interpreter, content_hash, trusted);
+                if (!error.ok())
+                    return tool_error_result(error_code_string(error.code),
+                                             error.message);
+            }
+
+            GuardApprovalDecision decision = GuardApprovalDecision::Allow;
+            const bool must_ask = permission_mode_ == PermissionMode::Confirm ||
+                                  (permission_mode_ == PermissionMode::Smart &&
+                                   !trusted);
+            if (must_ask) {
+                GuardApprovalRequest ask;
+                ask.tool_name = "run";
+                ask.command_preview = format_command_preview(parsed_arguments);
+                ask.rule_id = "ask_on_managed_script_content";
+                std::ostringstream message;
+                message << "Execute this exact managed script?\n"
+                        << "Name: " << script_name << "\n"
+                        << "Interpreter: " << interpreter << "\n"
+                        << "Arguments: "
+                        << format_command_preview(script_arguments) << "\n"
+                        << "Content hash: " << content_hash << "\n"
+                        << "--- script bytes ---\n"
+                        << script_bytes
+                        << (script_bytes.empty() || script_bytes.back() == '\n'
+                                ? std::string()
+                                : std::string("\n"))
+                        << "--- end script bytes ---";
+                ask.message = message.str();
+                ask.arguments = parsed_arguments;
+                ask.arguments.push_back("content_hash=" + content_hash);
+                decision = request_guard_approval(ask, cancellation);
+                if (!on_guard_ask_ && session_store_ != nullptr &&
+                    session_store_->is_open()) {
+                    AgentApprovalRecord row;
+                    row.tool_name = ask.tool_name;
+                    row.command_preview =
+                        redact_secrets(ask.command_preview, secrets_);
+                    row.rule_id = ask.rule_id;
+                    row.decision = guard_approval_decision_name(decision);
+                    row.source = "headless";
+                    row.message = redact_secrets(ask.message, secrets_);
+                    (void)session_store_->record_approval(row);
+                }
+            }
+            if (decision != GuardApprovalDecision::Allow)
+                return tool_error_result(
+                    decision == GuardApprovalDecision::Cancelled ? "cancelled"
+                                                                 : "policy_denied",
+                    decision == GuardApprovalDecision::Cancelled
+                        ? "managed script approval cancelled"
+                        : "managed script content requires user approval in " +
+                              std::string(permission_mode_name(permission_mode_)) +
+                              " mode");
+
+            if (permission_mode_ == PermissionMode::Smart && !trusted &&
+                session_store_ != nullptr && session_store_->is_open()) {
+                ScriptTrustRecord trust;
+                trust.script_name = script_name;
+                trust.interpreter = interpreter;
+                trust.content_hash = content_hash;
+                error = session_store_->record_script_trust(trust);
+                if (!error.ok())
+                    return tool_error_result(error_code_string(error.code),
+                                             error.message);
+            }
+
+            fs::path scripts_directory;
+            error = ensure_managed_scripts_directory(snapshot_.workspace,
+                                                     scripts_directory);
+            std::string suffix;
+            if (error.ok()) error = platform::secure_random_hex(16, suffix);
+            ScopedManagedScriptCopy temporary;
+            if (error.ok()) {
+                temporary.set(scripts_directory /
+                              fs::u8path(".ainiux-run-" + suffix));
+                error = platform::atomic_write_private(
+                    temporary.path().u8string(), script_bytes, true);
+            }
+
+            ProcessResult process;
+            if (error.ok()) {
+                ProcessOptions options;
+                options.workspace = snapshot_.workspace;
+                options.cwd = cwd;
+                options.timeout_ms = static_cast<long>(timeout);
+                options.cancellation = cancellation;
+                error = run_managed_script(interpreter,
+                                           temporary.path().u8string(),
+                                           script_arguments, options, process);
+            }
+            if (indexing_enabled_) queue_index_paths({}, true);
+            // Audit the model-requested path and arguments, never the private
+            // temporary filename used to close the approval/execution race.
+            process.arguments = parsed_arguments;
+            process.guard_decision = "allow";
+            process.guard_rule_id = "ask_on_managed_script_content";
+
+            json::Value data = object_value();
+            json::Value arguments = array_value();
+            for (const std::string& argument : process.arguments)
+                arguments.array.push_back(
+                    string_value(redact_secrets(argument, secrets_)));
+            data.object["arguments"] = std::move(arguments);
+            data.object["cwd"] = string_value(process.cwd);
+            data.object["resolved_executable"] = string_value(
+                redact_secrets(process.resolved_executable, secrets_));
+            data.object["exit_status"] = number_value(process.exit_status);
+            data.object["signal"] = number_value(process.signal);
+            data.object["duration_ms"] = number_value(process.duration_ms);
+            data.object["stdout"] = string_value(
+                redact_secrets(process.stdout_text, secrets_));
+            data.object["stderr"] = string_value(
+                redact_secrets(process.stderr_text, secrets_));
+            data.object["stdout_truncated"] =
+                bool_value(process.stdout_truncated);
+            data.object["stderr_truncated"] =
+                bool_value(process.stderr_truncated);
+            data.object["policy"] = string_value("allowed-managed-script");
+            json::Value guard = object_value();
+            guard.object["decision"] = string_value(process.guard_decision);
+            guard.object["rule_id"] = string_value(process.guard_rule_id);
+            guard.object["script_name"] = string_value(script_name);
+            guard.object["interpreter"] = string_value(interpreter);
+            guard.object["content_hash"] = string_value(content_hash);
+            guard.object["trust_reused"] = bool_value(trusted);
+            data.object["guard"] = std::move(guard);
+            if (!error.ok())
+                return envelope(false, std::move(data),
+                                error_code_string(error.code), error.message,
+                                {}, process.stdout_truncated ||
+                                        process.stderr_truncated);
+            return envelope(true, std::move(data), "", "", {},
+                            process.stdout_truncated ||
+                                process.stderr_truncated);
         }
         // Security-review keeps path scope to the completed index. Agent mode allows
         // real workspace paths (empty dirs, #files#, scripts to execute).
@@ -5410,6 +5974,59 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!get_string(args, "source", source_text, true, validation_error) ||
             !get_string(args, "destination", destination_text, true, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        const bool source_managed = managed_script_path(source_text);
+        const bool destination_managed = managed_script_path(destination_text);
+        if (source_managed || destination_managed) {
+            if (!source_managed || !destination_managed)
+                return tool_error_result(
+                    "policy_denied",
+                    "mv cannot move files between managed script storage and the workspace");
+            fs::path source;
+            fs::path destination;
+            std::string source_name;
+            std::string destination_name;
+            Error error = resolve_managed_script(
+                snapshot_.workspace, source_text, true, source, &source_name);
+            if (error.ok())
+                error = resolve_managed_script(snapshot_.workspace, destination_text,
+                                               false, destination,
+                                               &destination_name);
+            const GuardApprovalDecision decision =
+                error.ok()
+                    ? request_permission(
+                          "mv", "mv " + source_text + " -> " + destination_text,
+                          {source_text, destination_text}, false, false, true, false,
+                          {}, {}, cancellation)
+                    : GuardApprovalDecision::Deny;
+            if (error.ok() && decision != GuardApprovalDecision::Allow)
+                error = {decision == GuardApprovalDecision::Cancelled
+                             ? ErrorCode::Cancelled
+                             : ErrorCode::UnsupportedFeature,
+                         decision == GuardApprovalDecision::Cancelled
+                             ? "managed script rename approval cancelled"
+                             : "managed script rename requires user approval"};
+            std::error_code ec;
+            if (error.ok() && fs::exists(destination, ec))
+                error = {ErrorCode::FileWrite,
+                         "managed script destination already exists: " +
+                             destination_text};
+            if (error.ok()) error = invalidate_managed_script_trust(source_text);
+            if (error.ok()) error = invalidate_managed_script_trust(destination_text);
+            if (error.ok())
+                error = platform::atomic_move(source.u8string(),
+                                              destination.u8string(), false);
+            json::Value data = object_value();
+            data.object["source"] = string_value(source_text);
+            data.object["destination"] = string_value(destination_text);
+            data.object["renamed"] = bool_value(error.ok());
+            return error.ok()
+                       ? envelope(true, std::move(data), "", "", {}, false)
+                       : envelope(false, std::move(data),
+                                  error.code == ErrorCode::UnsupportedFeature
+                                      ? "policy_denied"
+                                      : error_code_string(error.code),
+                                  error.message, {}, false);
+        }
         fs::path source, destination;
         bool source_external = false, destination_external = false;
         Error error = resolve_native_path(snapshot_.workspace, source_text, true, source,

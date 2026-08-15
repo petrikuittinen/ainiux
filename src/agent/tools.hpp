@@ -21,6 +21,8 @@
 
 namespace ainiux::agent {
 
+class AgentSessionStore;
+
 struct IndexRefreshState;
 struct IndexOverlayEntry {
     bool removed = false;
@@ -37,6 +39,8 @@ struct SourceRange {
     std::size_t start_line = 1;
     std::size_t end_line = 0;
     std::size_t bytes = 0;
+    std::size_t next_start_line = 0;
+    std::size_t truncated_lines = 0;
     bool truncated = false;
     bool redacted = false;
 };
@@ -96,6 +100,8 @@ struct ToolRegistryOptions {
     VisionAttachHooks vision_hooks;
     PermissionMode permission_mode = PermissionMode::Smart;
     bool permission_controls = false;
+    // Optional project-local persistence for Smart managed-script trust.
+    AgentSessionStore* session_store = nullptr;
     bool indexing_enabled = true;
     IndexAccessMode index_access_mode =
         IndexAccessMode::SnapshotAuthorization;
@@ -221,6 +227,7 @@ class ReadToolRegistry {
                                 std::vector<std::string>& warnings) const;
     void note_written_file(const std::string& relative_path, const std::string& content) const;
     void note_removed_path(const std::string& relative_path) const;
+    Error invalidate_managed_script_trust(const std::string& relative_path) const;
     std::size_t queue_index_paths(const std::vector<std::string>& paths,
                                   bool full_tree = false) const;
     void merge_index_overlay() const;
@@ -288,6 +295,7 @@ class ReadToolRegistry {
     VisionAttachHooks vision_hooks_;
     PermissionMode permission_mode_ = PermissionMode::Smart;
     bool permission_controls_ = false;
+    AgentSessionStore* session_store_ = nullptr;
     bool indexing_enabled_ = true;
     IndexAccessMode index_access_mode_ =
         IndexAccessMode::SnapshotAuthorization;

@@ -24,7 +24,7 @@ struct AgentLoopLimits {
     std::size_t soft_identical_repeats = 3;
     std::size_t hard_identical_repeats = 5;
     std::size_t consecutive_failure_turns = 3;
-    std::size_t max_scripted_turns = 50;
+    std::size_t max_scripted_turns = 250;
     int transport_attempts = 3;  // total attempts per request, not "extra" retries
     bool interactive = false;    // interactive: ask to continue at turn cap
 };

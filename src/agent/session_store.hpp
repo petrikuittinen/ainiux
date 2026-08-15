@@ -56,6 +56,13 @@ struct AgentApprovalRecord {
     std::string message;
 };
 
+struct ScriptTrustRecord {
+    std::string script_name;
+    std::string interpreter;
+    std::string content_hash;
+    long long approved_at = 0;
+};
+
 // Backward-compatible aliases used by older call sites during transition.
 using AgentSessionRecord = AgentProjectRecord;
 
@@ -135,9 +142,18 @@ class AgentSessionStore {
     Error record_approval(const AgentApprovalRecord& record);
     Error load_approvals(std::vector<AgentApprovalRecord>& approvals, int limit = 100) const;
 
+    // Smart-mode reusable approval for one exact managed-script byte sequence.
+    Error script_is_trusted(const std::string& script_name,
+                            const std::string& interpreter,
+                            const std::string& content_hash,
+                            bool& trusted) const;
+    Error record_script_trust(const ScriptTrustRecord& record);
+    Error invalidate_script_trust(const std::string& script_name);
+
    private:
     Error ensure_schema();
     Error ensure_approvals_table();
+    Error ensure_script_trust_table();
     Error ensure_project_settings_columns();
     Error next_seq(long long& seq);
     Error touch();

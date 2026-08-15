@@ -2016,6 +2016,12 @@ Error apply_document(const Document& document, cli::Options& options) {
                              candidate.max_parallel_agents > 32)) {
                 err = schema_error(entry, "expected an integer from 1 through 32");
             }
+        } else if (name == "agent.max_turns") {
+            err = nonnegative_int(entry, candidate.agent_max_turns);
+            if (err.ok() && (candidate.agent_max_turns < 1 ||
+                             candidate.agent_max_turns > 500)) {
+                err = schema_error(entry, "expected an integer from 1 through 500");
+            }
         } else if (name == "agent.security_review_batch_size") {
             long long value = 0;
             err = auto_save_byte_size(entry, value);

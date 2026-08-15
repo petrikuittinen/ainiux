@@ -195,7 +195,40 @@ void test_record_and_load_approvals() {
     loaded.clear();
     check(again.load_approvals(loaded).ok() && loaded.size() == 3, "three approvals total");
 
+    bool trusted = true;
+    check(again.script_is_trusted("count.sh", "sh", "hash-one", trusted).ok() &&
+              !trusted,
+          "unknown script hash is not trusted");
+    agent::ScriptTrustRecord trust;
+    trust.script_name = "count.sh";
+    trust.interpreter = "sh";
+    trust.content_hash = "hash-one";
+    trust.approved_at = 1234;
+    check(again.record_script_trust(trust).ok(),
+          "record exact managed-script hash trust");
+    check(again.script_is_trusted("count.sh", "sh", "hash-one", trusted).ok() &&
+              trusted,
+          "exact name, interpreter, and hash reuse trust");
+    check(again.script_is_trusted("count.sh", "bash", "hash-one", trusted).ok() &&
+              !trusted &&
+              again.script_is_trusted("count.sh", "sh", "hash-two", trusted).ok() &&
+              !trusted,
+          "interpreter or content changes do not reuse trust");
+
+    again.close();
+    agent::AgentSessionStore trust_reopened;
+    check(trust_reopened.open(workspace).ok(),
+          "reopen database with soft script_trust extension");
+    check(trust_reopened.script_is_trusted("count.sh", "sh", "hash-one", trusted).ok() &&
+              trusted,
+          "managed-script trust persists across project resume");
+    check(trust_reopened.invalidate_script_trust("count.sh").ok() &&
+              trust_reopened.script_is_trusted("count.sh", "sh", "hash-one", trusted).ok() &&
+              !trusted,
+          "script mutation invalidation removes every interpreter approval for name");
+
     std::error_code ec;
+    trust_reopened.close();
     fs::remove_all(workspace, ec);
 }
 

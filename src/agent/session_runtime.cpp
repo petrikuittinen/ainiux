@@ -1106,6 +1106,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     tool_options.search_options = options_.search_options;
     tool_options.permission_mode = permission_mode_;
     tool_options.permission_controls = options_.interactive;
+    tool_options.session_store = &session_store_;
     tool_options.indexing_enabled = indexing_enabled;
     tool_options.goal_hooks.has_active_goal = [this]() { return goal_is_active(goal_); };
     tool_options.goal_hooks.mark_complete = [this](const std::string& evidence) -> Error {
@@ -1144,6 +1145,8 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                 fields.object["command"] = log_string(request.command_preview);
                 fields.object["rule_id"] = log_string(request.rule_id);
                 fields.object["decision"] = log_string(guard_approval_decision_name(decision));
+                fields.object["message"] = ReviewLogger::payload(
+                    redact_secrets(request.message, secrets_));
                 logger_->event("guard_approval", {"guard"}, std::move(fields),
                                decision == GuardApprovalDecision::Allow ? "success" : "failure");
             }
@@ -1207,7 +1210,9 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     const bool supports_tools = provider::capabilities_for(context).tool_calls;
     state_.protocol = default_tool_protocol(supports_tools);
     limits_.interactive = options_.interactive;
-    limits_.max_scripted_turns = 50;
+    limits_.max_scripted_turns = options_.max_agent_turns > 0
+                                     ? static_cast<std::size_t>(options_.max_agent_turns)
+                                     : 250U;
     known_tools_ = known_tool_names(tools_);
     publish_preparation(PreparationPhase::ToolSetup, true, phase_started);
 

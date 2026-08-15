@@ -837,7 +837,7 @@ void test_config_reads_models_template() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 74, "common config has every expected setting");
+    check(parsed.document.entries.size() == 75, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -884,7 +884,8 @@ void test_config_reads_common_template() {
               options.editor_ai_continue_prose_postfix_max_chars ==
                   ainiux::editor::kDefaultAiContinueProsePostfixMaxChars &&
               options.editor_ai_continue_max_tokens == ainiux::editor::kDefaultAiContinueMaxTokens &&
-              options.max_parallel_agents == 2 &&
+              options.max_parallel_agents == 4 &&
+              options.agent_max_turns == 250 &&
               options.security_review_batch_size == 200U * 1024U &&
               options.security_review_log_enabled &&
               options.security_review_log_keep_runs == 3 &&
@@ -1250,11 +1251,12 @@ void test_config_code_index_size() {
 
 void test_config_security_review_settings() {
     ainiux::config::ParseResult parsed = ainiux::config::parse(
-        "[agent]\nmax_parallel_agents = 4\nsecurity_review_batch_size = 200K\nsecurity_review_log_enabled = off\nsecurity_review_log_keep_runs = 9\n",
+        "[agent]\nmax_parallel_agents = 4\nmax_turns = 300\nsecurity_review_batch_size = 200K\nsecurity_review_log_enabled = off\nsecurity_review_log_keep_runs = 9\n",
         "agent.conf");
     ainiux::cli::Options options;
     ainiux::Error error = ainiux::config::apply_document(parsed.document, options);
     check(parsed.error.ok() && error.ok() && options.max_parallel_agents == 4 &&
+              options.agent_max_turns == 300 &&
               options.security_review_batch_size == 204800 &&
               !options.security_review_log_enabled && options.security_review_log_keep_runs == 9,
           "agent config parses bounded concurrency and binary-K review size");
@@ -1263,6 +1265,11 @@ void test_config_security_review_settings() {
     options = ainiux::cli::Options{};
     error = ainiux::config::apply_document(parsed.document, options);
     check(!error.ok(), "agent config rejects more than 32 parallel workers");
+
+    parsed = ainiux::config::parse("[agent]\nmax_turns = 501\n", "agent-turns-bad.conf");
+    options = ainiux::cli::Options{};
+    error = ainiux::config::apply_document(parsed.document, options);
+    check(!error.ok(), "agent config rejects more than 500 turns");
 
     parsed = ainiux::config::parse("[agent]\nsecurity_review_batch_size = 0\n", "agent-zero.conf");
     options = ainiux::cli::Options{};
