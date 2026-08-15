@@ -209,6 +209,50 @@ void accumulate_agent_token_usage(const provider::ChatResult& metrics,
     }
 }
 
+bool accumulate_agent_stream_decode(const provider::ChatResult& metrics,
+                                    long long estimated_output_tokens,
+                                    bool stream,
+                                    long long& tokens,
+                                    long long& decode_ms,
+                                    bool& estimated) {
+    long long first_ms = metrics.ttft_ms;
+    if (first_ms < 0 && stream && metrics.first_body_ms >= 0)
+        first_ms = metrics.first_body_ms;
+    if (!stream || first_ms < 0 || metrics.total_ms <= first_ms) {
+        return false;
+    }
+    long long round_tokens = 0;
+    bool round_estimated = false;
+    if (!metrics.completion_tokens_estimated &&
+        !metrics.usage_json.empty() && metrics.usage_json != "null" &&
+        metrics.completion_tokens > 0) {
+        round_tokens = metrics.completion_tokens;
+    } else if (estimated_output_tokens > 0) {
+        round_tokens = estimated_output_tokens;
+        round_estimated = true;
+    } else if (metrics.completion_tokens > 0) {
+        round_tokens = metrics.completion_tokens;
+        round_estimated = metrics.completion_tokens_estimated;
+    } else {
+        return false;
+    }
+    auto add = [](long long& total, long long value) {
+        if (value <= 0) return;
+        total = total > std::numeric_limits<long long>::max() - value
+                    ? std::numeric_limits<long long>::max()
+                    : total + value;
+    };
+    add(tokens, round_tokens);
+    add(decode_ms, metrics.total_ms - first_ms);
+    if (round_estimated) estimated = true;
+    return true;
+}
+
+double agent_stream_tokens_per_second(long long tokens, long long decode_ms) {
+    if (tokens <= 0 || decode_ms <= 0) return -1.0;
+    return static_cast<double>(tokens) * 1000.0 / static_cast<double>(decode_ms);
+}
+
 bool AgentSessionRuntime::is_interrupted(runtime::CancellationToken cancellation,
                                          const std::function<bool()>& interrupted) const {
     if (cancellation.cancelled()) return true;
@@ -1726,10 +1770,17 @@ Error AgentSessionRuntime::switch_permission_mode(
         ~Release() { active.store(false); }
     } release{operation_active_};
 
+    // write_session_settings encodes permission_mode_, so apply the new mode
+    // before persisting. Roll it back if the project row cannot be updated.
+    const PermissionMode previous = permission_mode_;
+    permission_mode_ = mode;
     if (session_store_.is_open()) {
         AgentProjectRecord project;
         Error error = session_store_.open_project(project);
-        if (!error.ok()) return error;
+        if (!error.ok()) {
+            permission_mode_ = previous;
+            return error;
+        }
         project.provider = context.profile.name;
         project.model = context.options.model;
         project.api =
@@ -1740,13 +1791,21 @@ Error AgentSessionRuntime::switch_permission_mode(
         error = settings_json_with_permission_mode(
             chat::settings_json_from_options(context.options), mode,
             project.settings_json);
-        if (!error.ok()) return error;
+        if (!error.ok()) {
+            permission_mode_ = previous;
+            return error;
+        }
         error = write_session_settings(project);
-        if (!error.ok()) return error;
+        if (!error.ok()) {
+            permission_mode_ = previous;
+            return error;
+        }
         error = session_store_.update_project_meta(project);
-        if (!error.ok()) return error;
+        if (!error.ok()) {
+            permission_mode_ = previous;
+            return error;
+        }
     }
-    permission_mode_ = mode;
     options_.permission_mode = mode;
     tools_.set_permission_mode(mode);
     return ok_error();
@@ -2239,9 +2298,17 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     const std::size_t tool_line_width = log_width > 8 ? log_width : 8;
     std::size_t turn_tool_index = 0;
     std::size_t active_round_id = 0;
+    constexpr std::size_t kWorkingNoticeId =
+        std::numeric_limits<std::size_t>::max() - 1;
+    bool working_row_started = false;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
         ++turn_tool_index;
+        if (working_row_started) {
+            structured_progress({AgentProgressAction::Discard, AgentProgressKind::Notice,
+                                 active_round_id, kWorkingNoticeId, {}, 0});
+            working_row_started = false;
+        }
         const auto execution_started = std::chrono::steady_clock::now();
         const long long approval_before =
             guard_approval_wait_ms_.load(std::memory_order_relaxed);
@@ -2374,9 +2441,13 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             std::max(0, context.options.agent_thinking_preview_max_chars));
         const int thinking_idle_seconds =
             std::max(0, context.options.agent_thinking_idle_preview_seconds);
-        std::size_t thinking_tool_id = 0;
-        std::size_t thinking_sentence_offset = 0;
-        std::string last_live_thinking_preview;
+        constexpr std::size_t kOpeningThinkingId = 0;
+        constexpr std::size_t kFinishedThinkingId = 1;
+        bool opening_thinking_frozen = false;
+        bool finished_thinking_started = false;
+        bool thinking_previews_finalized = false;
+        std::string last_live_opening_preview;
+        std::string last_live_finished_preview;
         auto last_thinking_idle_emit = std::chrono::steady_clock::now();
         const int thinking_token_refresh_seconds =
             std::max(0, context.options.agent_thinking_token_refresh_seconds);
@@ -2396,6 +2467,11 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 estimate_tokens_from_text(reasoning_so_far));
             last_thinking_token_publish = now;
         };
+        if (working_row_started) {
+            structured_progress({AgentProgressAction::Discard, AgentProgressKind::Notice,
+                                 active_round_id, kWorkingNoticeId, {}, 0});
+            working_row_started = false;
+        }
         publish_phase(AgentActivityPhase::Thinking);
         ReviewLogContext log_context("agent");
         log_context.round = state_.turn + 1;
@@ -2420,13 +2496,21 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 round_reasoning.clear();
                 round_preview.clear();
                 reasoning_row_started = false;
-                thinking_tool_id = 0;
-                thinking_sentence_offset = 0;
-                last_live_thinking_preview.clear();
+                opening_thinking_frozen = false;
+                finished_thinking_started = false;
+                thinking_previews_finalized = false;
+                last_live_opening_preview.clear();
+                last_live_finished_preview.clear();
                 last_thinking_idle_emit = std::chrono::steady_clock::now();
                 last_thinking_token_publish =
                     std::chrono::steady_clock::time_point::min();
                 clear_in_flight_generation_tokens();
+                if (working_row_started) {
+                    structured_progress({AgentProgressAction::Discard,
+                                         AgentProgressKind::Notice, active_round_id,
+                                         kWorkingNoticeId, {}, 0});
+                    working_row_started = false;
+                }
                 retry_notice_active = true;
                 std::string retry_notice =
                     "Waiting for provider · retry " +
@@ -2456,15 +2540,99 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                  std::numeric_limits<std::size_t>::max(), {}, 0});
             retry_notice_active = false;
         };
-        auto thinking_preview_line = [&](const std::string& fragment) {
-            return clip_to_cells(
-                format_reasoning_preview(fragment, thinking_preview_max_chars, secrets_),
-                tool_line_width);
+        auto clip_thinking_line = [&](const std::string& line) {
+            return clip_to_cells(line, tool_line_width);
         };
-        auto publish_thinking = [&](AgentProgressAction action, const std::string& text,
-                                    long long created_at_ms = 0) {
+        auto persist_thinking_line = [&](const std::string& line) {
+            if (session_store_.is_open() && session_id_ > 0)
+                (void)session_store_.append_message("thinking", line);
+        };
+        auto publish_thinking = [&](AgentProgressAction action, std::size_t tool_id,
+                                    const std::string& text, long long created_at_ms = 0) {
             structured_progress({action, AgentProgressKind::Thinking, active_round_id,
-                                 thinking_tool_id, text, created_at_ms});
+                                 tool_id, text, created_at_ms});
+        };
+        auto commit_thinking_line = [&](std::size_t tool_id, const std::string& line) {
+            if (line.empty()) return;
+            const long long frozen_ms = now_unix_ms();
+            publish_thinking(AgentProgressAction::Commit, tool_id, line, frozen_ms);
+            persist_thinking_line(line);
+        };
+        auto discard_thinking_line = [&](std::size_t tool_id) {
+            publish_thinking(AgentProgressAction::Discard, tool_id, {});
+        };
+        auto hide_working_row = [&]() {
+            if (!working_row_started) return;
+            structured_progress({AgentProgressAction::Discard, AgentProgressKind::Notice,
+                                 active_round_id, kWorkingNoticeId, {}, 0});
+            working_row_started = false;
+        };
+        auto finalize_thinking_previews = [&]() {
+            if (thinking_previews_finalized) return;
+            thinking_previews_finalized = true;
+            if (!options_.interactive || thinking_preview_max_chars == 0) {
+                if (finished_thinking_started)
+                    discard_thinking_line(kFinishedThinkingId);
+                if (reasoning_row_started && !opening_thinking_frozen)
+                    discard_thinking_line(kOpeningThinkingId);
+                return;
+            }
+            const std::string opening = clip_thinking_line(format_thinking_opening_preview(
+                round_reasoning, thinking_preview_max_chars, secrets_));
+            if (!opening.empty() && !opening_thinking_frozen)
+                commit_thinking_line(kOpeningThinkingId, opening);
+            else if (opening.empty() && reasoning_row_started &&
+                     !opening_thinking_frozen)
+                discard_thinking_line(kOpeningThinkingId);
+            if (!round_reasoning.empty() &&
+                !skip_finished_thinking_preview(round_reasoning, thinking_preview_max_chars,
+                                                secrets_)) {
+                const std::string finished = clip_thinking_line(
+                    format_finished_thinking_preview(round_reasoning,
+                                                     thinking_preview_max_chars,
+                                                     secrets_));
+                if (!finished.empty())
+                    commit_thinking_line(kFinishedThinkingId, finished);
+                else if (finished_thinking_started)
+                    discard_thinking_line(kFinishedThinkingId);
+            } else if (finished_thinking_started) {
+                discard_thinking_line(kFinishedThinkingId);
+            }
+        };
+        auto on_working = [&]() -> Error {
+            if (!options_.interactive) return ok_error();
+            finalize_thinking_previews();
+            publish_phase(AgentActivityPhase::Working);
+            if (!working_row_started) {
+                structured_progress({AgentProgressAction::Upsert,
+                                     AgentProgressKind::Notice, active_round_id,
+                                     kWorkingNoticeId, "Working: ", 0});
+                working_row_started = true;
+            }
+            return cancellation.cancelled()
+                       ? Error{ErrorCode::Cancelled, "agent working preview cancelled"}
+                       : ok_error();
+        };
+        auto upsert_live_thinking_tail = [&]() {
+            const std::string opening_body = thinking_opening_body(
+                round_reasoning, thinking_preview_max_chars, secrets_);
+            const std::string tail = format_live_thinking_tail(
+                round_reasoning, thinking_preview_max_chars, secrets_);
+            if (tail.empty() || tail == opening_body) {
+                if (finished_thinking_started) {
+                    discard_thinking_line(kFinishedThinkingId);
+                    finished_thinking_started = false;
+                    last_live_finished_preview.clear();
+                }
+                return;
+            }
+            const std::string live = clip_thinking_line(tail);
+            if (live.empty()) return;
+            if (live != last_live_finished_preview) {
+                publish_thinking(AgentProgressAction::Upsert, kFinishedThinkingId, live);
+                last_live_finished_preview = live;
+                finished_thinking_started = true;
+            }
         };
         auto on_reasoning = [&](const std::string& delta) -> Error {
                 if (!options_.interactive) return ok_error();
@@ -2479,96 +2647,43 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                : ok_error();
                 }
 
-                // 0 = single live row from the start of the stream (legacy).
-                if (thinking_idle_seconds <= 0) {
-                    const std::string preview = thinking_preview_line(round_reasoning);
-                    if (!preview.empty()) {
-                        round_preview = preview;
-                        reasoning_row_started = true;
-                        publish_thinking(AgentProgressAction::Upsert, preview);
-                    }
+                const std::string opening = clip_thinking_line(format_thinking_opening_preview(
+                    round_reasoning, thinking_preview_max_chars, secrets_));
+                if (opening.empty()) {
                     return cancellation.cancelled()
                                ? Error{ErrorCode::Cancelled,
                                        "agent reasoning preview cancelled"}
                                : ok_error();
                 }
 
-                const std::string normalized =
-                    normalize_reasoning_preview_text(round_reasoning, secrets_);
-                if (normalized.empty()) {
-                    return cancellation.cancelled()
-                               ? Error{ErrorCode::Cancelled,
-                                       "agent reasoning preview cancelled"}
-                               : ok_error();
-                }
-
-                const std::string prefix = "Thinking: ";
-                const std::size_t content_graphemes =
-                    thinking_preview_max_chars > prefix.size()
-                        ? thinking_preview_max_chars - prefix.size()
-                        : 0;
                 const auto now = std::chrono::steady_clock::now();
-                const bool idle_due =
-                    std::chrono::duration_cast<std::chrono::seconds>(
-                        now - last_thinking_idle_emit)
-                        .count() >= thinking_idle_seconds;
-
-                // Live row tracks the in-progress sentence/chunk from the
-                // current offset so the UI is not stuck on the stream head.
-                const std::string active =
-                    reasoning_active_slice(normalized, thinking_sentence_offset);
-                const std::string live_preview = thinking_preview_line(active);
-                if (!live_preview.empty()) {
-                    if (!reasoning_row_started) {
+                if (!opening_thinking_frozen) {
+                    if (!reasoning_row_started) last_thinking_idle_emit = now;
+                    if (opening != last_live_opening_preview) {
+                        publish_thinking(AgentProgressAction::Upsert, kOpeningThinkingId,
+                                         opening);
+                        last_live_opening_preview = opening;
+                        round_preview = opening;
+                        reasoning_row_started = true;
+                    }
+                    const bool more_after_opening = opening_preview_has_more(
+                        round_reasoning, thinking_preview_max_chars, secrets_);
+                    const bool idle_due =
+                        thinking_idle_seconds > 0 &&
+                        std::chrono::duration_cast<std::chrono::seconds>(
+                            now - last_thinking_idle_emit)
+                                .count() >= thinking_idle_seconds;
+                    const bool freeze_now = thinking_idle_seconds <= 0
+                                                ? more_after_opening
+                                                : (idle_due || more_after_opening);
+                    if (freeze_now) {
+                        commit_thinking_line(kOpeningThinkingId, opening);
+                        opening_thinking_frozen = true;
                         last_thinking_idle_emit = now;
                     }
-                    if (live_preview != last_live_thinking_preview) {
-                        publish_thinking(AgentProgressAction::Upsert, live_preview);
-                        last_live_thinking_preview = live_preview;
-                        round_preview = live_preview;
-                        reasoning_row_started = true;
-                    }
                 }
 
-                // After idle_seconds of pure reasoning, freeze the current unit
-                // as a history row and open a new live preview for the next one.
-                // Sticky text prefers the first thought of the uncommitted range
-                // (with short-closer backtrack); live animation stays on the tail.
-                if (idle_due && reasoning_row_started) {
-                    const ReasoningStickySlice sticky = reasoning_sticky_slice(
-                        normalized, thinking_sentence_offset, content_graphemes);
-                    if (!sticky.text.empty() &&
-                        sticky.next_offset > thinking_sentence_offset) {
-                        const std::string frozen =
-                            thinking_preview_line(sticky.text);
-                        if (!frozen.empty()) {
-                            const long long frozen_ms = now_unix_ms();
-                            publish_thinking(AgentProgressAction::Commit, frozen,
-                                             frozen_ms);
-                            if (session_store_.is_open() && session_id_ > 0)
-                                (void)session_store_.append_message("thinking",
-                                                                    frozen);
-                            thinking_sentence_offset = sticky.next_offset;
-                            ++thinking_tool_id;
-                            last_thinking_idle_emit = now;
-                            last_live_thinking_preview.clear();
-                            const std::string next_active = reasoning_active_slice(
-                                normalized, thinking_sentence_offset);
-                            const std::string next_preview =
-                                thinking_preview_line(next_active);
-                            if (!next_preview.empty()) {
-                                publish_thinking(AgentProgressAction::Upsert,
-                                                 next_preview);
-                                last_live_thinking_preview = next_preview;
-                                round_preview = next_preview;
-                            } else {
-                                // Remainder not ready yet; next deltas reopen.
-                                reasoning_row_started = false;
-                                round_preview = frozen;
-                            }
-                        }
-                    }
-                }
+                if (opening_thinking_frozen) upsert_live_thinking_tail();
 
                 return cancellation.cancelled()
                            ? Error{ErrorCode::Cancelled,
@@ -2578,7 +2693,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         Error error = send_tool_round_with_transport_retries(
             context, conversation_, definitions, round, cancellation,
             limits_.transport_attempts, observer_pointer, observation_context,
-            on_retry, on_reasoning);
+            on_retry, on_reasoning, on_working);
         clear_retry_notice();
         if (!error.ok() && options_.auto_compact &&
             options_.compact_strategy != CompactionStrategy::Fast &&
@@ -2593,27 +2708,31 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 round_reasoning.clear();
                 round_preview.clear();
                 reasoning_row_started = false;
-                thinking_tool_id = 0;
-                thinking_sentence_offset = 0;
-                last_live_thinking_preview.clear();
+                opening_thinking_frozen = false;
+                finished_thinking_started = false;
+                thinking_previews_finalized = false;
+                last_live_opening_preview.clear();
+                last_live_finished_preview.clear();
                 last_thinking_idle_emit = std::chrono::steady_clock::now();
                 last_thinking_token_publish =
                     std::chrono::steady_clock::time_point::min();
                 clear_in_flight_generation_tokens();
+                hide_working_row();
                 error = send_tool_round_with_transport_retries(
                     context, conversation_, definitions, round, cancellation,
                     limits_.transport_attempts, observer_pointer,
-                    observation_context, on_retry, on_reasoning);
+                    observation_context, on_retry, on_reasoning, on_working);
                 clear_retry_notice();
             } else if (!recovered.error.ok()) {
                 error = recovered.error;
             }
         }
         if (!error.ok()) {
-            if (reasoning_row_started)
-                structured_progress({AgentProgressAction::Discard,
-                                     AgentProgressKind::Thinking, active_round_id,
-                                     thinking_tool_id, {}, 0});
+            hide_working_row();
+            if (finished_thinking_started)
+                discard_thinking_line(kFinishedThinkingId);
+            if (reasoning_row_started && !opening_thinking_frozen)
+                discard_thinking_line(kOpeningThinkingId);
             clear_in_flight_generation_tokens();
             pair_dangling_tool_calls(context, conversation_, state_);
             publish_request_token_estimate();
@@ -2627,40 +2746,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         }
         if (options_.interactive && round_reasoning.empty())
             round_reasoning = round.reasoning_text;
-        if (options_.interactive && !round_reasoning.empty() &&
-            thinking_preview_max_chars > 0) {
-            if (thinking_idle_seconds > 0) {
-                // Finalize the live remainder with the sticky (first-thought)
-                // selection so the frozen row is useful, not a short closer.
-                const std::string normalized =
-                    normalize_reasoning_preview_text(round_reasoning, secrets_);
-                const std::string prefix = "Thinking: ";
-                const std::size_t content_graphemes =
-                    thinking_preview_max_chars > prefix.size()
-                        ? thinking_preview_max_chars - prefix.size()
-                        : 0;
-                const ReasoningStickySlice sticky = reasoning_sticky_slice(
-                    normalized, thinking_sentence_offset, content_graphemes);
-                if (!sticky.text.empty())
-                    round_preview = thinking_preview_line(sticky.text);
-                else if (round_preview.empty())
-                    round_preview = thinking_preview_line(round_reasoning);
-            } else {
-                round_preview = thinking_preview_line(round_reasoning);
-            }
-        }
-        if (!round_preview.empty()) {
-            const long long preview_ms = now_unix_ms();
-            structured_progress({AgentProgressAction::Commit,
-                                 AgentProgressKind::Thinking, active_round_id,
-                                 thinking_tool_id, round_preview, preview_ms});
-            if (session_store_.is_open() && session_id_ > 0)
-                (void)session_store_.append_message("thinking", round_preview);
-        } else if (reasoning_row_started) {
-            structured_progress({AgentProgressAction::Discard,
-                                 AgentProgressKind::Thinking, active_round_id,
-                                 thinking_tool_id, {}, 0});
-        }
+        finalize_thinking_previews();
+        if (round.tool_calls.empty()) hide_working_row();
 
         long long estimated_round_input_tokens = 0;
         if (round.metrics.prompt_tokens < 0) {
@@ -2683,6 +2770,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         accumulate_agent_token_usage(round.metrics, result.token_usage,
                                      estimated_round_input_tokens,
                                      estimated_round_output_tokens);
+        accumulate_agent_stream_decode(round.metrics, estimated_round_output_tokens,
+                                       context.options.stream, result.stream_output_tokens,
+                                       result.stream_decode_ms,
+                                       result.stream_tokens_estimated);
         // In-flight reasoning is not retained in the request projection; drop
         // the live meter before republishing the true next-request estimate.
         clear_in_flight_generation_tokens();

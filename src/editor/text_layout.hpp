@@ -51,6 +51,11 @@ bool parse_text_align_mode(const std::string& name, TextAlignMode& out);
 // True when width is a valid editor alignment width (21..1000).
 bool valid_text_align_width(size_t width);
 
+// Markdown fence / table line detectors used by display reflow and TUI wrap.
+bool looks_like_fence_open(const std::string& line, std::string& fence);
+bool looks_like_fence_close(const std::string& line, const std::string& fence);
+bool looks_like_table_line(const std::string& line);
+
 // Expand selection to full physical lines, or use the whole buffer.
 // Outputs byte range [start, end) to replace.
 void text_layout_scope(const EditorState& state, size_t& start, size_t& end, bool& had_selection);

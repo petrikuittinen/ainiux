@@ -50,6 +50,18 @@ void accumulate_agent_token_usage(const provider::ChatResult& metrics,
                                   long long estimated_input_tokens = 0,
                                   long long estimated_output_tokens = 0);
 
+// Count only streamed decode time after the first token. Tool-call wall time
+// and pre-TTFT wait are excluded. Returns false when the round cannot be
+// attributed to a started stream.
+bool accumulate_agent_stream_decode(const provider::ChatResult& metrics,
+                                    long long estimated_output_tokens,
+                                    bool stream,
+                                    long long& tokens,
+                                    long long& decode_ms,
+                                    bool& estimated);
+// tokens * 1000 / decode_ms, or -1 when the sample is empty.
+double agent_stream_tokens_per_second(long long tokens, long long decode_ms);
+
 struct SessionTurnResult {
     Error error;
     std::string final_text;
@@ -69,6 +81,10 @@ struct SessionTurnResult {
     std::vector<long long> compact_tool_line_ms;
     long long turn_started_ms = 0;
     long long finished_at_ms = 0;
+    // Sum of streamed output tokens / post-TTFT decode ms across model rounds.
+    long long stream_output_tokens = 0;
+    long long stream_decode_ms = 0;
+    bool stream_tokens_estimated = false;
 };
 
 enum class CompactionReason { Automatic, Manual };

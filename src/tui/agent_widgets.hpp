@@ -62,6 +62,8 @@ std::string agent_activity_line(AgentActivityState state,
                                 bool cancellable,
                                 long long elapsed_seconds,
                                 long long completed_task_ms,
-                                int cols);
+                                int cols,
+                                double completed_decode_tokens_per_second = -1.0,
+                                bool completed_tokens_estimated = false);
 
 }  // namespace ainiux::tui

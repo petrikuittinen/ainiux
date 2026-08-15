@@ -215,7 +215,7 @@ Error StdioSession::start(const ServerConfig& config, const StdioTransportOption
         ::close(stdin_pipe[1]);
         ::close(stdout_pipe[0]);
         ::close(stdout_pipe[1]);
-        if (!config.cwd.empty()) (void)::chdir(config.cwd.c_str());
+        if (!config.cwd.empty() && ::chdir(config.cwd.c_str()) != 0) _exit(126);
 
         std::vector<std::string> storage;
         storage.push_back(config.command);

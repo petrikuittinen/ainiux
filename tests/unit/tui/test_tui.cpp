@@ -565,6 +565,11 @@ void test_agent_widgets_and_dynamic_geometry() {
         agent_activity_line(AgentActivityState::Ready, false, 0, 4960, 80);
     check(completed == "Agent ready. Task completed in 4.96 seconds.",
           "completed activity reports the real task duration");
+    const std::string completed_rate =
+        agent_activity_line(AgentActivityState::Ready, false, 0, 4960, 80, 18.2, true);
+    check(completed_rate ==
+              "Agent ready. Task completed in 4.96 seconds. ~18.2 token/s.",
+          "completed activity reports post-TTFT stream token rate");
 
     const std::string narrow_status = agent_status_line(
         "very-long-model-name-that-needs-shortening", "high",
@@ -1420,18 +1425,22 @@ void test_tui_agent_history_chrome() {
     session.messages.clear();
     ainiux::provider::Message color_user{"user", "fix attempts"};
     ainiux::provider::Message color_think{"thinking", "Thinking: inspect the server entrypoint"};
+    ainiux::provider::Message color_finished{
+        "thinking", "Finished thinking: I will start updating the files."};
     ainiux::provider::Message color_tool_ok{
         "tool", "1: read_file(\"src/server.c\") → ok in 12 ms"};
     ainiux::provider::Message color_tool_err{
         "tool", "2: apply_patch(patch=\"...\") → error: not found in 4 ms"};
     session.messages.push_back(std::move(color_user));
     session.messages.push_back(std::move(color_think));
+    session.messages.push_back(std::move(color_finished));
     session.messages.push_back(std::move(color_tool_ok));
     session.messages.push_back(std::move(color_tool_err));
     agent_lines = ainiux::tui::detail::history_lines_for_session(
         session, 120, false, ainiux::tui::ActivityKind::None, 0, false, true);
     bool saw_user_color = false;
     bool saw_thinking_color = false;
+    bool saw_finished_thinking_color = false;
     bool saw_tool_call_color = false;
     bool saw_tool_ok_color = false;
     bool saw_tool_error_color = false;
@@ -1443,6 +1452,10 @@ void test_tui_agent_history_chrome() {
             if (segment.text.find("Thinking:") != std::string::npos)
                 saw_thinking_color =
                     saw_thinking_color ||
+                    segment.role == ainiux::tui::StyleRole::ThinkingTrace;
+            if (segment.text.find("Finished thinking:") != std::string::npos)
+                saw_finished_thinking_color =
+                    saw_finished_thinking_color ||
                     segment.role == ainiux::tui::StyleRole::ThinkingTrace;
             if (segment.text.find("read_file") != std::string::npos ||
                 segment.text.find("apply_patch") != std::string::npos)
@@ -1464,9 +1477,74 @@ void test_tui_agent_history_chrome() {
     }
     check(saw_user_color, "agent user prompt uses user_label color");
     check(saw_thinking_color, "agent thinking row uses thinking_trace color");
+    check(saw_finished_thinking_color,
+          "agent finished-thinking row uses thinking_trace color");
     check(saw_tool_call_color, "agent tool call uses thinking_activity color");
     check(saw_tool_ok_color, "agent tool ok status uses assistant_label (green) color");
     check(saw_tool_error_color, "agent tool error status uses error (red) color");
+}
+
+std::string joined_history_text(const std::vector<ainiux::tui::StyledLine>& lines) {
+    std::string joined;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i != 0) joined.push_back('\n');
+        for (const auto& segment : lines[i].segments) joined += segment.text;
+    }
+    return joined;
+}
+
+void test_history_word_wraps_prose_but_not_fenced_code() {
+    ainiux::chat::Session session;
+    session.messages.push_back(
+        {"assistant", "This is example extra words that should wrap cleanly."});
+    const std::vector<ainiux::tui::StyledLine> prose_lines =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 12, false, ainiux::tui::ActivityKind::None, 0, false, true);
+    const std::string prose = joined_history_text(prose_lines);
+    check(prose.find("examp\nle") == std::string::npos &&
+              prose.find("\nle ") == std::string::npos &&
+              prose.find("\nxample") == std::string::npos,
+          "prose history wraps on a word boundary: " + prose);
+    check(prose.find("This is") != std::string::npos &&
+              prose.find("example") != std::string::npos,
+          "prose history keeps whole words: " + prose);
+
+    session.messages.clear();
+    session.messages.push_back({"assistant", "```\nhello world extra\n```"});
+    const std::vector<ainiux::tui::StyledLine> code_lines =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 10, false, ainiux::tui::ActivityKind::None, 0, false, true);
+    const std::string code = joined_history_text(code_lines);
+    check(code.find("hello worl") != std::string::npos &&
+              code.find("d extra") != std::string::npos,
+          "fenced code keeps column wrap instead of word wrap: " + code);
+    check(code.find("hello \nworld") == std::string::npos,
+          "fenced code does not break at the last space: " + code);
+}
+
+void test_agent_working_notice_animates() {
+    ainiux::chat::Session session;
+    session.messages.push_back({"notice", "Working: "});
+    const std::vector<ainiux::tui::StyledLine> frame0 =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 80, false, ainiux::tui::ActivityKind::None, 0, false, true);
+    const std::vector<ainiux::tui::StyledLine> frame1 =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 80, false, ainiux::tui::ActivityKind::None, 1, false, true);
+    bool saw_working = false;
+    bool saw_animation = false;
+    for (const auto& line : frame0) {
+        for (const auto& segment : line.segments) {
+            if (segment.text.find("Working:") != std::string::npos) saw_working = true;
+            if (segment.role == ainiux::tui::StyleRole::StreamingActivity)
+                saw_animation = true;
+        }
+    }
+    check(saw_working && saw_animation,
+          "live Working: notice uses the streaming activity animation");
+    const std::string text0 = joined_history_text(frame0);
+    const std::string text1 = joined_history_text(frame1);
+    check(text0 != text1, "Working: animation advances across frames");
 }
 
 void test_agent_shell_notice_preserves_listing_newlines() {
@@ -2167,6 +2245,29 @@ void test_prompt_recall_is_mode_isolated() {
           "chat recall down restores the unsaved draft");
     chat.record("chat two");
     check(chat.size() == 2, "duplicate trailing prompt is not recorded twice");
+
+    std::vector<ainiux::provider::Message> loaded = {
+        {"system", "You are helpful."},
+        {"user", "first from db"},
+        {"assistant", "hello"},
+        {"user", ""},
+        {"user", "   "},
+        {"user", "second from db"},
+        {"notice", "not a prompt"},
+        {"user", "second from db"},
+    };
+    const auto seeded = ainiux::tui::user_prompts_for_recall(loaded);
+    check(seeded.size() == 3 && seeded[0] == "first from db" &&
+              seeded[1] == "second from db" && seeded[2] == "second from db",
+          "recall seed collects chronological non-empty user prompts");
+    ainiux::tui::PromptRecall from_db;
+    from_db.replace(seeded);
+    check(from_db.size() == 2, "replace consecutive-dedupes like record");
+    current = "";
+    check(from_db.recall_previous(current) && current == "second from db",
+          "loaded thread recall starts at the newest stored user prompt");
+    check(from_db.recall_previous(current) && current == "first from db",
+          "loaded thread recall walks older stored user prompts");
 }
 
 void test_agent_project_history_handoff_clears_successful_empty_project() {
@@ -2242,10 +2343,37 @@ void test_agent_progress_replaces_rows_in_place() {
           "failed provisional Thinking row is discarded and row indexes stay valid");
 }
 
+void test_agent_progress_opening_and_finished_thinking_rows() {
+    chat::Session session;
+    std::vector<ainiux::tui::AgentLiveRow> rows;
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
+         1, 0, "Thinking: first plan sentence", 0});
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Commit, agent::AgentProgressKind::Thinking,
+         1, 0, "Thinking: first plan sentence", 1});
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
+         1, 1, "last sentence still streaming", 0});
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Commit, agent::AgentProgressKind::Thinking,
+         1, 1, "Finished thinking: I will start updating the files.", 2});
+    check(session.messages.size() == 2 &&
+              session.messages[0].content == "Thinking: first plan sentence" &&
+              session.messages[1].content ==
+                  "Finished thinking: I will start updating the files.",
+          "live tail is unlabeled until commit as Finished thinking");
+}
+
 }  // namespace
 
 void run_all() {
     test_agent_progress_replaces_rows_in_place();
+    test_agent_progress_opening_and_finished_thinking_rows();
     test_terminal_frame_renderer_updates_only_changed_rows();
     test_shared_tui_render_skips_identical_frame();
     test_tui_history_jump_helpers();
@@ -2291,6 +2419,8 @@ void run_all() {
     test_tui_thinking_trace_display();
     test_tui_markdown_history_highlighting();
     test_tui_agent_history_chrome();
+    test_history_word_wraps_prose_but_not_fenced_code();
+    test_agent_working_notice_animates();
     test_agent_shell_notice_preserves_listing_newlines();
     test_agent_project_slash_command_parsing();
     test_prompt_recall_is_mode_isolated();

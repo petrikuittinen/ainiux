@@ -24,7 +24,7 @@ A thread with missing managed media stays readable but becomes read-only. `/clea
 
 ## Input and history
 
-`Enter` or `Ctrl+S` sends. `Esc` then `Enter` inserts a newline. The shared editor input supports grapheme-aware navigation, selection, copy/paste, undo/redo, soft wrapping, and syntax highlighting. Up on the first visual line and Down on the last visual line recall earlier submitted prompts from this chat session. Agent-mode prompts are not mixed into chat recall.
+`Enter` or `Ctrl+S` sends. `Esc` then `Enter` inserts a newline. The shared editor input supports grapheme-aware navigation, selection, copy/paste, undo/redo, soft wrapping, and syntax highlighting. History prose wraps on word boundaries so a long sentence does not split mid-word; Markdown fenced code keeps column wrap. Up on the first visual line and Down on the last visual line recall earlier user prompts from the current thread, including prompts loaded from the chat library. Agent-mode prompts are not mixed into chat recall.
 
 `/clear` in chat deletes the thread messages and restores the system prompt. In agent mode the same command only hides the visible window and does not change model context.
 

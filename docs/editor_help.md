@@ -347,7 +347,7 @@ The status line shows the current language and line-ending mode compactly in par
 
 ### Chat and agent history
 
-Chat and agent TUI history do **not** expose `/width`, `/left-align`, `/right-align`, `/center-align`, or `/justify`. Those commands remain **editor-only** buffer transforms. History rows are shown with terminal soft wrap; pretty Markdown tables are capped to the history content column. Stored transcripts are never rewritten by display layout.
+Chat and agent TUI history do **not** expose `/width`, `/left-align`, `/right-align`, `/center-align`, or `/justify`. Those commands remain **editor-only** buffer transforms. History prose soft-wraps on word boundaries; Markdown fenced code, tables, and preformatted tool/notice/thinking rows still wrap at the column. Pretty Markdown tables are capped to the history content column. Stored transcripts are never rewritten by display layout.
 
 ## Configuration
 

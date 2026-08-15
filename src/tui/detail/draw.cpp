@@ -7,10 +7,13 @@
 #include "agent/tool_display.hpp"
 #include "app/detail.hpp"
 
+#include "editor/detail/wrap.hpp"
+#include "editor/text_layout.hpp"
 #include "markdown/table_format.hpp"
 #include "provider/provider.hpp"
 #include "tui/terminal.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -119,6 +122,15 @@ void append_styled_piece(std::vector<StyledSegment>& line,
 
 bool starts_with(const std::string& text, const std::string& prefix) {
     return text.rfind(prefix, 0) == 0;
+}
+
+bool is_agent_working_notice(const std::string& content) {
+    if (!starts_with(content, "Working:")) return false;
+    for (size_t i = std::string("Working:").size(); i < content.size(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(content[i]);
+        if (ch != ' ' && ch != '\t') return false;
+    }
+    return true;
 }
 
 char lower_ascii(char ch) {
@@ -321,9 +333,9 @@ void draw_line(int row, int cols, const std::string& text, StyleRole role, const
     std::cout << format_line(row, cols, text, role, style);
 }
 
-void append_wrapped_segments(std::vector<std::vector<StyledSegment>>& lines,
-                             const std::vector<StyledSegment>& segments,
-                             int width) {
+void append_hard_wrapped_segments(std::vector<std::vector<StyledSegment>>& lines,
+                                  const std::vector<StyledSegment>& segments,
+                                  int width) {
     if (width <= 0) {
         lines.push_back({});
         return;
@@ -366,6 +378,119 @@ void append_wrapped_segments(std::vector<std::vector<StyledSegment>>& lines,
 
     if (lines.empty() || !current.empty() || last_was_newline) {
         lines.push_back(std::move(current));
+    }
+}
+
+std::string concat_segment_text(const std::vector<StyledSegment>& pieces) {
+    std::string text;
+    for (const StyledSegment& piece : pieces) text += piece.text;
+    return text;
+}
+
+std::vector<StyledSegment> slice_styled_range(const std::vector<StyledSegment>& pieces,
+                                              size_t start,
+                                              size_t end) {
+    std::vector<StyledSegment> out;
+    size_t offset = 0;
+    for (const StyledSegment& piece : pieces) {
+        const size_t piece_end = offset + piece.text.size();
+        if (piece_end <= start) {
+            offset = piece_end;
+            continue;
+        }
+        if (offset >= end) break;
+        const size_t from = std::max(start, offset);
+        const size_t to = std::min(end, piece_end);
+        if (to > from) {
+            append_styled_piece(out, piece.text.substr(from - offset, to - from), piece.role,
+                                piece.attributes);
+        }
+        offset = piece_end;
+    }
+    return out;
+}
+
+void append_word_wrapped_physical_line(std::vector<std::vector<StyledSegment>>& lines,
+                                       const std::vector<StyledSegment>& pieces,
+                                       int width) {
+    if (width <= 0) {
+        lines.push_back({});
+        return;
+    }
+    const std::string text = concat_segment_text(pieces);
+    const std::vector<editor::detail::WrapSegment> wraps =
+        editor::detail::wrap_line_segments(text, static_cast<size_t>(width));
+    if (wraps.empty()) {
+        lines.push_back({});
+        return;
+    }
+    for (const editor::detail::WrapSegment& wrap : wraps) {
+        lines.push_back(slice_styled_range(pieces, wrap.start, wrap.end));
+    }
+}
+
+void append_wrapped_segments(std::vector<std::vector<StyledSegment>>& lines,
+                             const std::vector<StyledSegment>& segments,
+                             int width,
+                             bool word_wrap_prose = false) {
+    if (!word_wrap_prose) {
+        append_hard_wrapped_segments(lines, segments, width);
+        return;
+    }
+    if (width <= 0) {
+        lines.push_back({});
+        return;
+    }
+
+    std::vector<StyledSegment> physical;
+    std::string open_fence;
+    bool last_was_newline = false;
+    auto flush_physical = [&]() {
+        if (physical.empty()) {
+            lines.push_back({});
+            last_was_newline = true;
+            return;
+        }
+        const std::string line_text = concat_segment_text(physical);
+        bool hard = !open_fence.empty() || editor::looks_like_table_line(line_text);
+        if (open_fence.empty()) {
+            std::string fence;
+            if (editor::looks_like_fence_open(line_text, fence)) {
+                open_fence = std::move(fence);
+                hard = true;
+            }
+        } else if (editor::looks_like_fence_close(line_text, open_fence)) {
+            open_fence.clear();
+            hard = true;
+        }
+        if (hard) {
+            append_hard_wrapped_segments(lines, physical, width);
+        } else {
+            append_word_wrapped_physical_line(lines, physical, width);
+        }
+        physical.clear();
+        last_was_newline = true;
+    };
+
+    for (const StyledSegment& segment : segments) {
+        size_t pos = 0;
+        while (pos < segment.text.size()) {
+            const size_t nl = segment.text.find('\n', pos);
+            const size_t end = nl == std::string::npos ? segment.text.size() : nl;
+            if (end > pos) {
+                append_styled_piece(physical, segment.text.substr(pos, end - pos), segment.role,
+                                    segment.attributes);
+                last_was_newline = false;
+            }
+            if (nl == std::string::npos) break;
+            flush_physical();
+            pos = nl + 1;
+        }
+    }
+    if (!physical.empty()) {
+        flush_physical();
+    } else if (last_was_newline || lines.empty()) {
+        lines.push_back({});
     }
 }
 
@@ -520,6 +645,9 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
             // a second thinking/streaming placeholder to transcript history.
             continue;
         }
+        const bool preformatted =
+            message.role == "tool" || message.role == "notice" ||
+            message.role == "thinking";
         const bool show_thinking_placeholder =
             agent_mode && message.role == "assistant" && content.empty() &&
             activity_kind == ActivityKind::Thinking && is_last_message;
@@ -530,7 +658,10 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
             agent_mode && message.role == "assistant" && !content.empty() &&
             activity_kind == ActivityKind::Streaming && is_last_message;
         std::vector<StyledSegment> content_segments;
-        if (show_thinking_placeholder) {
+        if (agent_mode && message.role == "notice" && is_agent_working_notice(content)) {
+            content_segments = activity_placeholder_segments(
+                "Working:", ActivityKind::Streaming, activity_frame, "");
+        } else if (show_thinking_placeholder) {
             content_segments =
                 activity_placeholder_segments("", ActivityKind::Thinking,
                                               activity_frame, "thinking...");
@@ -543,9 +674,6 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
             // Tool rows, shell notices, and thinking traces are preformatted
             // (ls listings, command output, activity). Chat/agent history never
             // applies left/right/justify prose reflow (editor-only commands).
-            const bool preformatted =
-                message.role == "tool" || message.role == "notice" ||
-                message.role == "thinking";
             // Display-only table pretty-print, capped to the history content width.
             const int prefix_cells = static_cast<int>(prefix.size());
             const int content_cols =
@@ -607,7 +735,8 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
         std::vector<std::vector<StyledSegment>> wrapped;
         const int prefix_cells = static_cast<int>(prefix.size());
         append_wrapped_segments(wrapped, content_segments,
-                                std::max(min_content_width, cols - prefix_cells));
+                                std::max(min_content_width, cols - prefix_cells),
+                                !preformatted);
         if (wrapped.empty() && !prefix.empty()) {
             // Keep a lone "> " line if content is empty (unlikely for user).
             StyledLine line;

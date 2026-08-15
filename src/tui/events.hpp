@@ -111,6 +111,9 @@ struct TuiEvent {
     bool agent_needs_user_continue = false;
     long long agent_turn_started_ms = 0;
     long long agent_finished_at_ms = 0;
+    long long agent_stream_output_tokens = 0;
+    long long agent_stream_decode_ms = 0;
+    bool agent_stream_tokens_estimated = false;
     // Guard Ask prompt (paired with ApprovalGate on the agent worker).
     std::string guard_tool_name;
     std::string guard_command_preview;

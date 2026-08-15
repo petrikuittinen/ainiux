@@ -186,7 +186,9 @@ void render(const chat::Session& session,
                                             agent_chrome.cancellable,
                                             agent_chrome.task_elapsed_seconds,
                                             agent_chrome.completed_task_ms,
-                                            cols),
+                                            cols,
+                                            agent_chrome.completed_decode_tokens_per_second,
+                                            agent_chrome.completed_tokens_estimated),
                         StyleRole::Status, style));
         if (agent_choice_active) {
             frame.set_row(

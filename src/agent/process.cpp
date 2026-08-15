@@ -981,10 +981,11 @@ Error run_managed_script(const std::string& interpreter,
                          const ProcessOptions& options,
                          ProcessResult& result) {
     ProcessResult output;
-    if (interpreter != "bash" && interpreter != "sh") {
+    if (interpreter != "bash" && interpreter != "sh" && interpreter != "python3" &&
+        interpreter != "python") {
         result = std::move(output);
         return {ErrorCode::BadArgs,
-                "managed scripts require the bash or sh interpreter"};
+                "managed scripts require bash, sh, python3, or python"};
     }
     std::string resolved;
     const Error found = resolve_fixed_path_executable(interpreter, resolved);

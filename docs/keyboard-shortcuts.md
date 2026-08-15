@@ -61,7 +61,7 @@ Use `/pop` to remove the last user or assistant message.
 
 | Shortcut | Action |
 |----------|--------|
-| Arrow keys | Move cursor (visual-row movement across soft-wrapped lines). Up on the first visual line / Down on the last visual line recall earlier submitted prompts for this mode (chat and agent lists are separate) |
+| Arrow keys | Move cursor (visual-row movement across soft-wrapped lines). Up on the first visual line / Down on the last visual line recall earlier user prompts for this mode (chat and agent lists are separate; chat includes prompts loaded from the current thread) |
 | `Shift` + arrows | Extend selection |
 | `Home` / `End` | Beginning / end of current line |
 | `Ctrl+Home` / `Ctrl+End` | Beginning / end of input buffer |

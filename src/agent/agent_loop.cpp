@@ -548,7 +548,8 @@ Error send_tool_round_with_transport_retries(
     const provider::ToolRoundObserver* observer,
     const provider::ToolRoundContext& observation_context,
     std::function<void(const Error& error, int attempt, int backoff_seconds)> on_retry,
-    provider::ReasoningDeltaCallback on_reasoning_delta) {
+    provider::ReasoningDeltaCallback on_reasoning_delta,
+    provider::WorkingCallback on_working) {
     if (transport_attempts < 1) transport_attempts = 1;
     Error error;
     for (int attempt = 0; attempt < transport_attempts; ++attempt) {
@@ -556,7 +557,8 @@ Error send_tool_round_with_transport_retries(
         provider::ToolRoundContext attempt_context = observation_context;
         attempt_context.retry_attempt = static_cast<std::size_t>(attempt + 1);
         error = provider::send_tool_round(context, conversation, tools, result, cancellation,
-                                          observer, attempt_context, on_reasoning_delta);
+                                          observer, attempt_context, on_reasoning_delta,
+                                          on_working);
         if (error.ok()) return error;
         if (is_immediate_fail_transport_error(error)) return error;
         if (!is_retryable_transport_error(error)) return error;

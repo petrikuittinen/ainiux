@@ -308,7 +308,9 @@ std::string agent_activity_line(AgentActivityState state,
                                 bool cancellable,
                                 long long elapsed_seconds,
                                 long long completed_task_ms,
-                                int cols) {
+                                int cols,
+                                double completed_decode_tokens_per_second,
+                                bool completed_tokens_estimated) {
     cols = std::max(1, cols);
     std::ostringstream out;
     if (state == AgentActivityState::Ready) {
@@ -316,6 +318,12 @@ std::string agent_activity_line(AgentActivityState state,
         if (completed_task_ms >= 0) {
             out << "Task completed in " << std::fixed << std::setprecision(2)
                 << static_cast<double>(completed_task_ms) / 1000.0 << " seconds.";
+            if (completed_decode_tokens_per_second >= 0.0) {
+                out << " ";
+                if (completed_tokens_estimated) out << "~";
+                out << std::setprecision(1) << completed_decode_tokens_per_second
+                    << " token/s.";
+            }
         } else {
             out << "/help /quit";
         }

@@ -1,6 +1,7 @@
 #include "agent/test_session_runtime.hpp"
 
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -9,6 +10,7 @@
 
 #include "agent/compact.hpp"
 #include "agent/session_runtime.hpp"
+#include "agent/session_store.hpp"
 #include "app/app.hpp"
 #include "cli/args.hpp"
 #include "provider/provider.hpp"
@@ -424,6 +426,54 @@ void test_agent_token_usage_aggregation_is_bounded() {
     check(app::format_agent_run_metrics(run).find(
               "tool calls 0 (0 failed)") != std::string::npos,
           "one-shot agent metrics always prints zero tool failures");
+
+    long long stream_tokens = 0;
+    long long stream_ms = 0;
+    bool stream_estimated = false;
+    provider::ChatResult first_stream;
+    first_stream.ttft_ms = 200;
+    first_stream.total_ms = 700;
+    first_stream.completion_tokens = 100;
+    first_stream.usage_json = "{}";
+    check(agent::accumulate_agent_stream_decode(first_stream, 0, true, stream_tokens,
+                                                stream_ms, stream_estimated) &&
+              stream_tokens == 100 && stream_ms == 500 && !stream_estimated,
+          "stream decode counts only time after the first token");
+    provider::ChatResult second_stream = first_stream;
+    second_stream.ttft_ms = 100;
+    second_stream.total_ms = 350;
+    second_stream.completion_tokens = 50;
+    check(agent::accumulate_agent_stream_decode(second_stream, 0, true, stream_tokens,
+                                                stream_ms, stream_estimated) &&
+              stream_tokens == 150 && stream_ms == 750,
+          "stream decode sums across model rounds and ignores tool-call gaps");
+    provider::ChatResult waiting;
+    waiting.ttft_ms = -1;
+    waiting.total_ms = 4000;
+    waiting.completion_tokens = 80;
+    waiting.usage_json = "{}";
+    check(!agent::accumulate_agent_stream_decode(waiting, 0, true, stream_tokens,
+                                                 stream_ms, stream_estimated) &&
+              stream_tokens == 150 && stream_ms == 750,
+          "rounds without a started stream are excluded from the rate");
+    provider::ChatResult first_body_only;
+    first_body_only.ttft_ms = -1;
+    first_body_only.first_body_ms = 80;
+    first_body_only.total_ms = 280;
+    first_body_only.completion_tokens = 40;
+    first_body_only.usage_json = "{}";
+    check(agent::accumulate_agent_stream_decode(first_body_only, 0, true, stream_tokens,
+                                                stream_ms, stream_estimated) &&
+              stream_tokens == 190 && stream_ms == 950,
+          "stream decode can start from first body byte when TTFT was not stamped");
+    check(!agent::accumulate_agent_stream_decode(first_stream, 0, false, stream_tokens,
+                                                 stream_ms, stream_estimated),
+          "non-streaming rounds are excluded from the decode rate");
+    check(std::abs(agent::agent_stream_tokens_per_second(150, 750) - 200.0) < 0.001,
+          "aggregate decode rate is tokens per post-TTFT second");
+    check(agent::agent_stream_tokens_per_second(0, 750) < 0 &&
+              agent::agent_stream_tokens_per_second(150, 0) < 0,
+          "empty stream samples produce no rate");
 }
 
 void test_task_mode_switch_is_session_scoped_and_failure_safe() {
@@ -1067,6 +1117,47 @@ void test_session_goal_set_pause_resume_complete_and_persist() {
     fs::remove_all(workspace, ec);
 }
 
+void test_switch_permission_mode_persists_and_reloads() {
+    const std::string workspace = temp_workspace("permissions");
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.prepared(),
+          "prepare for permission switch: " + error.message);
+    check(runtime.permission_mode() == agent::PermissionMode::Smart,
+          "interactive default permission mode is smart");
+
+    error = runtime.switch_permission_mode(agent::PermissionMode::Yolo, context);
+    check(error.ok() && runtime.permission_mode() == agent::PermissionMode::Yolo,
+          "switch_permission_mode updates the live session: " + error.message);
+
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "open project after permission switch");
+        agent::AgentProjectRecord project;
+        check(store.open_project(project).ok(), "load project after permission switch");
+        check(project.settings_json.find("\"permission_mode\":\"yolo\"") !=
+                  std::string::npos,
+              "permission switch writes yolo into project settings: " +
+                  project.settings_json);
+    }
+
+    runtime.reset();
+    error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.permission_mode() == agent::PermissionMode::Yolo,
+          "prepare reloads persisted yolo permission mode");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_reset_model_context_and_visible_clear() {
     const std::string workspace = temp_workspace("context-reset");
     {
@@ -1201,6 +1292,7 @@ void run_all() {
     test_display_notices_dedupe_consecutive_duplicates();
     test_prepare_idle_chrome_matches_next_request_not_full_history();
     test_session_goal_set_pause_resume_complete_and_persist();
+    test_switch_permission_mode_persists_and_reloads();
     test_reset_model_context_and_visible_clear();
 }
 

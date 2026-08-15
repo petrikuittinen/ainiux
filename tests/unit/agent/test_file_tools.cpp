@@ -2461,6 +2461,36 @@ void test_managed_scripts_storage_trust_and_execution() {
               "run", R"JSON({"command":"sh .ainiux-pr/scripts/count.sh yolo"})JSON")),
           "Yolo executes managed script without approval");
 
+    int python_asks = 0;
+    agent::ReadToolRegistry python_smart = make_registry(
+        workspace, agent::MutationPolicy::Full, false,
+        [&](const agent::GuardApprovalRequest& request,
+            runtime::CancellationToken) -> agent::GuardApprovalDecision {
+            ++python_asks;
+            check(request.rule_id == "ask_on_managed_script_content" &&
+                      request.message.find("Name: check.py") != std::string::npos &&
+                      request.message.find("Interpreter: python3") != std::string::npos,
+                  "Smart python managed-script approval shows identity");
+            return agent::GuardApprovalDecision::Allow;
+        },
+        agent::PermissionMode::Smart, true, &store);
+    check(json_ok(python_smart.execute(
+              "write",
+              R"JSON({"path":".ainiux-pr/scripts/check.py","content":"print('ok', end='')\n","mode":"create_new"})JSON")),
+          "create managed python script");
+    const std::string python_first = python_smart.execute(
+        "run", R"JSON({"command":"python3 .ainiux-pr/scripts/check.py"})JSON");
+    check(json_ok(python_first) && python_first.find("ok") != std::string::npos &&
+              python_asks == 1,
+          "Smart asks once then runs python3 managed script: " + python_first);
+    const std::string python_reused = python_smart.execute(
+        "run", R"JSON({"command":"python3 .ainiux-pr/scripts/check.py"})JSON");
+    check(json_ok(python_reused) && python_asks == 1,
+          "Smart reuses unchanged python3 script hash: " + python_reused);
+    check(json_ok(yolo.execute(
+              "run", R"JSON({"command":"python3 .ainiux-pr/scripts/check.py"})JSON")),
+          "Yolo executes python3 managed script without approval");
+
     check(json_ok(yolo.execute(
               "write",
               R"JSON({"path":".ainiux-pr/scripts/patch.sh","content":"echo before\n","mode":"create_new"})JSON")),
@@ -2560,7 +2590,8 @@ void test_managed_scripts_storage_trust_and_execution() {
         "zsh", (scripts / "patch.sh").string(), {}, process_options,
         unsupported_interpreter);
     check(!interpreter_error.ok() &&
-              interpreter_error.message.find("bash or sh") != std::string::npos,
+              interpreter_error.message.find("python3") != std::string::npos &&
+              interpreter_error.message.find("zsh") == std::string::npos,
           "managed execution reports a precise unsupported interpreter error");
 
     check(yolo.refresh_persistent_index(true).ok(),

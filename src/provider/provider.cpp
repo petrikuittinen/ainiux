@@ -3696,7 +3696,8 @@ Error send_tool_round(const RequestContext& context,
                       runtime::CancellationToken cancellation,
                       const ToolRoundObserver* observer,
                       const ToolRoundContext& observation_context,
-                      ReasoningDeltaCallback on_reasoning_delta) {
+                      ReasoningDeltaCallback on_reasoning_delta,
+                      WorkingCallback on_working) {
     Error precondition_error;
     if (context.profile.offline)
         precondition_error = {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
@@ -3750,7 +3751,28 @@ Error send_tool_round(const RequestContext& context,
     }
     std::string reasoning_stream_buffer;
     output::ThinkingTraceSplitter thinking_splitter;
-    if (context.options.stream && on_reasoning_delta) {
+    bool working_notified = false;
+    auto maybe_notify_working = [&]() -> Error {
+        if (working_notified || !on_working) return ok_error();
+        working_notified = true;
+        return on_working();
+    };
+    auto responses_event_starts_work = [](const json::Value& root) -> bool {
+        const json::Value* type = root.get("type");
+        const std::string event =
+            type != nullptr && type->is_string() ? type->string : std::string();
+        if (event == "response.function_call_arguments.delta" ||
+            event == "response.output_text.delta" ||
+            event == "response.content_part.added")
+            return true;
+        if (event != "response.output_item.added") return false;
+        const json::Value* item = root.get("item");
+        if (item == nullptr || !item->is_object()) return false;
+        const json::Value* item_type = item->get("type");
+        return item_type != nullptr && item_type->is_string() &&
+               (item_type->string == "function_call" || item_type->string == "message");
+    };
+    if (context.options.stream && (on_reasoning_delta || on_working)) {
         request.on_body = [&](const std::string& chunk) -> Error {
             reasoning_stream_buffer += chunk;
             std::size_t position = 0;
@@ -3769,6 +3791,7 @@ Error send_tool_round(const RequestContext& context,
                 json::ParseResult parsed = json::parse(data);
                 if (!parsed.error.ok()) continue;  // Final parser reports malformed SSE.
                 std::string delta;
+                bool starts_work = false;
                 if (context.api_kind == ApiKind::Responses) {
                     const json::Value* type = parsed.value.get("type");
                     const std::string event =
@@ -3779,6 +3802,7 @@ Error send_tool_round(const RequestContext& context,
                             value != nullptr && value->is_string())
                             delta = value->string;
                     }
+                    starts_work = responses_event_starts_work(parsed.value);
                 } else {
                     const json::Value* choices = parsed.value.get("choices");
                     if (choices != nullptr && choices->is_array() &&
@@ -3786,12 +3810,13 @@ Error send_tool_round(const RequestContext& context,
                         const json::Value* value = choices->array.front().get("delta");
                         if (value != nullptr && value->is_object()) {
                             delta = reasoning_text_from_object(*value);
-                            if (delta.empty()) {
-                                if (const json::Value* content = value->get("content");
-                                    content != nullptr && content->is_string()) {
-                                    output::ThinkingChunk thinking =
-                                        thinking_splitter.feed(content->string);
-                                    delta = std::move(thinking.trace);
+                            if (const json::Value* content = value->get("content");
+                                content != nullptr && content->is_string() &&
+                                !content->string.empty()) {
+                                output::ThinkingChunk thinking =
+                                    thinking_splitter.feed(content->string);
+                                if (delta.empty()) {
+                                    delta = thinking.trace;
                                     for (const std::string& tag :
                                          {std::string("<think>"),
                                           std::string("</think>")}) {
@@ -3801,13 +3826,22 @@ Error send_tool_round(const RequestContext& context,
                                             delta.erase(tag_position, tag.size());
                                     }
                                 }
+                                if (!thinking.visible.empty()) starts_work = true;
                             }
+                            if (const json::Value* calls = value->get("tool_calls");
+                                calls != nullptr && calls->is_array() &&
+                                !calls->array.empty())
+                                starts_work = true;
                         }
                     }
                 }
-                if (!delta.empty()) {
+                if (!delta.empty() && on_reasoning_delta) {
                     Error callback_error = on_reasoning_delta(delta);
                     if (!callback_error.ok()) return callback_error;
+                }
+                if (starts_work) {
+                    Error working_error = maybe_notify_working();
+                    if (!working_error.ok()) return working_error;
                 }
             }
             if (position > 0) reasoning_stream_buffer.erase(0, position);
@@ -3831,6 +3865,22 @@ Error send_tool_round(const RequestContext& context,
     result.metrics.tls_ms = response.response.tls_ms;
     result.metrics.time_to_first_byte_ms = response.response.time_to_first_byte_ms;
     result.metrics.first_body_ms = response.response.first_body_ms;
+    // Native tool rounds do not go through send_chat_messages, so stamp stream
+    // start from the first HTTP body byte (after connect/TTFB wait).
+    if (context.options.stream && response.response.first_body_ms >= 0)
+        result.metrics.ttft_ms = response.response.first_body_ms;
+    if (result.metrics.completion_tokens <= 0) {
+        std::string estimate_text = result.content;
+        if (!result.reasoning_text.empty()) estimate_text += result.reasoning_text;
+        if (estimate_text.empty()) {
+            for (const std::string& item : result.continuation_items_json)
+                estimate_text += item;
+        }
+        if (!estimate_text.empty()) {
+            result.metrics.completion_tokens = estimate_completion_tokens(estimate_text);
+            result.metrics.completion_tokens_estimated = true;
+        }
+    }
     if (observer != nullptr && observer->on_response)
         observer->on_response(observation_context, response.response, result, error);
     return error;

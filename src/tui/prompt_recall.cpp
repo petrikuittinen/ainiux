@@ -1,6 +1,19 @@
 #include "tui/prompt_recall.hpp"
 
+#include "app/detail.hpp"
+
 namespace ainiux::tui {
+
+std::vector<std::string> user_prompts_for_recall(
+    const std::vector<provider::Message>& messages) {
+    std::vector<std::string> prompts;
+    for (const provider::Message& message : messages) {
+        if (message.role != "user") continue;
+        if (app::detail::trim_ascii(message.content).empty()) continue;
+        prompts.push_back(message.content);
+    }
+    return prompts;
+}
 
 void PromptRecall::record(const std::string& text) {
     if (text.empty()) {
@@ -13,6 +26,12 @@ void PromptRecall::record(const std::string& text) {
     }
     index_ = entries_.size();
     draft_.clear();
+}
+
+void PromptRecall::replace(const std::vector<std::string>& texts) {
+    entries_.clear();
+    draft_.clear();
+    for (const std::string& text : texts) record(text);
 }
 
 bool PromptRecall::recall_previous(std::string& current) {

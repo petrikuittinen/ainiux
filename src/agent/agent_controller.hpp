@@ -42,6 +42,9 @@ struct AgentSurfaceEvent {
     bool agent_needs_user_continue = false;
     long long agent_turn_started_ms = 0;
     long long agent_finished_at_ms = 0;
+    long long agent_stream_output_tokens = 0;
+    long long agent_stream_decode_ms = 0;
+    bool agent_stream_tokens_estimated = false;
     provider::ChatResult chat;
     std::vector<provider::Message> agent_history;
     bool agent_history_loaded = false;

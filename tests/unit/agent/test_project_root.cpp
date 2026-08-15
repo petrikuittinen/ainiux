@@ -688,9 +688,9 @@ void test_reasoning_preview_unicode_redaction_and_limits() {
     check(agent::format_reasoning_preview("anything", 0, {}).empty(),
           "zero disables reasoning previews");
     const std::string clipped =
-        agent::format_reasoning_preview(u8"😀😀😀😀", 13, {});
-    check(clipped == u8"Thinking: 😀😀…",
-          "reasoning preview clips by grapheme with ellipsis inside limit");
+        agent::format_reasoning_preview(u8"😀😀😀😀", 2, {});
+    check(clipped == u8"Thinking: 😀😀",
+          "reasoning preview clips by grapheme without mid-token ellipsis");
 
     // Provider spacing is preserved (Kimi whitespace gluer is intentionally not
     // applied — it corrupted previews on other models, e.g. "I need" → "Ineed").
@@ -825,6 +825,87 @@ void test_reasoning_sticky_slice_prefers_first_thought_and_backtracks() {
           "sticky sentence split skips technical dots: " + tech.text);
 }
 
+void test_thinking_opening_and_finished_preview() {
+    const std::string long_open =
+        "User asked me to refactor the code base, but not touch src/shader "
+        "directory. I shall work file by file and then summarize.";
+    const std::string opening = agent::format_thinking_opening_preview(long_open, 80, {});
+    check(opening.rfind("Thinking: ", 0) == 0, "opening uses Thinking: prefix");
+    check(opening.find("User asked me to refactor") != std::string::npos,
+          "opening keeps the start of the trace: " + opening);
+    check(opening.find("summarize") == std::string::npos,
+          "opening does not include the tail: " + opening);
+    check(opening.back() != ' ', "opening clip does not end on a space: " + opening);
+    const std::string opening_body = agent::thinking_opening_body(long_open, 80, {});
+    check(opening_body.find(' ') != std::string::npos, "opening has word breaks to clip on");
+    check(opening_body.size() < 80 ||
+              agent::clip_preview_prefix(long_open, 80) == opening_body,
+          "opening body is a word-boundary prefix");
+
+    const std::string mid_word = "alpha beta gammadeltaepsilon";
+    const std::string mid_clip = agent::clip_preview_prefix(mid_word, 16);
+    check(mid_clip == "alpha beta",
+          "prefix clip walks back to the last word boundary: [" + mid_clip + "]");
+
+    const std::string one_token(40, 'x');
+    check(agent::clip_preview_prefix(one_token, 10) == std::string(10, 'x'),
+          "prefix clip keeps a grapheme window when there is no word break");
+
+    const std::string two_sentences =
+        "User asked me to refactor the code base, but not touch src/shader "
+        "directory. I shall work file by file. Now I have all the information "
+        "to proceed. I will start updating the files.";
+    const std::string live_tail =
+        agent::format_live_thinking_tail(two_sentences, 120, {});
+    check(!live_tail.empty() && live_tail.rfind("Finished thinking:", 0) != 0 &&
+              live_tail.rfind("Thinking:", 0) != 0,
+          "live tail has no preamble: " + live_tail);
+    check(live_tail.find("I will start updating the files.") != std::string::npos,
+          "live tail is the last sentence: " + live_tail);
+    const std::string finished =
+        agent::format_finished_thinking_preview(two_sentences, 120, {});
+    check(finished.rfind("Finished thinking: ", 0) == 0,
+          "finished uses Finished thinking: prefix");
+    check(finished.find("I will start updating the files.") != std::string::npos,
+          "finished keeps the last sentence: " + finished);
+    check(finished.find("User asked me") == std::string::npos,
+          "finished does not keep the opening plan: " + finished);
+    check(!agent::skip_finished_thinking_preview(two_sentences, 120, {}),
+          "distinct last sentence is shown");
+
+    const std::string short_one = "I will inspect the file.";
+    check(agent::format_thinking_opening_preview(short_one, 120, {}) ==
+              "Thinking: I will inspect the file.",
+          "short think is a single Thinking row");
+    check(agent::skip_finished_thinking_preview(short_one, 120, {}),
+          "short think skips a duplicate Finished thinking row");
+
+    const std::string long_last =
+        "First thought is brief. After gathering context I now believe the "
+        "correct approach is to update each module carefully without touching "
+        "the shader directory at all today.";
+    const std::string finished_long =
+        agent::finished_thinking_body(long_last, 40, {});
+    check(finished_long.find("First thought") == std::string::npos,
+          "long last sentence is suffix-clipped: " + finished_long);
+    check(!finished_long.empty() && finished_long.front() != ' ',
+          "suffix clip does not start with a space: " + finished_long);
+    check(agent::clip_preview_suffix("hello world extra", 11) == "world extra",
+          "suffix clip drops a leading partial word");
+
+    const std::string secret_trace =
+        "Start planning the change. Then use SECRET as the password.";
+    const std::string redacted =
+        agent::format_finished_thinking_preview(secret_trace, 120, {"SECRET"});
+    check(redacted.find("SECRET") == std::string::npos,
+          "finished preview redacts configured secrets");
+
+    check(agent::opening_preview_has_more(two_sentences, 40, {}),
+          "opening reports more text after a short clip");
+    check(!agent::opening_preview_has_more(short_one, 120, {}),
+          "short think has no more text after the opening clip");
+}
+
 }  // namespace
 
 void test_history_backup_path_and_enclosing_project() {
@@ -894,6 +975,7 @@ void run_all() {
     test_reasoning_preview_unicode_redaction_and_limits();
     test_reasoning_idle_slice_advances_sentences_and_partials();
     test_reasoning_sticky_slice_prefers_first_thought_and_backtracks();
+    test_thinking_opening_and_finished_preview();
 }
 
 }  // namespace ainiux::test::agent_project_root

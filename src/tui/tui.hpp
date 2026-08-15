@@ -148,6 +148,8 @@ struct AgentChrome {
     AgentActivityState activity_state = AgentActivityState::Ready;
     long long task_elapsed_seconds = 0;
     long long completed_task_ms = -1;
+    double completed_decode_tokens_per_second = -1.0;
+    bool completed_tokens_estimated = false;
 };
 
 struct RegenerationPlan {

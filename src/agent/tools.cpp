@@ -3613,7 +3613,7 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                "(`make`, `python3`) or project scripts (`./script.sh`, `bash script.sh`). "
                "Create reusable private scripts by writing exact "
                ".ainiux-pr/scripts/NAME (storage is automatic; do not mkdir or inspect "
-               ".ainiux-pr itself), then run only as bash|sh that path [args]. "
+               ".ainiux-pr itself), then run as bash|sh|python3|python that path [args]. "
                "No unquoted pipes/redirects/chaining. Prefer mkdir/mv/rm/ls over equivalents. "
                "Delete directories with rmdir (empty) or rm -r (non-empty asks in Smart). "
                "Act uses Guard; Plan allows vetted read-only forms."
@@ -5271,10 +5271,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                     : error_code_string(policy_error.code);
             return tool_error_result(code, policy_error.message);
         }
-        const bool managed_invocation =
+        const bool managed_shell_invocation =
             parsed_arguments.size() >= 2 &&
             (parsed_arguments[0] == "bash" || parsed_arguments[0] == "sh") &&
             managed_script_path(parsed_arguments[1]);
+        const bool managed_python_invocation =
+            parsed_arguments.size() >= 2 &&
+            (parsed_arguments[0] == "python3" || parsed_arguments[0] == "python") &&
+            managed_script_path(parsed_arguments[1]);
+        const bool managed_invocation =
+            managed_shell_invocation || managed_python_invocation;
         if (managed_invocation) {
             if (!full)
                 return tool_error_result(

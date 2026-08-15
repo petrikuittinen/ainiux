@@ -308,23 +308,123 @@ std::string normalize_reasoning_preview_text(
     return redact_secrets(reasoning, secrets);
 }
 
-std::string format_reasoning_preview(const std::string& reasoning,
-                                     std::size_t max_chars,
-                                     const std::vector<std::string>& secrets) {
-    if (max_chars == 0) return {};
-    const std::string prefix = "Thinking: ";
-    if (max_chars <= prefix.size()) return prefix.substr(0, max_chars);
+std::string flatten_reasoning_preview_text(
+    const std::string& reasoning, const std::vector<std::string>& secrets) {
     std::string text = normalize_reasoning_preview_text(reasoning, secrets);
-    if (text.empty()) return {};
-    // Single history row: map vertical whitespace to a plain space without
-    // otherwise altering token spacing.
     for (char& ch : text) {
         if (ch == '\n' || ch == '\r' || ch == '\t') ch = ' ';
     }
-    const std::size_t available = max_chars - prefix.size();
-    if (grapheme_count(text) <= available) return prefix + text;
-    if (available == 1) return prefix + u8"…";
-    return prefix + grapheme_prefix(text, available - 1) + u8"…";
+    return text;
+}
+
+std::string clip_preview_prefix(const std::string& text, std::size_t max_chars) {
+    if (max_chars == 0 || text.empty()) return {};
+    if (grapheme_count(text) <= max_chars) return text;
+    std::string prefix = grapheme_prefix(text, max_chars);
+    if (prefix.empty()) return {};
+    const std::size_t cut = prefix.size();
+    if (cut < text.size() && is_word_char(static_cast<unsigned char>(text[cut])) &&
+        is_word_char(static_cast<unsigned char>(prefix.back()))) {
+        std::size_t end = prefix.size();
+        while (end > 0 && is_word_char(static_cast<unsigned char>(prefix[end - 1])))
+            --end;
+        while (end > 0 &&
+               std::isspace(static_cast<unsigned char>(prefix[end - 1])) != 0)
+            --end;
+        if (end > 0) prefix.resize(end);
+    }
+    return prefix;
+}
+
+std::string clip_preview_suffix(const std::string& text, std::size_t max_chars) {
+    if (max_chars == 0 || text.empty()) return {};
+    if (grapheme_count(text) <= max_chars) return text;
+    std::string suffix = grapheme_suffix(text, max_chars);
+    if (suffix.empty()) return {};
+    const std::size_t start = text.size() - suffix.size();
+    if (start > 0 && is_word_char(static_cast<unsigned char>(suffix.front())) &&
+        is_word_char(static_cast<unsigned char>(text[start - 1]))) {
+        const std::string trimmed = trim_leading_partial_word(suffix);
+        if (!trimmed.empty()) suffix = trimmed;
+    }
+    return suffix;
+}
+
+std::string last_reasoning_sentence(const std::string& flattened) {
+    return reasoning_active_slice(flattened, 0);
+}
+
+std::string thinking_opening_body(const std::string& reasoning,
+                                  std::size_t max_chars,
+                                  const std::vector<std::string>& secrets) {
+    if (max_chars == 0) return {};
+    return clip_preview_prefix(flatten_reasoning_preview_text(reasoning, secrets),
+                               max_chars);
+}
+
+std::string finished_thinking_body(const std::string& reasoning,
+                                   std::size_t max_chars,
+                                   const std::vector<std::string>& secrets) {
+    if (max_chars == 0) return {};
+    const std::string flattened = flatten_reasoning_preview_text(reasoning, secrets);
+    return clip_preview_suffix(last_reasoning_sentence(flattened), max_chars);
+}
+
+bool opening_preview_has_more(const std::string& reasoning,
+                              std::size_t max_chars,
+                              const std::vector<std::string>& secrets) {
+    const std::string opening =
+        thinking_opening_body(reasoning, max_chars, secrets);
+    if (opening.empty()) return false;
+    const std::string flattened = flatten_reasoning_preview_text(reasoning, secrets);
+    const std::size_t after = skip_spaces(flattened, opening.size());
+    return after < flattened.size();
+}
+
+bool skip_finished_thinking_preview(const std::string& reasoning,
+                                    std::size_t max_chars,
+                                    const std::vector<std::string>& secrets) {
+    const std::string opening =
+        thinking_opening_body(reasoning, max_chars, secrets);
+    const std::string finished =
+        finished_thinking_body(reasoning, max_chars, secrets);
+    if (opening.empty() || finished.empty() || opening == finished) return true;
+    const std::string flattened = flatten_reasoning_preview_text(reasoning, secrets);
+    const std::string last = last_reasoning_sentence(flattened);
+    const std::size_t start = skip_spaces(flattened, 0);
+    // Last unit is still the first sentence / whole monologue — no later sentence.
+    if (start < flattened.size() && start + last.size() <= flattened.size() &&
+        flattened.compare(start, last.size(), last) == 0)
+        return true;
+    return false;
+}
+
+std::string format_thinking_opening_preview(const std::string& reasoning,
+                                            std::size_t max_chars,
+                                            const std::vector<std::string>& secrets) {
+    const std::string body = thinking_opening_body(reasoning, max_chars, secrets);
+    if (body.empty()) return {};
+    return "Thinking: " + body;
+}
+
+std::string format_live_thinking_tail(const std::string& reasoning,
+                                      std::size_t max_chars,
+                                      const std::vector<std::string>& secrets) {
+    return finished_thinking_body(reasoning, max_chars, secrets);
+}
+
+std::string format_finished_thinking_preview(
+    const std::string& reasoning, std::size_t max_chars,
+    const std::vector<std::string>& secrets) {
+    const std::string body = finished_thinking_body(reasoning, max_chars, secrets);
+    if (body.empty()) return {};
+    return "Finished thinking: " + body;
+}
+
+std::string format_reasoning_preview(const std::string& reasoning,
+                                     std::size_t max_chars,
+                                     const std::vector<std::string>& secrets) {
+    return format_thinking_opening_preview(reasoning, max_chars, secrets);
 }
 
 ReasoningIdleSlice take_reasoning_idle_slice(const std::string& normalized,

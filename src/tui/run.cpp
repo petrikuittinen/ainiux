@@ -165,6 +165,8 @@ app::TuiRunResult run(provider::RequestContext context,
     std::chrono::steady_clock::time_point agent_task_started;
     bool agent_task_active = false;
     long long agent_completed_task_ms = -1;
+    double agent_completed_decode_tps = -1.0;
+    bool agent_completed_tokens_estimated = false;
     bool agent_compaction_active = false;
     CompactionStrategy agent_compaction_strategy = CompactionStrategy::Smart;
     std::string theme = "dark";
@@ -351,6 +353,9 @@ app::TuiRunResult run(provider::RequestContext context,
                 event.agent_needs_user_continue = src.agent_needs_user_continue;
                 event.agent_turn_started_ms = src.agent_turn_started_ms;
                 event.agent_finished_at_ms = src.agent_finished_at_ms;
+                event.agent_stream_output_tokens = src.agent_stream_output_tokens;
+                event.agent_stream_decode_ms = src.agent_stream_decode_ms;
+                event.agent_stream_tokens_estimated = src.agent_stream_tokens_estimated;
                 break;
             case agent::AgentSurfaceEvent::Type::TurnError:
                 event.type = TuiEventType::Error;
@@ -362,6 +367,9 @@ app::TuiRunResult run(provider::RequestContext context,
                 event.agent_final_text = std::move(src.agent_final_text);
                 event.agent_turn_started_ms = src.agent_turn_started_ms;
                 event.agent_finished_at_ms = src.agent_finished_at_ms;
+                event.agent_stream_output_tokens = src.agent_stream_output_tokens;
+                event.agent_stream_decode_ms = src.agent_stream_decode_ms;
+                event.agent_stream_tokens_estimated = src.agent_stream_tokens_estimated;
                 break;
             case agent::AgentSurfaceEvent::Type::GuardApproval:
                 event.type = TuiEventType::GuardApproval;
@@ -445,6 +453,8 @@ app::TuiRunResult run(provider::RequestContext context,
                              completion_job.joinable();
         chrome.activity_state = agent_activity_state;
         chrome.completed_task_ms = agent_completed_task_ms;
+        chrome.completed_decode_tokens_per_second = agent_completed_decode_tps;
+        chrome.completed_tokens_estimated = agent_completed_tokens_estimated;
         if (agent_task_active) {
             chrome.task_elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(
                                               std::chrono::steady_clock::now() -
@@ -663,6 +673,7 @@ app::TuiRunResult run(provider::RequestContext context,
     };
 
     auto finish_loaded_session = [&](const std::string& loaded_label) {
+        chat_prompt_recall.replace(user_prompts_for_recall(session.messages));
         pending_images.clear();
         inflight_image_count = 0;
         chat_attachments.clear();
@@ -728,6 +739,7 @@ app::TuiRunResult run(provider::RequestContext context,
         queued_regen_text_attachments.clear();
         app::apply_system_prompt(session, context.options.system);
         history_scroll = 0;
+        chat_prompt_recall.replace({});
     };
 
     auto panel_text = [&]() {
@@ -1277,6 +1289,8 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_task_started = std::chrono::steady_clock::now();
             agent_task_active = true;
             agent_completed_task_ms = -1;
+            agent_completed_decode_tps = -1.0;
+            agent_completed_tokens_estimated = false;
             status = "Waiting for provider";
             if (!agent_controller) {
                 status = "Agent controller is missing";
@@ -1405,6 +1419,10 @@ app::TuiRunResult run(provider::RequestContext context,
                         event.agent_needs_user_continue = agent_turn.needs_user_continue;
                         event.agent_turn_started_ms = agent_turn.turn_started_ms;
                         event.agent_finished_at_ms = agent_turn.finished_at_ms;
+                        event.agent_stream_output_tokens = agent_turn.stream_output_tokens;
+                        event.agent_stream_decode_ms = agent_turn.stream_decode_ms;
+                        event.agent_stream_tokens_estimated =
+                            agent_turn.stream_tokens_estimated;
                         if (event.agent_final_text.empty() && !agent_turn.notice.empty() &&
                             !send_error.ok()) {
                             event.agent_final_text = agent_turn.notice;
@@ -1933,6 +1951,8 @@ app::TuiRunResult run(provider::RequestContext context,
         agent_task_started = std::chrono::steady_clock::now();
         agent_task_active = true;
         agent_completed_task_ms = -1;
+        agent_completed_decode_tps = -1.0;
+        agent_completed_tokens_estimated = false;
         status = agent::format_compaction_progress(requested_strategy, 0);
         active_job = ActiveJob::Chat;
         model_job.start(
@@ -2962,6 +2982,8 @@ app::TuiRunResult run(provider::RequestContext context,
                 agent_task_active = true;
                 agent_task_started = agent_controller->turn_started();
                 agent_completed_task_ms = -1;
+                agent_completed_decode_tps = -1.0;
+                agent_completed_tokens_estimated = false;
                 active_job = ActiveJob::Chat;
                 status = agent_controller->status_label();
                 if (status.empty()) {
@@ -3326,6 +3348,12 @@ app::TuiRunResult run(provider::RequestContext context,
                                           std::chrono::steady_clock::now() -
                                           agent_task_started)
                                           .count();
+                            agent_completed_decode_tps =
+                                agent::agent_stream_tokens_per_second(
+                                    event.agent_stream_output_tokens,
+                                    event.agent_stream_decode_ms);
+                            agent_completed_tokens_estimated =
+                                event.agent_stream_tokens_estimated;
                         }
                     }
                     if (should_regenerate) {
@@ -3370,6 +3398,8 @@ app::TuiRunResult run(provider::RequestContext context,
                         agent_activity_state = AgentActivityState::Ready;
                         agent_task_active = false;
                         agent_completed_task_ms = -1;
+                        agent_completed_decode_tps = -1.0;
+                        agent_completed_tokens_estimated = false;
                     }
                     inflight_image_count = 0;
                     if (should_regenerate) {
@@ -3835,6 +3865,8 @@ app::TuiRunResult run(provider::RequestContext context,
                     agent_task_active = false;
                     agent_activity_state = AgentActivityState::Ready;
                     agent_completed_task_ms = -1;
+                    agent_completed_decode_tps = -1.0;
+                    agent_completed_tokens_estimated = false;
                     if (event.agent_history_loaded) {
                         session.messages = std::move(event.agent_history);
                         history_scroll = history_scroll_for_thread_end();

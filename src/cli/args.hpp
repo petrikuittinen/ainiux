@@ -143,9 +143,11 @@ struct Options {
     int agent_input_max_height_percent = 25;
     int agent_thinking_preview_max_chars = 120;
     bool has_agent_thinking_preview_max_chars = false;
-    // Seconds of pure provider reasoning (no assistant text or tool calls)
-    // before printing the next thinking-preview sentence. 0 disables idle
-    // advancement; maximum 3600. Default 30.
+    // Seconds of pure provider reasoning before the opening Thinking: row
+    // freezes if it has not already filled the preview budget. 0 freezes the
+    // opening clip as soon as it is complete (or at phase end). Maximum 3600.
+    // Default 30. At most two rows: Thinking: (first ~max_chars) and a live
+    // last-sentence tail that becomes Finished thinking: when reasoning ends.
     int agent_thinking_idle_preview_seconds = 30;
     // How often interactive agent chrome refreshes the in-flight generation
     // token estimate while pure reasoning streams. Default 1 second; 0 disables

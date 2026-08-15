@@ -7,15 +7,64 @@
 namespace ainiux::agent {
 
 // Collapse provider reasoning to a single display row, redact configured
-// secrets, and clip by grapheme count. The returned string includes the
-// "Thinking: " prefix and any ellipsis inside max_chars.
+// secrets, and clip the body by grapheme/word boundary. The returned string
+// includes the "Thinking: " prefix. max_chars is the body budget (label extra).
 std::string format_reasoning_preview(const std::string& reasoning,
                                      std::size_t max_chars,
                                      const std::vector<std::string>& secrets);
 
+// Opening live/frozen row: "Thinking: " + first ~max_chars at a word boundary.
+std::string format_thinking_opening_preview(const std::string& reasoning,
+                                            std::size_t max_chars,
+                                            const std::vector<std::string>& secrets);
+
+// Live tail while reasoning is still streaming: last sentence / newest
+// fragment, clipped, with no label.
+std::string format_live_thinking_tail(const std::string& reasoning,
+                                      std::size_t max_chars,
+                                      const std::vector<std::string>& secrets);
+
+// Frozen closing row after </think> / end of reasoning:
+// "Finished thinking: " + last sentence, clipped to ~max_chars from the end
+// at a word boundary.
+std::string format_finished_thinking_preview(const std::string& reasoning,
+                                             std::size_t max_chars,
+                                             const std::vector<std::string>& secrets);
+
+// Bodies only (no label). Empty when max_chars is 0 or the source is empty.
+std::string thinking_opening_body(const std::string& reasoning,
+                                  std::size_t max_chars,
+                                  const std::vector<std::string>& secrets);
+std::string finished_thinking_body(const std::string& reasoning,
+                                   std::size_t max_chars,
+                                   const std::vector<std::string>& secrets);
+
+// True when the finished row should be omitted: empty side, same body, or the
+// last sentence is still the first sentence of the trace (no later sentence).
+bool skip_finished_thinking_preview(const std::string& reasoning,
+                                    std::size_t max_chars,
+                                    const std::vector<std::string>& secrets);
+
+// True when flattened reasoning continues past the opening word-boundary clip.
+bool opening_preview_has_more(const std::string& reasoning,
+                              std::size_t max_chars,
+                              const std::vector<std::string>& secrets);
+
 // Redact secrets for sentence walking / idle previews. Does not glue tokens.
 std::string normalize_reasoning_preview_text(
     const std::string& reasoning, const std::vector<std::string>& secrets);
+
+// Flatten vertical whitespace after redaction (single history line).
+std::string flatten_reasoning_preview_text(
+    const std::string& reasoning, const std::vector<std::string>& secrets);
+
+// Last complete sentence, else the newest incomplete tail.
+std::string last_reasoning_sentence(const std::string& flattened);
+
+// Word-boundary clips. If there is no whitespace (CJK / one token), keep the
+// grapheme window as-is.
+std::string clip_preview_prefix(const std::string& text, std::size_t max_chars);
+std::string clip_preview_suffix(const std::string& text, std::size_t max_chars);
 
 // One idle-thinking slice taken from already-normalized reasoning text.
 struct ReasoningIdleSlice {
