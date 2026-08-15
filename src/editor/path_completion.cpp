@@ -84,6 +84,7 @@ const std::vector<std::string>& agent_command_completions() {
         "/clear",
         "/cmd-out ",
         "/compact",
+        "/compact all",
         "/compact fast",
         "/compact smart",
         "/compact summary",

@@ -61,7 +61,7 @@ Use `/pop` to remove the last user or assistant message.
 
 | Shortcut | Action |
 |----------|--------|
-| Arrow keys | Move cursor (visual-row movement across soft-wrapped lines) |
+| Arrow keys | Move cursor (visual-row movement across soft-wrapped lines). Up on the first visual line / Down on the last visual line recall earlier submitted prompts for this mode (chat and agent lists are separate) |
 | `Shift` + arrows | Extend selection |
 | `Home` / `End` | Beginning / end of current line |
 | `Ctrl+Home` / `Ctrl+End` | Beginning / end of input buffer |
@@ -96,7 +96,7 @@ Use `/pop` to remove the last user or assistant message.
 
 ### Slash commands (type in input, `Enter` to run if single-line)
 
-`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/search`, `/theme`, `/scrollbar`, `/thinking`
+`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/search`, `/theme`, `/scrollbar`, `/thinking`. In chat, `/clear` wipes the thread. In agent, `/clear` only hides the visible transcript; `/compact all` resets model context.
 
 ---
 
@@ -256,7 +256,7 @@ session management.
 
 Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 `/cycle` follows Ctrl+G and enters the editor from chat or agent—including mid-turn so you can review dirty files in dired while tools continue. `F4` is the short path into dired for that review. Temporary editor hops do not finish the project agent session; leaving for chat or process quit does. Manual
-`/compact` preserves the full transcript while compacting model-visible context. In interactive agent mode, `/plan` selects planning mode and `/act` returns to full coding mode. `/goal [condition|clear|pause|resume]` sets a persistent completion condition; the agent auto-continues until it calls `goal_met` with evidence, stalls/blocks, hits the goal turn cap, or the user interrupts. Refactor mode is not implemented yet. New agent projects require explicit `/new` (Tab/Insert do not create one).
+`/compact` preserves the full transcript while compacting model-visible context. `/compact all` resets context to the system prompt, `AGENTS.md`, and tool definitions and clears `/goal`; logs stay in `.ainiux-pr`. `/clear` only hides the scrollable agent window. In interactive agent mode, `/plan` selects planning mode and `/act` returns to full coding mode. `/goal [condition|clear|pause|resume]` sets a persistent completion condition; the agent auto-continues until it calls `goal_met` with evidence, stalls/blocks, hits the goal turn cap, or the user interrupts. Refactor mode is not implemented yet. New agent projects require explicit `/new` (Tab/Insert do not create one).
 
 ---
 

@@ -91,8 +91,13 @@ The full transcript remains on disk. Compaction reduces only the model-visible r
 - `fast` builds a local checkpoint without a model call.
 - `smart` starts locally and escalates to the active model when loss risk requires it.
 - `summary` always requests a summary from the active model.
+- `all` is a one-shot reset: model context returns to the system prompt, `AGENTS.md`, and tool definitions. Visible history is wiped, an active `/goal` is cleared, and `.ainiux-pr` logs stay on disk. `all` is never used by automatic compaction.
 
 Run `/compact`, optionally followed by a strategy. Automatic compaction is enabled by default and uses **75% of every known context window**, unless `compact_limit` is explicitly set. Cancellation or a failed summary preserves the previous completed context. The detailed implementation is in [Agent compaction strategies](compact_strategies.md).
+
+`/clear` only hides the scrollable transcript for this TUI session. It does not change model context, sqlite logs, or `/goal`. Restarting agent reloads post-`/compact all` history.
+
+On startup the transcript shows display-only load lines with token estimates, for example `agent_prompt.md loaded ~700 tokens`, plus `AGENTS.md` when present and one aggregate `tools` line. These lines are not sent to the model.
 
 ## Code index
 
@@ -122,7 +127,7 @@ It produces Markdown and may write its local diagnostic review log unless disabl
 
 ## Interactive commands and display
 
-Agent mode shares input editing, cancellation, help, provider/model selectors, scrolling, and editor switching with chat. Agent-only commands include `/compact`, `/cmd-out`, `/index-code`, `/show-index`, `/plan`, `/act`, `/goal`, and project permission controls shown by `/help`. `/chat`, `/editor`, `/agent`, `/mode`, and `/cycle` are explicit surface handoffs.
+Agent mode shares input editing, cancellation, help, provider/model selectors, scrolling, and editor switching with chat. In the input box, Up on the first visual line and Down on the last visual line recall earlier submitted prompts (this TUI session only). Agent and chat keep separate recall lists. Agent-only commands include `/compact`, `/compact all`, `/clear`, `/cmd-out`, `/index-code`, `/show-index`, `/plan`, `/act`, `/goal`, and project permission controls shown by `/help`. `/chat`, `/editor`, `/agent`, `/mode`, and `/cycle` are explicit surface handoffs.
 
 ### Background agent while in the editor
 

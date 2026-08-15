@@ -24,7 +24,9 @@ A thread with missing managed media stays readable but becomes read-only. `/clea
 
 ## Input and history
 
-`Enter` or `Ctrl+S` sends. `Esc` then `Enter` inserts a newline. The shared editor input supports grapheme-aware navigation, selection, copy/paste, undo/redo, soft wrapping, and syntax highlighting.
+`Enter` or `Ctrl+S` sends. `Esc` then `Enter` inserts a newline. The shared editor input supports grapheme-aware navigation, selection, copy/paste, undo/redo, soft wrapping, and syntax highlighting. Up on the first visual line and Down on the last visual line recall earlier submitted prompts from this chat session. Agent-mode prompts are not mixed into chat recall.
+
+`/clear` in chat deletes the thread messages and restores the system prompt. In agent mode the same command only hides the visible window and does not change model context.
 
 The line above the input shows version, mode, model and reasoning, estimated token usage (and percent of the known context window), and provider credits when available (for example OpenRouter or DeepSeek). When no model is selected it shows `[choose model /model]`. Custom URL providers display as short `custom`, never as long registry ids such as `custom_openai_chat`. History navigation help (`Ctrl+B` / `Ctrl+D`) lives on the status row with TTFT or response metrics after a reply.
 

@@ -263,6 +263,8 @@ Error AgentSessionRuntime::update_project_settings(
         chat::settings_json_from_options(context.options), permission_mode_,
         project.settings_json);
     if (!error.ok()) return error;
+    error = write_session_settings(project);
+    if (!error.ok()) return error;
     project.workspace = options_.workspace;
     return session_store_.update_project_meta(project);
 }
@@ -305,7 +307,139 @@ long long AgentSessionRuntime::estimate_compact_tokens_before(
     // Unseeded: compare compact projection against seed overhead plus the full
     // durable model-projection transcript. Idle chrome uses a smaller bounded
     // prior-session seed and must not drive this reduction check.
-    return estimate_seed_overhead_tokens() + estimate_transcript_tokens(stored);
+    return estimate_seed_overhead_tokens() +
+           estimate_transcript_tokens(messages_after_seq(stored, context_reset_after_seq_));
+}
+
+std::vector<std::string> AgentSessionRuntime::context_load_notices() const {
+    std::vector<std::string> lines;
+    const long long prompt_tokens =
+        estimate_tokens_from_text(prompts_.agent_system_prompt(state_.protocol));
+    lines.push_back("agent_prompt.md loaded ~" + std::to_string(prompt_tokens) +
+                    " tokens");
+    if (!agents_md_.injection_text.empty()) {
+        const long long agents_tokens =
+            estimate_tokens_from_text(agents_md_.injection_text);
+        lines.push_back("AGENTS.md loaded ~" + std::to_string(agents_tokens) +
+                        " tokens");
+    }
+    long long tool_tokens = 0;
+    std::size_t count = 0;
+    for (const provider::FunctionDefinition& definition : tools_.definitions()) {
+        tool_tokens += estimate_tokens_from_text(definition.name);
+        tool_tokens += estimate_tokens_from_text(definition.description);
+        tool_tokens += estimate_tokens_from_text(definition.parameters_json);
+        tool_tokens += 8;
+        ++count;
+    }
+    if (count > 0) {
+        lines.push_back("tools loaded ~" + std::to_string(tool_tokens) +
+                        " tokens");
+    }
+    return lines;
+}
+
+void AgentSessionRuntime::append_context_load_notices(
+    std::vector<provider::Message>& history) const {
+    if (visible_history_hidden()) return;
+    const long long now = now_unix_ms();
+    for (const std::string& line : context_load_notices()) {
+        if (!history.empty() && history.back().role == "notice" &&
+            history.back().content == line) {
+            continue;
+        }
+        provider::Message notice{"notice", line};
+        notice.created_at_ms = now;
+        history.push_back(std::move(notice));
+    }
+}
+
+void AgentSessionRuntime::apply_context_reset_filter(
+    std::vector<AgentMessageRecord>& messages) const {
+    messages = messages_after_seq(messages, context_reset_after_seq_);
+}
+
+void AgentSessionRuntime::apply_context_reset_filter(
+    std::vector<AgentMessageRecord>& messages,
+    std::vector<AgentToolEventRecord>& events) const {
+    messages = messages_after_seq(messages, context_reset_after_seq_);
+    events = tool_events_after_seq(events, context_reset_after_seq_);
+}
+
+Error AgentSessionRuntime::write_session_settings(AgentProjectRecord& project) const {
+    Error error = settings_json_with_permission_mode(
+        project.settings_json, permission_mode_, project.settings_json);
+    if (!error.ok()) return error;
+    error = settings_json_with_goal(project.settings_json, goal_, project.settings_json);
+    if (!error.ok()) return error;
+    return settings_json_with_context_reset_after_seq(
+        project.settings_json, context_reset_after_seq_, project.settings_json);
+}
+
+Error AgentSessionRuntime::reset_model_context() {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    bool expected = false;
+    if (!operation_active_.compare_exchange_strong(expected, true))
+        return {ErrorCode::BadArgs,
+                "cannot reset context while an agent operation is active"};
+    struct Release {
+        std::atomic<bool>& active;
+        ~Release() { active.store(false); }
+    } release{operation_active_};
+
+    long long cut = 0;
+    if (session_store_.is_open()) {
+        AgentMessageRecord last;
+        bool found = false;
+        Error error = session_store_.peek_last_message(last, found);
+        if (!error.ok()) return error;
+        if (found) cut = last.seq;
+    }
+    context_reset_after_seq_ = cut;
+    display_min_seq_.store(0, std::memory_order_relaxed);
+
+    const bool had_goal = goal_.status != GoalStatus::Cleared && !goal_.condition.empty();
+    goal_.status = GoalStatus::Cleared;
+    goal_.turns = 0;
+    goal_.last_reason = "context reset";
+    if (!had_goal) goal_.condition.clear();
+
+    if (session_store_.is_open()) {
+        AgentProjectRecord project;
+        Error error = session_store_.open_project(project);
+        if (!error.ok()) return error;
+        error = write_session_settings(project);
+        if (!error.ok()) return error;
+        error = session_store_.update_project_meta(project);
+        if (!error.ok()) return error;
+        error = session_store_.append_message(
+            "notice", "Context reset; transcript retained on disk");
+        if (!error.ok()) return error;
+    }
+
+    conversation_ = provider::ToolConversation{};
+    conversation_seeded_ = false;
+    const long long baseline = estimate_seed_overhead_tokens();
+    cached_request_tokens_.store(baseline, std::memory_order_relaxed);
+    if (baseline > 0)
+        last_nonzero_request_tokens_.store(baseline, std::memory_order_relaxed);
+    return ok_error();
+}
+
+Error AgentSessionRuntime::hide_visible_history() {
+    if (!prepared_)
+        return {ErrorCode::Internal, "agent session runtime is not prepared"};
+    long long cut = 0;
+    if (session_store_.is_open()) {
+        AgentMessageRecord last;
+        bool found = false;
+        Error error = session_store_.peek_last_message(last, found);
+        if (!error.ok()) return error;
+        if (found) cut = last.seq;
+    }
+    if (cut > 0) display_min_seq_.store(cut, std::memory_order_relaxed);
+    return ok_error();
 }
 
 void AgentSessionRuntime::publish_request_token_estimate() {
@@ -395,6 +529,7 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
     result.error =
         session_store_.load_session(1, project, stored, tool_events);
     if (!result.error.ok()) return result;
+    apply_context_reset_filter(stored, tool_events);
 
     const long long window = context.options.context_tokens > 0
                                  ? static_cast<long long>(
@@ -964,6 +1099,8 @@ void AgentSessionRuntime::reset() {
     task_mode_ = AgentTaskMode::Act;
     permission_mode_ = PermissionMode::Smart;
     goal_ = SessionGoal{};
+    context_reset_after_seq_ = 0;
+    display_min_seq_.store(0, std::memory_order_relaxed);
     cached_request_tokens_.store(0, std::memory_order_relaxed);
     last_nonzero_request_tokens_.store(0, std::memory_order_relaxed);
     in_flight_generation_tokens_.store(0, std::memory_order_relaxed);
@@ -1246,6 +1383,12 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                 reset();
                 return error;
             }
+            error = context_reset_after_seq_from_settings_json(project.settings_json,
+                                                               context_reset_after_seq_);
+            if (!error.ok()) {
+                reset();
+                return error;
+            }
         }
     }
     publish_preparation(PreparationPhase::SessionDatabase, true, phase_started);
@@ -1301,6 +1444,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         if (options_.interactive && session_store_.is_open()) {
             std::vector<AgentMessageRecord> rows;
             if (session_store_.load_messages(rows).ok()) {
+                apply_context_reset_filter(rows);
                 const std::string prior = build_prior_session_context(rows);
                 if (!prior.empty()) {
                     baseline += estimate_tokens_from_text("user");
@@ -1327,9 +1471,13 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
     std::vector<AgentMessageRecord> rows;
     Error error = session_store_.load_messages(rows);
     if (!error.ok()) return error;
+    apply_context_reset_filter(rows);
+    const long long hidden_through =
+        display_min_seq_.load(std::memory_order_relaxed);
     out.reserve(rows.size());
     const std::size_t cols = terminal_column_count();
     for (const AgentMessageRecord& row : rows) {
+        if (hidden_through > 0 && row.seq <= hidden_through) continue;
         // Summary rows contain the internal model checkpoint, potentially with
         // large structured tool results. The completion status reports the
         // compaction to the user; replaying this payload would flood the TUI.
@@ -1593,9 +1741,7 @@ Error AgentSessionRuntime::switch_permission_mode(
             chat::settings_json_from_options(context.options), mode,
             project.settings_json);
         if (!error.ok()) return error;
-        // Preserve the session goal object across permission rewrites.
-        error = settings_json_with_goal(project.settings_json, goal_,
-                                       project.settings_json);
+        error = write_session_settings(project);
         if (!error.ok()) return error;
         error = session_store_.update_project_meta(project);
         if (!error.ok()) return error;
@@ -1991,8 +2137,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 result.error = settings_error;
                 return result;
             }
-            settings_error = settings_json_with_goal(project.settings_json, goal_,
-                                                     project.settings_json);
+            settings_error = write_session_settings(project);
             if (!settings_error.ok()) {
                 result.error = settings_error;
                 return result;
@@ -2016,6 +2161,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         std::vector<AgentMessageRecord> prior;
         if (options_.interactive && session_store_.is_open())
             (void)session_store_.load_messages(prior);
+        apply_context_reset_filter(prior);
         const std::string prior_context = build_prior_session_context(prior);
         if (prior_context.empty()) {
             seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, text,

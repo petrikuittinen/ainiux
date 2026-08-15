@@ -12,6 +12,7 @@
 
 #include "tui/file_jobs.hpp"
 #include "tui/input_handlers.hpp"
+#include "tui/prompt_recall.hpp"
 #include "tui/picker_input.hpp"
 #include "tui/provider_actions.hpp"
 #include "tui/session_load.hpp"
@@ -130,6 +131,8 @@ app::TuiRunResult run(provider::RequestContext context,
         return editor;
     };
     editor::EditorState input = new_input_editor();
+    PromptRecall chat_prompt_recall;
+    PromptRecall agent_prompt_recall;
     editor::ContextualCompleter path_completer;
     editor::AiContinueContext ai_continue;
     ai_continue.request = context;
@@ -1856,6 +1859,8 @@ app::TuiRunResult run(provider::RequestContext context,
                     event.agent_index_enabled = runtime->indexing_enabled();
                     event.error = runtime->load_display_messages(
                         event.agent_history);
+                    if (event.error.ok())
+                        runtime->append_context_load_notices(event.agent_history);
                     if (!event.error.ok())
                         event.error.message =
                             "fresh project initialized at " + event.agent_workspace +
@@ -1954,6 +1959,8 @@ app::TuiRunResult run(provider::RequestContext context,
                     event.error = notice_error;
                 const Error history_error =
                     runtime->load_display_messages(event.agent_history);
+                if (history_error.ok())
+                    runtime->append_context_load_notices(event.agent_history);
                 event.agent_history_loaded = history_error.ok();
                 if (event.error.ok() && !history_error.ok())
                     event.error = history_error;
@@ -1992,6 +1999,8 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (event.error.ok()) {
                     event.error =
                         runtime->load_display_messages(event.agent_history);
+                    if (event.error.ok())
+                        runtime->append_context_load_notices(event.agent_history);
                     event.agent_history_loaded = event.error.ok();
                     // Prefer the history intro line (includes fractional seconds);
                     // fall back if the report did not carry markdown.
@@ -2069,6 +2078,8 @@ app::TuiRunResult run(provider::RequestContext context,
                 if (event.error.ok()) {
                     event.error =
                         runtime->load_display_messages(event.agent_history);
+                    if (event.error.ok())
+                        runtime->append_context_load_notices(event.agent_history);
                     event.agent_history_loaded = event.error.ok();
                     event.text = "Code index refreshed";
                 }
@@ -2083,6 +2094,47 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.start_new_chat_thread = [&](const std::string& name) { start_new_chat_thread(name); };
     command_handlers.start_new_agent_project = start_new_agent_project;
     command_handlers.start_agent_compaction = start_agent_compaction;
+    command_handlers.start_agent_context_reset = [&]() {
+        if (!context.options.agent || !agent_runtime || !agent_runtime->prepared()) {
+            report_agent_error("Agent project runtime is unavailable");
+            return;
+        }
+        if (active_job != ActiveJob::None) {
+            status = "Cannot reset context while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (file_job.joinable()) {
+            status = "Cannot reset context while an agent file job is running; wait or cancel it first";
+            return;
+        }
+        const Error error = agent_runtime->reset_model_context();
+        if (!error.ok()) {
+            report_agent_error(error.message);
+            return;
+        }
+        std::vector<provider::Message> history;
+        if (agent_runtime->load_display_messages(history).ok()) {
+            agent_runtime->append_context_load_notices(history);
+            session.messages = std::move(history);
+        } else {
+            session.messages.clear();
+            agent_runtime->append_context_load_notices(session.messages);
+        }
+        history_scroll = history_scroll_for_thread_end();
+        status = "Context reset; transcript retained on disk";
+    };
+    command_handlers.clear_agent_visible_history = [&]() {
+        if (agent_runtime && agent_runtime->prepared()) {
+            const Error error = agent_runtime->hide_visible_history();
+            if (!error.ok()) {
+                report_agent_error(error.message);
+                return;
+            }
+        }
+        session.messages.clear();
+        history_scroll = 0;
+        status = "Visible history cleared";
+    };
     command_handlers.start_agent_index_code = start_agent_index_code;
     command_handlers.start_agent_show_index = start_agent_show_index;
     command_handlers.switch_agent_task_mode = [&](agent::AgentTaskMode mode) {
@@ -2652,6 +2704,10 @@ app::TuiRunResult run(provider::RequestContext context,
             input = new_input_editor();
             return;
         }
+        if (!text.empty()) {
+            if (context.options.agent) agent_prompt_recall.record(raw);
+            else chat_prompt_recall.record(raw);
+        }
         // User shell: !cmd /shell (notice) or !!cmd /shell-stdout (draft).
         if (raw.find('\n') == std::string::npos && !text.empty()) {
             std::string shell_command;
@@ -2814,6 +2870,8 @@ app::TuiRunResult run(provider::RequestContext context,
             history.agent_index_enabled = ready.agent_index_enabled;
             history.error =
                 agent_runtime->load_display_messages(history.agent_history);
+            if (history.error.ok())
+                agent_runtime->append_context_load_notices(history.agent_history);
             if (history.error.ok() && history.agent_history.empty()) {
                 // Empty history still needs a final event so the UI can join
                 // the file job without hanging on a second PrepareDone wait.
@@ -2886,6 +2944,7 @@ app::TuiRunResult run(provider::RequestContext context,
         if (agent_runtime->prepared()) {
             std::vector<provider::Message> history;
             if (agent_runtime->load_display_messages(history).ok()) {
+                agent_runtime->append_context_load_notices(history);
                 session.messages = std::move(history);
                 history_scroll = history_scroll_for_thread_end();
             }
@@ -3164,6 +3223,7 @@ app::TuiRunResult run(provider::RequestContext context,
                             agent_runtime->prepared()) {
                             std::vector<provider::Message> history;
                             if (agent_runtime->load_display_messages(history).ok()) {
+                                agent_runtime->append_context_load_notices(history);
                                 session.messages = std::move(history);
                                 live_agent_rows.clear();
                                 history_scroll = history_scroll_for_thread_end();
@@ -3737,8 +3797,11 @@ app::TuiRunResult run(provider::RequestContext context,
                     if (!event.error.ok()) {
                         std::vector<provider::Message> restored;
                         if (agent_runtime && agent_runtime->prepared() &&
-                            !agent_runtime->load_display_messages(restored).ok())
+                            agent_runtime->load_display_messages(restored).ok()) {
+                            agent_runtime->append_context_load_notices(restored);
+                        } else {
                             restored.clear();
+                        }
                         apply_agent_project_history_handoff(
                             session, project_switch_previous_history,
                             std::move(restored), false);
@@ -4083,8 +4146,12 @@ app::TuiRunResult run(provider::RequestContext context,
                 }
                 if (ch == 27) {
                     const detail::TuiSize screen = detail::terminal_size();
-                    const EscapeResult escape_result =
-                        handle_escape(input, current_layout(screen.rows, screen.cols), history_scroll, status);
+                    const EscapeResult escape_result = handle_escape(
+                        input, current_layout(screen.rows, screen.cols),
+                        history_scroll, status, false,
+                        context.options.agent ? &agent_prompt_recall
+                                              : &chat_prompt_recall,
+                        input_undo_limit);
                     if (escape_result == EscapeResult::OpenDired) {
                         // F4: hop straight into editor dired (skip Ctrl+G then F4).
                         if (interactive == nullptr) {

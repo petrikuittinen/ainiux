@@ -1067,6 +1067,121 @@ void test_session_goal_set_pause_resume_complete_and_persist() {
     fs::remove_all(workspace, ec);
 }
 
+void test_reset_model_context_and_visible_clear() {
+    const std::string workspace = temp_workspace("context-reset");
+    {
+        std::ofstream agents(fs::path(workspace) / "AGENTS.md");
+        agents << "# Project\nFollow the local build rules.\n";
+    }
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "reset fixture open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        check(store.open_project(project).ok(), "reset fixture project");
+        check(store.append_message("user", "old user prompt").ok(),
+              "reset fixture user");
+        check(store.append_message("assistant", "old assistant reply").ok(),
+              "reset fixture assistant");
+    }
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    Error error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.prepared(),
+          "prepare reset fixture: " + error.message);
+
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok() && display.size() >= 2,
+          "display includes prior transcript before reset");
+    error = runtime.set_goal("keep working until tests pass");
+    check(error.ok() && agent::goal_is_active(runtime.goal()),
+          "goal is active before reset");
+
+    const auto notices = runtime.context_load_notices();
+    check(!notices.empty() && notices.front().find("agent_prompt.md loaded ~") == 0,
+          "load notice reports agent_prompt.md tokens");
+    bool saw_agents = false;
+    bool saw_tools = false;
+    for (const std::string& line : notices) {
+        saw_agents = saw_agents || line.find("AGENTS.md loaded ~") == 0;
+        saw_tools = saw_tools || line.find("tools loaded ~") == 0;
+    }
+    check(saw_agents, "load notice reports AGENTS.md when present");
+    check(saw_tools, "load notice reports tool schemas");
+
+    error = runtime.reset_model_context();
+    check(error.ok(), "reset_model_context: " + error.message);
+    check(runtime.context_reset_after_seq() > 0, "reset persists a cut seq");
+    check(!agent::goal_is_active(runtime.goal()) &&
+              runtime.goal().status == agent::GoalStatus::Cleared,
+          "reset clears the session goal");
+    check(!runtime.visible_history_hidden(),
+          "reset does not set the session-local /clear watermark");
+
+    display.clear();
+    check(runtime.load_display_messages(display).ok(), "load after reset");
+    bool saw_old_user = false;
+    bool saw_reset_notice = false;
+    for (const provider::Message& message : display) {
+        if (message.content.find("old user prompt") != std::string::npos)
+            saw_old_user = true;
+        if (message.content.find("Context reset") != std::string::npos)
+            saw_reset_notice = true;
+    }
+    check(!saw_old_user, "display hides pre-reset transcript");
+    check(saw_reset_notice, "display shows the durable reset notice");
+
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "reopen store after reset");
+        std::vector<agent::AgentMessageRecord> rows;
+        check(store.load_messages(rows).ok() && rows.size() >= 3,
+              "sqlite still has pre-reset rows plus the reset notice");
+        bool stored_old = false;
+        for (const agent::AgentMessageRecord& row : rows) {
+            if (row.content.find("old user prompt") != std::string::npos)
+                stored_old = true;
+        }
+        check(stored_old, "full transcript remains on disk after reset");
+    }
+
+    const long long after_reset = runtime.estimated_request_tokens();
+    check(after_reset > 0, "idle chrome after reset is seed overhead");
+    runtime.reset();
+    check(runtime.prepare(context, {}, {}, options).ok(),
+          "re-prepare after reset");
+    check(runtime.context_reset_after_seq() > 0,
+          "reset cut reloads from project settings");
+    display.clear();
+    check(runtime.load_display_messages(display).ok(), "load after re-prepare");
+    saw_old_user = false;
+    for (const provider::Message& message : display) {
+        if (message.content.find("old user prompt") != std::string::npos)
+            saw_old_user = true;
+    }
+    check(!saw_old_user, "reopened session still hides pre-reset transcript");
+
+    const long long reopened_tokens = runtime.estimated_request_tokens();
+    check(runtime.hide_visible_history().ok(), "hide visible history");
+    check(runtime.visible_history_hidden(), "/clear watermark is session-local");
+    display.clear();
+    check(runtime.load_display_messages(display).ok() && display.empty(),
+          "/clear hides remaining visible rows without deleting sqlite");
+    check(runtime.estimated_request_tokens() == reopened_tokens,
+          "/clear does not wipe model context");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -1086,6 +1201,7 @@ void run_all() {
     test_display_notices_dedupe_consecutive_duplicates();
     test_prepare_idle_chrome_matches_next_request_not_full_history();
     test_session_goal_set_pause_resume_complete_and_persist();
+    test_reset_model_context_and_visible_clear();
 }
 
 }  // namespace ainiux::test::agent_session_runtime

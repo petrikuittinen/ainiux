@@ -150,4 +150,10 @@ std::string render_compaction_source(const CompactionPartition& partition);
 std::string build_prior_session_context(const std::vector<AgentMessageRecord>& messages,
                                         std::size_t max_chars = 24000);
 
+// Drop rows at or before a /compact all cut. seq 0 means no cut.
+std::vector<AgentMessageRecord> messages_after_seq(
+    const std::vector<AgentMessageRecord>& messages, long long seq);
+std::vector<AgentToolEventRecord> tool_events_after_seq(
+    const std::vector<AgentToolEventRecord>& events, long long seq);
+
 }  // namespace ainiux::agent

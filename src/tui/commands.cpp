@@ -81,10 +81,19 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
             text.size() <= 8 ? std::string()
                              : app::detail::trim_ascii(text.substr(8));
         if (!command.argument.empty()) {
-            CompactionStrategy ignored;
-            if (!agent::parse_compaction_strategy(command.argument, ignored)) {
-                command.action = AgentSlashAction::Invalid;
-                command.error = "Usage: /compact [fast|smart|summary]";
+            std::string lower = command.argument;
+            for (char& ch : lower) {
+                if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+            }
+            if (lower == "all") {
+                command.action = AgentSlashAction::CompactAll;
+                command.argument = "all";
+            } else {
+                CompactionStrategy ignored;
+                if (!agent::parse_compaction_strategy(command.argument, ignored)) {
+                    command.action = AgentSlashAction::Invalid;
+                    command.error = "Usage: /compact [fast|smart|summary|all]";
+                }
             }
         }
         return command;
@@ -244,12 +253,15 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/help or Ctrl+H (hide/show this panel)\n"
                 "Ctrl+C (copy input selection, or last message when none)\n"
                 "/quit or /exit\n"
-                "/clear\n"
+                + std::string(ctx.context.options.agent
+                                  ? "/clear (hide visible history; context kept)\n"
+                                  : "/clear\n") +
                 "/edit\n"
                 "/list (Ctrl+L; also shown on chat startup; Tab/Insert new thread)\n"
                 + std::string(ctx.context.options.agent
                                   ? "/new [PATH] (fresh agent project)\n"
                                     "/compact [fast|smart|summary] (preserve transcript)\n"
+                                    "/compact all (reset context; logs kept)\n"
                                     "/index-code (create/enable code index)\n"
                                     "/show-index (refresh compact index report)\n"
                                     "/plan (planning task mode)\n"
@@ -522,6 +534,16 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         return;
     }
     if (text == "/clear") {
+        if (ctx.context.options.agent) {
+            if (handlers.clear_agent_visible_history) {
+                handlers.clear_agent_visible_history();
+            } else {
+                ctx.session.messages.clear();
+                ctx.history_scroll = 0;
+                ctx.status = "Visible history cleared";
+            }
+            return;
+        }
         ctx.session.messages.clear();
         ctx.pending_images.clear();
         ctx.inflight_image_count = 0;
@@ -548,6 +570,14 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (agent_command.action == AgentSlashAction::Invalid) {
         ctx.status = agent_command.error;
+        return;
+    }
+    if (agent_command.action == AgentSlashAction::CompactAll) {
+        if (ctx.active_job != ActiveJob::None) {
+            ctx.status = "Cannot reset context while an agent job is running; wait or cancel it first";
+            return;
+        }
+        if (handlers.start_agent_context_reset) handlers.start_agent_context_reset();
         return;
     }
     if (agent_command.action == AgentSlashAction::Compact) {

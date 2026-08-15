@@ -4574,6 +4574,24 @@ void test_editor_word_wrap_rendering() {
     check(rendered.lines[1] == "ij  ", "editor render includes next wrapped row");
     check(rendered.cursor.visible && rendered.cursor.row == 1 && rendered.cursor.col == 0,
           "editor cursor maps inside wrapped line");
+
+    // Growing the viewport must pull earlier wrapped rows back into view.
+    state.ensure_cursor_visible({1, 1, 3, 4});
+    check(state.scroll_line == 0,
+          "editor clamp scroll when the grown viewport can show the whole draft");
+    check(state.cursor_on_last_visual_row({1, 1, 3, 4}),
+          "cursor stays on the last visual row after wrap");
+    state.cursor = 0;
+    check(state.cursor_on_first_visual_row({1, 1, 3, 4}),
+          "cursor at start is on the first visual row");
+
+    ainiux::editor::EditorState wrap = ainiux::editor::EditorState::from_text("abcdefgh");
+    wrap.cursor = wrap.text.size();
+    wrap.ensure_cursor_visible({1, 1, 1, 4});
+    check(wrap.scroll_line == 1, "one-row viewport scrolls to the wrapped second line");
+    wrap.ensure_cursor_visible({1, 1, 2, 4});
+    check(wrap.scroll_line == 0 && wrap.cursor_on_last_visual_row({1, 1, 2, 4}),
+          "two-row viewport shows the first wrapped line above the cursor");
 }
 
 void test_editor_file_io_failures() {

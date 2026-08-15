@@ -668,6 +668,13 @@ void test_prior_session_context_includes_recent_work() {
               agent::estimate_transcript_tokens(
                   {messages[0], messages[1], messages[2]}) + 8,
           "display-only roles do not materially affect transcript token estimates");
+    messages[0].seq = 1;
+    messages[1].seq = 2;
+    messages[2].seq = 3;
+    const auto after = agent::messages_after_seq(messages, 2);
+    check(after.size() == 1 && after.front().seq == 3 &&
+              after.front().content == "created game.py",
+          "messages_after_seq drops the compact-all cut and earlier rows");
 }
 
 void test_reasoning_preview_unicode_redaction_and_limits() {

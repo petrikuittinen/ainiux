@@ -11,6 +11,7 @@
 #include "editor/terminal_input.hpp"
 #include "editor/detail/wrap.hpp"
 #include "tui/input_handlers.hpp"
+#include "tui/prompt_recall.hpp"
 #include "tui/picker_input.hpp"
 #include "tui/provider_actions.hpp"
 #include "tui/session_load.hpp"
@@ -2072,10 +2073,15 @@ void test_agent_project_slash_command_parsing() {
     check(summary.action == ainiux::tui::AgentSlashAction::Compact &&
               summary.argument == "summary",
           "agent /compact accepts a one-shot strategy override");
+    const auto compact_all =
+        ainiux::tui::parse_agent_slash_command("/compact ALL");
+    check(compact_all.action == ainiux::tui::AgentSlashAction::CompactAll &&
+              compact_all.argument == "all",
+          "agent /compact all is a one-shot context reset");
     const auto invalid =
         ainiux::tui::parse_agent_slash_command("/compact now");
     check(invalid.action == ainiux::tui::AgentSlashAction::Invalid &&
-              invalid.error == "Usage: /compact [fast|smart|summary]",
+              invalid.error == "Usage: /compact [fast|smart|summary|all]",
           "agent /compact rejects arguments");
     check(ainiux::tui::parse_agent_slash_command("/show-index").action ==
               ainiux::tui::AgentSlashAction::ShowIndex,
@@ -2138,6 +2144,29 @@ void test_agent_project_slash_command_parsing() {
     check(ainiux::tui::parse_agent_slash_command("/goal clear now").action ==
               ainiux::tui::AgentSlashAction::Invalid,
           "agent /goal clear rejects extra args");
+}
+
+void test_prompt_recall_is_mode_isolated() {
+    ainiux::tui::PromptRecall chat;
+    ainiux::tui::PromptRecall agent;
+    chat.record("chat one");
+    chat.record("chat two");
+    agent.record("agent one");
+    std::string current = "draft";
+    check(agent.recall_previous(current) && current == "agent one",
+          "agent recall walks its own list");
+    check(!agent.recall_previous(current), "agent recall stops at the first prompt");
+    current = "draft";
+    check(chat.recall_previous(current) && current == "chat two",
+          "chat recall does not see agent prompts");
+    check(chat.recall_previous(current) && current == "chat one",
+          "chat recall walks older chat prompts");
+    check(chat.recall_next(current) && current == "chat two",
+          "chat recall down returns toward the live draft");
+    check(chat.recall_next(current) && current == "draft",
+          "chat recall down restores the unsaved draft");
+    chat.record("chat two");
+    check(chat.size() == 2, "duplicate trailing prompt is not recorded twice");
 }
 
 void test_agent_project_history_handoff_clears_successful_empty_project() {
@@ -2264,6 +2293,7 @@ void run_all() {
     test_tui_agent_history_chrome();
     test_agent_shell_notice_preserves_listing_newlines();
     test_agent_project_slash_command_parsing();
+    test_prompt_recall_is_mode_isolated();
     test_agent_project_history_handoff_clears_successful_empty_project();
 }
 

@@ -44,6 +44,43 @@ Error settings_json_with_permission_mode(const std::string& settings_json,
     return ok_error();
 }
 
+Error context_reset_after_seq_from_settings_json(const std::string& settings_json,
+                                                 long long& seq) {
+    seq = 0;
+    if (settings_json.empty() || settings_json == "{}") return ok_error();
+    const json::ParseResult parsed = json::parse(settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object())
+        return {ErrorCode::Config, "agent project settings must be a JSON object"};
+    const json::Value* value = parsed.value.get("context_reset_after_seq");
+    if (value == nullptr || value->type == json::Value::Type::Null) return ok_error();
+    if (value->type != json::Value::Type::Number || value->number < 0 ||
+        value->number > 1.0e15)
+        return {ErrorCode::Config, "agent context_reset_after_seq must be a non-negative integer"};
+    seq = static_cast<long long>(value->number);
+    return ok_error();
+}
+
+Error settings_json_with_context_reset_after_seq(const std::string& settings_json,
+                                                 long long seq,
+                                                 std::string& updated) {
+    if (seq < 0) seq = 0;
+    json::Value root;
+    if (settings_json.empty()) {
+        root.type = json::Value::Type::Object;
+    } else {
+        json::ParseResult parsed = json::parse(settings_json);
+        if (!parsed.error.ok() || !parsed.value.is_object())
+            return {ErrorCode::Config, "agent project settings must be a JSON object"};
+        root = std::move(parsed.value);
+    }
+    json::Value value;
+    value.type = json::Value::Type::Number;
+    value.number = static_cast<double>(seq);
+    root.object["context_reset_after_seq"] = std::move(value);
+    updated = json::stringify(root);
+    return ok_error();
+}
+
 Error restore_project_settings(const std::string& workspace,
                                cli::Options& options,
                                bool& restored,

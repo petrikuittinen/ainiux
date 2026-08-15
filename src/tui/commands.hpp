@@ -24,6 +24,7 @@ enum class AgentSlashAction {
     None,
     NewProject,
     Compact,
+    CompactAll,
     IndexCode,
     ShowIndex,
     Plan,
@@ -58,6 +59,8 @@ struct TuiCommandHandlers {
     std::function<void(const std::string&)> start_new_agent_project;
     std::function<void(std::optional<CompactionStrategy>)>
         start_agent_compaction;
+    std::function<void()> start_agent_context_reset;
+    std::function<void()> clear_agent_visible_history;
     std::function<void()> start_agent_index_code;
     std::function<void()> start_agent_show_index;
     std::function<void(agent::AgentTaskMode)> switch_agent_task_mode;

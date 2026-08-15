@@ -166,6 +166,16 @@ class AgentSessionRuntime {
     // Set/replace Active goal (turns reset). Persists when the session DB is open.
     Error set_goal(const std::string& condition);
     Error clear_goal(const std::string& reason = {});
+    long long context_reset_after_seq() const { return context_reset_after_seq_; }
+    bool visible_history_hidden() const {
+        return display_min_seq_.load(std::memory_order_relaxed) > 0;
+    }
+    std::vector<std::string> context_load_notices() const;
+    void append_context_load_notices(std::vector<provider::Message>& history) const;
+    // Manual /compact all: persist a cut, clear /goal, drop live model context.
+    Error reset_model_context();
+    // Session-local /clear: hide current visible rows without touching context.
+    Error hide_visible_history();
     Error pause_goal(const std::string& reason = {});
     Error resume_goal();
     Error mark_goal_complete(const std::string& evidence);
@@ -314,12 +324,18 @@ class AgentSessionRuntime {
         bool forced_summary = false);
 
     Error persist_goal_settings();
+    Error write_session_settings(AgentProjectRecord& project) const;
     void inject_active_goal_control(bool continue_nudge);
+    void apply_context_reset_filter(std::vector<AgentMessageRecord>& messages) const;
+    void apply_context_reset_filter(std::vector<AgentMessageRecord>& messages,
+                                    std::vector<AgentToolEventRecord>& events) const;
 
     SessionRuntimeOptions options_;
     AgentTaskMode task_mode_ = AgentTaskMode::Act;
     PermissionMode permission_mode_ = PermissionMode::Smart;
     SessionGoal goal_;
+    long long context_reset_after_seq_ = 0;
+    std::atomic<long long> display_min_seq_{0};
     bool prepared_ = false;
     bool conversation_seeded_ = false;
     std::vector<std::string> secrets_;

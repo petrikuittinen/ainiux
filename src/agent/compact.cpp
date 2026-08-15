@@ -1409,4 +1409,26 @@ std::string build_prior_session_context(
            text;
 }
 
+std::vector<AgentMessageRecord> messages_after_seq(
+    const std::vector<AgentMessageRecord>& messages, long long seq) {
+    if (seq <= 0) return messages;
+    std::vector<AgentMessageRecord> out;
+    out.reserve(messages.size());
+    for (const AgentMessageRecord& message : messages) {
+        if (message.seq > seq) out.push_back(message);
+    }
+    return out;
+}
+
+std::vector<AgentToolEventRecord> tool_events_after_seq(
+    const std::vector<AgentToolEventRecord>& events, long long seq) {
+    if (seq <= 0) return events;
+    std::vector<AgentToolEventRecord> out;
+    out.reserve(events.size());
+    for (const AgentToolEventRecord& event : events) {
+        if (event.seq > seq) out.push_back(event);
+    }
+    return out;
+}
+
 }  // namespace ainiux::agent

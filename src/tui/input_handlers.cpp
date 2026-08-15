@@ -196,11 +196,44 @@ std::string join_models_preview(const std::vector<std::string>& models) {
     return out;
 }
 
+void apply_recalled_prompt(editor::EditorState& input,
+                           const std::string& text,
+                           size_t undo_limit) {
+    input = editor::EditorState::from_text(text);
+    input.set_undo_limit(undo_limit);
+    input.mode = editor::EditorMode::Chat;
+    input.vertical_movement = editor::VerticalMovementMode::VisualRow;
+    input.cursor = input.text.size();
+}
+
+bool try_prompt_recall(PromptRecall& recall,
+                       editor::EditorState& input,
+                       const Layout& layout,
+                       editor::MovementKey key,
+                       size_t undo_limit) {
+    if (key != editor::MovementKey::Up && key != editor::MovementKey::Down) {
+        return false;
+    }
+    const bool first = input.cursor_on_first_visual_row(layout.input_rect);
+    const bool last = input.cursor_on_last_visual_row(layout.input_rect);
+    if (key == editor::MovementKey::Up && !first) return false;
+    if (key == editor::MovementKey::Down && !last) return false;
+    std::string current = input.text.str();
+    const bool moved = key == editor::MovementKey::Up
+                           ? recall.recall_previous(current)
+                           : recall.recall_next(current);
+    if (!moved) return false;
+    apply_recalled_prompt(input, current, undo_limit);
+    return true;
+}
+
 EscapeResult handle_escape(editor::EditorState& input,
                            const Layout& layout,
                            int& history_scroll,
                            std::string& status,
-                           bool input_only_movement) {
+                           bool input_only_movement,
+                           PromptRecall* prompt_recall,
+                           size_t input_undo_limit) {
     unsigned char ch = 0;
     if (!editor::read_terminal_byte(
             ch, editor::terminal_escape_inter_byte_timeout_ms())) {
@@ -227,6 +260,11 @@ EscapeResult handle_escape(editor::EditorState& input,
             apply_alt_meta_prefix(movement, alt_meta_prefix);
             if (!input_only_movement && apply_chat_history_scroll(movement, layout, history_scroll)) {
                 // Chat history scroll handled; leave input cursor unchanged.
+            } else if (prompt_recall != nullptr && !movement.shift && !movement.alt &&
+                       !movement.ctrl &&
+                       try_prompt_recall(*prompt_recall, input, layout, movement.key,
+                                         input_undo_limit)) {
+                // Replaced the draft with a recalled prompt.
             } else {
                 input.apply_movement(movement.key,
                                      layout.input_rect,

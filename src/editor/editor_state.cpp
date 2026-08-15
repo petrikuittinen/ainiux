@@ -1101,30 +1101,57 @@ Error EditorState::kill_to_line_end(Clipboard& clipboard) {
     return ok_error();
 }
 
-void EditorState::ensure_cursor_visible(const Rect& rect) {
-    const size_t line = text.line_for_offset(cursor);
-    const size_t height = static_cast<size_t>(std::max(1, rect.height));
-    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+namespace {
 
+size_t cursor_visual_row(const EditorState& state, size_t width) {
+    const size_t line = state.text.line_for_offset(state.cursor);
     size_t cursor_row = 0;
     for (size_t i = 0; i < line; ++i) {
-        cursor_row += wrapped_row_count(text.line_text(i), width, tab_width);
+        cursor_row += wrapped_row_count(state.text.line_text(i), width, state.tab_width);
     }
-    const size_t line_start_offset = text.line_start(line);
-    const std::string line_text_value = text.line_text(line);
+    const size_t line_start_offset = state.text.line_start(line);
+    const std::string line_text_value = state.text.line_text(line);
     cursor_row +=
         cursor_in_wrapped_line(line_text_value,
-                               cursor - line_start_offset,
+                               state.cursor - line_start_offset,
                                width,
-                               tab_width)
+                               state.tab_width)
             .row;
+    return cursor_row;
+}
+
+}  // namespace
+
+void EditorState::ensure_cursor_visible(const Rect& rect) {
+    const size_t height = static_cast<size_t>(std::max(1, rect.height));
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const size_t cursor_row = cursor_visual_row(*this, width);
+    const size_t content_rows = visual_row_count_bounded(width, static_cast<size_t>(-1));
+    const size_t max_scroll = content_rows > height ? content_rows - height : 0;
 
     if (cursor_row < scroll_line) {
         scroll_line = cursor_row;
     } else if (cursor_row >= scroll_line + height) {
         scroll_line = cursor_row - height + 1;
     }
+    if (scroll_line > max_scroll) {
+        scroll_line = max_scroll;
+    }
     scroll_column = 0;
+}
+
+bool EditorState::cursor_on_first_visual_row(const Rect& rect) const {
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const WrappedLocation location =
+        wrapped_location_for_offset(text, cursor, width, tab_width);
+    return location.line == 0 && location.segment == 0;
+}
+
+bool EditorState::cursor_on_last_visual_row(const Rect& rect) const {
+    const size_t width = static_cast<size_t>(std::max(1, rect.width));
+    const size_t content_rows = visual_row_count_bounded(width, static_cast<size_t>(-1));
+    if (content_rows <= 1) return true;
+    return cursor_visual_row(*this, width) + 1 >= content_rows;
 }
 
 bool EditorState::scroll_view_rows(const Rect& rect, int rows) {

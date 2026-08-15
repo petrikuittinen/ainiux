@@ -9,6 +9,7 @@
 #include "editor/editor.hpp"
 #include "editor/terminal_input.hpp"
 #include "tui/events.hpp"
+#include "tui/prompt_recall.hpp"
 #include "tui/tui.hpp"
 
 namespace ainiux::tui {
@@ -36,7 +37,9 @@ EscapeResult handle_escape(editor::EditorState& input,
                            const Layout& layout,
                            int& history_scroll,
                            std::string& status,
-                           bool input_only_movement = false);
+                           bool input_only_movement = false,
+                           PromptRecall* prompt_recall = nullptr,
+                           size_t input_undo_limit = 0);
 
 enum class PickerEscapeResult { Navigated, Cancelled, CreateNew };
 

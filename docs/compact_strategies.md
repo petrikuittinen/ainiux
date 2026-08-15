@@ -80,6 +80,9 @@ Unit tests assert 75 for windows 8k, 64k, and 128k when the configured limit is 
 
 Bare `/compact` and automatic compaction use `compact_strategy`.
 `/compact fast|smart|summary` overrides **one** invocation only.
+`/compact all` is **not** a `CompactionStrategy`. It is a manual context reset
+(system prompt + `AGENTS.md` + tool definitions only) and must never be selected
+as `compact_strategy` or by automatic compaction.
 
 ---
 
@@ -87,7 +90,7 @@ Bare `/compact` and automatic compaction use `compact_strategy`.
 
 ### 3.1 Manual
 
-Interactive agent: `/compact` or `/compact fast|smart|summary`.
+Interactive agent: `/compact` or `/compact fast|smart|summary|all`.
 
 ### 3.2 Automatic (proactive)
 
@@ -467,6 +470,10 @@ user turn also appends the new goal text, and mid-session compact rebuilds
 prior-session reopen block.
 
 ---
+
+`/compact all` writes `context_reset_after_seq` into project `settings_json`.
+Later prior-session injection, display history, and `fast|smart|summary`
+timelines ignore rows at or before that cut. The full sqlite transcript remains.
 
 ## 8. Related but not `/compact`
 

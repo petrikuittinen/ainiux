@@ -322,6 +322,22 @@ void test_goal_settings_json_and_control() {
           "paused goal strips the active control fragment");
 }
 
+void test_context_reset_after_seq_settings_json() {
+    long long seq = 99;
+    Error error = agent::context_reset_after_seq_from_settings_json("{}", seq);
+    check(error.ok() && seq == 0, "missing reset seq defaults to zero");
+    std::string encoded;
+    error = agent::settings_json_with_context_reset_after_seq(
+        R"({"permission_mode":"smart"})", 42, encoded);
+    check(error.ok() && encoded.find("\"context_reset_after_seq\":42") !=
+                            std::string::npos &&
+              encoded.find("\"permission_mode\":\"smart\"") != std::string::npos,
+          "reset seq merges into existing settings JSON");
+    seq = 0;
+    error = agent::context_reset_after_seq_from_settings_json(encoded, seq);
+    check(error.ok() && seq == 42, "reset seq settings JSON round trip");
+}
+
 }  // namespace
 
 void run_all() {
@@ -331,6 +347,7 @@ void run_all() {
     test_peek_last_message();
     test_permission_settings_json();
     test_goal_settings_json_and_control();
+    test_context_reset_after_seq_settings_json();
 }
 
 }  // namespace ainiux::test::agent_session_store

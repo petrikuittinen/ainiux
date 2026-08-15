@@ -159,7 +159,7 @@ ainiux plan "design local server mode" --provider openai -m MODEL
 ainiux lmstudio -m MODEL --security-review
 ```
 
-Interactive `/plan` and `/act` switch the task policy for the current session. `/goal CONDITION` sets a persistent completion condition and auto-continues until the model calls `goal_met` with evidence, stalls, reaches the turn cap, or is interrupted. `/compact fast|smart|summary` reduces model-visible context while preserving the full transcript on disk. Automatic compaction uses **75% of every known context window** unless explicitly configured otherwise.
+Interactive `/plan` and `/act` switch the task policy for the current session. `/goal CONDITION` sets a persistent completion condition and auto-continues until the model calls `goal_met` with evidence, stalls, reaches the turn cap, or is interrupted. `/compact fast|smart|summary` reduces model-visible context while preserving the full transcript on disk. `/compact all` resets model context to the system prompt, `AGENTS.md`, and tool definitions (logs stay in `.ainiux-pr`). Automatic compaction uses **75% of every known context window** unless explicitly configured otherwise.
 
 The optional code index is an optimized in-house C++ definitions index, not a compiler-grade parser or ground truth. It stores files, definitions, and static declaration importance, while lexical relevance stays primary. Agents must verify indexed locations against current source before editing.
 
