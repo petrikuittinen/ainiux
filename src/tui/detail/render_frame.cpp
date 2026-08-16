@@ -80,14 +80,16 @@ void render(const chat::Session& session,
     const InlineChoiceModel inline_choices =
         agent_mode ? agent_inline_choices_for_mode(mode) : InlineChoiceModel{};
     const bool agent_choice_active = valid_inline_choices(inline_choices);
+    const bool guard_details = mode == TuiMode::GuardApprovalConfirm;
     const bool panel_active =
-        (mode != TuiMode::Chat || !panel_text.empty()) && !agent_choice_active;
+        (mode != TuiMode::Chat || !panel_text.empty()) &&
+        (!agent_choice_active || guard_details);
     std::vector<StyledLine> history =
         panel_active
             ? panel_lines_for_text(panel_text, mode, history_cols, panel_title_override)
             : history_lines_for_session(session, history_cols, show_thinking_traces, activity_kind,
                                         activity_frame, syntax_highlight, agent_mode);
-    if (agent_choice_active && !panel_text.empty()) {
+    if (agent_choice_active && !panel_text.empty() && !panel_active) {
         std::vector<StyledLine> details =
             panel_lines_for_text(panel_text, mode, history_cols, panel_title_override);
         history.insert(history.end(),
@@ -95,7 +97,8 @@ void render(const chat::Session& session,
                        std::make_move_iterator(details.end()));
     }
     const bool picker_top_aligned = mode == TuiMode::ThreadList || mode == TuiMode::ProviderList ||
-                                    mode == TuiMode::ModelList || mode == TuiMode::ReasoningList;
+                                    mode == TuiMode::ModelList || mode == TuiMode::ReasoningList ||
+                                    mode == TuiMode::GuardApprovalConfirm;
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
@@ -195,6 +198,15 @@ void render(const chat::Session& session,
                 layout.status_row,
                 format_line(layout.status_row, cols, render_inline_choices(inline_choices),
                             StyleRole::Status, style));
+        } else if (mode == TuiMode::ProviderList || mode == TuiMode::ModelList ||
+                   mode == TuiMode::ReasoningList || mode == TuiMode::ThreadList ||
+                   mode == TuiMode::AttachmentList) {
+            // List-picker / search (draft `/query`) lives on the status row in
+            // chat. Agent chrome must not hide that row behind token counts.
+            frame.set_row(
+                layout.status_row,
+                format_line(layout.status_row, cols, status, status_role_for_text(status),
+                            style));
         } else {
             frame.set_row(
                 layout.status_row,

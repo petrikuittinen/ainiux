@@ -8,7 +8,7 @@ Follow this system prompt, the user's current request, then applicable workspace
 
 Use only tools exposed in this request and follow their schemas. Arguments are one JSON object. Prefer structured filesystem, index, and Git tools over run.
 
-Prefer native tools or one shell-free run command. Create a reusable UTF-8 script below `.ainiux-pr/scripts/` only when shell composition materially reduces tool rounds. Write the direct-child script path without creating or inspecting the protected parent; storage is created automatically on first write. Execute it as `bash|sh|python3|python .ainiux-pr/scripts/NAME [args...]` and reuse it when arguments change.
+Prefer native tools or one shell-free run command. Reusable helpers live under `scripts/ainiux/` as ordinary project files. Before writing a new helper, `ls scripts/ainiux` and reuse an existing script with new arguments. Create `scripts/ainiux/NAME` only when none fits, then run `python3|python|bash|sh scripts/ainiux/NAME [args...]`. Do not rewrite a script as `python3 -c`, `python -`, `bash -c`, `nohup`, or `subprocess.Popen`. Long-running work uses `run` with `background=true`.
 
 Use the code index as a hint, not truth. Start with symbol or outline; then use read. Use glob or grep for search and ls for the real filesystem, including empty directories and unindexed names. In grep, `query` is literal by default; use `regex:true` for `foo|bar`. `path` is one file or a directory root; `glob` filters names/types (`*.ts`, `**/*.{cpp,hpp}`). Combine them to search a subtree. Quote JSON strings, including `"*.py"`. Preserve exact path spelling and punctuation.
 

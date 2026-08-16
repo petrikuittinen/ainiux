@@ -459,6 +459,10 @@ void test_command_guard_adversarial() {
           "path traversal arg rejected");
     check(!agent::parse_command("python3 .ainiux-pr/x.py", args, agent::CommandPolicy::Agent, rule).ok(),
           ".ainiux-pr path arg rejected");
+    Error retired = agent::parse_command(
+        "python3 .ainiux-pr/scripts/serve_dir.py", args, agent::CommandPolicy::Agent, rule);
+    check(!retired.ok() && retired.message.find("scripts/ainiux") != std::string::npos,
+          "retired managed-script path names scripts/ainiux: " + retired.message);
 
     // Incomplete quotes.
     check(!agent::parse_command("python3 \"hello", args, agent::CommandPolicy::Agent, rule).ok(),

@@ -293,6 +293,44 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
         }
     }
 
+    if (command == "nohup" || command == "setsid" || command == "disown")
+        return deny("forbid_detach",
+                    "do not detach with nohup/setsid; use run background=true for "
+                    "long-running project scripts");
+
+    if (command == "python" || command == "python3") {
+        const char* inline_fix =
+            "write scripts/ainiux/NAME and run python3 scripts/ainiux/NAME [args]";
+        for (std::size_t i = 1; i < arguments.size(); ++i) {
+            const std::string& arg = arguments[i];
+            std::string payload;
+            if (arg == "-c" || arg == "--command") {
+                if (i + 1 >= arguments.size())
+                    return deny("forbid_inline_python",
+                                std::string("python -c requires a program; ") + inline_fix);
+                payload = arguments[i + 1];
+            } else if (arg.rfind("-c", 0) == 0 && arg.size() > 2) {
+                payload = arg.substr(2);
+            } else if (arg == "-") {
+                return deny("forbid_inline_python",
+                            std::string("python stdin programs are not allowed; ") +
+                                inline_fix);
+            } else {
+                continue;
+            }
+            if (payload.find("scripts/ainiux") != std::string::npos ||
+                payload.find(".ainiux-pr/scripts") != std::string::npos)
+                return deny("forbid_inline_python",
+                            std::string("do not wrap a project script in python -c; ") +
+                                inline_fix);
+            if (payload.find('\n') != std::string::npos || payload.size() > 120)
+                return deny("forbid_inline_python",
+                            std::string("multi-line or long python -c is not allowed; ") +
+                                inline_fix);
+            break;
+        }
+    }
+
     return {};
 }
 

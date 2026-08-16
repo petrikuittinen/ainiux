@@ -10,6 +10,7 @@ const char* subprocess_termination_name(SubprocessTerminationReason reason) {
         case SubprocessTerminationReason::Cancelled: return "cancelled";
         case SubprocessTerminationReason::SpawnFailed: return "spawn_failed";
         case SubprocessTerminationReason::IoFailed: return "io_failed";
+        case SubprocessTerminationReason::Running: return "running";
     }
     return "unknown";
 }

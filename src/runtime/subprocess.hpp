@@ -30,6 +30,10 @@ struct SubprocessOptions {
     std::size_t stdout_limit = 256U * 1024U;
     std::size_t stderr_limit = 256U * 1024U;
     long timeout_ms = 60000;
+    // When true, return after startup_ms if the child is still running. timeout_ms
+    // is then a max lifetime enforced by the background reaper.
+    bool background = false;
+    long startup_ms = 400;
     CancellationToken cancellation;
 };
 
@@ -40,6 +44,7 @@ enum class SubprocessTerminationReason {
     Cancelled,
     SpawnFailed,
     IoFailed,
+    Running,
 };
 
 struct SubprocessResult {
@@ -53,6 +58,8 @@ struct SubprocessResult {
     bool stdout_repaired_utf8 = false;
     bool stderr_repaired_utf8 = false;
     bool stdin_incomplete = false;
+    std::int64_t pid = 0;
+    bool background = false;
     SubprocessTerminationReason termination = SubprocessTerminationReason::SpawnFailed;
 };
 
@@ -60,6 +67,11 @@ struct SubprocessResult {
 // UTF-8 byte strings with CRLF/CR normalized to LF. Cancellation and timeout
 // terminate the complete process tree on both supported platforms.
 Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result);
+
+// Signal a process previously returned with background=true. The reaper still
+// collects the process. Unknown pids are a no-op success.
+Error kill_background_process(std::int64_t pid);
+void kill_all_background_processes();
 
 const char* subprocess_termination_name(SubprocessTerminationReason reason);
 

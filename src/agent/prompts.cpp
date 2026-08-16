@@ -1,5 +1,7 @@
 #include "agent/prompts.hpp"
 
+#include "agent/project_scripts.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -88,11 +90,20 @@ std::string TrustedPrompts::agent_system_prompt(ToolProtocol protocol) const {
     return join_prompt_parts(agent, protocol_block(protocol));
 }
 
-std::string agent_task_mode_control(AgentTaskMode mode) {
-    return std::string("[Ainiux active task mode]\n") +
-           (mode == AgentTaskMode::Plan
-                ? "Plan. Follow the Plan policy in the trusted agent prompt."
-                : "Act. Follow the Act policy in the trusted agent prompt.");
+std::string agent_task_mode_control(AgentTaskMode mode,
+                                    const std::vector<std::string>& project_scripts) {
+    std::string text = std::string("[Ainiux active task mode]\n") +
+                       (mode == AgentTaskMode::Plan
+                            ? "Plan. Follow the Plan policy in the trusted agent prompt."
+                            : "Act. Follow the Act policy in the trusted agent prompt.");
+    text += "\nReusable scripts are only scripts/ainiux/NAME. Ignore any other script "
+            "directory mentioned in earlier turns.";
+    const std::string catalog = project_script_catalog_text(project_scripts);
+    if (!catalog.empty()) {
+        text.push_back('\n');
+        text += catalog;
+    }
+    return text;
 }
 
 Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts& prompts) {
@@ -130,14 +141,16 @@ void seed_agent_conversation(provider::ToolConversation& conversation,
                              AgentTaskMode mode,
                              ToolProtocol protocol,
                              const std::string& user_goal,
-                             const std::string& agents_md_injection) {
+                             const std::string& agents_md_injection,
+                             const std::vector<std::string>& project_scripts) {
     conversation = provider::ToolConversation{};
     conversation.messages.push_back({"system", prompts.agent_system_prompt(protocol)});
     // Keep the system prompt static for provider-side caching; project rules are
     // separate user-role context and remain untrusted data.
     if (!agents_md_injection.empty())
         conversation.messages.push_back({"user", agents_md_injection});
-    conversation.messages.push_back({"user", agent_task_mode_control(mode)});
+    conversation.messages.push_back(
+        {"user", agent_task_mode_control(mode, project_scripts)});
     if (!user_goal.empty()) conversation.messages.push_back({"user", user_goal});
 }
 

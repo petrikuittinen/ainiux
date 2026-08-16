@@ -142,7 +142,7 @@ class AgentSessionStore {
     Error record_approval(const AgentApprovalRecord& record);
     Error load_approvals(std::vector<AgentApprovalRecord>& approvals, int limit = 100) const;
 
-    // Smart-mode reusable approval for one exact managed-script byte sequence.
+    // Confirm-mode reusable approval for one exact project-script byte sequence.
     Error script_is_trusted(const std::string& script_name,
                             const std::string& interpreter,
                             const std::string& content_hash,

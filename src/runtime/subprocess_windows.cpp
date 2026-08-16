@@ -14,6 +14,8 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -263,7 +265,78 @@ Error validate_options(const SubprocessOptions& options) {
     return ok_error();
 }
 
+struct WinBackgroundJob {
+    Handle process;
+    Handle job;
+    Handle stdout_read;
+    Handle stderr_read;
+    std::shared_ptr<std::string> stdout_text;
+    std::shared_ptr<std::string> stderr_text;
+    std::shared_ptr<bool> stdout_truncated;
+    std::shared_ptr<bool> stderr_truncated;
+    std::shared_ptr<std::mutex> output_mutex;
+    std::thread stdout_thread;
+    std::thread stderr_thread;
+    std::thread lifetime;
+    long timeout_ms = 0;
+    std::chrono::steady_clock::time_point started;
+};
+
+std::mutex g_background_mutex;
+std::map<std::int64_t, std::shared_ptr<WinBackgroundJob>> g_background_jobs;
+
+void windows_lifetime_watch(std::shared_ptr<WinBackgroundJob> job) {
+    for (;;) {
+        const DWORD waited = WaitForSingleObject(job->process.get(), 50);
+        if (waited == WAIT_OBJECT_0) break;
+        const auto now = std::chrono::steady_clock::now();
+        const long long elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - job->started)
+                .count();
+        if (job->timeout_ms > 0 && elapsed >= job->timeout_ms) {
+            (void)TerminateJobObject(job->job.get(), WAIT_TIMEOUT);
+            (void)WaitForSingleObject(job->process.get(), INFINITE);
+            break;
+        }
+        if (waited == WAIT_FAILED) {
+            (void)TerminateJobObject(job->job.get(), 126);
+            break;
+        }
+    }
+    if (job->stdout_thread.joinable()) job->stdout_thread.join();
+    if (job->stderr_thread.joinable()) job->stderr_thread.join();
+    job->job.reset();
+    std::lock_guard<std::mutex> lock(g_background_mutex);
+    for (auto it = g_background_jobs.begin(); it != g_background_jobs.end();) {
+        if (it->second == job)
+            it = g_background_jobs.erase(it);
+        else
+            ++it;
+    }
+}
+
 }  // namespace
+
+Error kill_background_process(std::int64_t pid) {
+    if (pid <= 0) return ok_error();
+    std::shared_ptr<WinBackgroundJob> job;
+    {
+        std::lock_guard<std::mutex> lock(g_background_mutex);
+        const auto found = g_background_jobs.find(pid);
+        if (found != g_background_jobs.end()) job = found->second;
+    }
+    if (job && job->job) (void)TerminateJobObject(job->job.get(), ERROR_CANCELLED);
+    return ok_error();
+}
+
+void kill_all_background_processes() {
+    std::vector<std::int64_t> pids;
+    {
+        std::lock_guard<std::mutex> lock(g_background_mutex);
+        for (const auto& entry : g_background_jobs) pids.push_back(entry.first);
+    }
+    for (const std::int64_t pid : pids) (void)kill_background_process(pid);
+}
 
 Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result) {
     result = SubprocessResult{};
@@ -355,19 +428,23 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
     stdin_read.reset();
     null_input.reset();
 
-    std::mutex output_mutex;
+    auto live_stdout = std::make_shared<std::string>();
+    auto live_stderr = std::make_shared<std::string>();
+    auto live_out_trunc = std::make_shared<bool>(false);
+    auto live_err_trunc = std::make_shared<bool>(false);
+    auto output_mutex = std::make_shared<std::mutex>();
     std::thread stdout_thread;
     std::thread stderr_thread;
     std::thread stdin_thread;
     try {
         stdout_thread =
-            std::thread(read_pipe, stdout_read.get(), std::ref(result.stdout_text),
-                        options.stdout_limit, std::ref(result.stdout_truncated),
-                        std::ref(output_mutex));
+            std::thread(read_pipe, stdout_read.get(), std::ref(*live_stdout),
+                        options.stdout_limit, std::ref(*live_out_trunc),
+                        std::ref(*output_mutex));
         stderr_thread =
-            std::thread(read_pipe, stderr_read.get(), std::ref(result.stderr_text),
-                        options.stderr_limit, std::ref(result.stderr_truncated),
-                        std::ref(output_mutex));
+            std::thread(read_pipe, stderr_read.get(), std::ref(*live_stderr),
+                        options.stderr_limit, std::ref(*live_err_trunc),
+                        std::ref(*output_mutex));
         if (options.provide_stdin) {
             HANDLE input_writer = stdin_write.release();
             try {
@@ -392,6 +469,8 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
                 "could not start subprocess pipe reader/writer threads"};
     }
 
+    bool detached = false;
+    const long startup_ms = options.startup_ms > 0 ? options.startup_ms : 400;
     for (;;) {
         const DWORD waited = WaitForSingleObject(process_handle.get(), 20);
         if (waited == WAIT_OBJECT_0) break;
@@ -404,10 +483,14 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
             (void)WaitForSingleObject(process_handle.get(), INFINITE);
             break;
         }
-        if (options.timeout_ms > 0 && elapsed >= options.timeout_ms) {
+        if (!options.background && options.timeout_ms > 0 && elapsed >= options.timeout_ms) {
             result.termination = SubprocessTerminationReason::TimedOut;
             (void)TerminateJobObject(job.get(), WAIT_TIMEOUT);
             (void)WaitForSingleObject(process_handle.get(), INFINITE);
+            break;
+        }
+        if (options.background && elapsed >= startup_ms) {
+            detached = true;
             break;
         }
         if (waited == WAIT_FAILED) {
@@ -416,6 +499,47 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
             (void)WaitForSingleObject(process_handle.get(), INFINITE);
             break;
         }
+    }
+    result.pid = static_cast<std::int64_t>(GetProcessId(process_handle.get()));
+    result.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - started)
+                             .count();
+    {
+        std::lock_guard<std::mutex> lock(*output_mutex);
+        result.stdout_text = *live_stdout;
+        result.stderr_text = *live_stderr;
+        result.stdout_truncated = *live_out_trunc;
+        result.stderr_truncated = *live_err_trunc;
+    }
+    if (detached) {
+        auto tracked = std::make_shared<WinBackgroundJob>();
+        tracked->process = std::move(process_handle);
+        tracked->job = std::move(job);
+        tracked->stdout_read = std::move(stdout_read);
+        tracked->stderr_read = std::move(stderr_read);
+        tracked->stdout_text = std::move(live_stdout);
+        tracked->stderr_text = std::move(live_stderr);
+        tracked->stdout_truncated = std::move(live_out_trunc);
+        tracked->stderr_truncated = std::move(live_err_trunc);
+        tracked->output_mutex = std::move(output_mutex);
+        tracked->stdout_thread = std::move(stdout_thread);
+        tracked->stderr_thread = std::move(stderr_thread);
+        tracked->timeout_ms = options.timeout_ms;
+        tracked->started = started;
+        if (stdin_thread.joinable()) stdin_thread.join();
+        {
+            std::lock_guard<std::mutex> lock(g_background_mutex);
+            g_background_jobs[result.pid] = tracked;
+        }
+        tracked->lifetime = std::thread(windows_lifetime_watch, tracked);
+        tracked->lifetime.detach();
+        result.background = true;
+        result.termination = SubprocessTerminationReason::Running;
+        detail::normalize_output(result.stdout_text, options.stdout_limit,
+                                 result.stdout_truncated, result.stdout_repaired_utf8);
+        detail::normalize_output(result.stderr_text, options.stderr_limit,
+                                 result.stderr_truncated, result.stderr_repaired_utf8);
+        return ok_error();
     }
     // A command owns its descendants. Closing the kill-on-close job now prevents
     // a detached descendant from retaining a pipe and hanging the reader joins.
@@ -429,9 +553,6 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
     DWORD exit_code = 0;
     if (GetExitCodeProcess(process_handle.get(), &exit_code))
         result.exit_code = static_cast<std::int64_t>(exit_code);
-    result.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - started)
-                             .count();
     if (result.termination != SubprocessTerminationReason::Cancelled &&
         result.termination != SubprocessTerminationReason::TimedOut &&
         result.termination != SubprocessTerminationReason::IoFailed)

@@ -53,6 +53,15 @@ void test_guard_patterns() {
     check(deny({"find", ".", "-delete"}), "find -delete denied");
     check(deny({"sqlite3", "app.sqlite", "DROP TABLE users;"}), "destructive sql denied");
     check(deny({"bash", "-c", "echo hi"}), "bash -c free-form denied");
+    check(deny({"nohup", "python3", "scripts/ainiux/serve_dir.py"}),
+          "nohup detach denied");
+    check(deny({"python3", "-c", "import subprocess\nprint(1)"}),
+          "multi-line python -c denied");
+    check(deny({"python3", "-c", "subprocess.Popen(['scripts/ainiux/x.py'])"}),
+          "python -c wrapping a project script denied");
+    check(agent::evaluate_command_guard(
+              {"python3", "-c", "print(1)"}).decision == agent::GuardDecision::Allow,
+          "short one-line python -c still allowed by guard");
     check(agent::evaluate_command_guard({"bash", "server.sh", "start"}).decision ==
               agent::GuardDecision::Allow,
           "bash script-file form allowed by guard");
@@ -146,7 +155,14 @@ void test_parse_policies() {
         R"CMD(python3 -c "import readline; print('readline available')")CMD",
         args, agent::CommandPolicy::Agent, rule);
     check(error.ok() && args.size() == 3 && args[2].find(';') != std::string::npos,
-          "agent accepts quoted python -c multi-statement payload: " + error.message);
+          "agent accepts quoted short python -c payload: " + error.message);
+    error = agent::parse_command(
+        R"CMD(python3 -c "import os
+import sys
+print(1)")CMD",
+        args, agent::CommandPolicy::Agent, rule);
+    check(!error.ok() && error.message.find("scripts/ainiux") != std::string::npos,
+          "agent denylists multi-line python -c: " + error.message);
 
     error = agent::parse_command("echo hi | wc -l", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok() && error.message.find("shell-free") != std::string::npos,

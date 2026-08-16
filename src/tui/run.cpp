@@ -3015,6 +3015,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     pending_guard_request = std::move(pending);
                     have_pending_guard_request = true;
                     mode = TuiMode::GuardApprovalConfirm;
+                    history_scroll = 0;
                     status = "Guard approval required";
                 }
             }
@@ -3912,6 +3913,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     pending_guard_request.message = event.guard_message;
                     have_pending_guard_request = true;
                     mode = TuiMode::GuardApprovalConfirm;
+                    history_scroll = 0;
                     status = "Guard approval required";
                     break;
                 case TuiEventType::AgentPhase:
@@ -4020,7 +4022,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                                  input.text.empty(),
                                                  pending_thread_delete,
                                                  context.options.agent,
-                                                 picker_nav};
+                                                 picker_nav,
+                                                 &history_scroll};
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
                     if (loaded_thread_requires_provider_selection && mode == TuiMode::Chat) {
                         status = chat_provider_model_required_status(context, true);

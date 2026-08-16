@@ -44,24 +44,27 @@ Interactive agent projects persist Confirm, Smart, or Yolo permission choices. C
 
 Permissions do not expand workspace containment or turn chat/editor AI assist into agents. Model output and repository instructions remain untrusted. Keep unrelated work backed up, inspect diffs, and avoid Yolo in valuable or unfamiliar trees.
 
-### Managed scripts
+### Project scripts
 
-Act mode can keep reusable shell composition in private project-local files under
-`.ainiux-pr/scripts/`. Write an exact direct-child path such as
-`.ainiux-pr/scripts/check.sh`; the storage directory is created automatically, so
-do not create or inspect the protected `.ainiux-pr` parent. Script names must be
-portable flat filenames, and scripts must be valid UTF-8 without NUL bytes and no
-larger than 64 KiB. Run them as `bash`, `sh`, `python3`, or `python` plus
-`.ainiux-pr/scripts/NAME [args...]`.
+Act mode keeps reusable helpers as ordinary project files under `scripts/ainiux/`.
+Write a flat portable filename such as `scripts/ainiux/check.sh`. The
+`scripts/ainiux/` parents are created automatically on first write. Run them as
+`bash`, `sh`, `python3`, or `python` plus `scripts/ainiux/NAME [args...]`, or
+the script path itself (`scripts/ainiux/NAME [args...]`). List
+the directory before inventing a new helper. Long-running helpers (HTTP servers,
+watchers) use `run` with `background=true` instead of `nohup` or `python3 -c`.
 
-The directory and files use private permissions and atomic writes. Managed
-scripts are excluded from the code index and agent history backups; other project
-state remains inaccessible to file tools and shell operands. Confirm asks before
-every execution. Smart asks when the script content or interpreter is new or has
-changed, then reuses approval for the same content hash; headless Smart denies an
-untrusted first execution. Yolo executes without approval. Ainiux runs a private
-temporary copy of the exact approved bytes and removes it after success, failure,
-timeout, or cancellation.
+These files are indexed, greppable, and visible to Git like any other workspace
+source. Smart and Yolo run `bash|sh|python3|python scripts/ainiux/NAME` without
+asking. Confirm asks once for that path and content hash (interpreter and
+argv-only path forms share the same trust), then reuses approval until the file
+bytes change. The prompt shows path, interpreter, arguments, size, and a short
+hash — not the script body. Use `read` on the path if you want to review the
+source. Headless Confirm denies an untrusted first execution. Trust is stored
+in project-local `.ainiux-pr/agent.sqlite` and survives quitting Ainiux; it is
+cleared if you delete `.ainiux-pr` or change the file. Multi-line or wrapping
+`python3 -c` is hard-denied in Confirm/Smart. The Guard panel opens at the top
+of the request; arrows, Page Up/Down, Home/End, and the mouse wheel scroll it.
 
 On Windows, agent commands remain direct argv execution. Executable discovery
 uses inherited PATH but ignores empty/relative entries and never implicitly

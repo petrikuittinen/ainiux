@@ -70,15 +70,55 @@ void scroll_chat_history_page_down(const Layout& layout, int& history_scroll) {
     history_scroll -= step;
 }
 
+bool apply_top_aligned_panel_scroll(editor::MovementKey key, int& history_scroll) {
+    switch (key) {
+        case editor::MovementKey::Up:
+            history_scroll = std::max(0, history_scroll - 1);
+            return true;
+        case editor::MovementKey::Down:
+            if (history_scroll < std::numeric_limits<int>::max()) ++history_scroll;
+            return true;
+        case editor::MovementKey::PageUp:
+            history_scroll = std::max(0, history_scroll - 8);
+            return true;
+        case editor::MovementKey::PageDown:
+            if (history_scroll < std::numeric_limits<int>::max() - 8)
+                history_scroll += 8;
+            else
+                history_scroll = std::numeric_limits<int>::max();
+            return true;
+        case editor::MovementKey::Home:
+            history_scroll = 0;
+            return true;
+        case editor::MovementKey::End:
+            history_scroll = std::numeric_limits<int>::max();
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool apply_chat_mouse_scroll(const editor::MouseInputEvent& mouse,
                              const Layout& layout,
                              TuiMode mode,
                              int& history_scroll) {
-    if (mode != TuiMode::Chat || mouse.col < 1 || mouse.col > layout.cols ||
+    if (mouse.col < 1 || mouse.col > layout.cols ||
         mouse.row < layout.history_row ||
         mouse.row >= layout.history_row + layout.history_rows) {
         return false;
     }
+    if (mode == TuiMode::GuardApprovalConfirm) {
+        if (mouse.button == editor::MouseButton::WheelUp) {
+            history_scroll = std::max(0, history_scroll - 1);
+            return true;
+        }
+        if (mouse.button == editor::MouseButton::WheelDown) {
+            if (history_scroll < std::numeric_limits<int>::max()) ++history_scroll;
+            return true;
+        }
+        return false;
+    }
+    if (mode != TuiMode::Chat) return false;
     if (mouse.button == editor::MouseButton::WheelUp) {
         if (history_scroll < std::numeric_limits<int>::max()) ++history_scroll;
         return true;
@@ -326,6 +366,23 @@ PickerEscapeResult handle_list_picker_escape(size_t item_count,
     selected = ui::move_text_selector_selection(selected, item_count, movement.key);
     status = ui::text_selector_status(selection_label, selected, item_count);
     return PickerEscapeResult::Navigated;
+}
+
+PickerEscapeResult handle_guard_approval_escape(int* history_scroll) {
+    unsigned char ch = 0;
+    if (!editor::read_terminal_byte(
+            ch, editor::terminal_escape_inter_byte_timeout_ms())) {
+        return PickerEscapeResult::Cancelled;
+    }
+    std::string sequence;
+    if (!read_csi_sequence(ch, sequence)) return PickerEscapeResult::Cancelled;
+    editor::MovementKeyEvent movement;
+    if (!editor::parse_movement_sequence(sequence, movement))
+        return PickerEscapeResult::Cancelled;
+    if (history_scroll != nullptr &&
+        apply_top_aligned_panel_scroll(movement.key, *history_scroll))
+        return PickerEscapeResult::Navigated;
+    return PickerEscapeResult::Cancelled;
 }
 
 PickerEscapeResult handle_thread_list_escape(std::vector<chat::ThreadSummary>& threads,

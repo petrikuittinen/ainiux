@@ -847,12 +847,13 @@ Error AgentSessionStore::script_is_trusted(const std::string& script_name,
     Statement statement;
     Error error = statement.prepare(
         db_, path_,
-        "SELECT content_hash FROM script_trust WHERE script_name=? AND interpreter=?");
+        "SELECT content_hash FROM script_trust WHERE script_name=? AND content_hash=?");
     if (!error.ok()) return error;
     error = statement.bind_text(db_, path_, 1, script_name);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 2, interpreter);
+    error = statement.bind_text(db_, path_, 2, content_hash);
     if (!error.ok()) return error;
+    (void)interpreter;
     const int step = statement.step();
     if (step == SQLITE_ROW)
         trusted = statement.column_text(0) == content_hash;

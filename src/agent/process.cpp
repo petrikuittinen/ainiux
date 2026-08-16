@@ -1,6 +1,7 @@
 #include "agent/process.hpp"
 
 #include "agent/command_guard.hpp"
+#include "agent/project_scripts.hpp"
 #include "agent/read_only_command.hpp"
 #include "platform/environment.hpp"
 #include "platform/filesystem.hpp"
@@ -401,26 +402,14 @@ Error enforce_git_policy(const std::vector<std::string>& args) {
             "git subcommand is not available in snapshot-only security review mode: " + subcommand};
 }
 
-bool exact_managed_script_path(const std::string& argument) {
-    const fs::path path = fs::u8path(argument);
-    if (path.is_absolute()) return false;
-    std::vector<std::string> parts;
-    for (const fs::path& part : path) parts.push_back(part.u8string());
-    return parts.size() == 3 && parts[0] == ".ainiux-pr" &&
-           parts[1] == "scripts" && !parts[2].empty() && parts[2] != "." &&
-           parts[2] != "..";
-}
-
 Error enforce_common_safety(const std::vector<std::string>& args,
-                            bool allow_absolute_paths = false,
-                            bool allow_managed_script_path = false) {
+                            bool allow_absolute_paths = false) {
     if (args.empty()) return {ErrorCode::BadArgs, "run_command command is empty"};
     // Shell-free execve: after tokenization, argv elements are program data, not
     // shell syntax. Do not reject ';' '|' etc. here — that blocked legitimate
     // payloads such as python3 -c "import x; print(1)". Unquoted operators in
     // the raw command string are rejected in parse_command instead.
     for (const std::string& arg : args) {
-        if (allow_managed_script_path && exact_managed_script_path(arg)) continue;
 #if defined(_WIN32)
         if (arg.size() >= 2 &&
             ((arg[0] >= 'A' && arg[0] <= 'Z') ||
@@ -442,9 +431,14 @@ Error enforce_common_safety(const std::vector<std::string>& args,
             value = ascii_lower(std::move(value));
 #endif
             if (value == ".." || value == ".ainiux-pr" || value == ".ainiux" ||
-                value == ".git" || value == ".hg" || value == ".svn")
+                value == ".git" || value == ".hg" || value == ".svn") {
+                if (retired_project_script_path(arg) ||
+                    fs::u8path(arg).generic_u8string().find(".ainiux-pr/script") !=
+                        std::string::npos)
+                    return {ErrorCode::BadArgs, retired_project_script_message()};
                 return {ErrorCode::BadArgs,
                         "run_command rejects traversal and protected metadata paths"};
+            }
         }
     }
     return ok_error();
@@ -634,12 +628,10 @@ Error enforce_agent_policy(std::vector<std::string>& args,
                            runtime::CancellationToken cancellation,
                            std::string& guard_decision_out,
                            bool allow_absolute_paths,
-                           bool unrestricted = false,
-                           bool allow_managed_script_path = false) {
+                           bool unrestricted = false) {
     guard_rule_id.clear();
     guard_decision_out = "allow";
-    Error error = enforce_common_safety(args, allow_absolute_paths || unrestricted,
-                                        allow_managed_script_path);
+    Error error = enforce_common_safety(args, allow_absolute_paths || unrestricted);
     if (!error.ok()) return error;
 
     // Denylist / Ask first: free-form shells, privilege escalation, disk destroyers,
@@ -756,8 +748,7 @@ Error parse_command(const std::string& command,
                     const GuardApprovalCallback* on_guard_ask,
                     runtime::CancellationToken cancellation,
                     bool allow_absolute_paths,
-                    bool unrestricted,
-                    bool allow_managed_script_path) {
+                    bool unrestricted) {
     guard_rule_id.clear();
     arguments.clear();
     {
@@ -771,8 +762,8 @@ Error parse_command(const std::string& command,
             return {ErrorCode::BadArgs,
                     "run_command is shell-free and rejects unquoted shell control "
                     "operators (| & ; < > ` and newlines). Quote them when they are "
-                    "program data (example: python3 -c \"import x; print(1)\"), or "
-                    "run a script file instead of chaining commands"};
+                    "program data, or write scripts/ainiux/NAME and run that file "
+                    "instead of chaining commands"};
         }
     }
     Error error = tokenize_command(command, arguments);
@@ -781,7 +772,7 @@ Error parse_command(const std::string& command,
         std::string unused_decision;
         return enforce_agent_policy(arguments, guard_rule_id, ask_handling, on_guard_ask,
                                     cancellation, unused_decision, allow_absolute_paths,
-                                    unrestricted, allow_managed_script_path);
+                                    unrestricted);
     }
     if (policy == CommandPolicy::PlanReadOnly)
         return enforce_plan_read_only_policy(arguments, allow_absolute_paths);
@@ -841,6 +832,8 @@ Error execute_resolved_command(ProcessResult& output,
     subprocess.timeout_ms = options.timeout_ms;
     subprocess.stdout_limit = options.stdout_limit;
     subprocess.stderr_limit = options.stderr_limit;
+    subprocess.background = options.background;
+    subprocess.startup_ms = options.startup_ms;
     subprocess.cancellation = options.cancellation;
     subprocess.environment = {
         std::string("PATH=") + fixed_command_path(),
@@ -899,6 +892,8 @@ Error execute_resolved_command(ProcessResult& output,
                        runtime::SubprocessTerminationReason::Cancelled;
     output.timed_out = process_result.termination ==
                        runtime::SubprocessTerminationReason::TimedOut;
+    output.background = process_result.background;
+    output.pid = process_result.pid;
     output.policy =
         policy == CommandPolicy::Agent ? "allowed-agent" : "allowed-read-only";
     if (output.guard_decision.empty()) output.guard_decision = "allow";
@@ -954,7 +949,7 @@ Error run_argv(std::vector<std::string> arguments,
         error = enforce_agent_policy(output.arguments, output.guard_rule_id,
                                      ask_handling, ask_ptr, options.cancellation,
                                      unused_decision, options.allow_external_paths,
-                                     options.unrestricted, false);
+                                     options.unrestricted);
         if (error.ok())
             output.guard_decision = "allow";
         else
@@ -971,35 +966,6 @@ Error run_argv(std::vector<std::string> arguments,
         return error;
     }
     error = execute_resolved_command(output, options, policy);
-    result = std::move(output);
-    return error;
-}
-
-Error run_managed_script(const std::string& interpreter,
-                         const std::string& temporary_script_path,
-                         const std::vector<std::string>& arguments,
-                         const ProcessOptions& options,
-                         ProcessResult& result) {
-    ProcessResult output;
-    if (interpreter != "bash" && interpreter != "sh" && interpreter != "python3" &&
-        interpreter != "python") {
-        result = std::move(output);
-        return {ErrorCode::BadArgs,
-                "managed scripts require bash, sh, python3, or python"};
-    }
-    std::string resolved;
-    const Error found = resolve_fixed_path_executable(interpreter, resolved);
-    if (!found.ok()) {
-        result = std::move(output);
-        return {ErrorCode::FileRead,
-                "managed script interpreter '" + interpreter +
-                    "' is unavailable on Ainiux's trusted executable path"};
-    }
-    output.arguments.push_back(interpreter);
-    output.arguments.push_back(temporary_script_path);
-    output.arguments.insert(output.arguments.end(), arguments.begin(), arguments.end());
-    output.guard_decision = "allow";
-    const Error error = execute_resolved_command(output, options, CommandPolicy::Agent);
     result = std::move(output);
     return error;
 }

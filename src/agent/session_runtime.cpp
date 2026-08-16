@@ -1,4 +1,7 @@
 #include "agent/session_runtime.hpp"
+
+#include "agent/project_scripts.hpp"
+#include "runtime/subprocess.hpp"
 #include "mcp/registry.hpp"
 #include "mcp/arg_rewrite.hpp"
 
@@ -327,7 +330,9 @@ long long AgentSessionRuntime::estimate_seed_overhead_tokens() const {
     }
     // Act/Plan mode control (user-role)
     {
-        const std::string mode_control = agent_task_mode_control(task_mode_);
+        std::vector<std::string> script_names;
+        (void)list_project_scripts(options_.workspace, script_names);
+        const std::string mode_control = agent_task_mode_control(task_mode_, script_names);
         total += estimate_tokens_from_text("user");
         total += estimate_tokens_from_text(mode_control);
         total += 4;
@@ -521,8 +526,10 @@ void AgentSessionRuntime::publish_request_token_estimate() {
 
 void AgentSessionRuntime::rebuild_compacted_conversation(
     const CompactionPartition& partition, const std::string& checkpoint) {
+    std::vector<std::string> script_names;
+    (void)list_project_scripts(options_.workspace, script_names);
     seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, "",
-                            agents_md_.injection_text);
+                            agents_md_.injection_text, script_names);
     conversation_.messages.push_back(
         {"user", compaction_checkpoint_wrapper(checkpoint)});
     auto append_plain = [&](const CompactionLogicalItem& item) {
@@ -1112,6 +1119,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
 }
 
 void AgentSessionRuntime::reset() {
+    runtime::kill_all_background_processes();
     tools_.set_mcp_bridge(nullptr);
     mcp_bridge_.reset();
     if (mcp_manager_) mcp_manager_->close_all();
@@ -1738,8 +1746,10 @@ Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
                     : refreshed.injection_text;
             append_conversation_text(conversation_, "user", refreshed_context);
         }
+        std::vector<std::string> script_names;
+        (void)list_project_scripts(options_.workspace, script_names);
         append_conversation_text(conversation_, "user",
-                                 agent_task_mode_control(mode));
+                                 agent_task_mode_control(mode, script_names));
     }
     agents_md_ = std::move(refreshed);
     task_mode_ = mode;
@@ -1959,6 +1969,7 @@ Error AgentSessionRuntime::finish_session(const std::string& status,
                                           const std::string& final_text,
                                           const std::string& error_code,
                                           const std::string& error_message) {
+    runtime::kill_all_background_processes();
     if (!session_store_.is_open() || session_id_ <= 0) return ok_error();
     Error error = session_store_.finish_session(
         session_id_, status, redact_secrets(final_text, secrets_), error_code,
@@ -2222,12 +2233,14 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             (void)session_store_.load_messages(prior);
         apply_context_reset_filter(prior);
         const std::string prior_context = build_prior_session_context(prior);
+        std::vector<std::string> script_names;
+        (void)list_project_scripts(options_.workspace, script_names);
         if (prior_context.empty()) {
             seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, text,
-                                    agents_md_.injection_text);
+                                    agents_md_.injection_text, script_names);
         } else {
             seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, "",
-                                    agents_md_.injection_text);
+                                    agents_md_.injection_text, script_names);
             conversation_.messages.push_back({"user", prior_context});
             conversation_.messages.push_back({"user", text});
             if (!context.options.quiet)

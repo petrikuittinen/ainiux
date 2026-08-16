@@ -56,6 +56,7 @@ struct TuiPickerInputState {
     size_t& pending_thread_delete;
     bool agent_mode = false;
     ui::TextSelectorNavState& picker_nav;
+    int* history_scroll = nullptr;
 };
 
 bool handle_tui_picker_input(unsigned char ch,

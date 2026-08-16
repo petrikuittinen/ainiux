@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "agent/agent_loop.hpp"
 #include "common.hpp"
@@ -29,7 +30,9 @@ struct TrustedPrompts {
 // Static protocol appendices (trusted code, not workspace files).
 const char* native_protocol_appendix();
 const char* xml_protocol_appendix();
-std::string agent_task_mode_control(AgentTaskMode mode);
+std::string agent_task_mode_control(
+    AgentTaskMode mode,
+    const std::vector<std::string>& project_scripts = {});
 
 Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts& prompts);
 
@@ -40,6 +43,7 @@ void seed_agent_conversation(provider::ToolConversation& conversation,
                              AgentTaskMode mode,
                              ToolProtocol protocol,
                              const std::string& user_goal,
-                             const std::string& agents_md_injection = {});
+                             const std::string& agents_md_injection = {},
+                             const std::vector<std::string>& project_scripts = {});
 
 }  // namespace ainiux::agent

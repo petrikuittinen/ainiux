@@ -182,6 +182,49 @@ void test_tui_provider_change_resets_only_on_actual_change() {
           "TUI actual provider change clears model and resets reasoning to Auto");
 }
 
+void test_agent_model_picker_slash_search() {
+    ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ModelList;
+    bool quit = false;
+    std::string status;
+    std::vector<std::string> items = {
+        "anthropic/claude-sonnet-4", "openai/gpt-5.6-luna", "qwen/qwen3-32b"};
+    size_t selected = 0;
+    bool picker_cancel_quits = false;
+    std::vector<ainiux::chat::ThreadSummary> threads;
+    size_t thread_selected = 0;
+    size_t pending_thread_delete = 0;
+    ainiux::ui::TextSelectorNavState picker_nav;
+    ainiux::tui::TuiPickerInputState state{
+        mode,
+        quit,
+        status,
+        items,
+        selected,
+        picker_cancel_quits,
+        threads,
+        thread_selected,
+        true,
+        pending_thread_delete,
+        true,
+        picker_nav,
+    };
+    ainiux::tui::TuiPickerCallbacks callbacks;
+    check(ainiux::tui::handle_tui_picker_input('/', state, callbacks) &&
+              picker_nav.search_active && status == "/",
+          "agent model picker / starts a visible search draft");
+    check(ainiux::tui::handle_tui_picker_input('g', state, callbacks) &&
+              status == "/g" && selected == 0,
+          "agent model picker search draft accepts query characters");
+    check(ainiux::tui::handle_tui_picker_input('p', state, callbacks) &&
+              ainiux::tui::handle_tui_picker_input('t', state, callbacks) &&
+              status == "/gpt",
+          "agent model picker search draft accumulates the query");
+    check(ainiux::tui::handle_tui_picker_input('\n', state, callbacks) &&
+              !picker_nav.search_active && selected == 1 &&
+              items[selected] == "openai/gpt-5.6-luna",
+          "agent model picker /query+Enter jumps to the matching model");
+}
+
 void test_tui_reasoning_picker_input() {
     ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ReasoningList;
     bool quit = false;
@@ -1949,6 +1992,85 @@ void test_tui_mouse_history_scroll() {
           "chat consumes but ignores mouse clicks");
 }
 
+void test_guard_approval_panel_scroll() {
+    int history_scroll = 3;
+    check(ainiux::tui::apply_top_aligned_panel_scroll(
+              ainiux::editor::MovementKey::Up, history_scroll) &&
+              history_scroll == 2,
+          "Guard panel Up moves toward the start of the request");
+    check(ainiux::tui::apply_top_aligned_panel_scroll(
+              ainiux::editor::MovementKey::Home, history_scroll) &&
+              history_scroll == 0,
+          "Guard panel Home jumps to the first line");
+    check(ainiux::tui::apply_top_aligned_panel_scroll(
+              ainiux::editor::MovementKey::PageDown, history_scroll) &&
+              history_scroll == 8,
+          "Guard panel Page Down advances through a long request");
+
+    const ainiux::tui::Layout layout = ainiux::tui::layout_for_terminal(24, 80);
+    ainiux::editor::MouseInputEvent mouse;
+    mouse.button = ainiux::editor::MouseButton::WheelDown;
+    mouse.row = layout.history_row;
+    mouse.col = 1;
+    check(ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::GuardApprovalConfirm,
+              history_scroll) &&
+              history_scroll == 9,
+          "Guard panel wheel down scrolls toward later lines");
+    mouse.button = ainiux::editor::MouseButton::WheelUp;
+    check(ainiux::tui::apply_chat_mouse_scroll(
+              mouse, layout, ainiux::tui::TuiMode::GuardApprovalConfirm,
+              history_scroll) &&
+              history_scroll == 8,
+          "Guard panel wheel up scrolls toward the start");
+
+    ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::GuardApprovalConfirm;
+    bool quit = false;
+    std::string status;
+    std::vector<std::string> items;
+    size_t selected = 0;
+    bool picker_cancel_quits = false;
+    std::vector<ainiux::chat::ThreadSummary> threads;
+    size_t thread_selected = 0;
+    size_t pending_thread_delete = 0;
+    ainiux::ui::TextSelectorNavState picker_nav;
+    int picker_scroll = 0;
+    ainiux::tui::TuiPickerInputState state{
+        mode,
+        quit,
+        status,
+        items,
+        selected,
+        picker_cancel_quits,
+        threads,
+        thread_selected,
+        true,
+        pending_thread_delete,
+        true,
+        picker_nav,
+        &picker_scroll,
+    };
+    bool accepted = false;
+    bool rejected = false;
+    ainiux::tui::TuiPickerCallbacks callbacks;
+    callbacks.on_guard_approval_accepted = [&]() { accepted = true; };
+    callbacks.on_guard_approval_rejected = [&]() { rejected = true; };
+
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes("[B");
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
+              picker_scroll == 1 && !rejected && !accepted,
+          "Guard Esc+Down scrolls instead of denying");
+    ainiux::editor::clear_terminal_input_queue();
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && rejected &&
+              !accepted,
+          "bare Esc still denies Guard approval");
+    rejected = false;
+    check(ainiux::tui::handle_tui_picker_input('y', state, callbacks) && accepted &&
+              !rejected,
+          "Guard y still allows");
+}
+
 void test_tui_chat_history_scroll_keys() {
     ainiux::tui::Layout layout = ainiux::tui::layout_for_terminal(24, 80);
     int history_scroll = 0;
@@ -2378,6 +2500,7 @@ void run_all() {
     test_shared_tui_render_skips_identical_frame();
     test_tui_history_jump_helpers();
     test_tui_provider_change_resets_only_on_actual_change();
+    test_agent_model_picker_slash_search();
     test_tui_reasoning_picker_input();
     test_tui_session_load_model_mismatch_detection();
     test_tui_session_load_model_confirm_text();
@@ -2403,6 +2526,7 @@ void run_all() {
     test_agent_inline_choices();
     test_tui_ctrl_chat_history_scroll_shortcuts();
     test_tui_mouse_history_scroll();
+    test_guard_approval_panel_scroll();
     test_tui_chat_history_scroll_keys();
     test_tui_read_terminal_input_marks_alt_meta_prefix();
     test_tui_thread_picker_accepts_delayed_arrow_sequence();

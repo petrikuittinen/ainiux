@@ -27,6 +27,8 @@ struct ProcessOptions {
     long timeout_ms = 10000;
     std::size_t stdout_limit = 65536;
     std::size_t stderr_limit = 65536;
+    bool background = false;
+    long startup_ms = 400;
     runtime::CancellationToken cancellation;
     // When set, GuardDecision::Ask prompts the user (one-shot). When empty,
     // Ask is denied (headless). Deny is never elevatable (unless unrestricted).
@@ -46,6 +48,8 @@ struct ProcessResult {
     bool stderr_truncated = false;
     bool timed_out = false;
     bool cancelled = false;
+    bool background = false;
+    std::int64_t pid = 0;
     std::string policy = "denied";
     std::string guard_rule_id;
     std::string guard_decision;  // allow | deny | ask→resolved
@@ -77,8 +81,7 @@ Error parse_command(const std::string& command,
                     const GuardApprovalCallback* on_guard_ask = nullptr,
                     runtime::CancellationToken cancellation = runtime::CancellationToken(),
                     bool allow_absolute_paths = false,
-                    bool unrestricted = false,
-                    bool allow_managed_script_path = false);
+                    bool unrestricted = false);
 Error run_inspection_command(const std::string& command,
                              const ProcessOptions& options,
                              ProcessResult& result);
@@ -93,13 +96,6 @@ Error run_argv(std::vector<std::string> arguments,
                const ProcessOptions& options,
                ProcessResult& result,
                CommandPolicy policy = CommandPolicy::InspectionOnly);
-// Execute a private temporary copy of an already validated managed script.
-// Only bash/sh from the trusted executable path are accepted.
-Error run_managed_script(const std::string& interpreter,
-                         const std::string& temporary_script_path,
-                         const std::vector<std::string>& arguments,
-                         const ProcessOptions& options,
-                         ProcessResult& result);
 // True when a trusted system `rg` binary is on the fixed process PATH.
 bool ripgrep_available();
 

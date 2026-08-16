@@ -7,7 +7,11 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <fcntl.h>
@@ -147,7 +151,113 @@ Error validate_options(const SubprocessOptions& options) {
     return ok_error();
 }
 
+struct PosixBackgroundJob {
+    pid_t pid = -1;
+    Fd stdout_fd;
+    Fd stderr_fd;
+    std::size_t stdout_limit = 0;
+    std::size_t stderr_limit = 0;
+    long timeout_ms = 0;
+    std::chrono::steady_clock::time_point started;
+    std::thread worker;
+};
+
+std::mutex g_background_mutex;
+std::map<std::int64_t, std::shared_ptr<PosixBackgroundJob>> g_background_jobs;
+
+void posix_background_reaper(std::shared_ptr<PosixBackgroundJob> job) {
+    std::string discarded_out;
+    std::string discarded_err;
+    bool out_trunc = false;
+    bool err_trunc = false;
+    bool stdout_open = job->stdout_fd.get() >= 0;
+    bool stderr_open = job->stderr_fd.get() >= 0;
+    if (stdout_open) make_nonblocking(job->stdout_fd.get());
+    if (stderr_open) make_nonblocking(job->stderr_fd.get());
+    bool reaped = false;
+    bool terminating = false;
+    long long terminate_started_ms = 0;
+    int wait_status = 0;
+    while (!reaped || stdout_open || stderr_open) {
+        const auto now = std::chrono::steady_clock::now();
+        const long long elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - job->started)
+                .count();
+        if (!terminating && job->timeout_ms > 0 && elapsed >= job->timeout_ms) {
+            (void)::kill(-job->pid, SIGTERM);
+            terminating = true;
+            terminate_started_ms = elapsed;
+        }
+        if (terminating && elapsed >= terminate_started_ms + 250)
+            (void)::kill(-job->pid, SIGKILL);
+        pollfd descriptors[2]{};
+        nfds_t count = 0;
+        if (stdout_open)
+            descriptors[count++] = {job->stdout_fd.get(), POLLIN | POLLHUP, 0};
+        if (stderr_open)
+            descriptors[count++] = {job->stderr_fd.get(), POLLIN | POLLHUP, 0};
+        if (count > 0) (void)::poll(descriptors, count, 25);
+        if (stdout_open)
+            drain_fd(job->stdout_fd, discarded_out, job->stdout_limit, out_trunc,
+                     stdout_open);
+        if (stderr_open)
+            drain_fd(job->stderr_fd, discarded_err, job->stderr_limit, err_trunc,
+                     stderr_open);
+        if (!reaped) {
+            const pid_t waited = ::waitpid(job->pid, &wait_status, WNOHANG);
+            if (waited == job->pid) reaped = true;
+            else if (waited < 0 && errno != EINTR) reaped = true;
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_background_mutex);
+    g_background_jobs.erase(static_cast<std::int64_t>(job->pid));
+}
+
+void start_posix_background_reaper(pid_t pid,
+                                   Fd&& stdout_fd,
+                                   Fd&& stderr_fd,
+                                   const SubprocessOptions& options,
+                                   std::chrono::steady_clock::time_point started) {
+    auto job = std::make_shared<PosixBackgroundJob>();
+    job->pid = pid;
+    job->stdout_fd = std::move(stdout_fd);
+    job->stderr_fd = std::move(stderr_fd);
+    job->stdout_limit = options.stdout_limit;
+    job->stderr_limit = options.stderr_limit;
+    job->timeout_ms = options.timeout_ms;
+    job->started = started;
+    {
+        std::lock_guard<std::mutex> lock(g_background_mutex);
+        g_background_jobs[static_cast<std::int64_t>(pid)] = job;
+    }
+    job->worker = std::thread(posix_background_reaper, job);
+    job->worker.detach();
+}
+
 }  // namespace
+
+Error kill_background_process(std::int64_t pid) {
+    if (pid <= 0) return ok_error();
+    std::shared_ptr<PosixBackgroundJob> job;
+    {
+        std::lock_guard<std::mutex> lock(g_background_mutex);
+        const auto found = g_background_jobs.find(pid);
+        if (found != g_background_jobs.end()) job = found->second;
+    }
+    (void)::kill(static_cast<pid_t>(-pid), SIGTERM);
+    (void)::kill(static_cast<pid_t>(pid), SIGTERM);
+    (void)job;
+    return ok_error();
+}
+
+void kill_all_background_processes() {
+    std::vector<std::int64_t> pids;
+    {
+        std::lock_guard<std::mutex> lock(g_background_mutex);
+        for (const auto& entry : g_background_jobs) pids.push_back(entry.first);
+    }
+    for (const std::int64_t pid : pids) (void)kill_background_process(pid);
+}
 
 Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result) {
     result = SubprocessResult{};
@@ -221,8 +331,10 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
     std::size_t stdin_offset = 0;
     bool reaped = false;
     bool terminating = false;
+    bool detached = false;
     long long terminate_started_ms = 0;
     int wait_status = 0;
+    const long startup_ms = options.startup_ms > 0 ? options.startup_ms : 400;
     while (!reaped || stdout_open || stderr_open) {
         const auto now = std::chrono::steady_clock::now();
         const long long elapsed =
@@ -232,11 +344,15 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
             (void)::kill(-pid, SIGTERM);
             terminating = true;
             terminate_started_ms = elapsed;
-        } else if (!terminating && options.timeout_ms > 0 && elapsed >= options.timeout_ms) {
+        } else if (!terminating && !options.background && options.timeout_ms > 0 &&
+                   elapsed >= options.timeout_ms) {
             result.termination = SubprocessTerminationReason::TimedOut;
             (void)::kill(-pid, SIGTERM);
             terminating = true;
             terminate_started_ms = elapsed;
+        } else if (options.background && !reaped && !terminating && elapsed >= startup_ms) {
+            detached = true;
+            break;
         }
         if (terminating && elapsed >= terminate_started_ms + 250)
             (void)::kill(-pid, SIGKILL);
@@ -284,6 +400,19 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
     result.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - started)
                              .count();
+    result.pid = static_cast<std::int64_t>(pid);
+    if (detached) {
+        start_posix_background_reaper(pid, std::move(stdout_pipe.read_end()),
+                                      std::move(stderr_pipe.read_end()), options,
+                                      started);
+        result.background = true;
+        result.termination = SubprocessTerminationReason::Running;
+        detail::normalize_output(result.stdout_text, options.stdout_limit,
+                                 result.stdout_truncated, result.stdout_repaired_utf8);
+        detail::normalize_output(result.stderr_text, options.stderr_limit,
+                                 result.stderr_truncated, result.stderr_repaired_utf8);
+        return ok_error();
+    }
     if (result.termination != SubprocessTerminationReason::Cancelled &&
         result.termination != SubprocessTerminationReason::TimedOut) {
         if (WIFEXITED(wait_status)) {

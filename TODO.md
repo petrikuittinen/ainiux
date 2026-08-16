@@ -19,6 +19,7 @@
 - Continue agent cleanup: load the agent transcript as the sole TUI source of truth, reduce chat-session coupling, strengthen editor↔agent handoff, and retain security-review as strictly read-only.
 - Measure representative agent turns before adding read-only tool parallelism. Add a bounded pool only if local tool execution reaches at least 5% of turn wall time; treat network-tool parallelism separately.
 - Add a future Agent-specific custom-command and skill system only after its own design; do not reuse `editor-commands.conf`, whose commands remain Chat/editor-only.
+- Reusable agent helpers live under `scripts/ainiux/`. `.ainiux-pr/scripts/` is gone. Watch whether models still invent `python3 -c` after the Guard and prompt change.
 
 ## Deferred roadmap
 

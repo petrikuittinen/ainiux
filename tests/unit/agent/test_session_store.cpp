@@ -208,12 +208,13 @@ void test_record_and_load_approvals() {
           "record exact managed-script hash trust");
     check(again.script_is_trusted("count.sh", "sh", "hash-one", trusted).ok() &&
               trusted,
-          "exact name, interpreter, and hash reuse trust");
+          "exact name and hash reuse trust");
     check(again.script_is_trusted("count.sh", "bash", "hash-one", trusted).ok() &&
-              !trusted &&
-              again.script_is_trusted("count.sh", "sh", "hash-two", trusted).ok() &&
+              trusted,
+          "same file hash reuses trust across interpreters");
+    check(again.script_is_trusted("count.sh", "sh", "hash-two", trusted).ok() &&
               !trusted,
-          "interpreter or content changes do not reuse trust");
+          "content hash change does not reuse trust");
 
     again.close();
     agent::AgentSessionStore trust_reopened;

@@ -66,6 +66,7 @@ The shipped product includes:
 - safe URL fetch and web search
 - syntax highlighting, grapheme-aware editing, multiple editor buffers, and AI assist
 - one-shot and interactive local agents with project-local `.ainiux-pr/` state
+- reusable project scripts under `scripts/ainiux/` with Smart content-hash trust and optional background `run`
 - Act/Plan task modes, Guard approvals, project-contained writes, and tool logging
 - mid-turn editor/dired review while an agent turn continues (Ctrl+G / F4; session stays open)
 - dired history line-diff tints and n/p changed-block navigation on dirty files

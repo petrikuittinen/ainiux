@@ -355,6 +355,14 @@ bool handle_tui_picker_input(unsigned char ch,
             state.quit = true;
             return true;
         }
+        if (ch == 27) {
+            const PickerEscapeResult result =
+                handle_guard_approval_escape(state.history_scroll);
+            if (result == PickerEscapeResult::Navigated) return true;
+            if (callbacks.on_guard_approval_rejected)
+                callbacks.on_guard_approval_rejected();
+            return true;
+        }
         const InlineChoiceResult choice =
             parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
         if (!choice.matched) return true;

@@ -28,6 +28,7 @@ bool apply_chat_mouse_scroll(const editor::MouseInputEvent& mouse,
                              const Layout& layout,
                              TuiMode mode,
                              int& history_scroll);
+bool apply_top_aligned_panel_scroll(editor::MovementKey key, int& history_scroll);
 
 bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
                                const Layout& layout,
@@ -42,6 +43,9 @@ EscapeResult handle_escape(editor::EditorState& input,
                            size_t input_undo_limit = 0);
 
 enum class PickerEscapeResult { Navigated, Cancelled, CreateNew };
+
+// Bare Esc cancels. Arrow/Page/Home/End scroll a top-aligned Guard panel.
+PickerEscapeResult handle_guard_approval_escape(int* history_scroll);
 
 PickerEscapeResult handle_list_picker_escape(size_t item_count,
                                              size_t& selected,
