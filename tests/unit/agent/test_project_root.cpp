@@ -680,7 +680,8 @@ void test_prior_session_context_includes_recent_work() {
 void test_reasoning_preview_unicode_redaction_and_limits() {
     const std::string preview = agent::format_reasoning_preview(
         u8"  e\u0301 \n 👩‍💻 你好 SECRET trailing", 22, {"SECRET"});
-    check(preview.rfind("Thinking: ", 0) == 0, "reasoning preview has stable prefix");
+    check(preview.rfind(agent::kThinkingPreviewPrefix, 0) == 0,
+          "reasoning preview has stable prefix");
     check(preview.find('\n') == std::string::npos && preview.find('\r') == std::string::npos,
           "reasoning preview maps vertical whitespace for a single history row");
     check(preview.find("SECRET") == std::string::npos,
@@ -689,7 +690,7 @@ void test_reasoning_preview_unicode_redaction_and_limits() {
           "zero disables reasoning previews");
     const std::string clipped =
         agent::format_reasoning_preview(u8"😀😀😀😀", 2, {});
-    check(clipped == u8"Thinking: 😀😀",
+    check(clipped == std::string(agent::kThinkingPreviewPrefix) + u8"😀😀",
           "reasoning preview clips by grapheme without mid-token ellipsis");
 
     // Provider spacing is preserved (Kimi whitespace gluer is intentionally not
@@ -745,8 +746,8 @@ void test_reasoning_idle_slice_advances_sentences_and_partials() {
         agent::take_reasoning_idle_slice(normalized, offset, 12, true);
     check(!forced.text.empty() && forced.next_offset > offset,
           "force_partial emits a clipped monologue chunk: " + forced.text);
-    check(agent::format_reasoning_preview(forced.text, 30, {}).rfind("Thinking: ", 0) ==
-              0,
+    check(agent::format_reasoning_preview(forced.text, 30, {}).rfind(
+              agent::kThinkingPreviewPrefix, 0) == 0,
           "idle chunks use the same Thinking preview formatter");
 
     // Avoid treating version/file dots as sentence ends.
@@ -830,7 +831,8 @@ void test_thinking_opening_and_finished_preview() {
         "User asked me to refactor the code base, but not touch src/shader "
         "directory. I shall work file by file and then summarize.";
     const std::string opening = agent::format_thinking_opening_preview(long_open, 80, {});
-    check(opening.rfind("Thinking: ", 0) == 0, "opening uses Thinking: prefix");
+    check(opening.rfind(agent::kThinkingPreviewPrefix, 0) == 0,
+          "opening uses the compact thinking prefix");
     check(opening.find("User asked me to refactor") != std::string::npos,
           "opening keeps the start of the trace: " + opening);
     check(opening.find("summarize") == std::string::npos,
@@ -857,28 +859,53 @@ void test_thinking_opening_and_finished_preview() {
         "to proceed. I will start updating the files.";
     const std::string live_tail =
         agent::format_live_thinking_tail(two_sentences, 120, {});
-    check(!live_tail.empty() && live_tail.rfind("Finished thinking:", 0) != 0 &&
-              live_tail.rfind("Thinking:", 0) != 0,
-          "live tail has no preamble: " + live_tail);
-    check(live_tail.find("I will start updating the files.") != std::string::npos,
-          "live tail is the last sentence: " + live_tail);
+    check(!live_tail.empty() &&
+              live_tail.rfind(agent::kThinkingPreviewPrefix, 0) != 0,
+          "live tail has no 💭 prefix: " + live_tail);
+    check(live_tail.rfind(agent::kThinkingPreviewEllipsis, 0) == 0,
+          "live tail marks omitted head with leading ...: " + live_tail);
+    check(live_tail.find("I will start updating the files.") != std::string::npos &&
+              live_tail.size() >= 1 && live_tail.back() == '.',
+          "live tail ends on the last character of the think: " + live_tail);
     const std::string finished =
         agent::format_finished_thinking_preview(two_sentences, 120, {});
-    check(finished.rfind("Finished thinking: ", 0) == 0,
-          "finished uses Finished thinking: prefix");
-    check(finished.find("I will start updating the files.") != std::string::npos,
-          "finished keeps the last sentence: " + finished);
+    check(finished.rfind(std::string(agent::kThinkingPreviewPrefix) +
+                             agent::kThinkingPreviewEllipsis,
+                         0) == 0,
+          "finished is 💭 ...tail: " + finished);
+    check(finished.find("I will start updating the files.") != std::string::npos &&
+              finished.size() >= 1 && finished.back() == '.',
+          "finished ends on the last character of the think: " + finished);
     check(finished.find("User asked me") == std::string::npos,
           "finished does not keep the opening plan: " + finished);
+    check(finished.size() < 3 ||
+              finished.compare(finished.size() - 3, 3, "...") != 0,
+          "finished must not end with ...: " + finished);
     check(!agent::skip_finished_thinking_preview(two_sentences, 120, {}),
-          "distinct last sentence is shown");
+          "distinct tail is shown");
 
     const std::string short_one = "I will inspect the file.";
     check(agent::format_thinking_opening_preview(short_one, 120, {}) ==
-              "Thinking: I will inspect the file.",
-          "short think is a single Thinking row");
+              std::string(agent::kThinkingPreviewPrefix) + "I will inspect the file.",
+          "short think is a single thinking row");
     check(agent::skip_finished_thinking_preview(short_one, 120, {}),
-          "short think skips a duplicate Finished thinking row");
+          "short think skips a duplicate finished row");
+
+    const std::string grok_period =
+        "User asked me to refactor the code base, but not touch src/shader "
+        "directory. I shall work file by file and then summarize the result. .";
+    const std::string grok_finished =
+        agent::format_finished_thinking_preview(grok_period, 80, {});
+    check(grok_finished.find("summarize") != std::string::npos,
+          "trailing period fragment does not become the finished row: " +
+              grok_finished);
+    check(grok_finished.size() >= 1 && grok_finished.back() == '.',
+          "grok-style tail still ends on the last think character: " +
+              grok_finished);
+    check(grok_finished != std::string(agent::kThinkingPreviewPrefix) + ".",
+          "finished row is not a lone period");
+    check(!agent::skip_finished_thinking_preview(grok_period, 80, {}),
+          "long think with a trailing period still shows a tail row");
 
     const std::string long_last =
         "First thought is brief. After gathering context I now believe the "
@@ -904,6 +931,30 @@ void test_thinking_opening_and_finished_preview() {
           "opening reports more text after a short clip");
     check(!agent::opening_preview_has_more(short_one, 120, {}),
           "short think has no more text after the opening clip");
+
+    const std::string tail_line = std::string(agent::kThinkingPreviewPrefix) +
+                                  agent::kThinkingPreviewEllipsis +
+                                  std::string(200, 'x') + "END.";
+    const std::string clipped_tail = agent::clip_thinking_preview_line(tail_line, 40);
+    check(clipped_tail.rfind(std::string(agent::kThinkingPreviewPrefix) +
+                                 agent::kThinkingPreviewEllipsis,
+                             0) == 0,
+          "width-clipped tail keeps 💭 ...: " + clipped_tail);
+    check(clipped_tail.size() >= 4 &&
+              clipped_tail.compare(clipped_tail.size() - 4, 4, "END.") == 0,
+          "width-clipped tail keeps the complete ending: " + clipped_tail);
+    check(clipped_tail.size() < 3 ||
+              clipped_tail.compare(clipped_tail.size() - 3, 3, "...") != 0,
+          "width-clipped tail must not end with ...: " + clipped_tail);
+
+    const std::string opening_line =
+        std::string(agent::kThinkingPreviewPrefix) + "User asked me to refactor " +
+        std::string(80, 'z');
+    const std::string clipped_open = agent::clip_thinking_preview_line(opening_line, 40);
+    check(clipped_open.rfind(agent::kThinkingPreviewPrefix, 0) == 0,
+          "width-clipped opening keeps the prefix: " + clipped_open);
+    check(clipped_open.find("User asked") != std::string::npos,
+          "width-clipped opening keeps the head: " + clipped_open);
 }
 
 }  // namespace

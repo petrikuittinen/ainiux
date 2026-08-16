@@ -70,6 +70,10 @@ struct DiredState {
 // Physical F4 key escape sequences (not the internal Alt+X sentinel 0xF4).
 bool is_dired_f4_sequence(const std::string& sequence);
 
+// Idle minibuffer hint while a read-only file view is focused.
+inline constexpr const char kDiredViewHelp[] =
+    "space/PageDown down, PageUp/b back, n next dirty block, p previous dirty block, q quit";
+
 std::string dired_sort_label(DiredSortKey key, bool ascending);
 // Short panel title (single line; full key help lives in dired_list_text).
 std::string dired_header_line(const DiredState& state);

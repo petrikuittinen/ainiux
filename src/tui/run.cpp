@@ -377,6 +377,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 event.guard_command_preview = std::move(src.guard_command_preview);
                 event.guard_rule_id = std::move(src.guard_rule_id);
                 event.guard_message = std::move(src.guard_message);
+                event.guard_review_path = std::move(src.guard_review_path);
                 break;
         }
         return event;
@@ -455,6 +456,8 @@ app::TuiRunResult run(provider::RequestContext context,
         chrome.completed_task_ms = agent_completed_task_ms;
         chrome.completed_decode_tokens_per_second = agent_completed_decode_tps;
         chrome.completed_tokens_estimated = agent_completed_tokens_estimated;
+        chrome.guard_can_review = have_pending_guard_request &&
+                                  !pending_guard_request.review_path.empty();
         if (agent_task_active) {
             chrome.task_elapsed_seconds = std::chrono::duration_cast<std::chrono::seconds>(
                                               std::chrono::steady_clock::now() -
@@ -2391,6 +2394,46 @@ app::TuiRunResult run(provider::RequestContext context,
         leave_target = target;
         quit = true;
     };
+    auto resolve_guard_review_path = [&]() -> std::string {
+        if (!have_pending_guard_request || pending_guard_request.review_path.empty())
+            return {};
+        const std::string raw = pending_guard_request.review_path;
+        if (raw.size() >= 1 && (raw[0] == '/' || raw[0] == '\\')) return raw;
+#if defined(_WIN32)
+        if (raw.size() >= 2 && raw[1] == ':') return raw;
+#endif
+        std::string workspace;
+        if (agent_runtime && agent_runtime->prepared())
+            workspace = agent_runtime->workspace();
+        if (workspace.empty()) return raw;
+        if (workspace.back() == '/' || workspace.back() == '\\') return workspace + raw;
+        return workspace + "/" + raw;
+    };
+    auto hop_to_editor_dired = [&](bool from_guard) {
+        if (interactive == nullptr) {
+            status = "Dired is unavailable";
+            return;
+        }
+        interactive->editor_settings.start_dired = true;
+        interactive->editor_settings.start_dired_view = false;
+        interactive->editor_settings.dired_return_to_guard = from_guard;
+        interactive->editor_settings.themes = &context.options.tui_themes;
+        interactive->editor_settings.theme_name = theme;
+        interactive->editor_settings.use_colors = use_colors;
+        interactive->theme_name = theme;
+        interactive->use_colors = use_colors;
+        const std::string review = from_guard ? resolve_guard_review_path() : std::string();
+        if (!review.empty()) {
+            interactive->editor_settings.start_dired_path = review;
+            interactive->editor_settings.start_dired_view = true;
+        } else if (context.options.agent && agent_runtime && agent_runtime->prepared() &&
+                   !agent_runtime->workspace().empty()) {
+            interactive->editor_settings.start_dired_path = agent_runtime->workspace();
+        } else if (interactive->editor_settings.start_dired_path.empty()) {
+            interactive->editor_settings.start_dired_path = ".";
+        }
+        leave_for(app::InteractiveUiTarget::Editor);
+    };
     command_handlers.switch_to_editor = [&]() { leave_for(app::InteractiveUiTarget::Editor); };
     command_handlers.switch_to_chat = [&]() {
         if (!context.options.agent) {
@@ -2601,6 +2644,10 @@ app::TuiRunResult run(provider::RequestContext context,
         have_pending_guard_request = false;
         mode = TuiMode::Chat;
         status = "Guard: denied";
+    };
+    picker_callbacks.on_guard_approval_review = [&]() {
+        hop_to_editor_dired(true);
+        status = "Reviewing in dired";
     };
     picker_callbacks.on_agent_permission_selected = [&](size_t selected) {
         static const char* modes[] = {"confirm", "smart", "yolo"};
@@ -3911,6 +3958,7 @@ app::TuiRunResult run(provider::RequestContext context,
                     pending_guard_request.command_preview = event.guard_command_preview;
                     pending_guard_request.rule_id = event.guard_rule_id;
                     pending_guard_request.message = event.guard_message;
+                    pending_guard_request.review_path = event.guard_review_path;
                     have_pending_guard_request = true;
                     mode = TuiMode::GuardApprovalConfirm;
                     history_scroll = 0;
@@ -4024,6 +4072,9 @@ app::TuiRunResult run(provider::RequestContext context,
                                                  context.options.agent,
                                                  picker_nav,
                                                  &history_scroll};
+                picker_state.guard_can_review =
+                    have_pending_guard_request &&
+                    !pending_guard_request.review_path.empty();
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
                     if (loaded_thread_requires_provider_selection && mode == TuiMode::Chat) {
                         status = chat_provider_model_required_status(context, true);
@@ -4189,31 +4240,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         input_undo_limit);
                     if (escape_result == EscapeResult::OpenDired) {
                         // F4: hop straight into editor dired (skip Ctrl+G then F4).
-                        if (interactive == nullptr) {
-                            status = "Dired is unavailable";
-                        } else {
-                            interactive->editor_settings.start_dired = true;
-                            // Keep theme/colors wired for RO history-diff paint.
-                            // Changed-line backgrounds require a non-null theme
-                            // registry; without this, agent→F4 dired can load
-                            // correct marks but paint them invisibly.
-                            interactive->editor_settings.themes =
-                                &context.options.tui_themes;
-                            interactive->editor_settings.theme_name = theme;
-                            interactive->editor_settings.use_colors = use_colors;
-                            interactive->theme_name = theme;
-                            interactive->use_colors = use_colors;
-                            if (context.options.agent && agent_runtime &&
-                                agent_runtime->prepared() &&
-                                !agent_runtime->workspace().empty()) {
-                                interactive->editor_settings.start_dired_path =
-                                    agent_runtime->workspace();
-                            } else if (interactive->editor_settings.start_dired_path
-                                           .empty()) {
-                                interactive->editor_settings.start_dired_path = ".";
-                            }
-                            leave_for(app::InteractiveUiTarget::Editor);
-                        }
+                        hop_to_editor_dired(mode == TuiMode::GuardApprovalConfirm);
                         continue;
                     }
                     if (escape_result == EscapeResult::Unhandled) {

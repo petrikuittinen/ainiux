@@ -124,6 +124,10 @@ struct EditorSettings {
     bool start_dired = false;
     // Directory or glob for start_dired; empty means ".".
     std::string start_dired_path;
+    // After start_dired, open the selected regular file in read-only view.
+    bool start_dired_view = false;
+    // q leaves dired and returns to the pending agent Guard dialog.
+    bool dired_return_to_guard = false;
 };
 
 struct AiContinueContext;

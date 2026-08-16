@@ -77,8 +77,12 @@ void render(const chat::Session& session,
 
     input.ensure_cursor_visible(layout.input_rect);
     const editor::RenderedPanel input_panel = input.render(layout.input_rect);
-    const InlineChoiceModel inline_choices =
-        agent_mode ? agent_inline_choices_for_mode(mode) : InlineChoiceModel{};
+    InlineChoiceModel inline_choices;
+    if (agent_mode) {
+        inline_choices = mode == TuiMode::GuardApprovalConfirm
+                             ? agent_guard_approval_choices(agent_chrome.guard_can_review)
+                             : agent_inline_choices_for_mode(mode);
+    }
     const bool agent_choice_active = valid_inline_choices(inline_choices);
     const bool guard_details = mode == TuiMode::GuardApprovalConfirm;
     const bool panel_active =

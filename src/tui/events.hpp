@@ -119,6 +119,7 @@ struct TuiEvent {
     std::string guard_command_preview;
     std::string guard_rule_id;
     std::string guard_message;
+    std::string guard_review_path;
     std::string agent_workspace;
     std::vector<provider::Message> agent_history;
     bool agent_history_loaded = false;

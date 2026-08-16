@@ -150,6 +150,7 @@ struct AgentChrome {
     long long completed_task_ms = -1;
     double completed_decode_tokens_per_second = -1.0;
     bool completed_tokens_estimated = false;
+    bool guard_can_review = false;
 };
 
 struct RegenerationPlan {

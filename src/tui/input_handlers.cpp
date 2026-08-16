@@ -376,6 +376,7 @@ PickerEscapeResult handle_guard_approval_escape(int* history_scroll) {
     }
     std::string sequence;
     if (!read_csi_sequence(ch, sequence)) return PickerEscapeResult::Cancelled;
+    if (editor::is_dired_f4_sequence(sequence)) return PickerEscapeResult::OpenDired;
     editor::MovementKeyEvent movement;
     if (!editor::parse_movement_sequence(sequence, movement))
         return PickerEscapeResult::Cancelled;

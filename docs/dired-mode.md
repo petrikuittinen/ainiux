@@ -90,7 +90,7 @@ Example (Linux):
 | Focus | How you get there | Navigation |
 | --- | --- | --- |
 | **List** (default) | Enter dired; press **Enter** while viewing a file | Up/down, page, home/end move the **selection** in the listing |
-| **View** | **Enter** on a regular file | Arrows / page / home/end scroll the **file**; `Ctrl+Home` / `Ctrl+End` go to start/end of the file |
+| **View** | **Enter** on a regular file, or Guard **Review** of a script | Arrows / page / home/end scroll the **file**; `Ctrl+Home` / `Ctrl+End` go to start/end of the file. The minibuffer shows `space/PageDown down, PageUp/b back, n next dirty block, p previous dirty block, q quit`. **q** leaves dired (does not return to the list) |
 
 - **Enter** on a directory enters it; on `../` goes to the parent.
 - **Enter** again while viewing returns to the **list**.
@@ -103,7 +103,7 @@ Example (Linux):
 
 | Key | Action |
 | --- | --- |
-| `q` | Leave dired and return to **editor** mode |
+| `q` | Leave dired entirely (list or read-only view). Returns to the **editor**, or to the Guard Yes/No/Review dialog when dired was opened with Review/`F4` from that dialog |
 | `Ctrl+Q` | Quit **ainiux** (global; same save prompts as the editor) |
 
 ### Navigation

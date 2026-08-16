@@ -20,6 +20,11 @@ const char* retired_project_script_message();
 bool project_script_invocation(const std::vector<std::string>& arguments,
                                std::string* interpreter = nullptr,
                                std::string* relative_path = nullptr);
+// Workspace-relative path of a project script the user can Review from Guard.
+// Empty when argv is not a workspace file (PATH binaries, -c/-m, missing file).
+std::string workspace_script_review_path(const std::vector<std::string>& arguments,
+                                         const std::string& workspace,
+                                         const std::string& cwd = {});
 Error list_project_scripts(const std::string& workspace, std::vector<std::string>& names);
 std::string project_script_catalog_text(const std::vector<std::string>& names);
 

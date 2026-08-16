@@ -1,4 +1,5 @@
 #include "tui/test_tui.hpp"
+#include "agent/reasoning_preview.hpp"
 #include "tui/background_metadata.hpp"
 #include "support/test_support.hpp"
 #include "app/user_shell.hpp"
@@ -308,11 +309,13 @@ void test_tui_reasoning_picker_input() {
 
     bool guard_allowed = false;
     bool guard_denied = false;
+    bool guard_reviewed = false;
     callbacks.on_guard_approval_accepted = [&]() { guard_allowed = true; };
     callbacks.on_guard_approval_rejected = [&]() { guard_denied = true; };
+    callbacks.on_guard_approval_review = [&]() { guard_reviewed = true; };
     mode = ainiux::tui::TuiMode::GuardApprovalConfirm;
     check(ainiux::tui::handle_tui_picker_input('x', state, callbacks) &&
-              !guard_allowed && !guard_denied,
+              !guard_allowed && !guard_denied && !guard_reviewed,
           "agent Guard Yes/No ignores ambiguous input");
     check(ainiux::tui::handle_tui_picker_input('y', state, callbacks) &&
               guard_allowed && !guard_denied,
@@ -321,6 +324,14 @@ void test_tui_reasoning_picker_input() {
     check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
               guard_denied && !guard_allowed,
           "agent Guard treats Esc as No");
+    guard_denied = false;
+    check(ainiux::tui::handle_tui_picker_input('r', state, callbacks) &&
+              !guard_reviewed && !guard_denied,
+          "Review is ignored when the Ask has no reviewable script");
+    state.guard_can_review = true;
+    check(ainiux::tui::handle_tui_picker_input('r', state, callbacks) &&
+              guard_reviewed && !guard_allowed && !guard_denied,
+          "script Guard Review does not resolve Allow or Deny");
 
     bool continued = false;
     bool stopped = false;
@@ -703,6 +714,13 @@ void test_agent_inline_choices() {
               parse_inline_choice_key(approval, 27).index == 1 &&
               !parse_inline_choice_key(approval, 'x').matched,
           "agent Guard accepts y/n, numbers, and Esc as No");
+    InlineChoiceModel review = agent_guard_approval_choices(true);
+    check(render_inline_choices(review) == "(1) [Y]es  (2) [N]o  (3) [R]eview",
+          "script Guard confirmation adds Review");
+    check(parse_inline_choice_key(review, 'r').index == 2 &&
+              parse_inline_choice_key(review, '3').index == 2 &&
+              parse_inline_choice_key(review, 27).index == 1,
+          "script Guard Review is r/3 and Esc remains No");
     InlineChoiceModel permissions =
         agent_inline_choices_for_mode(TuiMode::AgentPermissionSelect);
     check(render_inline_choices(permissions) ==
@@ -1467,9 +1485,12 @@ void test_tui_agent_history_chrome() {
     // Agent role colors reuse existing theme roles (no new palette keys).
     session.messages.clear();
     ainiux::provider::Message color_user{"user", "fix attempts"};
-    ainiux::provider::Message color_think{"thinking", "Thinking: inspect the server entrypoint"};
+    ainiux::provider::Message color_think{
+        "thinking", std::string(ainiux::agent::kThinkingPreviewPrefix) +
+                        "inspect the server entrypoint"};
     ainiux::provider::Message color_finished{
-        "thinking", "Finished thinking: I will start updating the files."};
+        "thinking", std::string(ainiux::agent::kThinkingPreviewPrefix) +
+                        "I will start updating the files."};
     ainiux::provider::Message color_tool_ok{
         "tool", "1: read_file(\"src/server.c\") → ok in 12 ms"};
     ainiux::provider::Message color_tool_err{
@@ -1492,11 +1513,11 @@ void test_tui_agent_history_chrome() {
             if (segment.text.find("fix attempts") != std::string::npos)
                 saw_user_color =
                     saw_user_color || segment.role == ainiux::tui::StyleRole::UserLabel;
-            if (segment.text.find("Thinking:") != std::string::npos)
+            if (segment.text.find("inspect the server entrypoint") != std::string::npos)
                 saw_thinking_color =
                     saw_thinking_color ||
                     segment.role == ainiux::tui::StyleRole::ThinkingTrace;
-            if (segment.text.find("Finished thinking:") != std::string::npos)
+            if (segment.text.find("I will start updating the files.") != std::string::npos)
                 saw_finished_thinking_color =
                     saw_finished_thinking_color ||
                     segment.role == ainiux::tui::StyleRole::ThinkingTrace;
@@ -2052,9 +2073,11 @@ void test_guard_approval_panel_scroll() {
     };
     bool accepted = false;
     bool rejected = false;
+    bool reviewed = false;
     ainiux::tui::TuiPickerCallbacks callbacks;
     callbacks.on_guard_approval_accepted = [&]() { accepted = true; };
     callbacks.on_guard_approval_rejected = [&]() { rejected = true; };
+    callbacks.on_guard_approval_review = [&]() { reviewed = true; };
 
     ainiux::editor::clear_terminal_input_queue();
     ainiux::editor::push_terminal_input_bytes("[B");
@@ -2069,6 +2092,12 @@ void test_guard_approval_panel_scroll() {
     check(ainiux::tui::handle_tui_picker_input('y', state, callbacks) && accepted &&
               !rejected,
           "Guard y still allows");
+    accepted = false;
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes("[14~");
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && reviewed &&
+              !rejected && !accepted,
+          "Guard F4 opens dired review instead of denying");
 }
 
 void test_tui_chat_history_scroll_keys() {
@@ -2419,13 +2448,14 @@ void test_agent_progress_replaces_rows_in_place() {
     ainiux::tui::apply_agent_progress_update(
         session, rows,
         {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
-         1, 0, "Thinking: first", 0});
+         1, 0, std::string(ainiux::agent::kThinkingPreviewPrefix) + "first", 0});
     ainiux::tui::apply_agent_progress_update(
         session, rows,
         {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
-         1, 0, "Thinking: updated", 0});
+         1, 0, std::string(ainiux::agent::kThinkingPreviewPrefix) + "updated", 0});
     check(session.messages.size() == 1 &&
-              session.messages[0].content == "Thinking: updated",
+              session.messages[0].content ==
+                  std::string(ainiux::agent::kThinkingPreviewPrefix) + "updated",
           "Thinking deltas reuse one live history row");
 
     ainiux::tui::apply_agent_progress_update(
@@ -2471,11 +2501,15 @@ void test_agent_progress_opening_and_finished_thinking_rows() {
     ainiux::tui::apply_agent_progress_update(
         session, rows,
         {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
-         1, 0, "Thinking: first plan sentence", 0});
+         1, 0, std::string(ainiux::agent::kThinkingPreviewPrefix) +
+                   "first plan sentence",
+         0});
     ainiux::tui::apply_agent_progress_update(
         session, rows,
         {agent::AgentProgressAction::Commit, agent::AgentProgressKind::Thinking,
-         1, 0, "Thinking: first plan sentence", 1});
+         1, 0,
+         std::string(ainiux::agent::kThinkingPreviewPrefix) + "first plan sentence",
+         1});
     ainiux::tui::apply_agent_progress_update(
         session, rows,
         {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Thinking,
@@ -2483,12 +2517,18 @@ void test_agent_progress_opening_and_finished_thinking_rows() {
     ainiux::tui::apply_agent_progress_update(
         session, rows,
         {agent::AgentProgressAction::Commit, agent::AgentProgressKind::Thinking,
-         1, 1, "Finished thinking: I will start updating the files.", 2});
+         1, 1,
+         std::string(ainiux::agent::kThinkingPreviewPrefix) +
+             "I will start updating the files.",
+         2});
     check(session.messages.size() == 2 &&
-              session.messages[0].content == "Thinking: first plan sentence" &&
+              session.messages[0].content ==
+                  std::string(ainiux::agent::kThinkingPreviewPrefix) +
+                      "first plan sentence" &&
               session.messages[1].content ==
-                  "Finished thinking: I will start updating the files.",
-          "live tail is unlabeled until commit as Finished thinking");
+                  std::string(ainiux::agent::kThinkingPreviewPrefix) +
+                      "I will start updating the files.",
+          "live tail is unlabeled until commit with the thinking prefix");
 }
 
 }  // namespace

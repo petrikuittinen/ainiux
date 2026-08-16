@@ -42,9 +42,10 @@ EscapeResult handle_escape(editor::EditorState& input,
                            PromptRecall* prompt_recall = nullptr,
                            size_t input_undo_limit = 0);
 
-enum class PickerEscapeResult { Navigated, Cancelled, CreateNew };
+enum class PickerEscapeResult { Navigated, Cancelled, CreateNew, OpenDired };
 
 // Bare Esc cancels. Arrow/Page/Home/End scroll a top-aligned Guard panel.
+// Physical F4 opens dired without treating the sequence as Deny.
 PickerEscapeResult handle_guard_approval_escape(int* history_scroll);
 
 PickerEscapeResult handle_list_picker_escape(size_t item_count,

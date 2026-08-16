@@ -141,10 +141,15 @@ InlineChoiceResult parse_inline_choice_key(const InlineChoiceModel& model, unsig
     return {};
 }
 
+InlineChoiceModel agent_guard_approval_choices(bool can_review) {
+    if (can_review) return {{{"Yes", 'y'}, {"No", 'n'}, {"Review", 'r'}}, 1};
+    return {{{"Yes", 'y'}, {"No", 'n'}}, 1};
+}
+
 InlineChoiceModel agent_inline_choices_for_mode(TuiMode mode) {
     switch (mode) {
         case TuiMode::GuardApprovalConfirm:
-            return {{{"Yes", 'y'}, {"No", 'n'}}, 1};
+            return agent_guard_approval_choices(false);
         case TuiMode::AgentPermissionSelect:
             return {{{"Confirm", 'c'}, {"Smart", 's'}, {"Yolo", 'y'}}, 1};
         case TuiMode::AgentContinueConfirm:

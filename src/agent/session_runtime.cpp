@@ -2554,7 +2554,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             retry_notice_active = false;
         };
         auto clip_thinking_line = [&](const std::string& line) {
-            return clip_to_cells(line, tool_line_width);
+            return clip_thinking_preview_line(line, tool_line_width);
         };
         auto persist_thinking_line = [&](const std::string& line) {
             if (session_store_.is_open() && session_id_ > 0)

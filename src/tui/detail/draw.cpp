@@ -4,6 +4,7 @@
 #include "tui/theme_registry.hpp"
 #include "tui/tui.hpp"
 
+#include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
 #include "app/detail.hpp"
 
@@ -620,8 +621,11 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
         }
         const bool is_last_message = message_index + 1 == session.messages.size();
         std::string content = message.content;
-        if (agent_mode && (message.role == "tool" || message.role == "thinking"))
+        if (agent_mode && message.role == "tool")
             content = agent::clip_to_cells(content, cols > 0 ? static_cast<std::size_t>(cols) : 0);
+        if (agent_mode && message.role == "thinking")
+            content = agent::clip_thinking_preview_line(
+                content, cols > 0 ? static_cast<std::size_t>(cols) : 0);
         if (message.role == "assistant") {
             if (message.content.empty()) {
                 if (!is_last_message || activity_kind == ActivityKind::None) {

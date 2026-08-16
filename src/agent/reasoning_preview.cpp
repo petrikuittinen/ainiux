@@ -3,6 +3,7 @@
 #include <cctype>
 #include <vector>
 
+#include "agent/tool_display.hpp"
 #include "editor/detail/unicode.hpp"
 #include "security/redact.hpp"
 
@@ -366,8 +367,18 @@ std::string finished_thinking_body(const std::string& reasoning,
                                    std::size_t max_chars,
                                    const std::vector<std::string>& secrets) {
     if (max_chars == 0) return {};
-    const std::string flattened = flatten_reasoning_preview_text(reasoning, secrets);
-    return clip_preview_suffix(last_reasoning_sentence(flattened), max_chars);
+    // Tail of the full think (before </think>), not the last sentence.
+    // Sentence-splitting turned Grok-style trailing "." fragments into a
+    // useless second frozen row.
+    return clip_preview_suffix(flatten_reasoning_preview_text(reasoning, secrets),
+                               max_chars);
+}
+
+bool thinking_preview_body_has_substance(const std::string& body) {
+    for (unsigned char ch : body) {
+        if (std::isalnum(ch) != 0 || ch >= 0x80U) return true;
+    }
+    return false;
 }
 
 bool opening_preview_has_more(const std::string& reasoning,
@@ -389,14 +400,8 @@ bool skip_finished_thinking_preview(const std::string& reasoning,
     const std::string finished =
         finished_thinking_body(reasoning, max_chars, secrets);
     if (opening.empty() || finished.empty() || opening == finished) return true;
-    const std::string flattened = flatten_reasoning_preview_text(reasoning, secrets);
-    const std::string last = last_reasoning_sentence(flattened);
-    const std::size_t start = skip_spaces(flattened, 0);
-    // Last unit is still the first sentence / whole monologue — no later sentence.
-    if (start < flattened.size() && start + last.size() <= flattened.size() &&
-        flattened.compare(start, last.size(), last) == 0)
-        return true;
-    return false;
+    if (!thinking_preview_body_has_substance(finished)) return true;
+    return !opening_preview_has_more(reasoning, max_chars, secrets);
 }
 
 std::string format_thinking_opening_preview(const std::string& reasoning,
@@ -404,13 +409,45 @@ std::string format_thinking_opening_preview(const std::string& reasoning,
                                             const std::vector<std::string>& secrets) {
     const std::string body = thinking_opening_body(reasoning, max_chars, secrets);
     if (body.empty()) return {};
-    return "Thinking: " + body;
+    return std::string(kThinkingPreviewPrefix) + body;
 }
+
+namespace {
+
+bool thinking_tail_omits_head(const std::string& reasoning, const std::string& body,
+                              const std::vector<std::string>& secrets) {
+    if (body.empty()) return false;
+    const std::string flattened = flatten_reasoning_preview_text(reasoning, secrets);
+    return flattened.size() > body.size();
+}
+
+std::string last_display_cells(const std::string& text, std::size_t cells) {
+    if (cells == 0 || text.empty()) return {};
+    const std::size_t width =
+        editor::detail::display_column_for_text(text, text.size());
+    if (width <= cells) return text;
+    const std::size_t drop = width - cells;
+    return text.substr(
+        editor::detail::byte_offset_for_display_column(text, drop));
+}
+
+bool is_thinking_tail_line(const std::string& line) {
+    const std::string prefix = kThinkingPreviewPrefix;
+    if (line.compare(0, prefix.size(), prefix) == 0)
+        return line.compare(prefix.size(), 3, kThinkingPreviewEllipsis) == 0;
+    return line.compare(0, 3, kThinkingPreviewEllipsis) == 0;
+}
+
+}  // namespace
 
 std::string format_live_thinking_tail(const std::string& reasoning,
                                       std::size_t max_chars,
                                       const std::vector<std::string>& secrets) {
-    return finished_thinking_body(reasoning, max_chars, secrets);
+    const std::string body = finished_thinking_body(reasoning, max_chars, secrets);
+    if (body.empty()) return {};
+    if (thinking_tail_omits_head(reasoning, body, secrets))
+        return std::string(kThinkingPreviewEllipsis) + body;
+    return body;
 }
 
 std::string format_finished_thinking_preview(
@@ -418,7 +455,32 @@ std::string format_finished_thinking_preview(
     const std::vector<std::string>& secrets) {
     const std::string body = finished_thinking_body(reasoning, max_chars, secrets);
     if (body.empty()) return {};
-    return "Finished thinking: " + body;
+    if (thinking_tail_omits_head(reasoning, body, secrets))
+        return std::string(kThinkingPreviewPrefix) + kThinkingPreviewEllipsis + body;
+    return std::string(kThinkingPreviewPrefix) + body;
+}
+
+std::string clip_thinking_preview_line(const std::string& line, std::size_t max_cells) {
+    if (max_cells == 0) return {};
+    const std::size_t width =
+        editor::detail::display_column_for_text(line, line.size());
+    if (width <= max_cells) return line;
+    if (!is_thinking_tail_line(line)) return clip_to_cells(line, max_cells);
+
+    std::string prefix;
+    std::string rest = line;
+    const std::string think = kThinkingPreviewPrefix;
+    if (line.compare(0, think.size(), think) == 0) {
+        prefix = think;
+        rest = line.substr(think.size());
+    }
+    if (rest.compare(0, 3, kThinkingPreviewEllipsis) == 0)
+        rest = rest.substr(3);
+    const std::string lead = prefix + kThinkingPreviewEllipsis;
+    const std::size_t lead_cells =
+        editor::detail::display_column_for_text(lead, lead.size());
+    if (lead_cells >= max_cells) return last_display_cells(line, max_cells);
+    return lead + last_display_cells(rest, max_cells - lead_cells);
 }
 
 std::string format_reasoning_preview(const std::string& reasoning,

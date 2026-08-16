@@ -40,7 +40,7 @@ executed. MCP tools remain separately qualified as `mcp__server__tool`. See the
 
 ## Permissions and Guard
 
-Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; headless Ask decisions are denied.
+Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; when the Ask is a workspace script, **`r` Review** opens that file in dired read-only view. `q` leaves dired and returns to the same Guard dialog. Headless Ask decisions are denied.
 
 Permissions do not expand workspace containment or turn chat/editor AI assist into agents. Model output and repository instructions remain untrusted. Keep unrelated work backed up, inspect diffs, and avoid Yolo in valuable or unfamiliar trees.
 
@@ -59,8 +59,8 @@ source. Smart and Yolo run `bash|sh|python3|python scripts/ainiux/NAME` without
 asking. Confirm asks once for that path and content hash (interpreter and
 argv-only path forms share the same trust), then reuses approval until the file
 bytes change. The prompt shows path, interpreter, arguments, size, and a short
-hash — not the script body. Use `read` on the path if you want to review the
-source. Headless Confirm denies an untrusted first execution. Trust is stored
+hash — not the script body. Press **Review** (`r` / `3`) to open the script
+in dired read-only view; `q` returns to the Yes/No/Review dialog. Headless Confirm denies an untrusted first execution. Trust is stored
 in project-local `.ainiux-pr/agent.sqlite` and survives quitting Ainiux; it is
 cleared if you delete `.ainiux-pr` or change the file. Multi-line or wrapping
 `python3 -c` is hard-denied in Confirm/Smart. The Guard panel opens at the top
@@ -140,14 +140,14 @@ Startup chrome shows **Agent preparing** only while local prepare phases run (in
 
 When a task finishes, the activity line reports wall-clock duration and a decode `token/s` estimate. That rate uses only streamed model time after the first token of each round; tool-call time and time-to-first-token are excluded. The estimate is omitted when no stream sample is available.
 
-Returning from editor/dired never re-starts a CLI/startup prompt (`-p`); that used to open a second turn and freeze chrome on “thinking” until Esc. Guard Ask raised while you are in dired stays pending across Ctrl+G (it is not auto-denied); answer with y/n in the editor or after returning to agent.
+Returning from editor/dired never re-starts a CLI/startup prompt (`-p`); that used to open a second turn and freeze chrome on “thinking” until Esc. Guard Ask raised while you are in dired stays pending across Ctrl+G (it is not auto-denied); answer with y/n (or r Review, when a script path is present) in the editor or after returning to agent.
 
 - Guard Ask (`y`/`n`) can be answered in the editor if approval is needed while you are reviewing files.
 - Quitting the editor while a turn is still running asks whether to cancel the agent and quit.
 - Switching to ordinary **chat** while a turn is running is blocked until the turn finishes or you cancel it (chat never silently gains workspace tools).
 - Dual AI (editor assist while the agent also streams) is intentionally deferred; manual editing and dired review are supported first.
 
-Live tool rows update in place. Provider-supplied reasoning previews are bounded, redacted, and display-only. Neither reasoning previews nor notice rows are sent back as conversational context. A reasoning phase shows at most two history rows. `Thinking:` animates the first ~`tui.agent_thinking_preview_max_chars` characters of the trace (default `120` of body text, clipped at a word boundary) and freezes after `tui.agent_thinking_idle_preview_seconds` (default `30`) or sooner once that opening clip is already complete and more reasoning follows. `0` freezes the opening clip as soon as it is complete, or at the end of the phase. After the opening row freezes, a second unlabeled row animates the latest sentence while the model is still thinking. When reasoning ends (`</think>`, a tool call, or a final answer), that row freezes as `Finished thinking:` plus the last sentence (same ~120-character word-boundary budget). A short think that is only one sentence keeps `Thinking:` and omits the finished row. After thinking ends, while the model is still streaming a tool call or the final answer, a live `Working:` row animates so a long write or similar generation is not a silent wait. `Working:` is display-only and is replaced by the compact tool line when execution starts.
+Live tool rows update in place. Provider-supplied reasoning previews are bounded, redacted, and display-only. Neither reasoning previews nor notice rows are sent back as conversational context. A reasoning phase shows at most two history rows. Both use a compact `💭 ` prefix. The first row animates the first ~`tui.agent_thinking_preview_max_chars` characters of the trace (default `120` of body text, clipped at a word boundary) and freezes after `tui.agent_thinking_idle_preview_seconds` (default `30`) or sooner once that opening clip is already complete and more reasoning follows. `0` freezes the opening clip as soon as it is complete, or at the end of the phase. After the opening row freezes, a second unlabeled row animates the tail of the think (last ~120 characters, word-boundary suffix, leading `...` when the head was omitted) while the model is still thinking. When reasoning ends (`</think>`, a tool call, or a final answer), that row freezes as `💭 ...` plus that same tail, always ending on the last character of the think — never a trailing `...`. A short think that fits in one clip keeps a single `💭 ` row. After thinking ends, while the model is still streaming a tool call or the final answer, a live `Working:` row animates so a long write or similar generation is not a silent wait. `Working:` is display-only and is replaced by the compact tool line when execution starts.
 
 The agent context chrome (`N tok (P%)`) is primarily a local estimate of the **next model request**. During long pure-reasoning streams it also adds a throttled local estimate of in-flight reasoning tokens so the meter is not frozen for minutes. Refresh interval is `tui.agent_thinking_token_refresh_seconds` (default `1`; `0` disables mid-stream updates). That in-flight estimate is display-only: it does not change compaction, provider context, or durable transcript accounting, and it drops when the model round finishes (reasoning previews are not retained as request context).
 

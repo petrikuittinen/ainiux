@@ -85,6 +85,7 @@ void test_guard_notify_posts_event() {
     request.command_preview = "docs/x.md";
     request.rule_id = "test";
     request.message = "needs approval";
+    request.review_path = "scripts/ainiux/check.sh";
 
     std::thread worker([&]() {
         const auto decision = controller.approval_gate()->request(
@@ -106,6 +107,8 @@ void test_guard_notify_posts_event() {
     check(event.type == ainiux::agent::AgentSurfaceEvent::Type::GuardApproval,
           "event type is GuardApproval");
     check(event.guard_tool_name == "write", "guard tool name is forwarded");
+    check(event.guard_review_path == "scripts/ainiux/check.sh",
+          "guard review path is forwarded");
     controller.approval_gate()->resolve(ainiux::agent::GuardApprovalDecision::Allow);
     worker.join();
 }

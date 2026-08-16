@@ -32,6 +32,7 @@ struct TuiPickerCallbacks {
     std::function<void(const std::string&)> on_model_confirm_retry;
     std::function<void()> on_guard_approval_accepted;
     std::function<void()> on_guard_approval_rejected;
+    std::function<void()> on_guard_approval_review;
     std::function<void(const std::string&)> on_guard_approval_retry;
     std::function<void(size_t)> on_agent_permission_selected;
     std::function<void()> on_agent_continue_accepted;
@@ -57,6 +58,7 @@ struct TuiPickerInputState {
     bool agent_mode = false;
     ui::TextSelectorNavState& picker_nav;
     int* history_scroll = nullptr;
+    bool guard_can_review = false;
 };
 
 bool handle_tui_picker_input(unsigned char ch,

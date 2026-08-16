@@ -359,12 +359,17 @@ bool handle_tui_picker_input(unsigned char ch,
             const PickerEscapeResult result =
                 handle_guard_approval_escape(state.history_scroll);
             if (result == PickerEscapeResult::Navigated) return true;
+            if (result == PickerEscapeResult::OpenDired) {
+                if (callbacks.on_guard_approval_review)
+                    callbacks.on_guard_approval_review();
+                return true;
+            }
             if (callbacks.on_guard_approval_rejected)
                 callbacks.on_guard_approval_rejected();
             return true;
         }
-        const InlineChoiceResult choice =
-            parse_inline_choice_key(agent_inline_choices_for_mode(state.mode), ch);
+        const InlineChoiceResult choice = parse_inline_choice_key(
+            agent_guard_approval_choices(state.guard_can_review), ch);
         if (!choice.matched) return true;
         switch (choice.index) {
             case 0:
@@ -372,6 +377,9 @@ bool handle_tui_picker_input(unsigned char ch,
                 return true;
             case 1:
                 if (callbacks.on_guard_approval_rejected) callbacks.on_guard_approval_rejected();
+                return true;
+            case 2:
+                if (callbacks.on_guard_approval_review) callbacks.on_guard_approval_review();
                 return true;
             default:
                 return true;

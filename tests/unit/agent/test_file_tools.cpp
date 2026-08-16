@@ -2284,6 +2284,35 @@ void test_attach_image_tool_hooks() {
     fs::remove_all(workspace, ec);
 }
 
+void test_workspace_script_review_path() {
+    const std::string workspace = write_temp_workspace("review-path");
+    fs::create_directories(fs::path(workspace) / "scripts" / "ainiux");
+    write_text(fs::path(workspace) / "scripts" / "ainiux" / "ok.sh", "echo ok\n");
+    write_text(fs::path(workspace) / "server.sh", "echo server\n");
+
+    check(agent::workspace_script_review_path({"scripts/ainiux/ok.sh"}, workspace) ==
+              "scripts/ainiux/ok.sh",
+          "project script path is reviewable");
+    check(agent::workspace_script_review_path({"sh", "scripts/ainiux/ok.sh"}, workspace) ==
+              "scripts/ainiux/ok.sh",
+          "interpreter + project script is reviewable");
+    check(agent::workspace_script_review_path({"./server.sh"}, workspace) == "server.sh",
+          "./server.sh is reviewable");
+    check(agent::workspace_script_review_path({"python3", "server.sh"}, workspace) ==
+              "server.sh",
+          "python3 server.sh is reviewable");
+    check(agent::workspace_script_review_path({"python3", "-c", "print(1)"}, workspace)
+              .empty(),
+          "python3 -c is not reviewable");
+    check(agent::workspace_script_review_path({"ls", "-l"}, workspace).empty(),
+          "PATH binary is not reviewable");
+    check(agent::workspace_script_review_path({"rm", "-r", "src"}, workspace).empty(),
+          "rm is not a script review");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_project_scripts_trust_and_execution() {
     std::string interpreter;
     std::string relative;
@@ -2425,15 +2454,17 @@ void test_project_scripts_trust_and_execution() {
             runtime::CancellationToken) -> agent::GuardApprovalDecision {
             ++confirm_asks;
             check(request.rule_id == "ask_on_project_script_content" &&
+                      request.review_path == "scripts/ainiux/count.sh" &&
                       request.message.find("Path: scripts/ainiux/count.sh") !=
                           std::string::npos &&
                       request.message.find("Interpreter: sh") != std::string::npos &&
                       request.message.find("Hash:") != std::string::npos &&
                       request.message.find("Remembered in this project") !=
                           std::string::npos &&
+                      request.message.find("Review") != std::string::npos &&
                       request.message.find("printf") == std::string::npos &&
                       request.message.find("--- script") == std::string::npos,
-                  "Confirm project-script approval shows path and hash, not file bytes");
+                  "Confirm project-script approval shows path, hash, and Review, not file bytes");
             return agent::GuardApprovalDecision::Allow;
         },
         agent::PermissionMode::Confirm, true, &store);
@@ -2613,6 +2644,7 @@ void run_all() {
     test_plan_document_mutation_policy();
     test_goal_met_tool_hooks();
     test_attach_image_tool_hooks();
+    test_workspace_script_review_path();
     test_project_scripts_trust_and_execution();
 }
 

@@ -63,6 +63,7 @@ void AgentController::arm_guard_notify() {
         event.guard_command_preview = request.command_preview;
         event.guard_rule_id = request.rule_id;
         event.guard_message = request.message;
+        event.guard_review_path = request.review_path;
         events_.push(std::move(event));
     });
 }

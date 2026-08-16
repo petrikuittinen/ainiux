@@ -414,6 +414,7 @@ app::EditorRunResult run_editor(const std::string& path,
     bool pending_agent_guard = false;
     agent::GuardApprovalRequest agent_guard_request;
     bool pending_agent_quit_confirm = false;
+    bool dired_return_to_guard = settings.dired_return_to_guard;
     std::string last_agent_status_badge;
     std::chrono::steady_clock::time_point last_dired_sync{};
 
@@ -422,30 +423,36 @@ app::EditorRunResult run_editor(const std::string& path,
         return interactive->agent_controller.get();
     };
 
+    auto agent_guard_prompt = [&]() -> std::string {
+        std::string prompt = "Agent Guard: ";
+        if (!agent_guard_request.tool_name.empty()) {
+            prompt += agent_guard_request.tool_name;
+            prompt += " · ";
+        }
+        if (!agent_guard_request.command_preview.empty()) {
+            prompt += agent_guard_request.command_preview;
+        } else if (!agent_guard_request.message.empty()) {
+            prompt += agent_guard_request.message;
+        } else {
+            prompt += "approval required";
+        }
+        prompt += agent_guard_request.review_path.empty() ? " (y/n) " : " (y/n/r) ";
+        return prompt;
+    };
+
     auto refresh_agent_background_status = [&]() {
         agent::AgentController* ctl = agent_controller();
         if (!ctl) return;
+        if (dired.active) return;
         if (ctl->waiting_guard() || (ctl->approval_gate() && ctl->approval_gate()->has_pending())) {
             agent::GuardApprovalRequest pending;
             if (ctl->approval_gate() && ctl->approval_gate()->try_get_pending(pending)) {
                 if (!pending_agent_guard ||
-                    pending.command_preview != agent_guard_request.command_preview) {
+                    pending.command_preview != agent_guard_request.command_preview ||
+                    pending.review_path != agent_guard_request.review_path) {
                     agent_guard_request = std::move(pending);
                     pending_agent_guard = true;
-                    std::string prompt = "Agent Guard: ";
-                    if (!agent_guard_request.tool_name.empty()) {
-                        prompt += agent_guard_request.tool_name;
-                        prompt += " · ";
-                    }
-                    if (!agent_guard_request.command_preview.empty()) {
-                        prompt += agent_guard_request.command_preview;
-                    } else if (!agent_guard_request.message.empty()) {
-                        prompt += agent_guard_request.message;
-                    } else {
-                        prompt += "approval required";
-                    }
-                    prompt += " (y/n) ";
-                    minibuffer_message(minibuffer, prompt);
+                    minibuffer_message(minibuffer, agent_guard_prompt());
                 }
             }
             return;
@@ -515,6 +522,8 @@ app::EditorRunResult run_editor(const std::string& path,
         // start_dired is a one-shot entry flag (agent F4 / CLI); never persist it.
         interactive->editor_settings.start_dired = false;
         interactive->editor_settings.start_dired_path.clear();
+        interactive->editor_settings.start_dired_view = false;
+        interactive->editor_settings.dired_return_to_guard = false;
         interactive->assist_config = assist_config;
         interactive->highlight_enabled = highlight_enabled;
         interactive->theme_name = theme_name;
@@ -792,10 +801,25 @@ app::EditorRunResult run_editor(const std::string& path,
         minibuffer_message(minibuffer, "Settings (read-only) — /setting, Esc, or Ctrl+Q to return");
     };
 
+    auto show_dired_view_help = [&]() {
+        minibuffer_message(minibuffer, kDiredViewHelp);
+    };
+
     auto exit_dired = [&]() {
         dired_close(dired);
         dired_overwrite_is_rename = false;
-        minibuffer_message(minibuffer, "Left dired — editor mode");
+        if (dired_return_to_guard) {
+            dired_return_to_guard = false;
+            if (interactive != nullptr)
+                interactive->editor_settings.dired_return_to_guard = false;
+            leave_editor_for(app::InteractiveUiTarget::Agent);
+            return;
+        }
+        if (pending_agent_guard) {
+            minibuffer_message(minibuffer, agent_guard_prompt());
+        } else {
+            minibuffer_message(minibuffer, "Left dired — editor mode");
+        }
     };
 
     auto enter_dired = [&](const std::string& path_or_glob) {
@@ -836,6 +860,19 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         minibuffer_message(minibuffer, dired_status_line(dired));
+    };
+
+    auto enter_dired_view_path = [&](const std::string& path) {
+        enter_dired(path);
+        if (!dired.active) return;
+        const DiredEntry* entry = dired_selected_entry(dired);
+        if (entry == nullptr || entry->is_directory || entry->is_parent) return;
+        Error err = dired_activate_selection(dired, settings);
+        if (!err.ok()) {
+            minibuffer_message(minibuffer, err.message);
+            return;
+        }
+        if (dired.focus == DiredFocus::View) show_dired_view_help();
     };
 
     auto activate_buffer = [&](size_t index) {
@@ -3295,16 +3332,17 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         // Background agent Guard Ask (worker blocked); answer without leaving editor.
         // Ctrl+G must NOT deny the Guard — leave the Ask pending for agent TUI.
-        if (pending_agent_guard) {
+        // While dired is open, do not steal keys: q/Space/n/p belong to the RO view.
+        if (pending_agent_guard && !dired.active) {
             if (ch == 7) {
                 // Cycle back to agent with Guard still pending (do not resolve).
                 pending_agent_guard = false;
                 agent_guard_request = {};
-                if (dired.active) {
-                    dired_close(dired);
-                    dired_overwrite_is_rename = false;
-                }
                 request_editor_toggle();
+                return;
+            }
+            if ((ch == 'r' || ch == 'R') && !agent_guard_request.review_path.empty()) {
+                enter_dired_view_path(agent_guard_request.review_path);
                 return;
             }
             switch (ui::parse_confirmation_key(ch)) {
@@ -3814,18 +3852,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 if (!err.ok()) {
                     minibuffer_message(minibuffer, err.message);
                 } else if (dired.focus == DiredFocus::View) {
-                    // Surface history-diff status so users see when marks exist
-                    // (agent F4 path previously painted them without a cue).
-                    if (dired.view_has_history_baseline) {
-                        const size_t n =
-                            ainiux::editor::count_changed_lines(dired.view_changed_lines);
-                        minibuffer_message(minibuffer,
-                                           n == 0 ? "History baseline · no line changes"
-                                                  : ("History diff · " + std::to_string(n) +
-                                                     " changed line(s) · gray bg"));
-                    } else {
-                        minibuffer_message(minibuffer, "");
-                    }
+                    show_dired_view_help();
                 } else {
                     minibuffer_message(minibuffer, dired_status_line(dired));
                 }
@@ -4674,12 +4701,19 @@ app::EditorRunResult run_editor(const std::string& path,
     }
 
     if (settings.start_dired) {
-        enter_dired(settings.start_dired_path.empty() ? "." : settings.start_dired_path);
+        const std::string start_path =
+            settings.start_dired_path.empty() ? std::string(".") : settings.start_dired_path;
+        if (settings.start_dired_view) {
+            enter_dired_view_path(start_path);
+        } else {
+            enter_dired(start_path);
+        }
         // One-shot request from agent F4 / CLI --dired; clear so a later mode
         // cycle does not reopen dired unexpectedly.
         if (interactive != nullptr) {
             interactive->editor_settings.start_dired = false;
             interactive->editor_settings.start_dired_path.clear();
+            interactive->editor_settings.start_dired_view = false;
         }
     }
 

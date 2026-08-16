@@ -212,7 +212,7 @@ Full guide: [dired-mode.md](dired-mode.md).
 | Shortcut | Action |
 |----------|--------|
 | `F4` or `Ctrl+X d` or `/dired` or CLI `-d` / `--dired [PATH]` | Enter dired |
-| `q` | Leave dired → editor |
+| `q` | Leave dired (list or RO view) → editor, or back to the Guard dialog if Review opened dired |
 | `Ctrl+Q` | Quit ainiux (global) |
 | `Enter` | Enter dir / view file RO (dirty + history → line bg diff); again leaves view for list |
 | `←` / `→` | Parent directory / enter selected directory |
@@ -252,7 +252,7 @@ session management.
 | `Ctrl+G` | Toggle agent → editor (allowed while a turn is running); the next Ctrl+G returns editor → agent (works from dired too — no need to press `q` first) |
 | `F4` | Open dired in the editor immediately (workspace root; same as Ctrl+G then F4). Allowed while a turn is running |
 | `Ctrl+Q` | Finish the project session and quit |
-| `y` / `n` | Allow or deny an active Guard Ask confirmation (agent TUI or editor while agent runs in the background) |
+| `y` / `n` / `r` | Allow, deny, or Review an active Guard Ask. Review is offered when the Ask is a workspace script; it opens that file in dired RO view. `q` there leaves dired and returns to the dialog |
 
 Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 `/cycle` follows Ctrl+G and enters the editor from chat or agent—including mid-turn so you can review dirty files in dired while tools continue. `F4` is the short path into dired for that review. Temporary editor hops do not finish the project agent session; leaving for chat or process quit does. Manual

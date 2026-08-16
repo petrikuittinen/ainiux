@@ -6,30 +6,39 @@
 
 namespace ainiux::agent {
 
+// Compact prefix for both the opening (head) and finished (tail) rows.
+inline constexpr const char kThinkingPreviewPrefix[] = "💭 ";
+// Marks omitted text before a suffix tail: "💭 ...complete ending."
+inline constexpr const char kThinkingPreviewEllipsis[] = "...";
+
 // Collapse provider reasoning to a single display row, redact configured
 // secrets, and clip the body by grapheme/word boundary. The returned string
-// includes the "Thinking: " prefix. max_chars is the body budget (label extra).
+// includes kThinkingPreviewPrefix. max_chars is the body budget (label extra).
 std::string format_reasoning_preview(const std::string& reasoning,
                                      std::size_t max_chars,
                                      const std::vector<std::string>& secrets);
 
-// Opening live/frozen row: "Thinking: " + first ~max_chars at a word boundary.
+// Opening live/frozen row: prefix + first ~max_chars at a word boundary.
 std::string format_thinking_opening_preview(const std::string& reasoning,
                                             std::size_t max_chars,
                                             const std::vector<std::string>& secrets);
 
-// Live tail while reasoning is still streaming: last sentence / newest
-// fragment, clipped, with no label.
+// Live tail while reasoning is still streaming: last ~max_chars of the
+// flattened think so far (word-boundary suffix), with no label.
 std::string format_live_thinking_tail(const std::string& reasoning,
                                       std::size_t max_chars,
                                       const std::vector<std::string>& secrets);
 
 // Frozen closing row after </think> / end of reasoning:
-// "Finished thinking: " + last sentence, clipped to ~max_chars from the end
-// at a word boundary.
+// prefix + optional "..." + last ~max_chars of the think. The last character
+// of the think is always kept; omitted text is marked at the start.
 std::string format_finished_thinking_preview(const std::string& reasoning,
                                              std::size_t max_chars,
                                              const std::vector<std::string>& secrets);
+
+// Fit a thinking preview to one terminal row. Tail lines (leading "..." or
+// "💭 ...") keep the ending; opening lines keep the start.
+std::string clip_thinking_preview_line(const std::string& line, std::size_t max_cells);
 
 // Bodies only (no label). Empty when max_chars is 0 or the source is empty.
 std::string thinking_opening_body(const std::string& reasoning,
@@ -39,8 +48,8 @@ std::string finished_thinking_body(const std::string& reasoning,
                                    std::size_t max_chars,
                                    const std::vector<std::string>& secrets);
 
-// True when the finished row should be omitted: empty side, same body, or the
-// last sentence is still the first sentence of the trace (no later sentence).
+// True when the finished row should be omitted: empty side, same body as the
+// opening clip, no text after the opening, or a punctuation-only tail.
 bool skip_finished_thinking_preview(const std::string& reasoning,
                                     std::size_t max_chars,
                                     const std::vector<std::string>& secrets);

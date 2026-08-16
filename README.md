@@ -151,7 +151,7 @@ Writable file buffers hold an advisory `FILE.LOCK` session and check for externa
 
 ### Local agent
 
-Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act mode can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval (including while you are reviewing in the editor after a mid-turn hop). Plan mode retains research tools but code-enforces writes to planning documents only. During a long interactive turn, `Ctrl+G` or `F4` opens the editor/dired so you can review dirty files and history-tinted change lines without cancelling tools or finishing the project session.
+Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act mode can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval (including while you are reviewing in the editor after a mid-turn hop). Script Asks also offer **Review**, which opens that file in dired; `q` returns to the dialog. Plan mode retains research tools but code-enforces writes to planning documents only. During a long interactive turn, `Ctrl+G` or `F4` opens the editor/dired so you can review dirty files and history-tinted change lines without cancelling tools or finishing the project session.
 
 ```sh
 ainiux lmstudio -m MODEL -r "add focused tests for the parser"

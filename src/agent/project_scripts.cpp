@@ -98,6 +98,72 @@ bool project_script_invocation(const std::vector<std::string>& arguments,
     return true;
 }
 
+namespace {
+
+bool is_script_interpreter(const std::string& command) {
+    return command == "bash" || command == "sh" || command == "python3" ||
+           command == "python";
+}
+
+bool is_interpreter_option(const std::string& argument) {
+    return !argument.empty() && argument[0] == '-';
+}
+
+std::string workspace_relative_if_regular_file(const std::string& raw,
+                                               const std::string& workspace,
+                                               const std::string& cwd) {
+    if (raw.empty() || workspace.empty() || is_interpreter_option(raw)) return {};
+    const fs::path root = fs::u8path(workspace);
+    fs::path base = root;
+    if (!cwd.empty()) {
+        const fs::path cwd_path = fs::u8path(cwd);
+        base = cwd_path.is_absolute() ? cwd_path : (root / cwd_path);
+    }
+    const fs::path supplied = fs::u8path(raw);
+    const fs::path candidate = supplied.is_absolute() ? supplied : (base / supplied);
+    std::error_code ec;
+    if (!fs::is_regular_file(candidate, ec) || ec) return {};
+    bool linked = false;
+    if (!platform::path_is_link_or_reparse(candidate.u8string(), linked).ok() || linked)
+        return {};
+    bool within = false;
+    if (!platform::path_is_within(workspace, candidate.u8string(), within).ok() || !within)
+        return {};
+    const fs::path canonical = fs::weakly_canonical(candidate, ec);
+    const fs::path root_canonical = fs::weakly_canonical(root, ec);
+    if (ec) return {};
+    const fs::path relative = canonical.lexically_relative(root_canonical);
+    const std::string generic = relative.generic_u8string();
+    if (generic.empty() || generic == "." || generic.rfind("..", 0) == 0) return {};
+    return generic;
+}
+
+}  // namespace
+
+std::string workspace_script_review_path(const std::vector<std::string>& arguments,
+                                         const std::string& workspace,
+                                         const std::string& cwd) {
+    if (arguments.empty() || workspace.empty()) return {};
+    std::string project_relative;
+    if (project_script_invocation(arguments, nullptr, &project_relative)) {
+        const std::string resolved =
+            workspace_relative_if_regular_file(project_relative, workspace, cwd);
+        return resolved.empty() ? project_relative : resolved;
+    }
+    if (is_script_interpreter(arguments[0])) {
+        for (size_t i = 1; i < arguments.size(); ++i) {
+            if (is_interpreter_option(arguments[i])) {
+                // -c / -m and similar: payload is not a workspace file.
+                if (arguments[i] == "-c" || arguments[i] == "-m") return {};
+                continue;
+            }
+            return workspace_relative_if_regular_file(arguments[i], workspace, cwd);
+        }
+        return {};
+    }
+    return workspace_relative_if_regular_file(arguments[0], workspace, cwd);
+}
+
 Error list_project_scripts(const std::string& workspace, std::vector<std::string>& names) {
     names.clear();
     if (workspace.empty()) return ok_error();

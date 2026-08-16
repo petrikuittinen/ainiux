@@ -29,6 +29,7 @@ bool valid_inline_choices(const InlineChoiceModel& model, std::string* reason = 
 std::string render_inline_choices(const InlineChoiceModel& model);
 InlineChoiceResult parse_inline_choice_key(const InlineChoiceModel& model, unsigned char key);
 InlineChoiceModel agent_inline_choices_for_mode(TuiMode mode);
+InlineChoiceModel agent_guard_approval_choices(bool can_review);
 
 struct AgentInputFrame {
     std::string workspace;

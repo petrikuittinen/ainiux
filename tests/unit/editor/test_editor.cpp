@@ -3788,9 +3788,25 @@ void test_editor_dired() {
     }
     EditorSettings settings;
     Error view_err = ainiux::editor::dired_activate_selection(state, settings);
+    {
+        DiredState file_open;
+        check(ainiux::editor::dired_open(file_open, (root / "b.txt").string()).ok(),
+              "dired_open on a file lists its directory");
+        const ainiux::editor::DiredEntry* selected =
+            ainiux::editor::dired_selected_entry(file_open);
+        check(selected != nullptr && selected->name == "b.txt",
+              "dired_open on a file selects that file");
+        check(ainiux::editor::dired_activate_selection(file_open, settings).ok() &&
+                  file_open.focus == DiredFocus::View && file_open.view.read_only,
+              "activating the selected file opens the RO view");
+    }
     check(view_err.ok(), "enter opens file view: " + view_err.message);
     check(state.focus == DiredFocus::View, "focus switches to view");
     check(state.view.read_only, "view is read-only");
+    check(std::string(ainiux::editor::kDiredViewHelp).find("q quit") != std::string::npos &&
+              std::string(ainiux::editor::kDiredViewHelp).find("space/PageDown") !=
+                  std::string::npos,
+          "RO view helper names paging keys and q quit");
     check(state.view.text.str().find("world") != std::string::npos, "view loads file content");
     check(!state.view_has_history_baseline && state.view_changed_lines.empty(),
           "clean/non-project view has no history diff marks");

@@ -1470,6 +1470,9 @@ GuardApprovalDecision ReadToolRegistry::request_permission(
                              : " this path in the active project?");
     }
     request.arguments = arguments;
+    if (tool_name == "run")
+        request.review_path =
+            workspace_script_review_path(arguments, snapshot_.workspace);
     return request_guard_approval(request, cancellation);
 }
 
@@ -5141,10 +5144,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                 : project_script_hash)
                         << "\n"
                         << "Remembered in this project until the file changes.\n"
-                        << "Read the path if you want to review the source.";
+                        << "Press Review to open the script in dired.";
                 ask.message = message.str();
                 ask.arguments = parsed_arguments;
                 ask.arguments.push_back("content_hash=" + project_script_hash);
+                ask.review_path = project_script_relative;
                 decision = request_guard_approval(ask, cancellation);
                 if (!on_guard_ask_ && session_store_ != nullptr &&
                     session_store_->is_open()) {

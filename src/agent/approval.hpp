@@ -28,6 +28,10 @@ struct GuardApprovalRequest {
     std::string rule_id;         // e.g. ask_on_destructive_git
     std::string message;         // why the guard asked
     std::vector<std::string> arguments;
+    // Workspace-relative script path when the Ask is for a reviewable file
+    // (Confirm scripts/ainiux first-run, or Confirm/Smart run of a project script).
+    // Empty: Guard stays Yes/No only.
+    std::string review_path;
 };
 
 enum class GuardApprovalDecision {

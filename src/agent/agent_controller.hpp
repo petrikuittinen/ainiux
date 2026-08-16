@@ -57,6 +57,7 @@ struct AgentSurfaceEvent {
     std::string guard_command_preview;
     std::string guard_rule_id;
     std::string guard_message;
+    std::string guard_review_path;
 };
 
 // Owns the multi-turn agent workspace session and (optionally) an in-flight
