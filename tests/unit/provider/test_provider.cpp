@@ -1550,6 +1550,36 @@ void test_provider_reasoning_request_compatibility() {
               field(request, "thinking_budget") == nullptr,
           "Qwen Chat does not send unsupported top-level effort fields");
 
+    context = chat_context(ainiux::ReasoningProtocol::QwenChatEffort,
+                           ainiux::ReasoningSelection::automatic());
+    request = serialized_request_json(context);
+    check(field(request, "chat_template_kwargs") == nullptr &&
+              field(request, "reasoning_effort") == nullptr,
+          "Qwen Chat effort omits fields for Auto");
+    context.options.reasoning = ainiux::ReasoningSelection::named("none");
+    context.options.reasoning_explicit = true;
+    request = serialized_request_json(context);
+    check_bool_field(field(request, "chat_template_kwargs"), "enable_thinking", false,
+                     "Qwen Chat effort disables thinking through chat template kwargs");
+    check(field(request, "reasoning_effort") == nullptr &&
+              field(field(request, "chat_template_kwargs"), "reasoning_effort") == nullptr,
+          "Qwen Chat effort omits reasoning_effort when thinking is off");
+    context.options.reasoning = ainiux::ReasoningSelection::named("medium");
+    request = serialized_request_json(context);
+    chat_template_kwargs = field(request, "chat_template_kwargs");
+    check_bool_field(chat_template_kwargs, "enable_thinking", true,
+                     "Qwen Chat effort enables thinking for a named effort");
+    check_string_field(chat_template_kwargs, "reasoning_effort", "medium",
+                       "Qwen Chat effort puts reasoning_effort in chat template kwargs");
+    check_string_field(request, "reasoning_effort", "medium",
+                       "Qwen Chat effort also sends top-level reasoning_effort");
+    context.options.reasoning = ainiux::ReasoningSelection::named("xhigh");
+    request = serialized_request_json(context);
+    check_string_field(field(request, "chat_template_kwargs"), "reasoning_effort", "xhigh",
+                       "Qwen Chat effort preserves xhigh without remapping");
+    check_string_field(request, "reasoning_effort", "xhigh",
+                       "Qwen Chat effort sends xhigh at the top level");
+
     context = context_for(ainiux::ReasoningProtocol::QwenResponses,
                           ainiux::ReasoningSelection::named("max"),
                           ainiux::provider::ApiKind::Responses);

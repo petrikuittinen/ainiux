@@ -437,6 +437,15 @@ std::string reasoning_fields_json(const RequestContext& context) {
             fields += disabled ? "false" : "true";
             fields += "}";
             return fields;
+        case ReasoningProtocol::QwenChatEffort:
+            fields = "\"chat_template_kwargs\":{\"enable_thinking\":";
+            fields += disabled ? "false" : "true";
+            if (!disabled) {
+                fields += ",\"reasoning_effort\":" + scalar;
+            }
+            fields += "}";
+            if (!disabled) fields = append_pair(fields, "reasoning_effort", scalar);
+            return fields;
         case ReasoningProtocol::QwenResponses:
         case ReasoningProtocol::MiniMaxResponses:
             return append_pair(fields, "reasoning", reasoning_effort_object(selection));

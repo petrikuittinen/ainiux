@@ -788,6 +788,53 @@ void test_config_reads_models_template() {
               deepseek_next == ainiux::ReasoningSelection::named("none"),
           "Ctrl+T / next_reasoning_selection works for dated DeepSeek V4 flash ids");
 
+    const ainiux::ModelCapability* qwen38 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "vllm", "chat", "vendor/Qwen/Qwen3.8-27B");
+    check(qwen38 != nullptr && qwen38->id == "qwen-3.8-chat" &&
+              qwen38->reasoning_protocol == ainiux::ReasoningProtocol::QwenChatEffort &&
+              qwen38->reasoning_default == ainiux::ReasoningSelection::named("xhigh") &&
+              qwen38->context_window_tokens == 262144 &&
+              qwen38->reasoning_options.size() == 4 &&
+              qwen38->reasoning_options[0] == ainiux::ReasoningSelection::named("none") &&
+              qwen38->reasoning_options[1] == ainiux::ReasoningSelection::named("low") &&
+              qwen38->reasoning_options[2] == ainiux::ReasoningSelection::named("medium") &&
+              qwen38->reasoning_options[3] == ainiux::ReasoningSelection::named("xhigh"),
+          "Qwen 3.8 family rule supplies none|low|medium|xhigh with default xhigh");
+    const ainiux::ModelCapability* qwen38_preview =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "qwen", "chat", "qwen3.8-max-preview");
+    check(qwen38_preview != nullptr && qwen38_preview->id == "qwen-3.8-chat",
+          "Qwen 3.8 family rule covers max-preview ids");
+    const ainiux::ModelCapability* qwen36 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "deepinfra", "chat", "vendor/qwen/QWEN3.6-27B");
+    check(qwen36 != nullptr && qwen36->id == "qwen-3-hybrid-chat" &&
+              qwen36->reasoning_protocol == ainiux::ReasoningProtocol::QwenChat,
+          "Qwen 3.6 still matches the toggle-only hybrid Chat record");
+    ainiux::ReasoningSelection qwen38_next;
+    check(ainiux::config::next_reasoning_selection(
+              options.model_catalog, "llamacpp", "chat", "Qwen3.8-27B",
+              ainiux::ReasoningSelection::automatic(), qwen38_next) &&
+              qwen38_next == ainiux::ReasoningSelection::named("none") &&
+              ainiux::config::next_reasoning_selection(
+                  options.model_catalog, "llamacpp", "chat", "Qwen3.8-27B",
+                  qwen38_next, qwen38_next) &&
+              qwen38_next == ainiux::ReasoningSelection::named("low") &&
+              ainiux::config::next_reasoning_selection(
+                  options.model_catalog, "llamacpp", "chat", "Qwen3.8-27B",
+                  ainiux::ReasoningSelection::named("xhigh"), qwen38_next) &&
+              qwen38_next.is_auto(),
+          "Qwen 3.8 Ctrl+T walks none|low|medium|xhigh then Auto");
+    ainiux::ReasoningSelection qwen36_next;
+    check(ainiux::config::next_reasoning_selection(
+              options.model_catalog, "deepinfra", "chat", "vendor/qwen/QWEN3.6-27B",
+              ainiux::ReasoningSelection::automatic(), qwen36_next) &&
+              qwen36_next == ainiux::ReasoningSelection::named("none") &&
+              ainiux::config::next_reasoning_selection(
+                  options.model_catalog, "deepinfra", "chat", "vendor/qwen/QWEN3.6-27B",
+                  qwen36_next, qwen36_next) &&
+              qwen36_next == ainiux::ReasoningSelection::named("enabled"),
+          "Qwen 3.6 Ctrl+T remains a thinking on/off toggle");
+
     const std::string valid_warning = ainiux::config::reasoning_catalog_warning(
         options.model_catalog,
         "groq",

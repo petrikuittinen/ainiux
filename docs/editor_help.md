@@ -149,8 +149,9 @@ Requires a configured provider **and** model. If either is missing, `Ctrl+Space`
 
 `Ctrl+T` cycles the selected model's catalog-backed reasoning setting from lower
 to higher values, then Auto, and around again. For toggle-only Qwen 3.5/3.6 and
-Gemma 4 models it switches thinking off and on. The minibuffer reports the new
-value (or why cycling is unavailable). `Alt+Ctrl+T` toggles whether thinking
+Gemma 4 models it switches thinking off and on. Qwen 3.8 walks
+`none|low|medium|xhigh` (provider default `xhigh`). The minibuffer reports the
+new value (or why cycling is unavailable). `Alt+Ctrl+T` toggles whether thinking
 traces are shown; `/thinking show|hide` is the command equivalent.
 
 After a successful AI command, the minibuffer shows `Generated N tokens` (or

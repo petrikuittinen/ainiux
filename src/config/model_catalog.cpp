@@ -179,6 +179,7 @@ bool parse_reasoning_protocol(const std::string& text, ReasoningProtocol& protoc
         {"anthropic_budget", ReasoningProtocol::AnthropicBudget},
         {"thinking_toggle", ReasoningProtocol::ThinkingToggle},
         {"qwen_chat", ReasoningProtocol::QwenChat},
+        {"qwen_chat_effort", ReasoningProtocol::QwenChatEffort},
         {"qwen_responses", ReasoningProtocol::QwenResponses},
         {"deepseek", ReasoningProtocol::DeepSeek},
         {"kimi_effort", ReasoningProtocol::KimiEffort},
@@ -209,6 +210,7 @@ const char* reasoning_protocol_name(ReasoningProtocol protocol) {
         case ReasoningProtocol::AnthropicBudget: return "anthropic_budget";
         case ReasoningProtocol::ThinkingToggle: return "thinking_toggle";
         case ReasoningProtocol::QwenChat: return "qwen_chat";
+        case ReasoningProtocol::QwenChatEffort: return "qwen_chat_effort";
         case ReasoningProtocol::QwenResponses: return "qwen_responses";
         case ReasoningProtocol::DeepSeek: return "deepseek";
         case ReasoningProtocol::KimiEffort: return "kimi_effort";
@@ -224,7 +226,7 @@ const char* reasoning_protocol_name(ReasoningProtocol protocol) {
 std::string reasoning_protocol_names() {
     return "none, generic_thinking, openai_effort, openrouter, gemini_effort, "
            "gemini_thinking_level, gemma_thinking_level, anthropic_budget, thinking_toggle, "
-           "qwen_chat, qwen_responses, deepseek, kimi_effort, zai, xai_effort, "
+           "qwen_chat, qwen_chat_effort, qwen_responses, deepseek, kimi_effort, zai, xai_effort, "
            "minimax_responses, nemotron_template, or hy3_template";
 }
 

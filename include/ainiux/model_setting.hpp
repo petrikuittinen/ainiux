@@ -55,6 +55,7 @@ enum class ReasoningProtocol {
     AnthropicBudget,
     ThinkingToggle,
     QwenChat,
+    QwenChatEffort,
     QwenResponses,
     DeepSeek,
     KimiEffort,

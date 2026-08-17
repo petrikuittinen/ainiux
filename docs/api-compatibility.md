@@ -41,6 +41,7 @@ gemma_thinking_level        chat_template_kwargs: { enable_thinking: BOOLEAN }
 anthropic_budget            thinking: { type: enabled, budget_tokens: TOKENS|VALUE }
 thinking_toggle             thinking: { type: enabled|disabled|VALUE }
 qwen_chat                   chat_template_kwargs: { enable_thinking: BOOLEAN }
+qwen_chat_effort            chat_template_kwargs enable_thinking plus reasoning_effort; top-level reasoning_effort when thinking is on
 qwen_responses              reasoning: { effort: VALUE }
 deepseek, zai               thinking.type plus unmodified reasoning_effort
 kimi_effort                 reasoning_effort: VALUE
@@ -53,7 +54,7 @@ generic_thinking            enable_thinking plus exact thinking_budget
 
 Disable spellings such as `none`, `off`, and numeric `0` are recognized where a protocol has an enable/disable shape. Other names—including `minimal`—are not globally rewritten because their meaning is model-specific. Auto is always omitted rather than converted to a guessed default.
 
-Catalog entries currently cover model-specific GPT-5 generations, Gemini/Gemma, Claude token budgets, Grok, DeepSeek, Kimi, GLM, Qwen Chat/Responses, MiniMax Chat/Responses, MiMo Chat/Responses, Stepfun, Nemotron, Hy3, Llama 3.x presets, and both 20B/120B gpt-oss variants. Model matching checks only the final component, so arbitrarily nested prefixes such as `gateway/vendor/GEMINI-...` work without becoming part of the family expression. Native Anthropic Messages is still not implemented; the catalog cannot add an API adapter by itself.
+Catalog entries currently cover model-specific GPT-5 generations, Gemini/Gemma, Claude token budgets, Grok, DeepSeek, Kimi, GLM, Qwen 3.5/3.6 Chat/Responses, Qwen 3.8 Chat effort, MiniMax Chat/Responses, MiMo Chat/Responses, Stepfun, Nemotron, Hy3, Llama 3.x presets, and both 20B/120B gpt-oss variants. Model matching checks only the final component, so arbitrarily nested prefixes such as `gateway/vendor/GEMINI-...` work without becoming part of the family expression. Native Anthropic Messages is still not implemented; the catalog cannot add an API adapter by itself.
 
 Temperature metadata is advisory for explicit overrides. Purpose presets omit temperature when the matched model/reasoning combination marks it unsupported. Explicit CLI, configuration, chat, or editor temperature values remain serialized and produce a warning because the provider may reject them. In particular, the bundled catalog distinguishes older GPT-5 models that reject temperature from GPT-5.4/GPT-5.2 models that permit it only with `reasoning=none`; see [OpenAI's current GPT-5 parameter compatibility](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.4).
 
