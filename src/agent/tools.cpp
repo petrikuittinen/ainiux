@@ -3497,13 +3497,15 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         }
     }
     if (agent_session) {
-        // Always advertised in Act/Plan so tool-definition cache stays stable
-        // whether or not a session goal is currently active.
-        tools.push_back(
-            {"goal_met",
-             "Call only when the active session goal is verifiably satisfied. Requires "
-             "non-empty evidence. Rejected when no goal is active.",
-             schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")});
+        // Advertised only while /goal is Active. Always listing it in Act/Plan
+        // made small models treat goal_met as a generic "task done" signal.
+        if (goal_hooks_.has_active_goal && goal_hooks_.has_active_goal()) {
+            tools.push_back(
+                {"goal_met",
+                 "Call only when the active session /goal is verifiably satisfied. "
+                 "Requires non-empty evidence. Not available in Act or Plan.",
+                 schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")});
+        }
         tools.push_back(
             {"attach",
              "Attach one local PNG/JPEG/GIF for vision on the next model round of this turn "

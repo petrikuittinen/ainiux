@@ -27,7 +27,7 @@ methodology.
 | `run` | `command` | Shell-free argv exec. Smart auto-allows classified in-project `mkdir`/`rmdir`/`rm`/`mv`; asks for non-empty `rm -r`. |
 | `fetch` | `url` | HTTP(S) → Markdown/text. Network sessions only. |
 | `web_search` | `term` | At most 3 search hits. Network sessions only. |
-| `goal_met` | `evidence` | Complete an active `/goal`. |
+| `goal_met` | `evidence` | Complete an active `/goal`. Advertised only while a session goal is Active (chrome shows `goal`). Hidden in Act/Plan. |
 | `attach` | `path` | Queue one local PNG/JPEG/GIF for this turn. |
 | `edit` | `path`, `ops` | Preferred in-file edit. |
 | `write` | `path`, `content` | Create/overwrite a file. |

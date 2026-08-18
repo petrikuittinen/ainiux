@@ -889,6 +889,7 @@ std::vector<std::string> assist_command_completions(const EditorAssistConfig& co
         }
     }
     commands.push_back("/help");
+    commands.push_back("/setting");
     commands.push_back("/highlight ");
     commands.push_back("/scrollbar ");
     commands.push_back("/scrollbar show");

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <regex>
 #include <sstream>
@@ -315,6 +316,14 @@ const ModelSetting* find_model_preset(const ModelCatalog& catalog,
         }
     }
     return nullptr;
+}
+
+double temperature_max_for(const ModelCapability* capability) {
+    if (capability != nullptr && capability->temperature_max.has_value() &&
+        std::isfinite(*capability->temperature_max) && *capability->temperature_max > 0.0) {
+        return *capability->temperature_max;
+    }
+    return 1.0;
 }
 
 bool temperature_supported_for(const ModelCapability& capability,

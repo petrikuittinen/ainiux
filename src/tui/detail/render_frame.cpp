@@ -45,7 +45,8 @@ void render(const chat::Session& session,
             TerminalFrameRenderer& frame_renderer,
             const char* panel_title_override,
             bool agent_mode,
-            const AgentChrome& agent_chrome) {
+            const AgentChrome& agent_chrome,
+            const std::vector<StyledLine>* overlay_lines) {
     const TuiSize terminal = terminal_size();
     // Never paint the host's true last column (see usable_terminal_cols).
     const int paint_cols = usable_terminal_cols(terminal.cols);
@@ -85,11 +86,14 @@ void render(const chat::Session& session,
     }
     const bool agent_choice_active = valid_inline_choices(inline_choices);
     const bool guard_details = mode == TuiMode::GuardApprovalConfirm;
+    const bool overlay_active = overlay_lines != nullptr && !overlay_lines->empty();
     const bool panel_active =
-        (mode != TuiMode::Chat || !panel_text.empty()) &&
+        !overlay_active && (mode != TuiMode::Chat || !panel_text.empty()) &&
         (!agent_choice_active || guard_details);
     std::vector<StyledLine> history =
-        panel_active
+        overlay_active
+            ? *overlay_lines
+            : panel_active
             ? panel_lines_for_text(panel_text, mode, history_cols, panel_title_override)
             : history_lines_for_session(session, history_cols, show_thinking_traces, activity_kind,
                                         activity_frame, syntax_highlight, agent_mode);
@@ -102,7 +106,8 @@ void render(const chat::Session& session,
     }
     const bool picker_top_aligned = mode == TuiMode::ThreadList || mode == TuiMode::ProviderList ||
                                     mode == TuiMode::ModelList || mode == TuiMode::ReasoningList ||
-                                    mode == TuiMode::GuardApprovalConfirm;
+                                    mode == TuiMode::GuardApprovalConfirm ||
+                                    mode == TuiMode::Settings;
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);
 
@@ -137,7 +142,8 @@ void render(const chat::Session& session,
                   static_cast<size_t>(std::max(0, history_start)))
             : ui::ScrollbarMetrics{};
     int printed = 0;
-    const StyleRole history_fill_role = panel_active ? StyleRole::PanelBorder : StyleRole::Text;
+    const StyleRole history_fill_role =
+        (panel_active || overlay_active) ? StyleRole::PanelBorder : StyleRole::Text;
     auto history_row_command = [&](int row,
                                    int track_row,
                                    const std::vector<StyledSegment>& segments) {

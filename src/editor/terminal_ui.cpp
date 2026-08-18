@@ -1571,7 +1571,8 @@ void render_terminal_panel(EditorState& state,
                            int& panel_scroll,
                            const char* panel_title_override,
                            const char* status_text_override,
-                           const std::vector<tui::StyledLine>* body_lines_override) {
+                           const std::vector<tui::StyledLine>* body_lines_override,
+                           bool raw_body) {
     const TerminalSize size = terminal_size();
     const int rows = std::max(3, size.rows);
     const int cols = std::max(20, size.cols);
@@ -1583,7 +1584,9 @@ void render_terminal_panel(EditorState& state,
                                                  theme_style.use_colors,
                                                  theme_style.color_mode};
     std::vector<tui::StyledLine> lines;
-    if (body_lines_override != nullptr) {
+    if (raw_body && body_lines_override != nullptr) {
+        lines = *body_lines_override;
+    } else if (body_lines_override != nullptr) {
         // Dired (and similar): custom multi-role body rows, same panel chrome as list pickers.
         const char* title =
             panel_title_override != nullptr ? panel_title_override : "Panel";

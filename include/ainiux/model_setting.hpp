@@ -84,6 +84,9 @@ struct ModelCapability {
     std::optional<ReasoningSelection> reasoning_default;
     std::vector<ReasoningSelection> reasoning_options;
     TemperatureSupport temperature = TemperatureSupport::Unknown;
+    // Accepted temperature upper bound for UI and /setting validation.
+    // Missing means 1.0 (Gemini families set 2.0 in the bundled catalog).
+    std::optional<double> temperature_max;
     bool web_search = false;
     std::string web_search_name = "web_search";
     bool enabled = true;

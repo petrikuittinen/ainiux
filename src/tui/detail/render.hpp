@@ -75,6 +75,7 @@ void render(const chat::Session& session,
             TerminalFrameRenderer& frame_renderer,
             const char* panel_title_override = nullptr,
             bool agent_mode = false,
-            const AgentChrome& agent_chrome = AgentChrome{});
+            const AgentChrome& agent_chrome = AgentChrome{},
+            const std::vector<StyledLine>* overlay_lines = nullptr);
 
 }  // namespace ainiux::tui::detail

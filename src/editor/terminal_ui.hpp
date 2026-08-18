@@ -161,7 +161,8 @@ void render_terminal_panel(EditorState& state,
                            int& panel_scroll,
                            const char* panel_title_override = nullptr,
                            const char* status_text_override = nullptr,
-                           const std::vector<tui::StyledLine>* body_lines_override = nullptr);
+                           const std::vector<tui::StyledLine>* body_lines_override = nullptr,
+                           bool raw_body = false);
 std::string editor_status_line(const EditorState& state,
                                bool help_view = false,
                                size_t split_pane_count = 1,

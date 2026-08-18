@@ -18,18 +18,26 @@ Agent tool rounds default to a maximum of 250 scripted rounds per user turn and 
 
 The first interactive use may offer to build a code index. Declining leaves live filesystem tools available. Use `/new` explicitly for a new agent project; `Tab` and `Insert` do not create one.
 
-## Act and Plan
+`/setting` opens the same grouped settings widget as chat. Agent-only rows include `thinking_preview_max_chars` and `cmd-out`. `s` writes the project settings file; `q` discards the draft.
 
-Act is the default task policy. It can inspect the workspace and perform ordinary contained mutations subject to permissions and Guard classification. `/plan` changes the current interactive session to planning policy, and `/act` returns to full coding policy.
+## Act, Plan, and Goal
+
+The input chrome shows one of three session states:
+
+- **act** (default) — full coding policy. `/act` returns here from Plan.
+- **plan** — `/plan` switches to planning policy. Read and research stay available; writes are limited to planning documents.
+- **goal** — `/goal CONDITION` overlays Act with a persistent completion condition. The chrome stays `goal` until `goal_met`, `/goal clear`, `/goal pause`, stall, or the turn cap.
+
+`goal_met` is advertised only in the **goal** state. Ordinary Act/Plan turns do not receive that tool, so a finished one-shot request is just a normal final answer.
 
 Plan keeps read and research tools but code-enforces writes to planning documents. One-shot Plan accepts `plan "goal"`, `--plan`, and `--plan-file`. It is not a promise that every model will produce a good plan; review the document before executing it.
 
 ## Native tools
 
 The current native names are `index`, `ls`, `glob`, `grep`, `symbol`, `outline`,
-`read`, `run`, `fetch`, `web_search`, `goal_met`, `attach`, `edit`, `write`,
-`mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on index, network,
-session, and mutation policy. When `models.conf` marks the current model
+`read`, `run`, `fetch`, `web_search`, `goal_met` (active `/goal` only), `attach`,
+`edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on
+index, network, session, and mutation policy. When `models.conf` marks the current model
 `web_search=on`, agent/run/plan attach the provider-hosted search tool and do
 not advertise the client Tavily/DuckDuckGo `web_search` function. Official
 Gemini OpenAI-compat Chat stays on client `web_search` because that adapter
@@ -80,7 +88,7 @@ kill-on-close Job Object so timeout or cancellation terminates descendants.
 
 ## Goals
 
-Interactive `/goal CONDITION` stores a session-scoped completion condition. The agent can continue across turns until it calls `goal_met` with evidence. It stops when the goal is met, the task stalls or blocks, the turn cap is reached, or the user interrupts.
+Interactive `/goal CONDITION` stores a session-scoped completion condition and switches the chrome to **goal**. The agent can continue across turns until it calls `goal_met` with evidence. It stops when the goal is met, the task stalls or blocks, the turn cap is reached, or the user interrupts. Without an active `/goal`, `goal_met` is not advertised.
 
 ```text
 /goal add the parser behavior and focused tests

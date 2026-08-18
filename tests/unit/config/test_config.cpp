@@ -506,6 +506,7 @@ void test_config_applies_model_catalog() {
         "reasoning_protocol = qwen_chat\n"
         "reasoning_default = medium\n"
         "temperature = supported\n"
+        "temperature_max = 2.0\n"
         "enabled = on\n"
         "[preset]\n"
         "model_id = qwen-coder\n"
@@ -531,7 +532,8 @@ void test_config_applies_model_catalog() {
               capability.reasoning_options[0] == ainiux::ReasoningSelection::named("low") &&
               capability.reasoning_options[1] == ainiux::ReasoningSelection::token_budget(1024) &&
               capability.context_window_tokens == 1000000 &&
-              capability.temperature == ainiux::TemperatureSupport::Supported,
+              capability.temperature == ainiux::TemperatureSupport::Supported &&
+              capability.temperature_max == 2.0,
           "model capability, context fallback, and compact reasoning values are stored");
     const ainiux::ModelSetting& preset = options.model_catalog.presets.front();
     check(!preset.temperature.has_value() && preset.top_k == 20 && preset.top_p == 0.95 &&

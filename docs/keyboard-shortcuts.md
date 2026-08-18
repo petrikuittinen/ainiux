@@ -74,6 +74,16 @@ Use `/pop` to remove the last user or assistant message.
 
 ### Sub-mode shortcuts
 
+**Settings** (`/setting`):
+
+- `↑` / `↓` — move between settings
+- `←` / `→` — cycle a closed list (reasoning, on/off, tab style)
+- Type — edit a number or string; invalid keystrokes are ignored
+- `Enter` — accept the current row
+- `Esc` — cancel the current row
+- `s` — save all staged changes and close
+- `q` — quit without saving
+
 **History edit** (`Ctrl+E` / `/edit`) and **system-prompt edit** (`/system`):
 
 - `Enter` or `Ctrl+S` — save

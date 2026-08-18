@@ -2188,13 +2188,9 @@ void test_goal_met_tool_hooks() {
 
     bool has_goal_met = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
-        if (definition.name == "goal_met") {
-            has_goal_met = true;
-            check(definition.parameters_json.find("evidence") != std::string::npos,
-                  "goal_met schema requires evidence");
-        }
+        if (definition.name == "goal_met") has_goal_met = true;
     }
-    check(has_goal_met, "agent registry always advertises goal_met");
+    check(!has_goal_met, "agent registry hides goal_met when no session goal is active");
 
     std::string result =
         tools.execute("goal_met", R"JSON({"evidence":"file exists"})JSON");
@@ -2202,6 +2198,16 @@ void test_goal_met_tool_hooks() {
           "goal_met rejects when no active goal");
 
     active = true;
+    has_goal_met = false;
+    for (const provider::FunctionDefinition& definition : tools.definitions()) {
+        if (definition.name == "goal_met") {
+            has_goal_met = true;
+            check(definition.parameters_json.find("evidence") != std::string::npos,
+                  "goal_met schema requires evidence");
+        }
+    }
+    check(has_goal_met, "agent registry advertises goal_met only while a goal is active");
+
     result = tools.execute("goal_met", R"JSON({"evidence":"   "})JSON");
     check(!json_ok(result) && json_error_code(result) == "invalid_arguments",
           "goal_met rejects empty evidence");

@@ -44,7 +44,7 @@ Slash commands (via `Ctrl+E`, `Esc`, or `Alt+X`, then the command):
 
 Both panes of a new split show the same buffer at first and start with the same cursor and scroll position. After that, each pane keeps its own point and window scroll (Emacs-style), even when both panes show the same buffer—moving or scrolling in one pane does not move the other. Open another file in one pane (`Ctrl+O`) or switch buffers (`Ctrl+L`) to compare two files. Status shows `[N panes]` while more than one pane is open.
 
-The mouse wheel scrolls the focused pane by exactly one visual row, including soft-wrapped rows and read-only help/settings views. The caret, selection, undo history, and dirty state do not change. If the caret scrolls off-screen it is hidden; the next keyboard navigation, edit, or paste resumes normal cursor following. Wheel input over another pane, the status line, minibuffer, or a picker is ignored. Native terminal selection may require `Shift+drag`, depending on the terminal.
+The mouse wheel scrolls the focused pane by exactly one visual row, including soft-wrapped rows, the read-only help view, and the settings widget. The caret, selection, undo history, and dirty state do not change. If the caret scrolls off-screen it is hidden; the next keyboard navigation, edit, or paste resumes normal cursor following. Wheel input over another pane, the status line, minibuffer, or a picker is ignored. Native terminal selection may require `Shift+drag`, depending on the terminal.
 
 **Other-pane scrolling:** after a split, `Ctrl+B`/`Ctrl+D` page the new sibling. After `Ctrl+X o`, they page the pane you left. With three or more panes, the target is always the last pane you left (not every non-focused pane). Cancel for minibuffers and replace mode is **Esc** only (not Ctrl+X).
 
@@ -262,9 +262,8 @@ Press **`Ctrl+E`**, **`Esc`**, or **`Alt+X`** to open the command minibuffer (`C
 | `/nosplit` | Alias for `/maximize` |
 | `/highlight [on|off]` | Show or toggle syntax highlighting for editor and chat |
 | `/scrollbar [show|hide]` | Show or hide scrollbars process-wide without reflowing text |
-| `/setting` | Toggle a generated read-only settings view without changing the active buffer |
-| `/setting NAME=VALUE` | Apply shared settings (`on`/`off` for booleans) |
-| `/setting general|coding|instruct|creative` | Apply a model-catalog purpose preset |
+| `/setting` | Open the settings widget (↑↓ move, ←→ choices, type numbers, Enter accept, Esc cancel row, s save, q quit) |
+| `/setting NAME=VALUE` | Apply a shared setting without opening the widget (`on`/`off` for booleans) |
 | `/thinking [show|hide]` | Show or set thinking-trace visibility |
 | `/theme [off|NAME]` | Disable styling or select/re-enable a named theme process-wide |
 | `/mode [MODE|auto]` | Show or set this buffer's syntax mode |

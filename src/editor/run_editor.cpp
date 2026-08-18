@@ -37,6 +37,7 @@
 #include "ui/provider_model_display.hpp"
 #include "ui/provider_model_selector.hpp"
 #include "ui/scrollbar.hpp"
+#include "ui/settings_widget.hpp"
 #include "ui/text_selector.hpp"
 
 #include <algorithm>
@@ -299,6 +300,8 @@ app::EditorRunResult run_editor(const std::string& path,
     EditorState buffer_list_view;
     ui::TextSelectorNavState buffer_list_nav;
     EditorProviderModelPicker picker;
+    ui::SettingsWidget settings_widget;
+    int settings_scroll = 0;
     EditorModelListRuntime model_list;
     provider::ModelsResult cached_editor_models;
     bool have_cached_editor_models = false;
@@ -492,6 +495,7 @@ app::EditorRunResult run_editor(const std::string& path,
         // pending_agent_guard is allowed: Ctrl+G leaves Guard Ask pending for
         // the agent TUI (must not auto-deny).
         return !help_view.active && !picker.active && !buffer_list_active &&
+               !settings_widget.active &&
                !pending_close_confirm && !pending_agent_quit_confirm &&
                !minibuffer.active && !replace.active &&
                !assist_session.active && !reformat_session.active && !insert_session.active &&
@@ -610,10 +614,28 @@ app::EditorRunResult run_editor(const std::string& path,
 
     auto render_editor = [&]() {
         // Keep the focused leaf's view in sync so unfocused panes stay independent.
-        if (!help_view.active && !dired.active && !picker.active && !buffer_list_active) {
+        if (!help_view.active && !dired.active && !picker.active && !buffer_list_active &&
+            !settings_widget.active) {
             split_layout.set_focused_view(pane_view_from_state(state));
         }
         const TerminalThemeStyle theme_style = terminal_theme_style();
+        if (settings_widget.active) {
+            const TerminalSize size = terminal_size();
+            const int width = std::max(1, size.cols - 1);
+            const std::vector<tui::StyledLine> body =
+                ui::render_settings_widget(settings_widget, width);
+            render_terminal_panel(state,
+                                  minibuffer,
+                                  terminal_frame_renderer,
+                                  theme_style,
+                                  tui::TuiMode::Settings,
+                                  settings_scroll,
+                                  nullptr,
+                                  settings_widget.status.c_str(),
+                                  &body,
+                                  true);
+            return;
+        }
         if (picker.active) {
             picker.refresh_view();
             render_terminal_panel(picker.view,
@@ -769,36 +791,9 @@ app::EditorRunResult run_editor(const std::string& path,
         minibuffer_message(minibuffer, "Help (read-only) — Ctrl+H, Esc /help, or Ctrl+Q to return");
     };
 
-    auto enter_settings_view = [&](const std::string& text) {
-        if (help_view.active) {
-            if (help_view.settings) {
-                exit_help_view();
-                return;
-            }
-            exit_help_view();
-        }
-        if (assist_session.active || reformat_session.active || insert_session.active) {
-            minibuffer_message(minibuffer, "Finish or cancel the active job before opening settings");
-            return;
-        }
-        help_view.saved = state.capture_state();
-        help_view.saved_path = state.path;
-        help_view.saved_dirty = state.dirty;
-        help_view.saved_language = state.language;
-        help_view.saved_language_automatic = state.language_automatic;
-        help_view.active = true;
-        help_view.settings = true;
-        state.text = PieceTable::from_string(text);
-        state.invalidate_word_index();
-        state.cursor = 0;
-        state.preferred_column = 0;
-        state.scroll_line = 0;
-        state.scroll_column = 0;
-        state.dirty = false;
-        state.set_language(highlight::Language::Text, false);
-        state.clear_selection();
-        state.clear_undo_history();
-        minibuffer_message(minibuffer, "Settings (read-only) — /setting, Esc, or Ctrl+Q to return");
+    auto close_editor_settings = [&]() {
+        ui::close_settings_widget(settings_widget);
+        settings_scroll = 0;
     };
 
     auto show_dired_view_help = [&]() {
@@ -831,6 +826,9 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (picker.active) {
             picker.active = false;
+        }
+        if (settings_widget.active) {
+            close_editor_settings();
         }
         if (assist_session.active || reformat_session.active || insert_session.active ||
             shell_session.active) {
@@ -1182,22 +1180,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto refresh_settings_view = [&]() {
-        if (!help_view.active || !help_view.settings) return;
-        const cli::Options* options = active_model_options();
+        if (!settings_widget.active) return;
+        cli::Options* options = mutable_model_options();
         if (options == nullptr) return;
-        const size_t retained_mouse_scroll = state.scroll_line;
-        state.text = PieceTable::from_string(chat::format_settings_panel(
-            *options,
-            ai_continue.has_value()
-                ? provider::reasoning_temperature_advisory(ai_continue->request)
-                : std::string{}));
-        state.invalidate_word_index();
-        state.cursor = 0;
-        state.scroll_line = mouse_view_detached ? retained_mouse_scroll : 0;
-        state.scroll_column = 0;
-        state.dirty = false;
-        state.clear_selection();
-        state.clear_undo_history();
+        settings_widget.draft = *options;
     };
 
     auto start_pending_selection_save = [&]() {
@@ -1221,6 +1207,55 @@ app::EditorRunResult run_editor(const std::string& path,
         pending_selection_save = provider::serialize_model_selection(
             provider::model_selection_from_options(*options));
         start_pending_selection_save();
+    };
+
+    auto open_editor_settings = [&]() {
+        if (help_view.active) {
+            exit_help_view();
+        }
+        if (assist_session.active || reformat_session.active || insert_session.active ||
+            shell_session.active) {
+            minibuffer_message(minibuffer, "Finish or cancel the active job before opening settings");
+            return;
+        }
+        if (picker.active || buffer_list_active || dired.active || minibuffer.active) {
+            minibuffer_message(minibuffer, "Finish the current action before opening settings");
+            return;
+        }
+        if (settings_widget.active) {
+            close_editor_settings();
+            minibuffer_message(minibuffer, "Settings discarded");
+            return;
+        }
+        cli::Options* options = mutable_model_options();
+        cli::Options fallback;
+        const cli::Options& source = options != nullptr ? *options : fallback;
+        ui::open_settings_widget(settings_widget,
+                                 chat::SettingsSurface::Editor,
+                                 source,
+                                 chat::make_editor_locals(state, text_align_width_default));
+        settings_scroll = 0;
+        minibuffer_message(minibuffer, settings_widget.status);
+    };
+
+    auto save_editor_settings = [&]() {
+        cli::Options* options = mutable_model_options();
+        chat::SettingsEditorLocals locals = settings_widget.editor_draft;
+        if (options != nullptr) {
+            chat::copy_visible_settings(chat::SettingsSurface::Editor,
+                                        settings_widget.draft,
+                                        settings_widget.editor_draft,
+                                        *options,
+                                        locals);
+            insert_options.auto_convert_html_to_markdown = options->auto_convert_html_to_markdown;
+            highlight_enabled = options->tui_highlight;
+            state.highlight_enabled = highlight_enabled;
+            schedule_selection_save();
+        }
+        chat::apply_editor_locals_to_state(locals, state);
+        text_align_width_default = locals.alignment_width;
+        close_editor_settings();
+        minibuffer_message(minibuffer, "Settings saved");
     };
 
     auto process_selection_save_events = [&]() {
@@ -2988,54 +3023,28 @@ app::EditorRunResult run_editor(const std::string& path,
         if (command_line == "/setting" || command_line.rfind("/setting ", 0) == 0) {
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
+            const std::string requested = command_line.size() <= 8
+                                              ? ""
+                                              : trim_ascii_copy(command_line.substr(8));
+            if (requested.empty()) {
+                open_editor_settings();
+                return;
+            }
             cli::Options* options = mutable_model_options();
             if (options == nullptr) {
                 minibuffer_message(minibuffer, "Settings are unavailable");
                 return;
             }
-            const std::string requested = command_line.size() <= 8
-                                              ? ""
-                                              : trim_ascii_copy(command_line.substr(8));
-            if (requested.empty()) {
-                enter_settings_view(chat::format_settings_panel(
-                    *options,
-                    ai_continue.has_value()
-                        ? provider::reasoning_temperature_advisory(ai_continue->request)
-                        : std::string{}));
-                return;
-            }
             if (chat::generation::is_chat_purpose(requested)) {
-                if (options->model.empty()) {
-                    minibuffer_message(minibuffer,
-                                       "Set a model with /model before applying a purpose preset");
-                    return;
-                }
-                const ModelCapability* capability = config::resolve_model_capability(
-                    options->model_catalog, options->provider, options->api, options->model);
-                const ModelSetting* preset = capability == nullptr
-                    ? nullptr
-                    : config::find_model_preset(options->model_catalog, *capability, requested);
-                if (preset == nullptr) {
-                    minibuffer_message(minibuffer,
-                                       "No [preset] in models.conf for model " + options->model +
-                                           " purpose " + requested);
-                    return;
-                }
-                Error err = chat::apply_model_setting_preset(*options, *preset, capability);
-                if (!err.ok()) {
-                    minibuffer_message(minibuffer, err.message);
-                    return;
-                }
-                minibuffer_message(minibuffer,
-                                   "Applied " + requested + " settings for " + options->model);
-                schedule_selection_save();
-                refresh_settings_view();
+                minibuffer_message(
+                    minibuffer,
+                    "purpose is no longer a setting; open /setting and edit temperature, "
+                    "top_p, and related fields, or pass --purpose on the command line");
                 return;
             }
             const size_t equals = requested.find('=');
             if (equals == std::string::npos) {
-                minibuffer_message(minibuffer,
-                                   "Usage: /setting NAME=VALUE or /setting general|coding|instruct|creative");
+                minibuffer_message(minibuffer, "Usage: /setting NAME=VALUE");
                 return;
             }
             const std::string name = trim_ascii_copy(requested.substr(0, equals));
@@ -3200,6 +3209,7 @@ app::EditorRunResult run_editor(const std::string& path,
                    minibuffer.input == pending_clipboard.minibuffer_input;
         }
         return !minibuffer.active && !help_view.active && !picker.active &&
+               !settings_widget.active &&
                !buffer_list_active && state.buffer_id() == pending_clipboard.buffer_id &&
                state.revision() == pending_clipboard.revision &&
                state.cursor == pending_clipboard.cursor &&
@@ -3400,7 +3410,8 @@ app::EditorRunResult run_editor(const std::string& path,
             const bool command_unavailable =
                 minibuffer.active || replace.active || assist_session.active ||
                 reformat_session.active || insert_session.active || shell_session.active ||
-                picker.active || buffer_list_active || dired.active || pending_close_confirm ||
+                picker.active || buffer_list_active || settings_widget.active ||
+                dired.active || pending_close_confirm ||
                 window_prefix_active;
             if (!command_unavailable) open_assist_command_minibuffer();
             return;
@@ -3978,6 +3989,53 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, "Cancelling shell...");
             return;
         }
+        if (settings_widget.active) {
+            if (ch == 17) {
+                quit = true;
+                return;
+            }
+            if (ch == 27) {
+                unsigned char next = 0;
+                if (!read_terminal_byte(next, terminal_escape_inter_byte_timeout_ms())) {
+                    ui::cancel_settings_widget_row(settings_widget);
+                    minibuffer_message(minibuffer, settings_widget.status);
+                    return;
+                }
+                std::string sequence;
+                if (next == '[' || next == 'O') {
+                    sequence.push_back(static_cast<char>(next));
+                    unsigned char body = 0;
+                    while (sequence.size() < 16 &&
+                           read_terminal_byte(body, terminal_escape_inter_byte_timeout_ms())) {
+                        sequence.push_back(static_cast<char>(body));
+                        if ((body >= 'A' && body <= 'Z') || body == '~' ||
+                            (body >= 'a' && body <= 'z')) {
+                            break;
+                        }
+                    }
+                    MovementKeyEvent movement;
+                    if (parse_movement_sequence(sequence, movement)) {
+                        ui::handle_settings_widget_movement(settings_widget, movement.key);
+                        minibuffer_message(minibuffer, settings_widget.status);
+                        return;
+                    }
+                }
+                ui::cancel_settings_widget_row(settings_widget);
+                minibuffer_message(minibuffer, settings_widget.status);
+                return;
+            }
+            const ui::SettingsWidgetAction action =
+                ui::handle_settings_widget_key(settings_widget, ch);
+            if (action == ui::SettingsWidgetAction::Saved) {
+                save_editor_settings();
+            } else if (action == ui::SettingsWidgetAction::Quit) {
+                close_editor_settings();
+                minibuffer_message(minibuffer, "Settings discarded");
+            } else if (action == ui::SettingsWidgetAction::Handled) {
+                minibuffer_message(minibuffer, settings_widget.status);
+            }
+            return;
+        }
         if (picker.active) {
             if (ch == 17) {
                 quit = true;
@@ -4302,6 +4360,7 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         if (ch == 24) {
             if (help_view.active || dired.active || picker.active || buffer_list_active ||
+                settings_widget.active ||
                 pending_close_confirm || assist_session.active || reformat_session.active ||
                 insert_session.active || shell_session.active) {
                 minibuffer_message(minibuffer, "Finish the current action before window commands");
@@ -4316,7 +4375,7 @@ app::EditorRunResult run_editor(const std::string& path,
         // Mutate only that leaf's view so the focused pane (and same-buffer siblings)
         // keep their independent cursors/scrolls.
         if ((ch == 2 || ch == 4) && split_layout.has_split() && !help_view.active &&
-            !picker.active && !buffer_list_active) {
+            !picker.active && !buffer_list_active && !settings_widget.active) {
             const std::optional<size_t> other_leaf = split_layout.other_scroll_leaf();
             if (!other_leaf.has_value()) {
                 minibuffer_message(minibuffer, "No other pane to scroll");
@@ -4562,6 +4621,10 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, "Choose a buffer or press Esc to cancel");
             return;
         }
+        if (settings_widget.active) {
+            minibuffer_message(minibuffer, "Finish settings or press q to quit without saving");
+            return;
+        }
         if (pending_close_confirm) {
             minibuffer_message(minibuffer, ui::kConfirmationRetryPrompt);
             return;
@@ -4601,7 +4664,8 @@ app::EditorRunResult run_editor(const std::string& path,
     SteadyClock::time_point last_activity = SteadyClock::now();
 
     auto autosave_context_ready = [&]() {
-        return !help_view.active && !picker.active && !buffer_list_active && !pending_close_confirm &&
+        return !help_view.active && !picker.active && !buffer_list_active &&
+               !settings_widget.active && !pending_close_confirm &&
                !minibuffer.active;
     };
 

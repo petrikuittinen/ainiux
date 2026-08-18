@@ -48,6 +48,7 @@
 #include "input/input.hpp"
 #include "runtime/runtime.hpp"
 #include "ui/confirmation.hpp"
+#include "ui/settings_widget.hpp"
 #include "ui/text_selector.hpp"
 #include "ui/provider_model_selector.hpp"
 #include "ui/provider_model_display.hpp"
@@ -536,6 +537,7 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t inflight_image_count = 0;
     std::string help_text;
     std::string settings_text;
+    ui::SettingsWidget settings_widget;
     std::string pending_reasoning;
     std::string pending_reasoning_warning;
     agent::NewProjectTarget pending_new_project;
@@ -861,12 +863,29 @@ app::TuiRunResult run(provider::RequestContext context,
         return nullptr;
     };
 
+    auto close_settings_widget = [&]() {
+        ui::close_settings_widget(settings_widget);
+        if (mode == TuiMode::Settings) mode = TuiMode::Chat;
+    };
+
     auto refresh_settings_panel_if_visible = [&]() {
         if (!settings_text.empty()) {
             settings_text = chat::format_settings_panel(
                 context.options,
                 provider::reasoning_temperature_advisory(context));
         }
+    };
+
+    auto open_settings_widget = [&]() {
+        help_text.clear();
+        settings_text.clear();
+        history_scroll = 0;
+        const chat::SettingsSurface surface = context.options.agent
+                                                  ? chat::SettingsSurface::Agent
+                                                  : chat::SettingsSurface::Chat;
+        ui::open_settings_widget(settings_widget, surface, context.options);
+        mode = TuiMode::Settings;
+        status = settings_widget.status;
     };
 
     auto sqlite_unavailable_message = [&]() {
@@ -1049,6 +1068,23 @@ app::TuiRunResult run(provider::RequestContext context,
             const Error error = agent_runtime->update_project_settings(context);
             if (!error.ok()) status = "Agent settings save failed: " + error.message;
         }
+    };
+
+    auto save_settings_widget = [&]() {
+        chat::SettingsEditorLocals unused;
+        chat::copy_visible_settings(settings_widget.surface,
+                                    settings_widget.draft,
+                                    settings_widget.editor_draft,
+                                    context.options,
+                                    unused);
+        show_thinking_traces = context.options.show_thinking_traces;
+        syntax_highlight = context.options.tui_highlight;
+        input.highlight_enabled = syntax_highlight;
+        const std::string advisory = provider::reasoning_temperature_advisory(context);
+        std::string message = "Settings saved";
+        if (!advisory.empty()) message += ". Warning: " + advisory;
+        close_settings_widget();
+        persist_settings_change(message);
     };
 
     auto set_thinking_trace_mode = [&](bool show_traces) {
@@ -2322,6 +2358,7 @@ app::TuiRunResult run(provider::RequestContext context,
         };
     command_handlers.persist_settings_change = persist_settings_change;
     command_handlers.refresh_settings_panel_if_visible = refresh_settings_panel_if_visible;
+    command_handlers.open_settings_widget = open_settings_widget;
     command_handlers.start_save = [&](const std::string& path) { start_save(path, session); };
     command_handlers.start_load = [&](const std::string& path) { file_jobs.start_load(path); };
     command_handlers.pop_last_message = pop_last_message;
@@ -3131,16 +3168,26 @@ app::TuiRunResult run(provider::RequestContext context,
         }
     }
 
+    auto settings_overlay_lines = [&]() -> std::vector<tui::StyledLine> {
+        if (mode != TuiMode::Settings) return {};
+        const detail::TuiSize screen = detail::terminal_size();
+        const int paint = usable_terminal_cols(screen.cols);
+        const int widget_cols = paint >= 2 ? paint - 1 : std::max(1, paint);
+        return ui::render_settings_widget(settings_widget, widget_cols);
+    };
+
     std::string visible_panel = panel_text();
     size_t render_frame = 0;
     const auto render_animation_started = std::chrono::steady_clock::now();
     detail::TerminalFrameRenderer terminal_frame_renderer;
     ActivityKind activity_kind = ActivityKind::None;
+    std::vector<tui::StyledLine> settings_overlay = settings_overlay_lines();
     detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                    activity_kind, render_frame, syntax_highlight, show_scrollbars,
                    make_render_style(),
                    terminal_frame_renderer, panel_title(), context.options.agent,
-                   build_shell_chrome());
+                   build_shell_chrome(),
+                   settings_overlay.empty() ? nullptr : &settings_overlay);
     while (!quit) {
         credit_jobs.reap_finished();
         process_clipboard_events();
@@ -3179,7 +3226,8 @@ app::TuiRunResult run(provider::RequestContext context,
                         mode == TuiMode::ModelList ||
                         mode == TuiMode::ReasoningList ||
                         mode == TuiMode::ReasoningConfirm ||
-                        mode == TuiMode::ModelConfirm;
+                        mode == TuiMode::ModelConfirm ||
+                        mode == TuiMode::Settings;
                     const std::string setup_status = status;
                     if (!preserve_setup_picker) mode = TuiMode::Chat;
                     if (!event.error.ok()) {
@@ -4081,6 +4129,65 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     continue;
                 }
+                if (mode == TuiMode::Settings) {
+                    if (ch == 17) {
+                        quit = true;
+                        continue;
+                    }
+                    if (ch == 8) {
+                        close_settings_widget();
+                        handle_command("/help");
+                        continue;
+                    }
+                    if (ch == 7) {
+                        close_settings_widget();
+                        command_handlers.switch_to_editor();
+                        continue;
+                    }
+                    if (ch == 27) {
+                        unsigned char next = 0;
+                        if (!editor::read_terminal_byte(
+                                next, editor::terminal_escape_inter_byte_timeout_ms())) {
+                            ui::cancel_settings_widget_row(settings_widget);
+                            status = settings_widget.status;
+                            continue;
+                        }
+                        std::string sequence;
+                        if (next == '[' || next == 'O') {
+                            sequence.push_back(static_cast<char>(next));
+                            unsigned char body = 0;
+                            while (sequence.size() < 16 &&
+                                   editor::read_terminal_byte(
+                                       body, editor::terminal_escape_inter_byte_timeout_ms())) {
+                                sequence.push_back(static_cast<char>(body));
+                                if ((body >= 'A' && body <= 'Z') || body == '~' ||
+                                    (body >= 'a' && body <= 'z')) {
+                                    break;
+                                }
+                            }
+                            editor::MovementKeyEvent movement;
+                            if (editor::parse_movement_sequence(sequence, movement)) {
+                                ui::handle_settings_widget_movement(settings_widget, movement.key);
+                                status = settings_widget.status;
+                                continue;
+                            }
+                        }
+                        ui::cancel_settings_widget_row(settings_widget);
+                        status = settings_widget.status;
+                        continue;
+                    }
+                    const ui::SettingsWidgetAction action =
+                        ui::handle_settings_widget_key(settings_widget, ch);
+                    if (action == ui::SettingsWidgetAction::Saved) {
+                        save_settings_widget();
+                    } else if (action == ui::SettingsWidgetAction::Quit) {
+                        close_settings_widget();
+                        status = "Settings discarded";
+                    } else if (action == ui::SettingsWidgetAction::Handled) {
+                        status = settings_widget.status;
+                    }
+                    continue;
+                }
                 if (mode == TuiMode::AttachmentList) {
                     if (ch == 17) {
                         quit = true;
@@ -4411,11 +4518,13 @@ app::TuiRunResult run(provider::RequestContext context,
                 std::chrono::steady_clock::now() - render_animation_started)
                 .count() /
             200);
+        settings_overlay = settings_overlay_lines();
         detail::render(session, input, status, history_scroll, show_thinking_traces, mode, visible_panel,
                        activity_kind, render_frame, syntax_highlight, show_scrollbars,
                        make_render_style(),
                        terminal_frame_renderer, panel_title(), context.options.agent,
-                       build_shell_chrome());
+                       build_shell_chrome(),
+                       settings_overlay.empty() ? nullptr : &settings_overlay);
     }
 
     model_job.cancel();

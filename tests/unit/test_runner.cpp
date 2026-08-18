@@ -34,6 +34,7 @@
 #include "security/test_security.hpp"
 #include "support/test_support.hpp"
 #include "tui/test_tui.hpp"
+#include "ui/test_settings_widget.hpp"
 #include "ui/test_text_selector.hpp"
 
 int main() {
@@ -69,6 +70,7 @@ int main() {
     ainiux::test::runtime::run_all();
     ainiux::test::security::run_all();
     ainiux::test::ui::run_all();
+    ainiux::test::ui_settings::run_all();
     ainiux::test::editor::run_all();
     ainiux::test::tui::run_all();
 

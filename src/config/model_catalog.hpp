@@ -42,6 +42,8 @@ const ModelSetting* find_model_preset(const ModelCatalog& catalog,
                                       const std::string& purpose);
 bool temperature_supported_for(const ModelCapability& capability,
                                const ReasoningSelection& selection);
+// Default 1.0 when the catalog record omits temperature_max.
+double temperature_max_for(const ModelCapability* capability);
 std::string temperature_advisory(const ModelCapability* capability,
                                  const ReasoningSelection& selection,
                                  bool explicit_temperature);

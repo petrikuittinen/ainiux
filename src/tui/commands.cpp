@@ -278,9 +278,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/context [auto|TOKENS]\n"
                 "/reasoning [auto|VALUE|TOKENS]\n"
                 "/system [TEXT]\n"
-                "/setting (hide/show current settings)\n"
+                "/setting (open settings)\n"
                 "/setting NAME=VALUE\n"
-                "/setting general|coding|instruct|creative\n"
                 + std::string(ctx.context.options.agent
                                   ? ""
                                   : "/clone\n"
@@ -924,56 +923,26 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     if (text == "/setting" || text.rfind("/setting ", 0) == 0) {
         const std::string requested = text.size() <= 8 ? "" : app::detail::trim_ascii(text.substr(8));
         if (requested.empty()) {
-            if (ctx.settings_text.empty()) {
-                ctx.help_text.clear();
-                ctx.settings_text = chat::format_settings_panel(
-                    ctx.context.options,
-                    provider::reasoning_temperature_advisory(ctx.context));
-                ctx.status = "Settings shown; /setting hides them";
-            } else {
-                ctx.settings_text.clear();
-                ctx.status = "Settings hidden";
+            if (ctx.active_job != ActiveJob::None) {
+                ctx.status = "Finish the current job before opening settings";
+                return;
             }
-            ctx.history_scroll = 0;
+            if (handlers.open_settings_widget) {
+                handlers.open_settings_widget();
+            } else {
+                ctx.status = "Settings are unavailable";
+            }
             return;
         }
         if (chat::generation::is_chat_purpose(requested)) {
-            if (ctx.context.options.model.empty()) {
-                ctx.status = "Set a model with /model before applying a purpose preset";
-                return;
-            }
-            const ModelCapability* capability = provider::matched_model_capability(ctx.context);
-            const ModelSetting* preset = capability == nullptr
-                ? nullptr
-                : config::find_model_preset(ctx.context.options.model_catalog,
-                                            *capability,
-                                            requested);
-            if (preset == nullptr) {
-                ctx.status = "No [preset] in models.conf for model " + ctx.context.options.model +
-                             " purpose " + requested;
-                return;
-            }
-            Error preset_error = chat::apply_model_setting_preset(ctx.context.options, *preset, capability);
-            if (!preset_error.ok()) {
-                ctx.status = detail::error_line(preset_error);
-                return;
-            }
-            if (preset->default_system_prompt.has_value() && !preset->default_system_prompt->empty()) {
-                app::replace_system_prompt(ctx.session, *preset->default_system_prompt);
-                ctx.context.options.system = *preset->default_system_prompt;
-            }
-            std::string message = "Applied " + requested + " settings for " +
-                                  ctx.context.options.model;
-            const std::string advisory =
-                provider::reasoning_temperature_advisory(ctx.context);
-            if (!advisory.empty()) message += ". Warning: " + advisory;
-            handlers.persist_settings_change(message);
-            handlers.refresh_settings_panel_if_visible();
+            ctx.status =
+                "purpose is no longer a setting; open /setting and edit temperature, "
+                "top_p, and related fields, or pass --purpose on the command line";
             return;
         }
         const size_t equals = requested.find('=');
         if (equals == std::string::npos) {
-            ctx.status = "Usage: /setting NAME=VALUE or /setting " + chat::generation::chat_purpose_description();
+            ctx.status = "Usage: /setting NAME=VALUE";
             return;
         }
         const std::string name = app::detail::trim_ascii(requested.substr(0, equals));

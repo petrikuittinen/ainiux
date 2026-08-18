@@ -80,6 +80,7 @@ struct TuiCommandHandlers {
     std::function<void(const std::string&, const std::string&)> request_reasoning_confirmation;
     std::function<void(const std::string&)> persist_settings_change;
     std::function<void()> refresh_settings_panel_if_visible;
+    std::function<void()> open_settings_widget;
     std::function<void(const std::string&)> start_save;
     std::function<void(const std::string&)> start_load;
     std::function<void()> pop_last_message;

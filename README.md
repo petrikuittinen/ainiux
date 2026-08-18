@@ -174,7 +174,7 @@ In a measured audit on the current 20-core ARM64 system, 437 files and 11,631 de
 See [Agent workflows](docs/agent.md), [MCP servers](docs/mcp.md), [code-index internals](docs/code_index_and_tool_calls_explained.md), and [Security](docs/security.md).
 
 The native tool API is deliberately compact: `index`, `ls`, `glob`, `grep`,
-`symbol`, `outline`, `read`, `run`, `fetch`, `web_search`, `goal_met`, `attach`,
+`symbol`, `outline`, `read`, `run`, `fetch`, `web_search`, `goal_met` (active `/goal` only), `attach`,
 `edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch` as applicable to the
 session. Removed long names and aliases are not silently accepted. See the
 [native tool inventory](docs/tool_calls.md) for availability and policy details.

@@ -1421,6 +1421,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         std::optional<ReasoningSelection> reasoning_default;
         std::vector<ReasoningSelection> reasoning_options;
         TemperatureSupport temperature = TemperatureSupport::Unknown;
+        std::optional<double> temperature_max;
         bool web_search = false;
         std::string web_search_name = "web_search";
         bool enabled = true;
@@ -1491,6 +1492,14 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
                     return schema_error(entry,
                                         "temperature must be unknown, supported, unsupported, or reasoning_none_only");
                 }
+            } else if (key == "temperature_max") {
+                double value = 0.0;
+                Error err = numeric_double(entry, value);
+                if (!err.ok()) return err;
+                if (!std::isfinite(value) || value <= 0.0) {
+                    return schema_error(entry, "temperature_max must be a finite number greater than 0");
+                }
+                partial.temperature_max = value;
             } else if (key == "enabled") {
                 Error err = require_type(entry, Value::Type::Boolean);
                 if (!err.ok()) return err;
@@ -1583,6 +1592,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         capability.reasoning_default = partial.reasoning_default;
         capability.reasoning_options = partial.reasoning_options;
         capability.temperature = partial.temperature;
+        capability.temperature_max = partial.temperature_max;
         capability.web_search = partial.web_search;
         capability.web_search_name = partial.web_search_name;
         capability.load_order = candidate.model_catalog.next_load_order++;

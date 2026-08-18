@@ -50,6 +50,8 @@ See [Keyboard shortcuts](keyboard-shortcuts.md) for selection, clipboard, picker
 
 Core commands include `/help`, `/new`, `/list`, `/edit`, `/provider`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/search`, `/theme`, `/scrollbar`, and `/thinking`.
 
+`/setting` opens a full-history settings widget grouped into Model, Display, and General. Arrow keys move between rows; left/right cycle choices such as `reasoning` (from `models.conf`) and on/off flags; numbers and strings are typed in place. Enter accepts the current row, Esc cancels that row, `s` saves to the thread (and the agent project when in `-a`), and `q` quits without saving. `/setting NAME=VALUE` remains available for scripts and power users. Temperature must be 0.0–1.0 unless the matched catalog record sets `temperature_max` (Gemini families use 2.0).
+
 `/insert` places text into the input. `/attach` adds provider context or a supported image. `/fetch` and `/search` are explicit network operations. A URL typed in ordinary prompt text is not fetched.
 
 Editor-only `/width`, `/alignment-width`, `/left-align`, `/right-align`, `/center-align`, and `/justify` commands are rejected in chat and agent history. They operate on editor buffers only.

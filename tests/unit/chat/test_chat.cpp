@@ -542,6 +542,22 @@ void test_chat_settings_helpers() {
     ainiux::Error err = ainiux::chat::apply_chat_setting(options, "temperature", "0.9");
     check(err.ok() && options.has_temperature && options.temperature == 0.9,
           "chat setting parser applies temperature");
+    err = ainiux::chat::apply_chat_setting(options, "temperature", "1.5");
+    check(!err.ok() && err.message.find("0.0 through 1") != std::string::npos,
+          "chat setting rejects temperature above the default 1.0 max");
+    ainiux::ModelCapability gemini;
+    gemini.id = "google-gemini-3";
+    gemini.model_regex = "^gemini-3(?:[.][0-9]+)?(?:-[a-z0-9]+)*$";
+    gemini.temperature_max = 2.0;
+    options.model_catalog.models.push_back(gemini);
+    options.model = "gemini-3-flash";
+    err = ainiux::chat::apply_chat_setting(options, "temperature", "1.5");
+    check(err.ok() && options.temperature == 1.5,
+          "chat setting accepts Gemini temperature up to 2.0");
+    err = ainiux::chat::apply_chat_setting(options, "temperature", "2.1");
+    check(!err.ok(), "chat setting rejects Gemini temperature above 2.0");
+    err = ainiux::chat::apply_chat_setting(options, "top_p", "1.2");
+    check(!err.ok(), "chat setting rejects top_p above 1.0");
     err = ainiux::chat::apply_chat_setting(options, "reasoning", "8192");
     check(err.ok() &&
               options.reasoning == ainiux::ReasoningSelection::token_budget(8192),
@@ -653,7 +669,7 @@ void test_chat_settings_helpers() {
     const std::string empty_panel = ainiux::chat::format_settings_panel(empty_panel_options);
     check(empty_panel.find("temperature=\n") != std::string::npos &&
               empty_panel.find("reasoning=auto") != std::string::npos &&
-              empty_panel.find("purpose=\n") != std::string::npos &&
+              empty_panel.find("purpose=") == std::string::npos &&
               empty_panel.find("default") == std::string::npos,
           "chat settings panel shows Auto while leaving other unset fields empty");
 

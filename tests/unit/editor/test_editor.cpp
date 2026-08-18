@@ -1305,6 +1305,10 @@ void test_editor_assist_helpers() {
     check(!completions.empty() && completions.front() == "/spell", "assist completions include /spell");
     check(std::find(completions.begin(), completions.end(), "/regenerate") != completions.end(),
           "assist completions include /regenerate");
+    check(std::find(completions.begin(), completions.end(), "/setting") != completions.end(),
+          "assist completions include /setting");
+    check(std::find(completions.begin(), completions.end(), "/setting ") == completions.end(),
+          "assist completions omit the trailing-space /setting twin");
     for (const char* builtin :
          {"/spell",     "/grammar", "/fact",     "/comment",  "/rewrite",  "/English",
           "/Chinese",   "/Finnish", "/German",   "/French",   "/Italian",  "/Spanish",
@@ -1393,6 +1397,20 @@ void test_editor_assist_helpers() {
     completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(completion.changed && input == "Chinese",
           "slashless completion handles case-insensitive configured names");
+
+    input = "/set";
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
+    bool saw_setting = input == "/setting";
+    for (size_t i = 0; i < completer.candidates.size(); ++i) {
+        if (completer.candidates[i] == "/setting") saw_setting = true;
+    }
+    check(saw_setting, "editor /set tab completion finds /setting");
+    input = "setting";
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
+    check(input == "setting" && completion.match_count == 1,
+          "slashless editor tab completion matches setting");
     check(ainiux::editor::editor_assist_path_prefix_length("open notes") == 5 &&
               ainiux::editor::editor_assist_path_prefix_length("/saveas notes") == 8,
           "slashless and slashed path commands expose path completion");

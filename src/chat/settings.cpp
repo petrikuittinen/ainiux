@@ -216,7 +216,7 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
     for (char& ch : name) {
         ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
-    if (name == "auto-convert-html-to-md") {
+    if (name == "auto-convert-html-to-md" || name == "auto_convert_html_to_md") {
         bool enabled = false;
         if (!parse_bool_setting(value, enabled)) {
             return invalid_setting_value(name, "expected on or off");
@@ -295,9 +295,28 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
             options.has_presence_penalty = false;
             return ok_error();
         }
+        if (name == "context_tokens") {
+            options.has_context_tokens = false;
+            options.context_tokens = 0;
+            return ok_error();
+        }
         return invalid_setting_value(name,
                                      "unknown setting; expected " + generation::chat_setting_names_description() +
-                                         ", stream, show_thinking_traces, highlight, cmd-out, or auto-convert-html-to-md");
+                                         ", stream, show_thinking_traces, highlight, cmd-out, "
+                                         "auto-convert-html-to-md, or context_tokens");
+    }
+    if (name == "context_tokens") {
+        if (value.empty() || value == "auto") {
+            options.has_context_tokens = false;
+            options.context_tokens = 0;
+            return ok_error();
+        }
+        long long tokens = 0;
+        Error err = cli::parse_context_tokens(value, tokens);
+        if (!err.ok()) return err;
+        options.context_tokens = tokens;
+        options.has_context_tokens = true;
+        return ok_error();
     }
     if (name == generation::kMaxTokens || name == generation::kMaxOutputTokens) {
         int parsed = 0;
@@ -339,6 +358,14 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         if (!std::isfinite(options.temperature)) {
             return invalid_setting_value(name, "expected a finite number");
         }
+        const ModelCapability* capability = config::resolve_model_capability(
+            options.model_catalog, options.provider, options.api, options.model);
+        const double max_temperature = config::temperature_max_for(capability);
+        if (options.temperature < 0.0 || options.temperature > max_temperature) {
+            std::ostringstream range;
+            range << "expected a number from 0.0 through " << max_temperature;
+            return invalid_setting_value(name, range.str());
+        }
         options.has_temperature = true;
         options.temperature_preset_applied = false;
         return ok_error();
@@ -367,6 +394,15 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
         if (!std::isfinite(parsed)) {
             return invalid_setting_value(name, "expected a finite number");
         }
+        if (name == generation::kTopP || name == generation::kMinP) {
+            if (parsed < 0.0 || parsed > 1.0) {
+                return invalid_setting_value(name, "expected a number from 0.0 through 1.0");
+            }
+        } else if (name == generation::kRepeatPenalty) {
+            if (parsed <= 0.0) {
+                return invalid_setting_value(name, "expected a number greater than 0");
+            }
+        }
         if (name == generation::kTopP) {
             options.top_p = parsed;
             options.has_top_p = true;
@@ -384,7 +420,8 @@ Error apply_chat_setting(cli::Options& options, const std::string& raw_name, con
     }
     return invalid_setting_value(name,
                                  "unknown setting; expected " + generation::chat_setting_names_description() +
-                                     ", stream, show_thinking_traces, highlight, cmd-out, or auto-convert-html-to-md");
+                                     ", stream, show_thinking_traces, highlight, cmd-out, "
+                                     "auto-convert-html-to-md, or context_tokens");
 }
 
 std::string settings_json_from_options(const cli::Options& options) {
@@ -621,7 +658,6 @@ std::string current_system_prompt(const Session& session) {
 std::string format_settings_summary(const cli::Options& options) {
     std::ostringstream out;
     out << "Settings";
-    out << " purpose=" << (options.has_chat_purpose ? options.chat_purpose : "default");
     out << " temperature=" << (options.has_temperature ? std::to_string(options.temperature) : "default");
     out << " top_k=" << (options.has_top_k ? std::to_string(options.top_k) : "default");
     out << " top_p=" << (options.has_top_p ? std::to_string(options.top_p) : "default");
@@ -639,7 +675,7 @@ std::string format_settings_summary(const cli::Options& options) {
 std::string format_settings_panel(const cli::Options& options,
                                   const std::string& advisory) {
     std::ostringstream out;
-    out << "/setting (hide/show this panel)\n";
+    out << "/setting (open settings)\n";
     auto append = [&](const char* name, const std::string& value) { out << name << '=' << value << '\n'; };
     append("stream", options.stream_explicit ? (options.stream ? "on" : "off") : "");
     append("temperature", options.has_temperature ? std::to_string(options.temperature) : "");
@@ -653,7 +689,6 @@ std::string format_settings_panel(const cli::Options& options,
     append("reasoning", config::reasoning_selection_value(options.reasoning));
     append("show_thinking_traces",
            options.has_show_thinking_traces ? (options.show_thinking_traces ? "on" : "off") : "");
-    append("purpose", options.has_chat_purpose ? options.chat_purpose : "");
     append("context_tokens", options.has_context_tokens ? std::to_string(options.context_tokens) : "");
     if (options.agent) {
         append("thinking_preview_max_chars",

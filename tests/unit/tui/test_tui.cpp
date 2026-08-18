@@ -428,6 +428,19 @@ void test_chat_assist_command_completions_include_configured_commands() {
           "chat assist completions omit scoped editor variants");
     check(std::find(completions.begin(), completions.end(), "/Chinese newbuffer") == completions.end(),
           "chat assist completions omit newbuffer scoped variants");
+    check(std::find(completions.begin(), completions.end(), "/setting") != completions.end(),
+          "chat assist completions include /setting");
+    check(std::find(completions.begin(), completions.end(), "/setting ") == completions.end(),
+          "chat assist completions omit the trailing-space /setting twin");
+    for (const std::string& command : completions) {
+        std::string trimmed = command;
+        while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t')) {
+            trimmed.pop_back();
+        }
+        if (trimmed == command) continue;
+        check(std::find(completions.begin(), completions.end(), trimmed) == completions.end(),
+              "chat assist completions do not list both '" + trimmed + "' and '" + command + "'");
+    }
 }
 
 void test_chat_assist_request_text_strips_content_tags() {
@@ -485,6 +498,26 @@ void test_chat_slash_command_tab_completion_matches_assist_commands() {
           "chat tab completion completes a unique assist prefix in one press");
     check(chinese.text.str() == "/Chinese",
           "chat tab completion resolves /Chi to /Chinese");
+
+    completer.reset();
+    ainiux::editor::EditorState setting = ainiux::editor::EditorState::from_text("/setti");
+    setting.mode = ainiux::editor::EditorMode::Chat;
+    setting.cursor = setting.text.size();
+    const ainiux::editor::PathCompletionResult setting_result = completer.complete(setting);
+    check(setting_result.handled && setting_result.changed && setting_result.match_count == 1 &&
+              setting.text.str() == "/setting",
+          "chat tab completion uniquely expands /setti to /setting");
+
+    completer.reset();
+    completer.set_agent_mode(true);
+    ainiux::editor::EditorState agent_setting = ainiux::editor::EditorState::from_text("/set");
+    agent_setting.mode = ainiux::editor::EditorMode::Chat;
+    agent_setting.cursor = agent_setting.text.size();
+    const ainiux::editor::PathCompletionResult agent_setting_result =
+        completer.complete(agent_setting);
+    check(agent_setting_result.handled && agent_setting.text.str() == "/setting" &&
+              agent_setting_result.match_count == 1,
+          "agent tab completion uniquely expands /set to /setting");
 
     completer.reset();
     completer.set_agent_mode(true);

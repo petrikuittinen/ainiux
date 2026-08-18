@@ -118,6 +118,17 @@ bool apply_chat_mouse_scroll(const editor::MouseInputEvent& mouse,
         }
         return false;
     }
+    if (mode == TuiMode::Settings) {
+        if (mouse.button == editor::MouseButton::WheelUp) {
+            history_scroll = std::max(0, history_scroll - 1);
+            return true;
+        }
+        if (mouse.button == editor::MouseButton::WheelDown) {
+            if (history_scroll < std::numeric_limits<int>::max()) ++history_scroll;
+            return true;
+        }
+        return false;
+    }
     if (mode != TuiMode::Chat) return false;
     if (mouse.button == editor::MouseButton::WheelUp) {
         if (history_scroll < std::numeric_limits<int>::max()) ++history_scroll;
