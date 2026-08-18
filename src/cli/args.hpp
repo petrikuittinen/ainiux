@@ -121,6 +121,7 @@ struct Options {
     std::string fetch_url;
     std::string search_query;
     std::string web_search_provider = "auto";
+    bool builtin_web_search = true;
     std::string tavily_key_env;
     std::string firecrawl_key_env;
     std::string exa_key_env;

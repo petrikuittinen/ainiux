@@ -9,6 +9,7 @@
 #include "chat/settings.hpp"
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
+#include "provider/provider.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
 
@@ -383,6 +384,13 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                 const std::string query = detail::trim_ascii(text.substr(7));
                 if (query.empty()) {
                     std::cerr << "Usage: /search QUERY\n";
+                    continue;
+                }
+                if (provider::hosted_web_search_enabled(context)) {
+                    session.messages.push_back({"user", "Search the web for: " + query});
+                    if (!context.options.quiet) {
+                        std::cerr << "Using model-hosted web_search for: " << query << "\n";
+                    }
                     continue;
                 }
                 search::SearchResponse response;

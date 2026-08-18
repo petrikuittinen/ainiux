@@ -334,6 +334,12 @@ void test_cli_web_search_parse() {
     check(parsed.options.max_web_search_results == 5, "web search max results parsed");
     check(parsed.options.max_web_search_results_explicit, "web search max results marked explicit");
     check(parsed.options.prompt == "summarize", "web search prompt parsed");
+    check(parsed.options.builtin_web_search, "hosted web_search stays on by default");
+
+    const char* disable[] = {"ainiux", "--no-builtin-web-search", "-p", "hi"};
+    ainiux::cli::ParseResult disabled = ainiux::cli::parse_args(4, const_cast<char**>(disable));
+    check(disabled.error.ok() && !disabled.options.builtin_web_search,
+          "--no-builtin-web-search disables hosted web_search");
 }
 
 void test_cli_agent_max_response_bytes_parse() {

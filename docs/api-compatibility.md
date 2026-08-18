@@ -18,9 +18,9 @@ Image request formatting supports multiple input images. In `auto` mode, the cli
 
 ## Responses API
 
-Implemented text-only support is available with `--api responses`, `--responses`, or the `openai_responses` profile shortcut. The built-in OpenAI profile maps this to `POST https://api.openai.com/v1/responses`. Custom base URLs can also use the standard `/responses` path. For chat-only provider profiles, `ainiux` returns `AINIUX_ERR_UNSUPPORTED_FEATURE` unless the user supplies an explicit `--responses-url URL`.
+Official `--provider openai` now defaults to Responses (`POST https://api.openai.com/v1/responses`). Keep Chat Completions with `--api chat`, `openai_chat`, or a user `api = chat` setting. `--api responses`, `--responses`, and `openai_responses` still select Responses explicitly. Custom base URLs and `custom_openai_chat` stay on Chat Completions unless the user asks for Responses. Switching to a chat-only profile such as Gemini, Anthropic, or OpenRouter uses Chat Completions even if the previous provider or project session left `api=responses`. An explicit `--api responses` on a chat-only profile still returns `AINIUX_ERR_UNSUPPORTED_FEATURE` unless the user supplies `--responses-url URL`. xAI and DeepSeek now advertise a built-in `/responses` path.
 
-Current Responses support maps `output_text` and streaming `response.output_text.delta` into the same internal assistant message/delta model used by Chat Completions. Reasoning summary deltas are rendered as `<think>...</think>` blocks when providers emit them. Images, files, tools, provider-side context management, and capability probing are not implemented yet.
+Current Responses support maps `output_text` and streaming `response.output_text.delta` into the same internal assistant message/delta model used by Chat Completions. Reasoning summary deltas are rendered as `<think>...</think>` blocks when providers emit them. User image input uses Responses `input_image` data URLs. Hosted `web_search` tools are catalog-selected (see below). Native and MCP function tools are sent with `strict: false` because their schemas have optional properties; OpenAI strict mode requires every property in `required`. Files, `previous_response_id` / server-side conversations, `file_search`, `code_interpreter`, and live capability probing are not implemented yet.
 
 Interactive Agent credit display currently supports OpenRouter `GET https://openrouter.ai/api/v1/credits` (`data.total_credits - data.total_usage`, displayed as USD), OpenAI `GET https://api.openai.com/v1/dashboard/billing/credit_grants` (`total_available`, displayed as USD), and DeepSeek `GET https://api.deepseek.com/user/balance` (`balance_infos[].total_balance` plus its returned currency). OpenAI's dashboard endpoint can reject project-scoped keys even when those keys can make model requests. These authenticated lookups use the selected provider key, are bounded and cancellable, never persist the response or credential, and do not change inference endpoint compatibility.
 
@@ -56,6 +56,22 @@ Disable spellings such as `none`, `off`, and numeric `0` are recognized where a 
 
 Catalog entries currently cover model-specific GPT-5 generations, Gemini/Gemma, Claude token budgets, Grok, DeepSeek, Kimi, GLM, Qwen 3.5/3.6 Chat/Responses, Qwen 3.8 Chat effort, MiniMax Chat/Responses, MiMo Chat/Responses, Stepfun, Nemotron, Hy3, Llama 3.x presets, and both 20B/120B gpt-oss variants. Model matching checks only the final component, so arbitrarily nested prefixes such as `gateway/vendor/GEMINI-...` work without becoming part of the family expression. Native Anthropic Messages is still not implemented; the catalog cannot add an API adapter by itself.
 
+## Hosted web_search
+
+`models.conf` may mark a family `web_search = on` and optionally `web_search_name`. When the matched model has that flag and `web_search.builtin` is on (the default), Ainiux attaches the **provider-hosted** search tool and does not run Tavily/Firecrawl/Exa/Searxng/DuckDuckGo. `--no-builtin-web-search` or user `web_search.builtin = off` restores the client path. `--web-search-provider` does not disable hosted search.
+
+```text
+family              name            wire                                         API
+GPT-5               web_search      { "type": "web_search" }                     Responses (OpenAI default)
+Claude              web_search      { "type": "web_search" }                     Chat (OpenAI-compat; native Messages is not this slice)
+Grok 4              web_search      { "type": "web_search" }                     Responses
+DeepSeek V4         web_search      { "type": "web_search" }                     Responses
+Kimi K2/K3          $web_search     { "type": "builtin_function", "function": { "name": "$web_search" } }  Chat; client echoes arguments
+GLM-5               web_search      { "type": "web_search", "web_search": { "enable": true } }  Chat
+```
+
+Gemini official grounding is native `google_search` on generateContent/Interactions. The official OpenAI-compat Chat adapter rejects `{ "type": "google_search" }` with HTTP 400, so Ainiux does not attach that hosted tool and keeps the client `web_search` path. Gemini streamed `tool_calls` often omit the OpenAI `index` field and may include `extra_content.google.thought_signature`; Ainiux assigns a stable index and echoes those extras on the next turn. Anthropic hosted search on native Messages (`web_search_20250305`) is not implemented; client search remains the reliable Claude path. Hosted `web_search_call` output items are replayed and not executed locally. Citations from `url_citation` annotations are collected for display.
+
 Temperature metadata is advisory for explicit overrides. Purpose presets omit temperature when the matched model/reasoning combination marks it unsupported. Explicit CLI, configuration, chat, or editor temperature values remain serialized and produce a warning because the provider may reject them. In particular, the bundled catalog distinguishes older GPT-5 models that reject temperature from GPT-5.4/GPT-5.2 models that permit it only with `reasoning=none`; see [OpenAI's current GPT-5 parameter compatibility](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.4).
 
 Native agent tool rounds also expose provider-supplied readable reasoning to the interactive agent UI. Chat Completions accepts streamed or non-streamed `reasoning_content`, textual `reasoning` and `reasoning_details`, and `<think>...</think>` traces. Responses accepts readable reasoning summaries/text and their delta events. Encrypted reasoning details and opaque Responses reasoning state are preserved only where protocol continuation requires them and are never rendered as previews. This display path does not synthesize reasoning when the provider supplies none and does not change one-shot agent output.
@@ -68,10 +84,10 @@ none           offline                 none                                     
 openrouter                             https://openrouter.ai/api/v1                          yes   no         OPENROUTER_API_KEY     no
 openai         openai_chat,            https://api.openai.com/v1                              yes   yes        OPENAI_API_KEY          no
                openai_responses*
-deepseek                               https://api.deepseek.com                              yes   no         DEEPSEEK_API_KEY       no
+deepseek                               https://api.deepseek.com                              yes   yes        DEEPSEEK_API_KEY       no
 gemini                                 https://generativelanguage.googleapis.com/v1beta/openai yes  no         GEMINI_API_KEY         no
 anthropic                              https://api.anthropic.com/v1                          yes   no         ANTHROPIC_API_KEY      no
-xai            grok                    https://api.x.ai/v1                                   yes   no         XAI_API_KEY            no
+xai            grok                    https://api.x.ai/v1                                   yes   yes        XAI_API_KEY            no
 moonshot       kimi                    https://api.moonshot.ai/v1                            yes   no         MOONSHOT_API_KEY       no
 llamacpp       llama_cpp, llama.cpp    http://localhost:8080/v1                              yes   no         none                   yes
 lm_studio      lmstudio, lm-studio     http://localhost:1234/v1                              yes   no         optional               yes
@@ -94,7 +110,7 @@ custom_openai_chat custom              user supplied                            
 
 The `none` profile is an explicit model-offline mode. It accepts no model endpoint, performs no model discovery or chat HTTP requests, and returns `AINIUX_ERR_UNSUPPORTED_FEATURE` for those operations. Standalone editor, local HTML/Markdown/plaintext conversion, URL extraction, and non-model REPL/TUI commands remain available without configuring an endpoint. Explicit URL fetching still performs the requested non-model HTTP operation.
 
-`openai_responses` selects the OpenAI profile and `--api responses`.
+Official `openai` now defaults to Responses. `openai_chat` and `--api chat` select Chat Completions. `openai_responses` still selects the OpenAI profile and Responses.
 
 `custom_openai_chat` can use `/responses` from the supplied base URL when `--api responses` is selected, or any explicit endpoint passed with `--responses-url`.
 

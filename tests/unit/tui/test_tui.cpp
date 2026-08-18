@@ -183,6 +183,31 @@ void test_tui_provider_change_resets_only_on_actual_change() {
           "TUI actual provider change clears model and resets reasoning to Auto");
 }
 
+void test_tui_provider_change_openai_responses_to_gemini() {
+    ainiux::cli::Options options;
+    options.tui = true;
+    options.agent = true;
+    options.provider = "openai";
+    options.key = "test-key";
+    ainiux::provider::ContextResult built = ainiux::provider::build_context(options);
+    check(built.error.ok() &&
+              built.context.api_kind == ainiux::provider::ApiKind::Responses,
+          "agent OpenAI context defaults to Responses before a provider switch");
+
+    ainiux::chat::Session session;
+    bool show_thinking_traces = false;
+    std::string status;
+    check(ainiux::tui::apply_selected_provider(built.context,
+                                               session,
+                                               show_thinking_traces,
+                                               "gemini",
+                                               status),
+          "selecting Gemini after official OpenAI succeeds: " + status);
+    check(built.context.profile.name == "gemini" &&
+              built.context.api_kind == ainiux::provider::ApiKind::ChatCompletions,
+          "selecting Gemini in agent mode uses Chat Completions instead of Responses");
+}
+
 void test_agent_model_picker_slash_search() {
     ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ModelList;
     bool quit = false;
@@ -2540,6 +2565,7 @@ void run_all() {
     test_shared_tui_render_skips_identical_frame();
     test_tui_history_jump_helpers();
     test_tui_provider_change_resets_only_on_actual_change();
+    test_tui_provider_change_openai_responses_to_gemini();
     test_agent_model_picker_slash_search();
     test_tui_reasoning_picker_input();
     test_tui_session_load_model_mismatch_detection();

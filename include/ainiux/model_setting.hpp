@@ -84,6 +84,8 @@ struct ModelCapability {
     std::optional<ReasoningSelection> reasoning_default;
     std::vector<ReasoningSelection> reasoning_options;
     TemperatureSupport temperature = TemperatureSupport::Unknown;
+    bool web_search = false;
+    std::string web_search_name = "web_search";
     bool enabled = true;
     std::uint64_t load_order = 0;
 };

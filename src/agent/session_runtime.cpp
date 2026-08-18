@@ -1290,6 +1290,8 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                                        ? MutationPolicy::PlanningDocuments
                                        : MutationPolicy::Full;
     tool_options.allow_network = options_.allow_network;
+    tool_options.hosted_web_search = provider::hosted_web_search_enabled(context);
+    tool_options.hosted_web_search_name = provider::hosted_web_search_display_name(context);
     tool_options.history_backup = options_.history_backup;
     tool_options.fetch_options = options_.fetch_options;
     tool_options.search_options = options_.search_options;
@@ -2441,9 +2443,18 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         }
 
         // Native tools when protocol allows; empty definitions on pure XML channel.
-        const std::vector<provider::FunctionDefinition> definitions =
+        // Re-check hosted search here: the model/API may have changed since prepare.
+        std::vector<provider::FunctionDefinition> definitions =
             state_.protocol == ToolProtocol::Xml ? std::vector<provider::FunctionDefinition>{}
                                                  : tools_.definitions();
+        if (provider::hosted_web_search_enabled(context)) {
+            definitions.erase(
+                std::remove_if(definitions.begin(), definitions.end(),
+                               [](const provider::FunctionDefinition& definition) {
+                                   return definition.name == "web_search";
+                               }),
+                definitions.end());
+        }
 
         provider::ToolRoundResult round;
         active_round_id = state_.turn + 1;
@@ -2760,6 +2771,15 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         if (options_.interactive && round_reasoning.empty())
             round_reasoning = round.reasoning_text;
         finalize_thinking_previews();
+        if (!round.hosted_search_queries.empty()) {
+            std::string notice = "web_search";
+            for (const std::string& query : round.hosted_search_queries) {
+                notice += " · " + query;
+            }
+            structured_progress({AgentProgressAction::Commit, AgentProgressKind::Notice,
+                                 active_round_id, kWorkingNoticeId + 1, notice,
+                                 now_unix_ms()});
+        }
         if (round.tool_calls.empty()) hide_working_row();
 
         long long estimated_round_input_tokens = 0;

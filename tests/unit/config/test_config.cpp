@@ -712,6 +712,42 @@ void test_model_catalog_layering_and_validation() {
     check(!err.ok() && err.code == ainiux::ErrorCode::Config &&
               err.message.find("unknown reasoning protocol") != std::string::npos,
           "unregistered reasoning protocols are rejected during config loading");
+
+    err = apply(
+        "[model]\n"
+        "id = search-on\nprovider = any\napi = any\nmodel = \"^search-on$\"\n"
+        "value = low\nreasoning_protocol = openai_effort\nweb_search = on\n"
+        "[model]\n"
+        "id = search-named\nprovider = any\napi = chat\nmodel = \"^search-named$\"\n"
+        "value = low\nreasoning_protocol = kimi_effort\nweb_search = on\n"
+        "web_search_name = $web_search\n"
+        "[model]\n"
+        "id = search-off\nprovider = any\napi = any\nmodel = \"^search-off$\"\n"
+        "value = low\nreasoning_protocol = openai_effort\nweb_search = off\n",
+        "web-search-models.conf");
+    check(err.ok(), "web_search catalog keys parse");
+    const ainiux::ModelCapability* search_on = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "chat", "search-on");
+    const ainiux::ModelCapability* search_named = ainiux::config::resolve_model_capability(
+        options.model_catalog, "moonshot", "chat", "search-named");
+    const ainiux::ModelCapability* search_off = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "chat", "search-off");
+    check(search_on != nullptr && search_on->web_search &&
+              search_on->web_search_name == "web_search",
+          "web_search=on stores the default tool name");
+    check(search_named != nullptr && search_named->web_search &&
+              search_named->web_search_name == "$web_search",
+          "web_search_name overrides the hosted tool name");
+    check(search_off != nullptr && !search_off->web_search,
+          "web_search=off leaves hosted search disabled");
+
+    invalid = ainiux::config::parse(
+        "[model]\nid = broken\nmodel = \".*\"\nvalue = low\nreasoning_protocol = openai_effort\n"
+        "web_search_name =\n",
+        "empty-search-name.conf");
+    err = ainiux::config::apply_models_document(invalid.document, options);
+    check(!err.ok() && err.message.find("web_search_name") != std::string::npos,
+          "empty web_search_name is rejected");
 }
 
 void test_config_reads_models_template() {
@@ -805,6 +841,35 @@ void test_config_reads_models_template() {
             options.model_catalog, "qwen", "chat", "qwen3.8-max-preview");
     check(qwen38_preview != nullptr && qwen38_preview->id == "qwen-3.8-chat",
           "Qwen 3.8 family rule covers max-preview ids");
+
+    const ainiux::ModelCapability* gpt54 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "responses", "gpt-5.4");
+    check(gpt54 != nullptr && gpt54->web_search && gpt54->web_search_name == "web_search",
+          "GPT-5 family advertises hosted web_search");
+    const ainiux::ModelCapability* gemini36 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "gemini", "chat", "gemini-3.6-flash");
+    check(gemini36 != nullptr && !gemini36->web_search,
+          "Gemini 3 family does not advertise hosted google_search on OpenAI-compat Chat");
+    const ainiux::ModelCapability* grok46 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "xai", "responses", "grok-4.6");
+    check(grok46 != nullptr && grok46->web_search, "Grok 4 family advertises hosted web_search");
+    const ainiux::ModelCapability* deepseek_flash = ainiux::config::resolve_model_capability(
+        options.model_catalog, "deepseek", "responses", "deepseek-v4-flash");
+    check(deepseek_flash != nullptr && deepseek_flash->web_search,
+          "DeepSeek V4 family advertises hosted web_search on Responses");
+    const ainiux::ModelCapability* kimi_k26 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "moonshot", "chat", "kimi-k2.6");
+    check(kimi_k26 != nullptr && kimi_k26->id == "moonshot-kimi-k2" &&
+              kimi_k26->web_search && kimi_k26->web_search_name == "$web_search",
+          "Kimi K2 family uses the builtin $web_search tool");
+    const ainiux::ModelCapability* kimi_k3 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "moonshot", "chat", "kimi-k3");
+    check(kimi_k3 != nullptr && kimi_k3->web_search && kimi_k3->web_search_name == "$web_search",
+          "Kimi K3 family uses the builtin $web_search tool");
+    const ainiux::ModelCapability* glm52 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "zai", "chat", "glm-5.2");
+    check(glm52 != nullptr && glm52->web_search && glm52->web_search_name == "web_search",
+          "GLM-5 family advertises hosted web_search");
     const ainiux::ModelCapability* qwen36 = ainiux::config::resolve_model_capability(
         options.model_catalog, "deepinfra", "chat", "vendor/qwen/QWEN3.6-27B");
     check(qwen36 != nullptr && qwen36->id == "qwen-3-hybrid-chat" &&
@@ -881,10 +946,19 @@ void test_config_reads_models_template() {
     }
 }
 
+void test_user_api_setting_is_explicit() {
+    ainiux::cli::Options options;
+    const ainiux::config::ParseResult parsed = ainiux::config::parse("api = chat\n", "user.conf");
+    check(parsed.error.ok(), "user api setting parses");
+    check(ainiux::config::apply_document(parsed.document, options, true).ok() &&
+              options.api == "chat" && options.api_explicit,
+          "user-layer api = chat is marked explicit so OpenAI stays on Chat Completions");
+}
+
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 75, "common config has every expected setting");
+    check(parsed.document.entries.size() == 76, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -1448,6 +1522,7 @@ void run_all() {
     test_config_applies_model_catalog();
     test_model_catalog_layering_and_validation();
     test_config_reads_models_template();
+    test_user_api_setting_is_explicit();
     test_bundled_model_catalog_outside_source_directory();
     test_config_empty_and_numeric_edge_cases();
     test_config_code_index_size();

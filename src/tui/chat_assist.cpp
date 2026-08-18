@@ -2,6 +2,7 @@
 
 #include "app/detail.hpp"
 #include "editor/assist_runtime.hpp"
+#include "provider/provider.hpp"
 #include "search/search.hpp"
 
 namespace ainiux::tui {
@@ -55,6 +56,14 @@ bool try_handle_chat_assist_command(const std::string& text,
     }
 
     if (parsed.kind == editor::AssistCommandKind::WebSearch) {
+        if (provider::hosted_web_search_enabled(context)) {
+            session.messages.push_back(
+                {"user", "Search the web for: " + parsed.custom_prompt});
+            history_scroll = 0;
+            status = "Using model-hosted web_search";
+            callbacks.start_store_save();
+            return true;
+        }
         search::Options search_options = search::options_for(context.options);
         search::SearchResponse response;
         Error search_error = search::search(parsed.custom_prompt, search_options, response);

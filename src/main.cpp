@@ -689,7 +689,8 @@ int ainiux_main(int argc, char** argv) {
     if (!fetched_context_message.empty()) {
         session.messages.push_back({"user", fetched_context_message});
     }
-    if (ainiux::app::wants_search_prompt_context(context.options)) {
+    if (ainiux::app::wants_search_prompt_context(context.options) &&
+        !ainiux::provider::hosted_web_search_enabled(context)) {
         ainiux::search::SearchResponse search_response;
         ainiux::Error search_err =
             ainiux::search::search(context.options.search_query, ainiux::search::options_for(context.options),
@@ -704,6 +705,9 @@ int ainiux_main(int argc, char** argv) {
         }
         session.messages.push_back(
             {"user", ainiux::app::search_context_message(context.options, search_response)});
+    } else if (ainiux::app::wants_search_prompt_context(context.options) &&
+               !context.options.quiet) {
+        std::cerr << "Using model-hosted web_search instead of client search providers\n";
     }
     for (std::string& message : attachment_context_messages) {
         session.messages.push_back({"user", std::move(message)});

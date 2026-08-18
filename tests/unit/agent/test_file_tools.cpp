@@ -1857,7 +1857,7 @@ void test_git_and_network_tools_policy() {
         agent::index::Snapshot snapshot;
         check(agent::index::load_snapshot(options, snapshot).ok(), "snapshot for network tools");
         agent::ReadToolRegistry net_tools;
-        check(agent::ReadToolRegistry::create(std::move(options), std::move(snapshot), {},
+        check(agent::ReadToolRegistry::create(options, snapshot, {},
                                               net_tools, net_options)
                   .ok(),
               "create network-enabled registry");
@@ -1898,6 +1898,23 @@ void test_git_and_network_tools_policy() {
         // May succeed via keyless providers or fail unavailable — must not crash.
         check(json_ok(search) || !json_error_code(search).empty(),
               "web_search returns structured result: " + search);
+
+        net_options.hosted_web_search = true;
+        net_options.hosted_web_search_name = "$web_search";
+        agent::ReadToolRegistry hosted_tools;
+        check(agent::ReadToolRegistry::create(options, snapshot, {}, hosted_tools, net_options)
+                  .ok(),
+              "create hosted-search registry");
+        bool saw_client_search = false;
+        for (const provider::FunctionDefinition& def : hosted_tools.definitions()) {
+            if (def.name == "web_search") saw_client_search = true;
+        }
+        check(!saw_client_search,
+              "hosted web_search omits the client Tavily/DuckDuckGo tool");
+        const std::string echoed =
+            hosted_tools.execute("$web_search", R"JSON({"query":"news"})JSON");
+        check(echoed.find("news") != std::string::npos,
+              "Kimi $web_search echoes arguments instead of running client search");
     }
 
     agent::ReadToolRegistry review = make_registry(workspace, false);

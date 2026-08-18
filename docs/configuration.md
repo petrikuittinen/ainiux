@@ -83,7 +83,7 @@ At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic
 - `[media]` controls SQLite versus file-backed attachment size and cleanup ages.
 - `[editor]` controls undo, file size warnings, auto-save, indentation, line endings, alignment width, and AI continuation limits.
 - `[url_fetch]` controls byte limits and private-address permission.
-- `[web_search]` controls result count, provider, key-variable names, and optional endpoints.
+- `[web_search]` controls hosted-search preference (`builtin`), result count, provider, key-variable names, and optional endpoints.
 - `[tui]` controls colors, theme, color wire format (`color_mode`), highlighting, thinking display, agent input height, reasoning-preview body length (`agent_thinking_preview_max_chars`, default `120`, not counting the `💭 ` prefix), when the opening thinking row freezes if it has not already filled that budget (`agent_thinking_idle_preview_seconds`, default `30`; `0` freezes the opening clip as soon as it is complete), and how often the agent context chrome refreshes an in-flight reasoning token estimate during long thinks (`agent_thinking_token_refresh_seconds`, default `1`; `0` disables). Long thinks keep at most those two rows: the frozen opening clip and a live tail of the last ~max_chars of the think, frozen with the same `💭 ` prefix when reasoning ends.
 
 ## Themes
@@ -109,7 +109,7 @@ If colors look wrong over SSH from Windows Terminal, try `--color-mode 256` or s
 
 ## Model catalog
 
-`models.conf` contains repeatable `[model]` and `[preset]` records. Model matching uses validated case-insensitive regular expressions against the final slash-separated model component. Records can describe API, context window, reasoning protocol and choices, temperature support, and priority. Purpose presets supply optional generation fields.
+`models.conf` contains repeatable `[model]` and `[preset]` records. Model matching uses validated case-insensitive regular expressions against the final slash-separated model component. Records can describe API, context window, reasoning protocol and choices, temperature support, priority, and optional hosted `web_search` / `web_search_name`. Purpose presets supply optional generation fields.
 
 Endpoint metadata and explicit CLI values outrank catalog fallbacks. Protocol names are closed because request JSON stays in provider adapter code rather than configuration.
 
@@ -121,10 +121,13 @@ The command minibuffer opens with `Ctrl+E`, `Esc`, or `Alt+X`; `Tab` completes c
 
 ## Web search
 
+When `models.conf` marks the selected model `web_search = on`, Ainiux prefers the provider-hosted search tool over Tavily and the other client providers. Set `builtin = off` or pass `--no-builtin-web-search` to force the client path. `--web-search-provider` does not disable hosted search.
+
 `provider = auto` tries configured API providers and keyless fallbacks according to the implementation. Supported names are `tavily`, `firecrawl`, `exa`, `searxng`, and `duckduckgo`.
 
 ```conf
 [web_search]
+builtin = on
 max_results = 3
 provider = auto
 tavily_key_env = TAVILY_API_KEY

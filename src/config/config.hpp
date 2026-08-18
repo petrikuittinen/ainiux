@@ -79,7 +79,7 @@ struct LoadResult {
 
 ParseResult parse(const std::string& input, const std::string& source_path = "<memory>");
 ParseResult read_file(const std::string& path, size_t max_bytes = kMaxConfigBytes);
-Error apply_document(const Document& document, cli::Options& options);
+Error apply_document(const Document& document, cli::Options& options, bool user_layer = false);
 Error apply_editor_commands_document(const Document& document, cli::Options& options);
 Error apply_themes_document(const Document& document, cli::Options& options);
 Error apply_benchmarks_document(const Document& document, cli::Options& options);

@@ -135,6 +135,7 @@ struct ChatResult {
     long long tls_ms = -1;
     long long time_to_first_byte_ms = -1;
     long long first_body_ms = -1;
+    std::vector<std::pair<std::string, std::string>> citations;
 };
 
 struct FunctionDefinition {
@@ -166,6 +167,8 @@ struct ToolRoundResult {
     std::vector<std::string> continuation_items_json;
     ChatResult metrics;
     bool truncated = false;
+    std::vector<std::pair<std::string, std::string>> citations;
+    std::vector<std::string> hosted_search_queries;
 };
 
 struct ToolSourceRange {
@@ -255,6 +258,10 @@ Error validate_profile_name(const std::string& name);
 const Capabilities& capabilities_for(const RequestContext& context);
 bool credit_balance_available(const RequestContext& context);
 const ModelCapability* matched_model_capability(const RequestContext& context);
+bool hosted_web_search_enabled(const RequestContext& context);
+bool hosted_web_search_is_kimi_echo(const RequestContext& context);
+bool hosted_web_search_name_matches(const RequestContext& context, const std::string& name);
+std::string hosted_web_search_display_name(const RequestContext& context);
 std::string reasoning_temperature_advisory(const RequestContext& context);
 Capabilities detected_capabilities_for(const RequestContext& context);
 Error validate_image_input(const RequestContext& context);

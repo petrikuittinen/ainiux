@@ -612,8 +612,8 @@ void test_image_capability_detection() {
     check(ainiux::provider::validate_image_input(context).ok(),
           "explicit image capability override allows a compatible unknown model");
     context.api_kind = ainiux::provider::ApiKind::Responses;
-    check(!ainiux::provider::validate_image_input(context).ok(),
-          "Responses image input remains rejected until its request schema is implemented");
+    check(ainiux::provider::validate_image_input(context).ok(),
+          "Responses accepts image input when the model is image-capable");
 }
 
 void test_provider_lookup_metadata() {
@@ -921,6 +921,52 @@ void test_apply_provider_target_accepts_custom_url() {
           "custom URL provider target normalizes the requested endpoint");
 }
 
+void test_gemini_uses_chat_after_inherited_responses() {
+    ainiux::cli::Options leftover;
+    leftover.provider = "gemini";
+    leftover.api = "responses";
+    leftover.api_explicit = false;
+    leftover.agent = true;
+    leftover.key = "test-key";
+    ainiux::provider::ContextResult leftover_ctx =
+        ainiux::provider::build_context(leftover);
+    check(leftover_ctx.error.ok() &&
+              leftover_ctx.context.profile.name == "gemini" &&
+              leftover_ctx.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions,
+          "inherited Responses from official OpenAI does not fail Gemini");
+    check(ainiux::provider::active_request_url(leftover_ctx.context).find(
+              "/chat/completions") != std::string::npos,
+          "Gemini inherited-Responses fallback uses Chat Completions");
+
+    ainiux::cli::Options from_openai;
+    from_openai.provider = "openai";
+    from_openai.api = "responses";
+    from_openai.api_explicit = true;
+    from_openai.agent = true;
+    from_openai.key = "test-key";
+    ainiux::provider::apply_provider_target(from_openai, "gemini");
+    check(from_openai.provider == "gemini" && from_openai.api == "chat" &&
+              !from_openai.api_explicit,
+          "selecting Gemini after OpenAI Responses resets API to chat");
+    ainiux::provider::ContextResult selected =
+        ainiux::provider::build_context(from_openai);
+    check(selected.error.ok() &&
+              selected.context.profile.name == "gemini" &&
+              selected.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions,
+          "agent provider picker uses Chat Completions for Gemini");
+
+    ainiux::cli::Options openai_again = selected.context.options;
+    ainiux::provider::apply_provider_target(openai_again, "openai");
+    ainiux::provider::ContextResult back =
+        ainiux::provider::build_context(openai_again);
+    check(back.error.ok() &&
+              back.context.profile.name == "openai" &&
+              back.context.api_kind == ainiux::provider::ApiKind::Responses,
+          "reselecting official OpenAI still defaults to Responses");
+}
+
 void test_tui_local_endpoint_auto_selects_model() {
     const char* argv[] = {"ainiux", "http://localhost:30000", "--chat"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(3, const_cast<char**>(argv));
@@ -1195,6 +1241,28 @@ void test_cli_target_change_clears_stale_remembered_model() {
     check(repeated_deepseek.options.base_url.empty() &&
               repeated_deepseek.options.model.empty(),
           "explicit provider repairs a mismatched restored base URL and model");
+
+    ainiux::cli::Options remembered_openai_responses;
+    remembered_openai_responses.provider = "openai";
+    remembered_openai_responses.api = "responses";
+    remembered_openai_responses.model = "gpt-5.4";
+    remembered_openai_responses.key = "test-key";
+    const char* gemini_agent_argv[] = {"ainiux", "--provider", "gemini", "-a"};
+    ainiux::cli::ParseResult gemini_after_openai = ainiux::cli::parse_args(
+        4, const_cast<char**>(gemini_agent_argv), remembered_openai_responses);
+    check(gemini_after_openai.error.ok(),
+          "agent --provider gemini after an OpenAI Responses project parses");
+    ainiux::provider::apply_cli_target_change(
+        gemini_after_openai.options, remembered_openai_responses, false);
+    check(gemini_after_openai.options.api == "chat",
+          "CLI provider change drops inherited Responses for a chat-only provider");
+    ainiux::provider::ContextResult gemini_ctx =
+        ainiux::provider::build_context(gemini_after_openai.options);
+    check(gemini_ctx.error.ok() &&
+              gemini_ctx.context.profile.name == "gemini" &&
+              gemini_ctx.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions,
+          "ainiux --provider gemini -a uses Chat Completions after OpenAI Responses");
     ainiux::provider::ContextResult repaired_deepseek =
         ainiux::provider::build_context(repeated_deepseek.options);
     check(repaired_deepseek.error.ok() &&
@@ -1793,6 +1861,35 @@ void test_native_tool_protocols() {
               round.tool_calls[0].arguments_json == R"({"path":"a.cpp"})",
           "fragmented streamed Chat tool call assembles id, name, and arguments by index");
 
+    const std::string gemini_stream =
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{"
+        "\"id\":\"function-call-1\",\"type\":\"function\","
+        "\"extra_content\":{\"google\":{\"thought_signature\":\"sig\"}},"
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"Gemini image API\\\"}\"}}]}}]}\n\n"
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"},\"finish_reason\":\"stop\"}]}\n\n"
+        "data: [DONE]\n\n";
+    error = ainiux::provider::parse_tool_response(context, gemini_stream, round, true);
+    check(error.ok() && round.tool_calls.size() == 1 &&
+              round.tool_calls[0].id == "function-call-1" &&
+              round.tool_calls[0].name == "web_search" &&
+              round.tool_calls[0].arguments_json == R"({"query":"Gemini image API"})",
+          "Gemini streamed tool calls without index assemble as one function call");
+    check(!round.continuation_items_json.empty() &&
+              round.continuation_items_json.front().find("thought_signature") !=
+                  std::string::npos,
+          "Gemini streamed thought_signature is preserved for the next turn");
+
+    const std::string gemini_two_calls =
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}},"
+        "{\"id\":\"b\",\"type\":\"function\",\"function\":{\"name\":\"fetch\",\"arguments\":\"{}\"}}]}}]}\n\n"
+        "data: [DONE]\n\n";
+    error = ainiux::provider::parse_tool_response(context, gemini_two_calls, round, true);
+    check(error.ok() && round.tool_calls.size() == 2 &&
+              round.tool_calls[0].id == "a" && round.tool_calls[1].id == "b" &&
+              round.tool_calls[1].name == "fetch",
+          "Gemini streamed tool calls without index keep distinct ids");
+
     const std::string reasoning_chat_stream =
         "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect \"}}]}\n\n"
         "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"carefully\"}]}}]}\n\n"
@@ -1821,6 +1918,9 @@ void test_native_tool_protocols() {
     check(tools != nullptr && tools->at(0) != nullptr && tools->at(0)->get("function") == nullptr &&
               tools->at(0)->get("name") != nullptr,
           "Responses native definitions use the Responses function shape");
+    const ainiux::json::Value* strict = tools->at(0)->get("strict");
+    check(strict != nullptr && strict->type == ainiux::json::Value::Type::Bool && !strict->boolean,
+          "Responses function tools set strict=false so optional properties stay valid");
 
     const std::string responses_body =
         R"({"model":"mock-model","status":"completed","output":[{"type":"reasoning","id":"r1","encrypted_content":"opaque"},{"type":"function_call","id":"fc1","call_id":"call_7","name":"search_text","arguments":"{\"query\":\"auth\"}"}]})";
@@ -1922,6 +2022,218 @@ void test_native_tool_protocols() {
               round.metrics.cache_write_tokens == 4 &&
               round.metrics.completion_tokens == 3,
           "streaming Responses final usage retains normalized cache metrics");
+}
+
+void test_openai_defaults_to_responses() {
+    const char* argv[] = {"ainiux", "--provider", "openai", "-p", "hello", "--header",
+                          "Authorization: Bearer test"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(7, const_cast<char**>(argv));
+    check(parsed.error.ok(), "openai default args parse");
+    ainiux::provider::ContextResult ctx = ainiux::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "openai default context builds");
+    check(ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
+          "official openai defaults to Responses");
+    check(ainiux::provider::active_request_url(ctx.context) ==
+              "https://api.openai.com/v1/responses",
+          "official openai uses the Responses URL");
+
+    const char* chat_alias[] = {"ainiux", "--provider", "openai_chat", "-p", "hello", "--header",
+                                "Authorization: Bearer test"};
+    ainiux::cli::ParseResult chat_parsed =
+        ainiux::cli::parse_args(7, const_cast<char**>(chat_alias));
+    ainiux::provider::ContextResult chat_ctx =
+        ainiux::provider::build_context(chat_parsed.options);
+    check(chat_ctx.error.ok() &&
+              chat_ctx.context.api_kind == ainiux::provider::ApiKind::ChatCompletions,
+          "openai_chat stays on Chat Completions");
+
+    const char* pinned[] = {"ainiux", "--provider", "openai", "--api", "chat", "-p", "hello",
+                            "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult pinned_parsed = ainiux::cli::parse_args(9, const_cast<char**>(pinned));
+    ainiux::provider::ContextResult pinned_ctx =
+        ainiux::provider::build_context(pinned_parsed.options);
+    check(pinned_ctx.error.ok() &&
+              pinned_ctx.context.api_kind == ainiux::provider::ApiKind::ChatCompletions,
+          "--api chat keeps official openai on Chat Completions");
+
+    const char* local[] = {"ainiux", "http://localhost:8000", "-p", "hello", "--header",
+                           "Authorization: Bearer test"};
+    ainiux::cli::ParseResult local_parsed = ainiux::cli::parse_args(6, const_cast<char**>(local));
+    ainiux::provider::ContextResult local_ctx =
+        ainiux::provider::build_context(local_parsed.options);
+    check(local_ctx.error.ok() &&
+              local_ctx.context.profile.name == ainiux::provider::names::kCustomOpenAiChat &&
+              local_ctx.context.api_kind == ainiux::provider::ApiKind::ChatCompletions,
+          "positional custom URL stays on Chat Completions");
+}
+
+void test_xai_and_deepseek_accept_responses() {
+    const char* xai[] = {"ainiux", "--provider", "xai", "--api", "responses", "-m", "grok-4.6",
+                         "-p", "hello", "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult xai_parsed = ainiux::cli::parse_args(11, const_cast<char**>(xai));
+    ainiux::provider::ContextResult xai_ctx = ainiux::provider::build_context(xai_parsed.options);
+    check(xai_ctx.error.ok() && xai_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
+          "xAI accepts --api responses");
+
+    const char* deepseek[] = {"ainiux", "--provider", "deepseek", "--api", "responses", "-m",
+                              "deepseek-v4-flash", "-p", "hello", "--header",
+                              "Authorization: Bearer test"};
+    ainiux::cli::ParseResult ds_parsed = ainiux::cli::parse_args(11, const_cast<char**>(deepseek));
+    ainiux::provider::ContextResult ds_ctx = ainiux::provider::build_context(ds_parsed.options);
+    check(ds_ctx.error.ok() && ds_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
+          "DeepSeek accepts --api responses");
+}
+
+void test_hosted_web_search_serialization() {
+    const auto with_capability = [](const std::string& id, const std::string& regex,
+                                    const std::string& name, bool search) {
+        ainiux::ModelCapability capability;
+        capability.id = id;
+        capability.provider = "any";
+        capability.api = "any";
+        capability.model_regex = regex;
+        capability.priority = 100;
+        capability.reasoning_protocol = ainiux::ReasoningProtocol::OpenAiEffort;
+        capability.web_search = search;
+        capability.web_search_name = name;
+        capability.load_order = 1;
+        return capability;
+    };
+
+    ainiux::provider::RequestContext context;
+    context.profile.name = "openai";
+    context.api_kind = ainiux::provider::ApiKind::Responses;
+    context.options.model = "gpt-5.4";
+    context.options.model_catalog.models.push_back(
+        with_capability("openai-gpt-5", "^gpt-5.*$", "web_search", true));
+    ainiux::json::Value request = serialized_request_json(context);
+    const ainiux::json::Value* tools = field(request, "tools");
+    check(tools != nullptr && tools->is_array() && !tools->array.empty(),
+          "hosted web_search is attached to a Responses request");
+    check_string_field(tools->array.front(), "type", "web_search",
+                       "OpenAI hosted tool is {type:web_search}");
+    check(tools->array.front().get("function") == nullptr,
+          "hosted web_search is not a client function");
+
+    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    context.options.model = "gemini-3.6-flash";
+    context.options.model_catalog.models.clear();
+    context.options.model_catalog.models.push_back(
+        with_capability("google-gemini-3", "^gemini-3.*$", "google_search", true));
+    request = serialized_request_json(context);
+    tools = field(request, "tools");
+    check(tools == nullptr || tools->array.empty(),
+          "Gemini OpenAI-compat Chat does not attach hosted google_search");
+
+    context.options.model = "glm-5.2";
+    context.options.model_catalog.models.clear();
+    ainiux::ModelCapability glm = with_capability("zai-glm-5", "^glm-5.*$", "web_search", true);
+    glm.reasoning_protocol = ainiux::ReasoningProtocol::Zai;
+    context.options.model_catalog.models.push_back(glm);
+    request = serialized_request_json(context);
+    tools = field(request, "tools");
+    check(tools != nullptr && !tools->array.empty(), "GLM hosted tool is attached");
+    check_string_field(tools->array.front(), "type", "web_search", "GLM tool type is web_search");
+    const ainiux::json::Value* wrapper = tools->array.front().get("web_search");
+    check(wrapper != nullptr && wrapper->is_object() && wrapper->get("enable") != nullptr &&
+              wrapper->get("enable")->boolean,
+          "GLM hosted tool wraps enable=true");
+
+    context.options.model = "kimi-k3";
+    context.options.model_catalog.models.clear();
+    context.options.model_catalog.models.push_back(
+        with_capability("moonshot-kimi-k3", "^kimi-k3.*$", "$web_search", true));
+    request = serialized_request_json(context);
+    tools = field(request, "tools");
+    check(tools != nullptr && !tools->array.empty(), "Kimi hosted tool is attached");
+    check_string_field(tools->array.front(), "type", "builtin_function",
+                       "Kimi hosted tool uses builtin_function");
+    check_string_field(tools->array.front().get("function"), "name", "$web_search",
+                       "Kimi hosted tool name is $web_search");
+
+    context.options.builtin_web_search = false;
+    request = serialized_request_json(context);
+    check(field(request, "tools") == nullptr,
+          "--no-builtin-web-search omits hosted tools");
+
+    context.options.builtin_web_search = true;
+    context.api_kind = ainiux::provider::ApiKind::Responses;
+    context.options.model = "gpt-5.4";
+    context.options.model_catalog.models.clear();
+    context.options.model_catalog.models.push_back(
+        with_capability("openai-gpt-5", "^gpt-5.*$", "web_search", true));
+    ainiux::provider::ToolConversation conversation;
+    conversation.messages = {{"user", "search the news"}};
+    const std::vector<ainiux::provider::FunctionDefinition> client_tools = {
+        {"ls",
+         "List files",
+         R"({"type":"object","properties":{"path":{"type":"string"},"max_entries":{"type":"integer"}},"required":[],"additionalProperties":false})"},
+        {"web_search",
+         "Client search",
+         R"({"type":"object","properties":{"term":{"type":"string"}},"required":["term"],"additionalProperties":false})"}};
+    ainiux::json::ParseResult parsed = ainiux::json::parse(
+        ainiux::provider::serialize_tool_request(context, conversation, client_tools));
+    check(parsed.error.ok(), "Responses hosted+native tool request is valid JSON");
+    tools = parsed.value.get("tools");
+    check(tools != nullptr && tools->is_array(), "Responses mixed tools serialize");
+    bool saw_hosted = false;
+    bool saw_client_search = false;
+    bool saw_ls = false;
+    bool ls_strict_false = false;
+    for (const ainiux::json::Value& item : tools->array) {
+        const ainiux::json::Value* type = item.get("type");
+        const ainiux::json::Value* name = item.get("name");
+        if (type != nullptr && type->is_string() && type->string == "web_search") saw_hosted = true;
+        if (name != nullptr && name->is_string() && name->string == "web_search")
+            saw_client_search = true;
+        if (name != nullptr && name->is_string() && name->string == "ls") {
+            saw_ls = true;
+            const ainiux::json::Value* tool_strict = item.get("strict");
+            ls_strict_false = tool_strict != nullptr &&
+                              tool_strict->type == ainiux::json::Value::Type::Bool &&
+                              !tool_strict->boolean;
+        }
+    }
+    check(saw_hosted && saw_ls && !saw_client_search && ls_strict_false,
+          "hosted web_search replaces the client function and ls is not strict");
+}
+
+void test_hosted_web_search_parse_and_images() {
+    ainiux::provider::RequestContext context;
+    context.api_kind = ainiux::provider::ApiKind::Responses;
+    context.options.model = "gpt-5.4";
+    ainiux::provider::ToolRoundResult round;
+    const std::string body =
+        "{\"status\":\"completed\",\"output\":["
+        "{\"type\":\"web_search_call\",\"id\":\"ws_1\",\"status\":\"completed\","
+        "\"action\":{\"type\":\"search\",\"query\":\"latest news\"}},"
+        "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{"
+        "\"type\":\"output_text\",\"text\":\"A story\","
+        "\"annotations\":[{\"type\":\"url_citation\",\"url\":\"https://example.com\","
+        "\"title\":\"Example\"}]}]}]}";
+    ainiux::Error error = ainiux::provider::parse_tool_response(context, body, round, false);
+    check(error.ok() && round.tool_calls.empty() && round.content.find("A story") != std::string::npos,
+          "web_search_call is not treated as a client function call");
+    check(!round.hosted_search_queries.empty() && round.hosted_search_queries.front() == "latest news",
+          "web_search_call query is recorded");
+    check(!round.citations.empty() && round.citations.front().first == "https://example.com",
+          "url_citation annotations are collected");
+
+    ainiux::provider::ToolConversation conversation;
+    conversation.continuation_items_json = round.continuation_items_json;
+    check(!conversation.continuation_items_json.empty() &&
+              conversation.continuation_items_json.front().find("web_search_call") != std::string::npos,
+          "web_search_call items are preserved for replay");
+
+    context.options.model = "gpt-5.4";
+    ainiux::provider::Message user;
+    user.role = "user";
+    user.content = "look";
+    user.images.push_back({"image/png", "AAAA"});
+    const std::string request = ainiux::provider::serialize_request(context, {user});
+    check(request.find("\"type\":\"input_image\"") != std::string::npos &&
+              request.find("data:image/png;base64,AAAA") != std::string::npos,
+          "Responses user images serialize as input_image data URLs");
 }
 
 void test_credit_balance_parsing_and_formatting() {
@@ -2051,6 +2363,7 @@ void run_all() {
     test_model_context_window_tokens();
     test_models_markdown_format();
     test_apply_provider_target_accepts_custom_url();
+    test_gemini_uses_chat_after_inherited_responses();
     test_tui_local_endpoint_auto_selects_model();
     test_tui_startup_provider_selection_helpers();
     test_editor_startup_local_only_default();
@@ -2063,6 +2376,10 @@ void run_all() {
     test_provider_unicode_request_serialization();
     test_openrouter_session_stickiness_serialization();
     test_provider_capabilities_and_responses_context();
+    test_openai_defaults_to_responses();
+    test_xai_and_deepseek_accept_responses();
+    test_hosted_web_search_serialization();
+    test_hosted_web_search_parse_and_images();
     test_provider_registry_resolves_added_profiles();
     test_provider_responses_unsupported_and_override();
     test_provider_reasoning_request_compatibility();

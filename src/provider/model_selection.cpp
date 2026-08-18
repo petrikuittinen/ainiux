@@ -106,6 +106,9 @@ void apply_cli_target_change(cli::Options& options,
         if (!options.chat_url_cli_explicit) options.chat_url.clear();
         if (!options.models_url_cli_explicit) options.models_url.clear();
         if (!options.responses_url_cli_explicit) options.responses_url.clear();
+        // Inherited api=responses from official OpenAI / project restore must
+        // not stick on a chat-only provider. An explicit --api on this run wins.
+        if (!options.api_explicit) options.api = "chat";
     }
     if (provider_or_endpoint_changed && !options.model_explicit) {
         // Never carry a remembered or configured model id across a provider or

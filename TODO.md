@@ -31,7 +31,7 @@
 
 - Keyless search uses DuckDuckGo HTML (Instant Answer secondary). DDG may rate-limit or show bot challenges after rapid queries; Google HTML scrape was removed (JS-only shells).
 - **Later:** evaluate a more reliable free/casual web search provider (or optional lightweight local proxy) without requiring paid APIs for everyday use. Keep optional Tavily/Exa/Firecrawl/Searxng for power users.
-- Agent `web_search` returns at most **3** results; tool text steers the model to fetch only the top few URLs. Search result URLs are truncated when extremely long.
+- Agent client `web_search` returns at most **3** results; hosted provider `web_search` (catalog `web_search=on`) takes precedence when the model/API can emit it. Native Gemini generateContent/Interactions and native Anthropic Messages search remain future work.
 - Fetch converts ISO-8859-1 / Windows-1252 pages to UTF-8 so tool results stay valid JSON for local model servers; JSON string escape also refuses raw ill-formed UTF-8 bytes.
 - Agent `fetch` is Markdown/plain-text only (no raw HTML to the model); HTML→MD strips scripts/styles.
 

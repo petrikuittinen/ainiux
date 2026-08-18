@@ -444,6 +444,15 @@ void TuiFileJobs::start_search(const std::string& query) {
         status = "Usage: /search QUERY";
         return;
     }
+    if (provider::hosted_web_search_enabled(context)) {
+        TuiEvent event;
+        event.type = TuiEventType::SearchDone;
+        event.text = query;
+        event.inserted_message = {"user", "Search the web for: " + query};
+        events.push(std::move(event));
+        status = "Using model-hosted web_search for " + query;
+        return;
+    }
     search::Options options = search::options_for(context.options);
     runtime::EventQueue<TuiEvent>& event_queue = events;
     file_job.start([query, options, &event_queue](runtime::CancellationToken token) mutable {

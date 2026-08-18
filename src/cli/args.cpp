@@ -410,6 +410,9 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.stream_cli_explicit = true;
         } else if (arg == "--responses") {
             opts.api = "responses";
+            opts.api_explicit = true;
+        } else if (arg == "--no-builtin-web-search") {
+            opts.builtin_web_search = false;
         } else if (arg == "--quiet") {
             opts.quiet = true;
         } else if (arg == "--verbose" || arg == "-v") {
@@ -888,6 +891,7 @@ Error validate_security_review_arguments(int argc, char** argv, const Options& o
         }
         if (option == "--security-review" || option == "--security-review-log" ||
             option == "--no-security-review-log" || option == "--responses" ||
+            option == "--no-builtin-web-search" ||
             option == "--key-stdin" || option == "--quiet" || option == "--debug" ||
             option == "--no-config" || option == "--trace-http" ||
             option == "--insecure-tls" || option == "--stream" || option == "--no-stream") {
@@ -988,7 +992,8 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
         }
         if (option == "run" || option == "--agent-log" || option == "--no-agent-log" ||
             option == "--disable-indexing" ||
-            option == "--responses" || option == "--key-stdin" || option == "--quiet" ||
+            option == "--responses" || option == "--no-builtin-web-search" ||
+            option == "--key-stdin" || option == "--quiet" ||
             option == "--debug" || option == "--no-config" || option == "--trace-http" ||
             option == "--insecure-tls" || option == "--stream" || option == "--no-stream") {
             continue;
@@ -1067,7 +1072,8 @@ Error validate_agent_interactive_arguments(int argc, char** argv, const Options&
         }
         if (option == "--agent" || option == "-a" || option == "agent" || option == "--agent-log" ||
             option == "--disable-indexing" ||
-            option == "--no-agent-log" || option == "--responses" || option == "--key-stdin" ||
+            option == "--no-agent-log" || option == "--responses" ||
+            option == "--no-builtin-web-search" || option == "--key-stdin" ||
             option == "--quiet" || option == "--debug" || option == "--no-config" ||
             option == "--trace-http" || option == "--insecure-tls" || option == "--stream" ||
             option == "--no-stream" || option == "--nocolors" || option == "--no-colors") {
@@ -1249,6 +1255,10 @@ Options:
                                 'stdin' reads UTF-8 plaintext from standard input.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
       --search QUERY            Run a web search and use results as prompt context with -p.
+                                Hosted model search is used instead when the catalog
+                                marks the selected model web_search=on.
+      --no-builtin-web-search   Disable hosted provider web_search and use the client
+                                Tavily/Firecrawl/Exa/Searxng/DuckDuckGo path.
       --web-search-provider NAME
                                 auto, tavily, firecrawl, exa, searxng, or duckduckgo.
       --max-web-search-results N
@@ -1296,7 +1306,9 @@ Options:
       --provider NAME           none (offline), openrouter, openai, kimi, llama.cpp,
                                 lm_studio, ollama, vllm, sglang, zai, qwen, etc.
       --profile NAME            Alias for --provider.
-      --api chat|responses      Use Chat Completions (default) or Responses API.
+      --api chat|responses      Use Chat Completions or Responses API. Official OpenAI
+                                defaults to Responses; openai_chat and --api chat stay
+                                on Chat Completions.
       --responses               Shortcut for --api responses.
       --base-url URL
       --chat-url URL

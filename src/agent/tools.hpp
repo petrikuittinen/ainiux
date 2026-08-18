@@ -91,6 +91,9 @@ struct ToolRegistryOptions {
     MutationPolicy mutation_policy = MutationPolicy::Disabled;
     // Network tools reuse src/fetch and src/search. Disabled for security-review.
     bool allow_network = false;
+    // When the catalog model hosts web_search, omit the client Tavily/DDG tool.
+    bool hosted_web_search = false;
+    std::string hosted_web_search_name;
     HistoryBackupPolicy history_backup;
     fetch::Options fetch_options;
     search::Options search_options = search::default_options();
@@ -287,6 +290,8 @@ class ReadToolRegistry {
     mcp::ToolBridge* mcp_bridge_ = nullptr;
     MutationPolicy mutation_policy_ = MutationPolicy::Disabled;
     bool allow_network_ = false;
+    bool hosted_web_search_ = false;
+    std::string hosted_web_search_name_;
     HistoryBackupPolicy history_backup_{};
     fetch::Options fetch_options_{};
     search::Options search_options_{};

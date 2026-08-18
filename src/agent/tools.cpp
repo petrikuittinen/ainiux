@@ -1166,6 +1166,8 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.secrets_ = std::move(secrets);
     loaded.mutation_policy_ = options.mutation_policy;
     loaded.allow_network_ = options.allow_network;
+    loaded.hosted_web_search_ = options.hosted_web_search;
+    loaded.hosted_web_search_name_ = options.hosted_web_search_name;
     loaded.history_backup_ = options.history_backup;
     loaded.fetch_options_ = options.fetch_options;
     loaded.search_options_ = options.search_options;
@@ -3482,15 +3484,17 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                     "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8388608},"
                     "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000}",
                     "\"url\"")});
-        tools.push_back(
-            {"web_search",
-             "Web search (configured API providers, else DuckDuckGo). At most 3 results "
-             "(title/URL/snippet). Returns web_search_unavailable when none can run.",
-             schema("\"term\":{\"type\":\"string\"},"
-                    "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3},"
-                    "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
-                    "\"site\":{\"type\":\"string\"}",
-                    "\"term\"")});
+        if (!hosted_web_search_) {
+            tools.push_back(
+                {"web_search",
+                 "Web search (configured API providers, else DuckDuckGo). At most 3 results "
+                 "(title/URL/snippet). Returns web_search_unavailable when none can run.",
+                 schema("\"term\":{\"type\":\"string\"},"
+                        "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3},"
+                        "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
+                        "\"site\":{\"type\":\"string\"}",
+                        "\"term\"")});
+        }
     }
     if (agent_session) {
         // Always advertised in Act/Plan so tool-definition cache stays stable
@@ -6389,7 +6393,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, truncated);
     }
 
+    if (hosted_web_search_ &&
+        (name == hosted_web_search_name_ || name == "$web_search")) {
+        return arguments_json.empty() ? std::string("{}") : arguments_json;
+    }
+
     if (name == "web_search") {
+        if (hosted_web_search_)
+            return arguments_json.empty() ? std::string("{}") : arguments_json;
         if (!allow_network_)
             return tool_error_result("policy_denied", "web_search is not enabled in this session");
         std::string term;

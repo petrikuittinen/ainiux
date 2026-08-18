@@ -1,5 +1,6 @@
 #include "chat/settings.hpp"
 #include "config/model_catalog.hpp"
+#include "provider/hosted_search.hpp"
 #include "provider/names.hpp"
 #include "provider/provider.hpp"
 
@@ -147,12 +148,12 @@ const std::vector<Profile>& profile_registry() {
             "https://api.openai.com/v1/dashboard/billing/credit_grants"),
         with_credit_endpoint(
             make_profile("deepseek", {}, "https://api.deepseek.com",
-                         "/chat/completions", "/models", "",
+                         "/chat/completions", "/models", "/responses",
                          {"DEEPSEEK_API_KEY", "AINIUX_API_KEY"}, true, false),
             "https://api.deepseek.com/user/balance"),
         make_profile("gemini", {}, "https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions", "/models", "", {"GEMINI_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("anthropic", {}, "https://api.anthropic.com/v1", "/chat/completions", "/models", "", {"ANTHROPIC_API_KEY", "AINIUX_API_KEY"}, true, false, "", "OpenAI compatibility layer is mainly for testing/comparison."),
-        make_profile("xai", {"grok"}, "https://api.x.ai/v1", "/chat/completions", "/models", "", {"XAI_API_KEY", "AINIUX_API_KEY"}, true, false),
+        make_profile("xai", {"grok"}, "https://api.x.ai/v1", "/chat/completions", "/models", "/responses", {"XAI_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("moonshot", {"kimi"}, "https://api.moonshot.ai/v1", "/chat/completions", "/models", "", {"MOONSHOT_API_KEY", "AINIUX_API_KEY"}, true, false),
         // Local OpenAI-compatible servers (after kimi): llama.cpp, LM Studio, Ollama, vLLM, SGLang.
         make_profile(names::kLlamacpp, {"llama_cpp", "llama.cpp"}, "http://localhost:8080/v1", "/chat/completions", "/models", "", {}, false, true),
@@ -202,6 +203,10 @@ std::string provider_lookup_name(const std::string& requested) {
 
 bool provider_requests_responses(const std::string& requested) {
     return normalize_provider_key(requested) == names::kOpenAiResponses;
+}
+
+bool provider_requests_chat(const std::string& requested) {
+    return normalize_provider_key(requested) == names::kOpenAiChat;
 }
 
 bool find_profile(const std::string& requested, Profile& out) {
@@ -450,6 +455,16 @@ std::string reasoning_fields_json(const RequestContext& context) {
         case ReasoningProtocol::MiniMaxResponses:
             return append_pair(fields, "reasoning", reasoning_effort_object(selection));
         case ReasoningProtocol::DeepSeek:
+            if (context.api_kind == ApiKind::Responses) {
+                if (disabled) return {};
+                return append_pair(fields, "reasoning", reasoning_effort_object(wire_selection));
+            }
+            fields = append_pair(fields,
+                                 "thinking",
+                                 std::string("{\"type\":\"") +
+                                     (disabled ? "disabled" : "enabled") + "\"}");
+            if (!disabled) fields = append_pair(fields, "reasoning_effort", scalar);
+            return fields;
         case ReasoningProtocol::Zai:
             fields = append_pair(fields,
                                  "thinking",
@@ -607,8 +622,23 @@ std::string build_responses_request_json(const RequestContext& context, const st
         if (message.role == "assistant") {
             out << "{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":"
                 << json::quote(content) << ",\"annotations\":[]}]}";
-        } else {
+        } else if (message.images.empty()) {
             out << "{\"role\":\"user\",\"content\":" << json::quote(content) << "}";
+        } else {
+            out << "{\"role\":\"user\",\"content\":[";
+            bool wrote_part = false;
+            if (!content.empty()) {
+                out << "{\"type\":\"input_text\",\"text\":" << json::quote(content) << "}";
+                wrote_part = true;
+            }
+            for (const ImageInput& image : message.images) {
+                if (wrote_part) out << ",";
+                const std::string data_url =
+                    "data:" + image.mime_type + ";base64," + image.base64_data;
+                out << "{\"type\":\"input_image\",\"image_url\":" << json::quote(data_url) << "}";
+                wrote_part = true;
+            }
+            out << "]}";
         }
     }
     out << "]";
@@ -1546,6 +1576,7 @@ Error parse_responses_json_value(const json::Value& root, ChatResult& result, bo
                 }
                 if (const json::Value* content = item.get("content")) {
                     append_responses_content_text(*content, content_text);
+                    collect_content_citations(*content, result.citations);
                 }
             }
         }
@@ -2350,7 +2381,8 @@ ContextResult build_context(const cli::Options& input_options) {
                  "--plan/--plan-file, or --repl"}};
     }
 
-    if (provider_requests_responses(options.provider)) {
+    const std::string requested_provider = options.provider;
+    if (provider_requests_responses(requested_provider)) {
         options.api = "responses";
     }
     ApiKind api_kind = options.api == "responses" ? ApiKind::Responses : ApiKind::ChatCompletions;
@@ -2365,6 +2397,10 @@ ContextResult build_context(const cli::Options& input_options) {
         if (provider_requests_responses(options.positional_url)) {
             options.api = "responses";
             api_kind = ApiKind::Responses;
+        }
+        if (provider_requests_chat(options.positional_url) && !options.api_explicit) {
+            options.api = "chat";
+            api_kind = ApiKind::ChatCompletions;
         }
         if (!find_profile(options.positional_url, profile)) {
             return {{}, {ErrorCode::BadArgs, "unknown provider profile: " + options.positional_url}};
@@ -2382,6 +2418,35 @@ ContextResult build_context(const cli::Options& input_options) {
         }
     } else {
         options.provider = profile.name;
+    }
+    const bool requested_openai_chat =
+        provider_requests_chat(requested_provider) ||
+        provider_requests_chat(options.positional_url);
+    if (!options.api_explicit && !requested_openai_chat &&
+        normalize_provider_key(profile.name) == names::kOpenAi) {
+        options.api = "responses";
+        api_kind = ApiKind::Responses;
+    }
+    if (!options.api_explicit && !options.model.empty() &&
+        profile.capabilities.responses_api) {
+        const ModelCapability* preview = config::resolve_model_capability(
+            options.model_catalog, profile.name,
+            api_kind == ApiKind::Responses ? "responses" : "chat", options.model);
+        if (preview != nullptr && preview->web_search &&
+            (preview->id == "xai-grok-4" || preview->id == "deepseek-v4" ||
+             preview->id == "openai-gpt-5")) {
+            options.api = "responses";
+            api_kind = ApiKind::Responses;
+        }
+    }
+    // Official OpenAI (and project restore after it) leave api=responses.
+    // Chat-only profiles such as Gemini have no Responses endpoint; inherit
+    // Chat Completions unless the user asked for Responses or supplied a URL.
+    if (api_kind == ApiKind::Responses &&
+        !profile.capabilities.responses_api && options.responses_url.empty() &&
+        !options.api_explicit) {
+        options.api = "chat";
+        api_kind = ApiKind::ChatCompletions;
     }
     Error reasoning_error = config::resolve_reasoning_off(
         options.model_catalog,
@@ -2501,9 +2566,26 @@ void apply_provider_target(cli::Options& options, const std::string& target) {
     if (looks_like_api_url(target)) {
         options.positional_url = target;
         options.provider = "openai";
+        // Custom URLs stay on Chat Completions unless the user asks again.
+        options.api = "chat";
+        options.api_explicit = false;
         return;
     }
     options.provider = target;
+    if (provider_requests_responses(target)) {
+        options.api = "responses";
+        options.api_explicit = true;
+    } else if (provider_requests_chat(target)) {
+        options.api = "chat";
+        options.api_explicit = true;
+    } else {
+        // Drop leftover Responses from official OpenAI so chat-only profiles
+        // (Gemini, Anthropic, OpenRouter, …) rebuild on Chat Completions.
+        // Official openai keeps api_explicit false so build_context can apply
+        // the Responses default.
+        options.api = "chat";
+        options.api_explicit = false;
+    }
 }
 
 void apply_tui_startup_default(cli::Options& options) {
@@ -2693,7 +2775,12 @@ bool credit_balance_available(const RequestContext& context) {
 
 Capabilities detected_capabilities_for(const RequestContext& context) {
     Capabilities caps = capabilities_for(context);
-    if (context.api_kind != ApiKind::ChatCompletions || context.options.image_capability == "deny") {
+    if (context.options.image_capability == "deny") {
+        caps.images = false;
+        return caps;
+    }
+    if (context.api_kind != ApiKind::ChatCompletions &&
+        context.api_kind != ApiKind::Responses) {
         caps.images = false;
         return caps;
     }
@@ -2722,9 +2809,10 @@ Capabilities detected_capabilities_for(const RequestContext& context) {
 }
 
 Error validate_image_input(const RequestContext& context) {
-    if (context.api_kind != ApiKind::ChatCompletions) {
+    if (context.api_kind != ApiKind::ChatCompletions &&
+        context.api_kind != ApiKind::Responses) {
         return {ErrorCode::UnsupportedFeature,
-                "image input currently supports Chat Completions only; use --api chat"};
+                "image input supports Chat Completions and Responses only"};
     }
     if (context.options.image_capability == "deny") {
         return {ErrorCode::UnsupportedFeature, "image input is disabled by --image-capability deny"};
@@ -2798,8 +2886,10 @@ long long reported_total_tokens(const ChatResult& result) {
 }
 
 std::string serialize_request(const RequestContext& context, const std::vector<Message>& messages) {
-    return context.api_kind == ApiKind::Responses ? build_responses_request_json(context, messages)
-                                                  : build_chat_request_json(context, messages);
+    const std::string body = context.api_kind == ApiKind::Responses
+                                 ? build_responses_request_json(context, messages)
+                                 : build_chat_request_json(context, messages);
+    return attach_hosted_web_search_tools(context, body);
 }
 
 std::string serialize_chat_request(const RequestContext& context, const std::vector<Message>& messages) {
@@ -3128,11 +3218,52 @@ Error get_credit_balance(const RequestContext& context,
                                          fetched.response.body, result);
 }
 
+Error send_kimi_hosted_chat(const RequestContext& context,
+                            const std::vector<Message>& messages,
+                            const DeltaCallback& on_delta,
+                            ChatResult& result,
+                            runtime::CancellationToken cancellation) {
+    ToolConversation conversation;
+    conversation.messages = messages;
+    constexpr int kMaxEchoRounds = 8;
+    ToolRoundResult last;
+    for (int round = 0; round < kMaxEchoRounds; ++round) {
+        ToolRoundResult current;
+        const Error error = send_tool_round(context, conversation, {}, current, cancellation);
+        if (!error.ok()) return error;
+        last = std::move(current);
+        if (last.tool_calls.empty()) break;
+        std::vector<std::string> echoed;
+        echoed.reserve(last.tool_calls.size());
+        for (const ToolCall& call : last.tool_calls) {
+            if (!hosted_web_search_name_matches(context, call.name)) {
+                return {ErrorCode::ProviderSchema,
+                        "Kimi hosted search returned an unexpected tool call: " + call.name};
+            }
+            echoed.push_back(call.arguments_json.empty() ? "{}" : call.arguments_json);
+        }
+        append_tool_results(context, last.tool_calls, echoed, conversation);
+    }
+    result = last.metrics;
+    result.content = last.content;
+    result.citations = last.citations;
+    if (!last.reasoning_text.empty() && result.content.find("<think>") == std::string::npos)
+        result.content = "<think>" + last.reasoning_text + "</think>\n" + last.content;
+    if (on_delta && !result.content.empty()) {
+        const Error delta_error = on_delta(result.content);
+        if (!delta_error.ok()) return delta_error;
+    }
+    return ok_error();
+}
+
 Error send_chat_messages(const RequestContext& context,
                          const std::vector<Message>& messages,
                          DeltaCallback on_delta,
                          ChatResult& result,
                          runtime::CancellationToken cancellation) {
+    if (hosted_web_search_is_kimi_echo(context)) {
+        return send_kimi_hosted_chat(context, messages, on_delta, result, cancellation);
+    }
     if (context.profile.offline) {
         return {ErrorCode::UnsupportedFeature,
                 "provider none disables AI/model requests; select an OpenAI-compatible provider first"};
@@ -3372,6 +3503,7 @@ Error parse_responses_tool_root(const json::Value& root, ToolRoundResult& result
         const json::Value* type = item.get("type");
         if (type != nullptr && type->is_string() && type->string == "reasoning")
             append_responses_reasoning_text(item, result.reasoning_text);
+        collect_hosted_search_metadata(item, result.hosted_search_queries, result.citations);
         if (type != nullptr && type->is_string() && type->string == "function_call") {
             const json::Value* call_id = item.get("call_id");
             const json::Value* id = item.get("id");
@@ -3396,10 +3528,59 @@ Error parse_responses_tool_root(const json::Value& root, ToolRoundResult& result
     return ok_error();
 }
 
+Error streamed_tool_call_index(const json::Value& item,
+                               std::size_t array_position,
+                               const std::map<std::size_t, ToolCall>& calls,
+                               std::size_t& index) {
+    const json::Value* index_value = item.get("index");
+    if (index_value != nullptr) {
+        if (index_value->type != json::Value::Type::Number ||
+            !std::isfinite(index_value->number) || index_value->number < 0 ||
+            index_value->number > 1000000 ||
+            index_value->number !=
+                static_cast<double>(static_cast<std::size_t>(index_value->number))) {
+            return {ErrorCode::ProviderSchema, "streamed tool call is missing a valid index"};
+        }
+        index = static_cast<std::size_t>(index_value->number);
+        return ok_error();
+    }
+    // Official Gemini OpenAI-compat omits index. Match a repeated id, otherwise
+    // assign the next slot or continue the only in-flight call.
+    if (const json::Value* id = item.get("id");
+        id != nullptr && id->is_string() && !id->string.empty()) {
+        for (const auto& entry : calls) {
+            if (entry.second.id == id->string) {
+                index = entry.first;
+                return ok_error();
+            }
+        }
+        index = calls.empty() ? 0 : calls.rbegin()->first + 1;
+        return ok_error();
+    }
+    if (calls.size() == 1) {
+        index = calls.begin()->first;
+        return ok_error();
+    }
+    index = array_position;
+    return ok_error();
+}
+
+void merge_streamed_tool_call_extras(json::Value& extras, const json::Value& item) {
+    if (!item.is_object()) return;
+    if (!extras.is_object()) extras = json_object_value();
+    for (const auto& field : item.object) {
+        if (field.first == "index" || field.first == "id" || field.first == "type" ||
+            field.first == "function")
+            continue;
+        extras.object[field.first] = field.second;
+    }
+}
+
 Error parse_chat_tool_stream(const std::string& body,
                              ToolRoundResult& result,
                              const ReasoningDeltaCallback& on_reasoning_delta) {
     std::map<std::size_t, ToolCall> calls;
+    std::map<std::size_t, json::Value> extras;
     json::Value preserved = json_object_value();
     auto process = [&](const std::string& data) -> Error {
         if (data.empty() || data == "[DONE]") return ok_error();
@@ -3444,15 +3625,11 @@ Error parse_chat_tool_stream(const std::string& body,
         const json::Value* tool_calls = delta->get("tool_calls");
         if (tool_calls == nullptr) return ok_error();
         if (!tool_calls->is_array()) return {ErrorCode::ProviderSchema, "streamed tool_calls must be an array"};
-        for (const json::Value& item : tool_calls->array) {
-            const json::Value* index_value = item.get("index");
-            if (index_value == nullptr || index_value->type != json::Value::Type::Number ||
-                !std::isfinite(index_value->number) || index_value->number < 0 ||
-                index_value->number > 1000000 ||
-                index_value->number !=
-                    static_cast<double>(static_cast<std::size_t>(index_value->number)))
-                return {ErrorCode::ProviderSchema, "streamed tool call is missing a valid index"};
-            const std::size_t index = static_cast<std::size_t>(index_value->number);
+        for (std::size_t item_index = 0; item_index < tool_calls->array.size(); ++item_index) {
+            const json::Value& item = tool_calls->array[item_index];
+            std::size_t index = 0;
+            Error index_error = streamed_tool_call_index(item, item_index, calls, index);
+            if (!index_error.ok()) return index_error;
             ToolCall& call = calls[index];
             call.index = index;
             if (const json::Value* id = item.get("id"); id != nullptr && id->is_string()) call.id += id->string;
@@ -3461,6 +3638,7 @@ Error parse_chat_tool_stream(const std::string& body,
                 if (const json::Value* arguments = function->get("arguments"); arguments != nullptr && arguments->is_string())
                     call.arguments_json += arguments->string;
             }
+            merge_streamed_tool_call_extras(extras[index], item);
         }
         return ok_error();
     };
@@ -3493,6 +3671,11 @@ Error parse_chat_tool_stream(const std::string& body,
             function.object["name"] = json_string_value(call.name);
             function.object["arguments"] = json_string_value(call.arguments_json);
             item.object["function"] = std::move(function);
+            const auto extra = extras.find(call.index);
+            if (extra != extras.end()) {
+                for (const auto& field : extra->second.object)
+                    item.object[field.first] = field.second;
+            }
             array.array.push_back(std::move(item));
             result.tool_calls.push_back(std::move(call));
         }
@@ -3634,7 +3817,12 @@ std::string serialize_tool_request(const RequestContext& context,
         items->array.push_back(std::move(item));
     }
     json::Value definitions = json_array_value();
+    if (const json::Value* existing_tools = root.get("tools");
+        existing_tools != nullptr && existing_tools->is_array())
+        definitions = *existing_tools;
+    const bool omit_client_web_search = hosted_web_search_enabled(context);
     for (const FunctionDefinition& definition : tools) {
+        if (omit_client_web_search && definition.name == "web_search") continue;
         json::ParseResult schema = json::parse(definition.parameters_json);
         if (!schema.error.ok() || !schema.value.is_object()) return "{}";
         json::Value item = json_object_value();
@@ -3643,7 +3831,9 @@ std::string serialize_tool_request(const RequestContext& context,
             item.object["name"] = json_string_value(definition.name);
             item.object["description"] = json_string_value(definition.description);
             item.object["parameters"] = std::move(schema.value);
-            item.object["strict"] = json_bool_value(true);
+            // Native/MCP tools have optional properties. OpenAI strict mode
+            // requires every property in `required`, which those schemas do not.
+            item.object["strict"] = json_bool_value(false);
         } else {
             json::Value function = json_object_value();
             function.object["name"] = json_string_value(definition.name);
@@ -3653,8 +3843,10 @@ std::string serialize_tool_request(const RequestContext& context,
         }
         definitions.array.push_back(std::move(item));
     }
+    if (definitions.array.empty()) return "{}";
     root.object["tools"] = std::move(definitions);
-    root.object["tool_choice"] = json_string_value("auto");
+    if (root.get("tool_choice") == nullptr)
+        root.object["tool_choice"] = json_string_value("auto");
     return json::stringify(root);
 }
 
@@ -3710,7 +3902,7 @@ Error send_tool_round(const RequestContext& context,
     Error precondition_error;
     if (context.profile.offline)
         precondition_error = {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
-    else if (tools.empty())
+    else if (tools.empty() && !hosted_web_search_enabled(context))
         precondition_error = {ErrorCode::BadArgs, "native tool request requires at least one function definition"};
     else if (cancellation.cancelled())
         precondition_error = {ErrorCode::Cancelled, "native tool request cancelled before it started"};
@@ -3772,14 +3964,18 @@ Error send_tool_round(const RequestContext& context,
             type != nullptr && type->is_string() ? type->string : std::string();
         if (event == "response.function_call_arguments.delta" ||
             event == "response.output_text.delta" ||
-            event == "response.content_part.added")
+            event == "response.content_part.added" ||
+            event == "response.web_search_call.in_progress" ||
+            event == "response.web_search_call.searching" ||
+            event == "response.web_search_call.completed")
             return true;
         if (event != "response.output_item.added") return false;
         const json::Value* item = root.get("item");
         if (item == nullptr || !item->is_object()) return false;
         const json::Value* item_type = item->get("type");
         return item_type != nullptr && item_type->is_string() &&
-               (item_type->string == "function_call" || item_type->string == "message");
+               (item_type->string == "function_call" || item_type->string == "message" ||
+                item_type->string == "web_search_call");
     };
     if (context.options.stream && (on_reasoning_delta || on_working)) {
         request.on_body = [&](const std::string& chunk) -> Error {

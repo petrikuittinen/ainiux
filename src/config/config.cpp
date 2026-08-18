@@ -1421,6 +1421,8 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         std::optional<ReasoningSelection> reasoning_default;
         std::vector<ReasoningSelection> reasoning_options;
         TemperatureSupport temperature = TemperatureSupport::Unknown;
+        bool web_search = false;
+        std::string web_search_name = "web_search";
         bool enabled = true;
         SourceLocation source;
     };
@@ -1493,6 +1495,16 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
                 Error err = require_type(entry, Value::Type::Boolean);
                 if (!err.ok()) return err;
                 partial.enabled = entry.value.boolean;
+            } else if (key == "web_search") {
+                Error err = require_type(entry, Value::Type::Boolean);
+                if (!err.ok()) return err;
+                partial.web_search = entry.value.boolean;
+            } else if (key == "web_search_name") {
+                Error err = require_type(entry, Value::Type::String);
+                if (!err.ok()) return err;
+                if (entry.value.string.empty())
+                    return schema_error(entry, "web_search_name must not be empty");
+                partial.web_search_name = entry.value.string;
             } else {
                 return schema_error(entry, "unknown [model] key");
             }
@@ -1571,6 +1583,8 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         capability.reasoning_default = partial.reasoning_default;
         capability.reasoning_options = partial.reasoning_options;
         capability.temperature = partial.temperature;
+        capability.web_search = partial.web_search;
+        capability.web_search_name = partial.web_search_name;
         capability.load_order = candidate.model_catalog.next_load_order++;
         candidate.model_catalog.models.push_back(std::move(capability));
     }
@@ -1890,7 +1904,7 @@ ParseResult read_file(const std::string& path, size_t max_bytes) {
     return parse(input, path);
 }
 
-Error apply_document(const Document& document, cli::Options& options) {
+Error apply_document(const Document& document, cli::Options& options, bool user_layer) {
     cli::Options candidate = options;
     for (const auto& item : document.entries) {
         const std::string& name = item.first;
@@ -1916,7 +1930,10 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "api") {
             std::string value;
             err = enum_string(entry, {"chat", "responses"}, value, "chat or responses");
-            if (err.ok()) candidate.api = value;
+            if (err.ok()) {
+                candidate.api = value;
+                if (user_layer) candidate.api_explicit = true;
+            }
         } else if (name == "endpoint.base_url") {
             err = require_type(entry, Value::Type::String);
             if (err.ok()) candidate.base_url = entry.value.string;
@@ -2223,6 +2240,9 @@ Error apply_document(const Document& document, cli::Options& options) {
         } else if (name == "url_fetch.allow_private_addresses") {
             err = require_type(entry, Value::Type::Boolean);
             if (err.ok()) candidate.allow_private_url_fetch = entry.value.boolean;
+        } else if (name == "web_search.builtin") {
+            err = require_type(entry, Value::Type::Boolean);
+            if (err.ok()) candidate.builtin_web_search = entry.value.boolean;
         } else if (name == "web_search.max_results") {
             err = nonnegative_int(entry, candidate.max_web_search_results);
             if (err.ok() && candidate.max_web_search_results <= 0) {
@@ -2813,7 +2833,14 @@ LoadResult load_automatic(const cli::Options& base_options,
             {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Missing, user_path});
         return result;
     }
-    Error err = apply_config_file(user_path, result.options);
+    ParseResult user_parsed = read_file(user_path);
+    if (!user_parsed.error.ok()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Error, user_path});
+        result.error = std::move(user_parsed.error);
+        return result;
+    }
+    Error err = apply_document(user_parsed.document, result.options, true);
     if (!err.ok()) {
         result.diagnostics.push_back(
             {ConfigScope::User, ConfigFileKind::Config, ConfigFileState::Error, user_path});

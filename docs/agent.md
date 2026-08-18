@@ -29,7 +29,11 @@ Plan keeps read and research tools but code-enforces writes to planning document
 The current native names are `index`, `ls`, `glob`, `grep`, `symbol`, `outline`,
 `read`, `run`, `fetch`, `web_search`, `goal_met`, `attach`, `edit`, `write`,
 `mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on index, network,
-session, and mutation policy. `read` accepts either one `path` or an `items` batch
+session, and mutation policy. When `models.conf` marks the current model
+`web_search=on`, agent/run/plan attach the provider-hosted search tool and do
+not advertise the client Tavily/DuckDuckGo `web_search` function. Official
+Gemini OpenAI-compat Chat stays on client `web_search` because that adapter
+rejects hosted `google_search`. `fetch` stays. `read` accepts either one `path` or an `items` batch
 of 1–100 ranges. `grep` can combine a file/directory `path` with a name/type
 `glob` filter.
 

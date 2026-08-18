@@ -68,7 +68,9 @@ ainiux deepseek -m MODEL -p "Hello"
 ainiux http://localhost:8000/v1 -m MODEL -p "Hello"
 ```
 
-Override individual paths with `--base-url`, `--chat-url`, `--models-url`, or `--responses-url`. `--api responses` and `--responses` select the text-only Responses adapter. Endpoint normalization is deterministic and reports surprising rewrites unless `--quiet` is set.
+Override individual paths with `--base-url`, `--chat-url`, `--models-url`, or `--responses-url`. Official `--provider openai` defaults to Responses. `--api chat`, `openai_chat`, and a user `api = chat` setting stay on Chat Completions. `--api responses` and `--responses` still select Responses explicitly. Custom URLs stay on Chat Completions. Selecting a chat-only provider such as Gemini uses Chat Completions even if the previous provider used Responses. Endpoint normalization is deterministic and reports surprising rewrites unless `--quiet` is set.
+
+`--search QUERY` with a model request uses hosted provider `web_search` when `models.conf` marks the model `web_search=on`. `--no-builtin-web-search` forces the client Tavily/Firecrawl/Exa/Searxng/DuckDuckGo path. Standalone `--search` without a model request still uses client search.
 
 ## Script reliability
 

@@ -45,7 +45,7 @@ Status: **v1.18 plus an unreleased native Windows parity target** (see `README.m
 
 ### Implemented capabilities agents must respect
 
-- Built-in provider registry and aliases; Chat Completions; text-only OpenAI Responses API (`--api responses`, `--responses`, `openai_responses`)
+- Built-in provider registry and aliases; Chat Completions; OpenAI Responses API (official `openai` defaults to Responses; `--api chat` / `openai_chat` keep Chat Completions)
 - Catalog-selected provider reasoning mapping (`--reasoning auto|VALUE|TOKENS`)
 - `--provider none` offline profile for conversion/editor without a model endpoint
 - Credential lookup from env / key file / stdin; redaction in logs and artifacts
