@@ -172,6 +172,7 @@ class Parser {
             return fail("expected string");
         }
         while (pos_ < input_.size()) {
+            const size_t char_pos = pos_;
             const unsigned char ch = static_cast<unsigned char>(input_[pos_++]);
             if (ch == '"') {
                 return ok_error();
@@ -180,6 +181,47 @@ class Parser {
                 return fail("unescaped control character in string");
             }
             if (ch != '\\') {
+                size_t continuation_count = 0;
+                if (ch < 0x80) {
+                    continuation_count = 0;
+                } else if (ch >= 0xC2 && ch <= 0xDF) {
+                    continuation_count = 1;
+                } else if (ch >= 0xE0 && ch <= 0xEF) {
+                    continuation_count = 2;
+                } else if (ch >= 0xF0 && ch <= 0xF4) {
+                    continuation_count = 3;
+                } else {
+                    pos_ = char_pos;
+                    return fail("invalid UTF-8 in string");
+                }
+                if (continuation_count != 0) {
+                    if (pos_ + continuation_count > input_.size()) {
+                        pos_ = char_pos;
+                        return fail("incomplete UTF-8 sequence in string");
+                    }
+                    const unsigned char second = static_cast<unsigned char>(input_[pos_]);
+                    const bool invalid_second =
+                        second < 0x80 || second > 0xBF ||
+                        (ch == 0xE0 && second < 0xA0) ||
+                        (ch == 0xED && second > 0x9F) ||
+                        (ch == 0xF0 && second < 0x90) ||
+                        (ch == 0xF4 && second > 0x8F);
+                    if (invalid_second) {
+                        pos_ = char_pos;
+                        return fail("invalid UTF-8 in string");
+                    }
+                    for (size_t i = 1; i < continuation_count; ++i) {
+                        const unsigned char continuation =
+                            static_cast<unsigned char>(input_[pos_ + i]);
+                        if (continuation < 0x80 || continuation > 0xBF) {
+                            pos_ = char_pos;
+                            return fail("invalid UTF-8 in string");
+                        }
+                    }
+                    out.append(input_, char_pos, continuation_count + 1);
+                    pos_ += continuation_count;
+                    continue;
+                }
                 out.push_back(static_cast<char>(ch));
                 continue;
             }

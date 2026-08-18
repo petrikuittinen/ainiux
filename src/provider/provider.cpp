@@ -3249,7 +3249,7 @@ Error send_kimi_hosted_chat(const RequestContext& context,
     result.citations = last.citations;
     if (!last.reasoning_text.empty() && result.content.find("<think>") == std::string::npos)
         result.content = "<think>" + last.reasoning_text + "</think>\n" + last.content;
-    if (on_delta && !result.content.empty()) {
+    if (context.options.stream && on_delta && !result.content.empty()) {
         const Error delta_error = on_delta(result.content);
         if (!delta_error.ok()) return delta_error;
     }
@@ -3345,6 +3345,12 @@ Error send_chat_messages(const RequestContext& context,
                         : chat_parser.finish(timed_delta, result, done);
         if (!err.ok()) {
             return err;
+        }
+        if (result.content.empty()) {
+            return {ErrorCode::ProviderSchema,
+                    context.api_kind == ApiKind::Responses
+                        ? "Responses API stream did not contain output text"
+                        : "chat completion stream did not contain assistant content"};
         }
     } else {
         Error err = context.api_kind == ApiKind::Responses ? parse_responses_json(http_result.response.body, result)

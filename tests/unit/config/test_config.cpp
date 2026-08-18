@@ -861,9 +861,17 @@ void test_config_reads_models_template() {
           "DeepSeek V4 family advertises hosted web_search on Responses");
     const ainiux::ModelCapability* kimi_k26 = ainiux::config::resolve_model_capability(
         options.model_catalog, "moonshot", "chat", "kimi-k2.6");
-    check(kimi_k26 != nullptr && kimi_k26->id == "moonshot-kimi-k2" &&
+    check(kimi_k26 != nullptr && kimi_k26->id == "moonshot-kimi-k2-hybrid" &&
+              kimi_k26->reasoning_protocol == ainiux::ReasoningProtocol::ThinkingToggle &&
+              kimi_k26->reasoning_options.size() == 2 &&
+              ainiux::config::reasoning_selection_disables(kimi_k26->reasoning_options[0]) &&
               kimi_k26->web_search && kimi_k26->web_search_name == "$web_search",
-          "Kimi K2 family uses the builtin $web_search tool");
+          "Kimi K2.6 uses the thinking toggle and builtin $web_search tool");
+    const ainiux::ModelCapability* kimi_k25 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "moonshot", "chat", "kimi-k2.5");
+    check(kimi_k25 != nullptr && kimi_k25->id == "moonshot-kimi-k2-hybrid" &&
+              kimi_k25->reasoning_protocol == ainiux::ReasoningProtocol::ThinkingToggle,
+          "Kimi K2.5 uses the same thinking toggle catalog entry");
     const ainiux::ModelCapability* kimi_k3 = ainiux::config::resolve_model_capability(
         options.model_catalog, "moonshot", "chat", "kimi-k3");
     check(kimi_k3 != nullptr && kimi_k3->web_search && kimi_k3->web_search_name == "$web_search",

@@ -3,8 +3,10 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 PORT="${AINIUX_TEST_PORT:-18080}"
+RESPONSES_PORT="${AINIUX_RESPONSES_TEST_PORT:-18081}"
 MODEL="mock-model"
 SERVER_LOG="$ROOT/build/mock_server.log"
+RESPONSES_SERVER_LOG="$ROOT/build/responses_mock_server.log"
 EMPTY_CONFIG_HOME="$ROOT/build/empty-config-home"
 TEST_HOME="$ROOT/build/test-home"
 WINDOWS_NATIVE=0
@@ -16,13 +18,17 @@ mkdir -p "$EMPTY_CONFIG_HOME" "$TEST_HOME"
 export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$EMPTY_CONFIG_HOME"
 
-python3 "$ROOT/tests/mock_server/openai_mock.py" --port "$PORT" --model "$MODEL" >"$SERVER_LOG" 2>&1 &
+python3 "$ROOT/tests/mock_server/openai_mock.py" --api chat --port "$PORT" --model "$MODEL" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
-trap 'kill "$SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" >/dev/null 2>&1 || true' EXIT INT TERM
+python3 "$ROOT/tests/mock_server/openai_mock.py" --api responses --port "$RESPONSES_PORT" \
+    --model "$MODEL" >"$RESPONSES_SERVER_LOG" 2>&1 &
+RESPONSES_SERVER_PID=$!
+trap 'kill "$SERVER_PID" "$RESPONSES_SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" "$RESPONSES_SERVER_PID" >/dev/null 2>&1 || true' EXIT INT TERM
 
 i=0
 while [ "$i" -lt 50 ]; do
-    if curl -sS "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1; then
+    if curl -sS "http://127.0.0.1:$PORT/v1/models" >/dev/null 2>&1 &&
+       curl -sS "http://127.0.0.1:$RESPONSES_PORT/v1/models" >/dev/null 2>&1; then
         break
     fi
     i=$((i + 1))
@@ -30,6 +36,7 @@ while [ "$i" -lt 50 ]; do
 done
 
 BASE="http://127.0.0.1:$PORT"
+RESPONSES_BASE="http://127.0.0.1:$RESPONSES_PORT"
 
 benchmark_dataset="$ROOT/build/integration-benchmark.jsonl"
 cat >"$benchmark_dataset" <<JSONL
@@ -526,12 +533,18 @@ grep 'input appears to be binary' "$binary_attachment_err" >/dev/null
 invalid_utf8_attachment="$ROOT/build/invalid-utf8-attachment.txt"
 printf '\377' >"$invalid_utf8_attachment"
 invalid_utf8_attachment_err="$ROOT/build/invalid-utf8-attachment.err"
-if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$invalid_utf8_attachment" \
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" \
+    -p "summarize-legacy-attachment" --attach "$invalid_utf8_attachment" \
     >"$ROOT/build/invalid-utf8-attachment.out" 2>"$invalid_utf8_attachment_err"; then
-    echo "invalid UTF-8 attachment should fail" >&2
+    echo "ambiguous invalid UTF-8 attachment should require --encoding" >&2
     exit 1
 fi
-grep 'Input expects UTF-8 text' "$invalid_utf8_attachment_err" >/dev/null
+grep 'input is not valid UTF-8' "$invalid_utf8_attachment_err" >/dev/null
+grep 'pass --encoding NAME' "$invalid_utf8_attachment_err" >/dev/null
+legacy_attachment_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" \
+    -p "summarize-legacy-attachment" --encoding windows-1252 \
+    --attach "$invalid_utf8_attachment")
+test "$legacy_attachment_reply" = "legacy-attachment-ok"
 
 missing_attachment_err="$ROOT/build/missing-attachment.err"
 if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
@@ -613,11 +626,14 @@ legacy_html="$ROOT/build/windows1251-russian.html"
 printf '<h1>\317\360\350\342\345\362</h1>' >"$legacy_html"
 legacy_err="$ROOT/build/nonutf-html.err"
 if "$ROOT/ainiux" --input "$legacy_html" --output-format plaintext --quiet >"$ROOT/build/nonutf-html.out" 2>"$legacy_err"; then
-    echo "non-UTF-8 HTML extraction should have failed" >&2
+    echo "unlabeled non-UTF-8 HTML extraction should require --encoding" >&2
     exit 1
 fi
-grep 'HTML extraction expects UTF-8 input' "$legacy_err" >/dev/null
-grep 'charset conversion is not implemented yet' "$legacy_err" >/dev/null
+grep 'input is not valid UTF-8' "$legacy_err" >/dev/null
+grep 'pass --encoding NAME' "$legacy_err" >/dev/null
+legacy_text=$("$ROOT/ainiux" --input "$legacy_html" --encoding windows-1251 \
+    --output-format plaintext --quiet)
+printf '%s\n' "$legacy_text" | grep -F 'Привет' >/dev/null
 
 models=$("$ROOT/ainiux" --list-models "$BASE" --quiet)
 printf '%s' "$models" | grep -F "| $MODEL |" >/dev/null
@@ -626,7 +642,7 @@ printf '%s' "$models" | grep -F "**Provider:**" >/dev/null
 reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello")
 test "$reply" = "Hello"
 reasoning_warning_err="$ROOT/build/reasoning-value-warning.err"
-reasoning_warning_reply=$("$ROOT/ainiux" "$BASE" --no-stream \
+reasoning_warning_reply=$("$ROOT/ainiux" "$BASE" --api chat --no-stream \
     -m "gateway/deepseek-v4-flash" --reasoning maxx -p "hello" \
     2>"$reasoning_warning_err")
 test "$reasoning_warning_reply" = "Hello"
@@ -637,7 +653,7 @@ grep 'models.conf values: none|low|high|max' "$reasoning_warning_err" >/dev/null
 repl_reasoning_warning_err="$ROOT/build/repl-reasoning-value-warning.err"
 printf '/reasoning maxx\nn\n/quit\n' | \
     "$ROOT/ainiux" "$BASE" --quiet --repl --no-stream \
-        -m "gateway/deepseek-v4-flash" \
+        --api chat -m "gateway/deepseek-v4-flash" \
         >"$ROOT/build/repl-reasoning-value-warning.out" \
         2>"$repl_reasoning_warning_err"
 grep "Warning: reasoning value 'maxx' is not listed" \
@@ -674,18 +690,18 @@ grep '<h1>Mock Title</h1>' "$html_file" >/dev/null
 stream=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "hello")
 test "$stream" = "Hello"
 
-responses_reply=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello")
+responses_reply=$("$ROOT/ainiux" "$RESPONSES_BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello")
 test "$responses_reply" = "Hello"
-responses_stream=$("$ROOT/ainiux" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "hello")
+responses_stream=$("$ROOT/ainiux" "$RESPONSES_BASE" --quiet --api responses --stream -m "$MODEL" -p "hello")
 test "$responses_stream" = "Hello"
-responses_json=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
+responses_json=$("$ROOT/ainiux" "$RESPONSES_BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
 printf '%s' "$responses_json" | grep '"content":"Hello"' >/dev/null
 
 shape_openai=$("$ROOT/ainiux" --provider openai --api chat --base-url "$BASE" --quiet --no-stream \
     -m "$MODEL" --reasoning high -p "expect-openai-chat-reasoning" \
     --header "Authorization: Bearer test")
 test "$shape_openai" = "request-ok"
-shape_openai_responses=$("$ROOT/ainiux" --provider openai --base-url "$BASE" --quiet \
+shape_openai_responses=$("$ROOT/ainiux" --provider openai --base-url "$RESPONSES_BASE" --quiet \
     --api responses --no-stream -m "$MODEL" --reasoning 4096 \
     -p "expect-openai-responses-reasoning" --header "Authorization: Bearer test")
 test "$shape_openai_responses" = "request-ok"
@@ -702,7 +718,7 @@ shape_kimi=$("$ROOT/ainiux" --provider moonshot --base-url "$BASE" --quiet --no-
     --header "Authorization: Bearer test")
 test "$shape_kimi" = "request-ok"
 shape_deepseek=$("$ROOT/ainiux" --provider deepseek --base-url "$BASE" --quiet \
-    --no-stream -m "deepseek-v4-pro" --reasoning xhigh \
+    --api chat --no-stream -m "deepseek-v4-pro" --reasoning xhigh \
     -p "expect-deepseek-v4-thinking" --header "Authorization: Bearer test")
 test "$shape_deepseek" = "request-ok"
 shape_qwen=$("$ROOT/ainiux" --provider qwen --base-url "$BASE" --quiet --no-stream \
@@ -722,10 +738,10 @@ test "$(cat "$reasoning_err")" = "$reasoning_trace"
 reasoning_stream=$("$ROOT/ainiux" "$BASE" --quiet --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
 test "$reasoning_stream" = "Visible answer"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
-responses_reasoning=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+responses_reasoning=$("$ROOT/ainiux" "$RESPONSES_BASE" --quiet --api responses --no-stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
 test "$responses_reasoning" = "Visible answer"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
-responses_reasoning_stream=$("$ROOT/ainiux" "$BASE" --quiet --api responses --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
+responses_reasoning_stream=$("$ROOT/ainiux" "$RESPONSES_BASE" --quiet --api responses --stream -m "$MODEL" -p "reasoning" 2>"$reasoning_err")
 test "$responses_reasoning_stream" = "Visible answer"
 test "$(cat "$reasoning_err")" = "$reasoning_trace"
 reasoning_json=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "reasoning" --format json 2>"$reasoning_err")
@@ -832,7 +848,7 @@ security_responses_out="$ROOT/build/security-review-responses.out"
 security_responses_err="$ROOT/build/security-review-responses.err"
 (
     cd "$security_workspace"
-    "$ROOT/ainiux" "$BASE" --security-review --responses --no-stream --quiet -m "$MODEL" \
+    "$ROOT/ainiux" "$RESPONSES_BASE" --security-review --responses --no-stream --quiet -m "$MODEL" \
         >"$security_responses_out" 2>"$security_responses_err"
 )
 grep 'Result: complete' "$security_responses_out" >/dev/null

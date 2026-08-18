@@ -75,6 +75,19 @@ void test_json_unicode_and_escaping() {
     parsed = ainiux::json::parse("{\"long\":\"" + long_text + "\"}");
     check(parsed.error.ok() && parsed.value.get("long")->string == long_text,
           "JSON parse preserves very long string values");
+
+    const std::string invalid_utf8 =
+        std::string("{\"text\":\"") + static_cast<char>(0xFF) + "\"}";
+    parsed = ainiux::json::parse(invalid_utf8);
+    check(!parsed.error.ok() && parsed.error.code == ainiux::ErrorCode::JsonParse &&
+              parsed.error.message.find("invalid UTF-8") != std::string::npos,
+          "raw invalid UTF-8 in JSON strings is rejected");
+
+    const std::string truncated_utf8 =
+        std::string("{\"text\":\"") + static_cast<char>(0xE2);
+    parsed = ainiux::json::parse(truncated_utf8);
+    check(!parsed.error.ok() && parsed.error.message.find("incomplete UTF-8") != std::string::npos,
+          "truncated UTF-8 in JSON strings is rejected");
 }
 
 }  // namespace

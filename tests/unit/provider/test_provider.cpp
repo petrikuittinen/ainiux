@@ -585,6 +585,24 @@ void test_responses_sse_accepts_concatenated_json_payloads() {
     check(result.total_tokens == 3, "concatenated Responses payloads preserve completion metadata");
 }
 
+void test_empty_provider_streams_are_rejected() {
+    ainiux::provider::ChatResult chat_result;
+    std::string chat_streamed;
+    const ainiux::Error chat_error =
+        run_chat_stream_from_body("", chat_result, chat_streamed);
+    check(!chat_error.ok() && chat_error.code == ainiux::ErrorCode::ProviderSchema &&
+              chat_error.message.find("did not contain assistant content") != std::string::npos,
+          "empty Chat Completions stream is rejected");
+
+    ainiux::provider::ChatResult responses_result;
+    std::string responses_streamed;
+    const ainiux::Error responses_error =
+        run_responses_stream_from_body("", responses_result, responses_streamed);
+    check(!responses_error.ok() && responses_error.code == ainiux::ErrorCode::ProviderSchema &&
+              responses_error.message.find("did not contain output text") != std::string::npos,
+          "empty Responses API stream is rejected");
+}
+
 void test_explicit_chat_url_does_not_require_base_when_model_set() {
     const char* argv[] = {"ainiux", "--chat-url", "https://example.test/custom/chat", "-m", "model", "-p", "hello", "--header", "Authorization: Bearer test"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(9, const_cast<char**>(argv));
@@ -2353,6 +2371,7 @@ void run_all() {
     test_chat_sse_concatenated_payload_split_ignores_content_braces();
     test_chat_sse_accepts_json_payload_immediately_followed_by_done();
     test_responses_sse_accepts_concatenated_json_payloads();
+    test_empty_provider_streams_are_rejected();
     test_explicit_chat_url_does_not_require_base_when_model_set();
     test_image_capability_detection();
     test_provider_lookup_metadata();

@@ -10,17 +10,62 @@ class Handler(BaseHTTPRequestHandler):
     model = "mock-model"
     empty_models = False
     stream_delay = 0.0
+    api = "both"
 
     def log_message(self, fmt, *args):
         return
 
     def _send(self, status, body, content_type="application/json"):
-        data = body.encode("utf-8")
+        self._send_bytes(status, body.encode("utf-8"), content_type)
+
+    def _send_bytes(self, status, data, content_type="application/json"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_fault(self, last, responses, stream):
+        if last == "mock-empty-response":
+            self._send_bytes(
+                200,
+                b"",
+                "text/event-stream" if stream else "application/json",
+            )
+            return True
+        if last == "mock-malformed-json":
+            body = b'data: {"broken":\n\n' if stream else b'{"broken":'
+            self._send_bytes(
+                200,
+                body,
+                "text/event-stream" if stream else "application/json",
+            )
+            return True
+        if last == "mock-invalid-utf8":
+            if stream:
+                if responses:
+                    body = b'data: {"type":"response.output_text.delta","delta":"\xff"}\n\n'
+                else:
+                    body = b'data: {"choices":[{"delta":{"content":"\xff"}}]}\n\n'
+            elif responses:
+                body = (
+                    b'{"id":"resp_invalid_utf8","object":"response","output":'
+                    b'[{"type":"message","role":"assistant","content":'
+                    b'[{"type":"output_text","text":"\xff"}]}]}'
+                )
+            else:
+                body = (
+                    b'{"id":"chatcmpl_invalid_utf8","object":"chat.completion",'
+                    b'"choices":[{"index":0,"message":{"role":"assistant",'
+                    b'"content":"\xff"}}]}'
+                )
+            self._send_bytes(
+                200,
+                body,
+                "text/event-stream" if stream else "application/json",
+            )
+            return True
+        return False
 
     def _stream_delay(self):
         """Allow one request to be slow without launching another mock process."""
@@ -226,11 +271,11 @@ class Handler(BaseHTTPRequestHandler):
                 "gemini",
             )
         if last == "expect-kimi-thinking":
-            if request.get("reasoning_effort") != "off":
-                return self._fail_validation("kimi: expected reasoning_effort=off")
+            if request.get("thinking") != {"type": "disabled"}:
+                return self._fail_validation("kimi: expected thinking.type=disabled")
             return self._forbid_fields(
                 request,
-                ["reasoning", "thinking", "enable_thinking", "thinking_budget"],
+                ["reasoning", "reasoning_effort", "enable_thinking", "thinking_budget"],
                 "kimi",
             )
         if last == "expect-deepseek-v4-thinking":
@@ -279,6 +324,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"error": {"message": "empty model field"}}))
             return
         last = self._responses_last_input(request)
+        if self._send_fault(last, responses=True, stream=bool(request.get("stream"))):
+            return
         if not self._validate_request_shape(request, last, responses=True):
             return
         input_items = request.get("input", [])
@@ -420,16 +467,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"error": {"message": "bad json"}}))
             return
         if self.path == "/v1/responses":
+            if self.api == "chat":
+                self._send(404, json.dumps({"error": {"message": "Responses API disabled on this mock"}}))
+                return
             self._handle_responses(request)
             return
         if self.path != "/v1/chat/completions":
             self._send(404, json.dumps({"error": {"message": "not found"}}))
+            return
+        if self.api == "responses":
+            self._send(404, json.dumps({"error": {"message": "Chat Completions API disabled on this mock"}}))
             return
         if request.get("model") == "":
             self._send(400, json.dumps({"error": {"message": "empty model field"}}))
             return
         messages = request.get("messages", [])
         last, image_count = self._chat_last_input(request)
+        if self._send_fault(last, responses=False, stream=bool(request.get("stream"))):
+            return
         if not self._validate_request_shape(request, last):
             return
         system_text = "\n".join(
@@ -690,6 +745,8 @@ class Handler(BaseHTTPRequestHandler):
             reply = "input-context-ok" if input_context_seen else "missing-input-context"
         elif last == "summarize-attachments":
             reply = "attachments-ok" if attachment_alpha_seen and attachment_beta_seen else "missing-attachments"
+        elif last == "summarize-legacy-attachment":
+            reply = "legacy-attachment-ok" if "ÿ" in all_text else "missing-legacy-attachment"
         elif last == "summarize-insert" or last.endswith("summarize-insert"):
             reply = "insert-ok" if inserted_context_seen else "missing-insert"
         elif last == "describe-image" or last.startswith("describe-image\n"):
@@ -849,10 +906,12 @@ def main():
     parser.add_argument("--model", default="mock-model")
     parser.add_argument("--empty-models", action="store_true")
     parser.add_argument("--stream-delay", type=float, default=0.0)
+    parser.add_argument("--api", choices=("chat", "responses", "both"), default="both")
     args = parser.parse_args()
     Handler.model = args.model
     Handler.empty_models = args.empty_models
     Handler.stream_delay = args.stream_delay
+    Handler.api = args.api
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.serve_forever()
 

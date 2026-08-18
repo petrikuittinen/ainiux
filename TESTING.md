@@ -49,13 +49,14 @@ packaging.
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
 - `tests/unit/mcp/` — MCP registry, HTTP/stdio client against `tests/mock_server/mcp_mock.py`, tool envelope, prepare-cancel regression.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
-- `tests/integration/test_mock_smoke.sh` — fast Chat, Responses, and one-shot-agent transport smoke.
+- `tests/integration/test_mock_smoke.sh` — fast protocol-isolated Chat, Responses,
+  provider-fault (empty/malformed/non-UTF-8), no-input CLI, and one-shot-agent transport smoke.
 - `tests/integration/test_mock_server.sh` — comprehensive CLI, REPL, benchmark/grade, fetch, config, attachments, TUI, SQLite, and native-tool security-review coverage against one shared local mock API.
 - `tests/integration/test_code_index.sh` — project-local refresh, ignore/skip behavior, Markdown output, stale snapshots, and CLI isolation.
 - `tests/integration/test_sqlite_persistence.sh` — SQLite-backed TUI persistence via `tui_sqlite_driver.py`.
 - `tests/integration/tui_startup_selection_driver.py` — isolated PTY coverage for bare-offline chat and one-/multiple-model startup discovery.
 - `tests/integration/clipboard_driver.py` — focused fake-helper/OSC 52 PTY coverage for editor and shared chat/agent input clipboard behavior.
-- `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses.
+- `tests/mock_server/` — Python HTTP mocks for OpenAI-compatible APIs and slow responses. The integration scripts launch protocol-isolated Chat Completions and Responses instances.
 - `tests/mock/` — POSIX `LD_PRELOAD` shim for disk-full simulation.
 - `tests/fixtures/subprocess_fixture.cpp` — native Unicode argv/cwd/environment,
   stdin/stdout/stderr, nonzero/exception exit, output-cap, timeout, cancellation,
@@ -128,11 +129,14 @@ transport, filesystem, or PTY boundary is involved.
 
 ### `tests/mock_server/openai_mock.py`
 
-Local OpenAI-compatible server used by both mock scripts. Supports one-,
+Local OpenAI-compatible handler used by both mock scripts. They launch separate
+`--api chat` and `--api responses` server instances so endpoint and schema
+coverage cannot fall through to the other protocol. The handler supports one-,
 multiple-, and empty-result model-list endpoints, chat completions, Responses,
 streaming, request-local delayed streams, exact reasoning fields, attachments,
 images, HTML fetch fixtures, strict benchmark grading, one-shot agent tools,
-and the security-review native tool/coordinator loop.
+the security-review native tool/coordinator loop, and empty/malformed/non-UTF-8
+provider response faults.
 
 ### `tests/mock_server/slow_http_mock.py`
 
