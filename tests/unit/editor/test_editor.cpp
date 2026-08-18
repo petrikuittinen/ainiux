@@ -2326,6 +2326,31 @@ void test_editor_file_round_trip() {
     err = ainiux::editor::load_file(path, settings, loaded);
     check(err.ok() && loaded.str() == "first\nsecond",
           "editor file load has no configured upper limit when file_size_limit is -1");
+
+    const std::string utf16_path = "build/unit-editor-utf16.txt";
+    {
+        std::ofstream output(utf16_path, std::ios::binary | std::ios::trunc);
+        const char le[] = {'H', 0, 'e', 0, 'l', 0, 'l', 0, 'o', 0};
+        output.write(le, 10);
+    }
+    ainiux::editor::LoadedFile utf16_loaded;
+    err = ainiux::editor::load_file(utf16_path, settings, utf16_loaded);
+    check(err.ok() && utf16_loaded.text.str() == "Hello" && utf16_loaded.converted,
+          "editor auto-converts confident UTF-16 LE files");
+
+    const std::string latin1_path = "build/unit-editor-latin1.txt";
+    {
+        std::ofstream output(latin1_path, std::ios::binary | std::ios::trunc);
+        output << "Kes" << '\xe4';
+    }
+    ainiux::editor::LoadedFile deferred;
+    err = ainiux::editor::load_file(latin1_path, settings, deferred,
+                                   ainiux::editor::UnrecognizedEncodingPolicy::Defer);
+    check(err.ok() && deferred.needs_encoding_choice && !deferred.raw_bytes.empty(),
+          "unrecognized 8-bit editor files defer conversion");
+    err = ainiux::editor::finish_loaded_file(deferred, settings, "iso-8859-1");
+    check(err.ok() && deferred.text.str() == u8"Kesä" && deferred.converted,
+          "editor finish_loaded_file converts a chosen encoding");
 }
 
 void test_editor_linebreak_modes() {

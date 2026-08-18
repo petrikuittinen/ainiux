@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "encoding/encoding.hpp"
 #include "html/html.hpp"
 
 namespace ainiux::input {
@@ -29,6 +30,30 @@ bool looks_like_http_url(const std::string& source) {
     return lower.rfind("http://", 0) == 0 || lower.rfind("https://", 0) == 0;
 }
 
+Error decode_local_text(std::string& body,
+                        const std::string& source_description,
+                        const std::string& encoding_name,
+                        bool html_hints,
+                        runtime::CancellationToken cancellation) {
+    encoding::DecodeOptions options;
+    options.encoding_name = encoding_name;
+    options.html_hints = html_hints;
+    std::string utf8;
+    encoding::DetectedEncoding used;
+    Error err = encoding::decode_incoming_text(body, options, utf8, used, cancellation);
+    if (!err.ok()) {
+        return {err.code, err.message + " (" + source_description + ")"};
+    }
+    const size_t nul = utf8.find('\0');
+    if (nul != std::string::npos) {
+        return {ErrorCode::UnsupportedFeature,
+                source_description + " appears to be binary: contains a NUL byte at offset " +
+                    std::to_string(nul)};
+    }
+    body = std::move(utf8);
+    return ok_error();
+}
+
 Error validate_insert_text(const std::string& body, const std::string& source_description) {
     const size_t nul = body.find('\0');
     if (nul != std::string::npos) {
@@ -42,7 +67,7 @@ Error validate_insert_text(const std::string& body, const std::string& source_de
                 "cannot insert " + source_description +
                     ": input is not valid UTF-8 (invalid byte at offset " +
                     std::to_string(invalid_offset) +
-                    "). Convert it to UTF-8 and try again."};
+                    "). Convert it to UTF-8 or pass --encoding NAME."};
     }
     return ok_error();
 }
@@ -371,7 +396,8 @@ Error load_image_file(const std::string& path,
 Error load_text_context_file(const std::string& path,
                              size_t max_bytes,
                              TextContext& context,
-                             runtime::CancellationToken cancellation) {
+                             runtime::CancellationToken cancellation,
+                             const std::string& encoding_name) {
     const std::string resolved = expand_user_path(path);
     FileType type;
     Error err = classify_file_type(resolved, type);
@@ -417,21 +443,12 @@ Error load_text_context_file(const std::string& path,
                 resolved == "stdin" ? "could not read plaintext from stdin"
                                     : "could not read " + type.name + ": " + resolved};
     }
-    const size_t nul = body.find('\0');
-    if (nul != std::string::npos) {
-        return {ErrorCode::UnsupportedFeature,
-                "input appears to be binary: " +
-                    (resolved == "stdin" ? std::string("stdin") : "file " + resolved) +
-                    " contains a NUL byte at offset " +
-                    std::to_string(nul)};
-    }
-    size_t invalid_offset = 0;
-    if (!html::is_valid_utf8(body, &invalid_offset)) {
-        return {ErrorCode::UnsupportedFeature,
-                "Input expects UTF-8 text; charset conversion is not implemented yet for " +
-                    (resolved == "stdin" ? std::string("stdin") : "file " + resolved) +
-                    " (invalid byte at offset " + std::to_string(invalid_offset) +
-                    "). Convert the document to UTF-8 and try again."};
+    const std::string source_description =
+        resolved == "stdin" ? std::string("stdin") : "file " + resolved;
+    err = decode_local_text(body, source_description, encoding_name, type.kind == Kind::Html,
+                            cancellation);
+    if (!err.ok()) {
+        return err;
     }
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "text insertion cancelled: " + resolved};
@@ -497,7 +514,11 @@ Error load_insert_source(const std::string& source,
         if (!err.ok()) {
             return err;
         }
-        err = validate_insert_text(loaded.content, "file " + loaded.source);
+        FileType type;
+        const Error type_error = classify_file_type(loaded.source, type);
+        const bool html_hints = type_error.ok() && type.kind == Kind::Html;
+        err = decode_local_text(loaded.content, "file " + loaded.source, options.encoding_name,
+                                html_hints, cancellation);
         if (!err.ok()) {
             return err;
         }
@@ -531,7 +552,8 @@ std::string text_context_message(const TextContext& context) {
 Error read_local_text_file_for_attach(const std::string& path,
                                       size_t max_bytes,
                                       std::string& content,
-                                      runtime::CancellationToken cancellation) {
+                                      runtime::CancellationToken cancellation,
+                                      const std::string& encoding_name) {
     const std::string resolved = expand_user_path(path);
     if (resolved == "stdin" || resolved == "-") {
         return {ErrorCode::BadArgs,
@@ -574,18 +596,10 @@ Error read_local_text_file_for_attach(const std::string& path,
     if (file.bad()) {
         return {ErrorCode::FileRead, "could not read " + type.name + ": " + resolved};
     }
-    const size_t nul = body.find('\0');
-    if (nul != std::string::npos) {
-        return {ErrorCode::UnsupportedFeature,
-                "input appears to be binary: file " + resolved +
-                    " contains a NUL byte at offset " + std::to_string(nul)};
-    }
-    size_t invalid_offset = 0;
-    if (!html::is_valid_utf8(body, &invalid_offset)) {
-        return {ErrorCode::UnsupportedFeature,
-                "Input expects UTF-8 text; charset conversion is not implemented yet for file " +
-                    resolved + " (invalid byte at offset " + std::to_string(invalid_offset) +
-                    "). Convert the document to UTF-8 and try again."};
+    err = decode_local_text(body, "file " + resolved, encoding_name, type.kind == Kind::Html,
+                            cancellation);
+    if (!err.ok()) {
+        return err;
     }
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "attach read cancelled: " + resolved};

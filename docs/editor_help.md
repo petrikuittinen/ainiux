@@ -1,4 +1,4 @@
-# ainiux Editor Help v1.18
+# ainiux Editor Help v1.19
 
 Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured. Start in the directory browser with `ainiux -d` / `ainiux --dired [PATH]` (PATH defaults to the current directory; `q` leaves dired for the editor, `Ctrl+Q` quits ainiux). The full dired guide is [dired-mode.md](dired-mode.md).
 
@@ -365,7 +365,7 @@ Chat and agent TUI history do **not** expose `/width`, `/left-align`, `/right-al
 - `tab-style` — fallback `spaces` or `tab` style (default `spaces`)
 - `linebreak` — default `lf`, `cr`, or `crlf` for new, empty, no-ending, and mixed-ending files (default `lf`)
 
-`[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `on`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and requires UTF-8 HTML. Set it to `off` to insert raw HTML. Local `/insert` accepts every file ending, but rejects NUL-containing, invalid UTF-8, unreadable, and oversized content. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
+`[input] auto-convert-html-to-md` controls `/insert URL` and defaults to `on`. URL insertion accepts only HTTP(S), retains the existing private-address, proxy, timeout, TLS, content-type, and response-size protections, and converts fetched HTML to UTF-8 from the declared charset. Set it to `off` to insert raw HTML. Local `/insert` accepts every file ending. UTF-8 and confident UTF-16 load automatically; unlabeled 8-bit text needs `--encoding NAME` on the CLI. Opening such a file in the editor asks for an encoding (or **Open as-is**). Converted buffers save as UTF-8. NUL-containing binary, unreadable, and oversized content is still rejected. CR and CRLF are normalized to the editor's internal LF representation and use the buffer's chosen linebreak mode when saved.
 
 User shell (`shell` / `/shell` / `!` / `shell-stdout` / `/shell-stdout` / `!!`) runs `/bin/sh -c` on POSIX or built-in Windows PowerShell 5.1 (`-NoLogo -NoProfile -NonInteractive`, encoded command, UTF-8 output) on Windows. In the editor the leading `/` is optional (as with other commands). Every form opens a **new buffer** containing pure stdout only; the minibuffer shows success (exit, elapsed ms, byte count) or a clear failure (exit/stderr snippet). Esc cancels an in-flight shell job. Unlike chat/agent, `shell-stdout` is not draft-fill here—both forms use the new-buffer path.
 

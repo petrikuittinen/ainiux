@@ -681,7 +681,7 @@ test "$responses_stream" = "Hello"
 responses_json=$("$ROOT/ainiux" "$BASE" --quiet --api responses --no-stream -m "$MODEL" -p "hello" --format json)
 printf '%s' "$responses_json" | grep '"content":"Hello"' >/dev/null
 
-shape_openai=$("$ROOT/ainiux" --provider openai --base-url "$BASE" --quiet --no-stream \
+shape_openai=$("$ROOT/ainiux" --provider openai --api chat --base-url "$BASE" --quiet --no-stream \
     -m "$MODEL" --reasoning high -p "expect-openai-chat-reasoning" \
     --header "Authorization: Bearer test")
 test "$shape_openai" = "request-ok"

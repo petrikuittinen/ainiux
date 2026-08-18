@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "common.hpp"
+#include "encoding/encoding.hpp"
 
 namespace ainiux::html {
 namespace {
@@ -595,98 +596,7 @@ struct TableState {
 }  // namespace
 
 bool is_valid_utf8(const std::string& input, size_t* error_offset) {
-    auto fail = [&](size_t offset) {
-        if (error_offset != nullptr) {
-            *error_offset = offset;
-        }
-        return false;
-    };
-    auto is_continuation = [&](size_t offset) {
-        if (offset >= input.size()) {
-            return false;
-        }
-        const unsigned char ch = static_cast<unsigned char>(input[offset]);
-        return ch >= 0x80 && ch <= 0xBF;
-    };
-
-    size_t i = 0;
-    while (i < input.size()) {
-        const unsigned char ch = static_cast<unsigned char>(input[i]);
-        if (ch <= 0x7F) {
-            ++i;
-            continue;
-        }
-        if (ch >= 0xC2 && ch <= 0xDF) {
-            if (!is_continuation(i + 1)) {
-                return fail(i);
-            }
-            i += 2;
-            continue;
-        }
-        if (ch == 0xE0) {
-            if (i + 2 >= input.size()) {
-                return fail(i);
-            }
-            const unsigned char b1 = static_cast<unsigned char>(input[i + 1]);
-            if (b1 < 0xA0 || b1 > 0xBF || !is_continuation(i + 2)) {
-                return fail(i);
-            }
-            i += 3;
-            continue;
-        }
-        if ((ch >= 0xE1 && ch <= 0xEC) || (ch >= 0xEE && ch <= 0xEF)) {
-            if (!is_continuation(i + 1) || !is_continuation(i + 2)) {
-                return fail(i);
-            }
-            i += 3;
-            continue;
-        }
-        if (ch == 0xED) {
-            if (i + 2 >= input.size()) {
-                return fail(i);
-            }
-            const unsigned char b1 = static_cast<unsigned char>(input[i + 1]);
-            if (b1 < 0x80 || b1 > 0x9F || !is_continuation(i + 2)) {
-                return fail(i);
-            }
-            i += 3;
-            continue;
-        }
-        if (ch == 0xF0) {
-            if (i + 3 >= input.size()) {
-                return fail(i);
-            }
-            const unsigned char b1 = static_cast<unsigned char>(input[i + 1]);
-            if (b1 < 0x90 || b1 > 0xBF || !is_continuation(i + 2) || !is_continuation(i + 3)) {
-                return fail(i);
-            }
-            i += 4;
-            continue;
-        }
-        if (ch >= 0xF1 && ch <= 0xF3) {
-            if (!is_continuation(i + 1) || !is_continuation(i + 2) || !is_continuation(i + 3)) {
-                return fail(i);
-            }
-            i += 4;
-            continue;
-        }
-        if (ch == 0xF4) {
-            if (i + 3 >= input.size()) {
-                return fail(i);
-            }
-            const unsigned char b1 = static_cast<unsigned char>(input[i + 1]);
-            if (b1 < 0x80 || b1 > 0x8F || !is_continuation(i + 2) || !is_continuation(i + 3)) {
-                return fail(i);
-            }
-            i += 4;
-            continue;
-        }
-        return fail(i);
-    }
-    if (error_offset != nullptr) {
-        *error_offset = input.size();
-    }
-    return true;
+    return encoding::is_valid_utf8(input, error_offset);
 }
 
 bool parse_output_format(const std::string& text, OutputFormat& out) {

@@ -194,8 +194,23 @@ void test_input_file_io_and_unicode_edge_cases() {
     }
     err = ainiux::input::load_text_context_file(invalid_utf8_txt, 1024, loaded);
     check(!err.ok() && err.code == ainiux::ErrorCode::UnsupportedFeature &&
-              err.message.find("UTF-8") != std::string::npos,
-          "text loader rejects invalid UTF-8 bytes");
+              err.message.find("--encoding") != std::string::npos,
+          "text loader rejects unlabeled invalid UTF-8 and names --encoding");
+    err = ainiux::input::load_text_context_file(invalid_utf8_txt, 1024, loaded,
+                                               ainiux::runtime::CancellationToken(),
+                                               "windows-1252");
+    check(err.ok() && loaded.content.find(u8"ÿ") != std::string::npos,
+          "text loader converts --encoding windows-1252");
+
+    const std::string utf16_txt = "build/unit-utf16.txt";
+    {
+        std::ofstream output(utf16_txt, std::ios::binary | std::ios::trunc);
+        const char le[] = {'H', 0, 'e', 0, 'l', 0, 'l', 0, 'o', 0};
+        output.write(le, 10);
+    }
+    err = ainiux::input::load_text_context_file(utf16_txt, 1024, loaded);
+    check(err.ok() && loaded.content == "Hello",
+          "text loader auto-converts UTF-16 LE without treating NULs as binary");
 
     const std::string unicode_md = "build/unit-arabic-chinese.md";
     const std::string unicode_body = u8"# عنوان\n\n你好 👨‍👩‍👧‍👦\n";

@@ -32,7 +32,7 @@
 - Keyless search uses DuckDuckGo HTML (Instant Answer secondary). DDG may rate-limit or show bot challenges after rapid queries; Google HTML scrape was removed (JS-only shells).
 - **Later:** evaluate a more reliable free/casual web search provider (or optional lightweight local proxy) without requiring paid APIs for everyday use. Keep optional Tavily/Exa/Firecrawl/Searxng for power users.
 - Agent client `web_search` returns at most **3** results; hosted provider `web_search` (catalog `web_search=on`) takes precedence when the model/API can emit it. Native Gemini generateContent/Interactions and native Anthropic Messages search remain future work.
-- Fetch converts ISO-8859-1 / Windows-1252 pages to UTF-8 so tool results stay valid JSON for local model servers; JSON string escape also refuses raw ill-formed UTF-8 bytes.
+- Fetch converts declared charsets to UTF-8 (built-in UTF-16 / 125x / Latin / KOI8, plus allowlisted `iconv` CJK) so tool results stay valid JSON for local model servers; JSON string escape also refuses raw ill-formed UTF-8 bytes.
 - Agent `fetch` is Markdown/plain-text only (no raw HTML to the model); HTML→MD strips scripts/styles.
 
 ## Syntax Highlighting
@@ -78,7 +78,7 @@
 
 ## Runtime, Cancellation, And Leak Checks
 
-- Continue hardening charset conversion and text encoding paths.
+- Continue hardening charset conversion: remaining CJK coverage depends on `iconv` / Windows code pages; unlabeled 8-bit files still require `--encoding` or the editor picker.
 - Expand runtime cancellation tests to cover interrupted streaming HTTP and slow file jobs.
 - Add interrupted-stream cancellation tests for streaming parser/provider paths.
 - Add leak checks for more success, error, failure, interrupted-stream, and cancellation paths.

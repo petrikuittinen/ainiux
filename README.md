@@ -6,7 +6,7 @@ Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compati
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.18**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.19**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -99,7 +99,7 @@ families used most heavily while developing and testing the current agent,
 reasoning, tool-calling, and local OpenAI-compatible server paths. Exact model
 availability and identifiers still depend on the selected provider or local server.
 
-## Current v1.18 capabilities
+## Current v1.19 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -117,7 +117,7 @@ ainiux --fetch-url https://example.com --output-format plaintext
 printf 'piped text' | ainiux --input stdin --output stdout
 ```
 
-Text, Markdown, and HTML can be attached with `--attach`. PNG, JPEG, and GIF input is available through compatible Chat Completions models. PDF and DOCX conversion are not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
+Text, Markdown, and HTML can be attached with `--attach`. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. PDF and DOCX conversion are not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
 
 Web search supports API providers and keyless fallbacks:
 
@@ -310,7 +310,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not currently implement a local OpenAI-compatible server, browser UI, image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript, implement a browser DOM, or transcode legacy character sets.
+Ainiux does not currently implement a local OpenAI-compatible server, browser UI, image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 
@@ -320,7 +320,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.18 history](docs/version-history.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.19 history](docs/version-history.md).
 
 For the complete current option list, run:
 

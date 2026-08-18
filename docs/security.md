@@ -122,7 +122,7 @@ Defaults:
 - redirects: followed by default (max 5); each hop still blocks private/loopback/metadata addresses via the socket-open check
 - request headers: sends browser-style `User-Agent`, `Accept`, `Accept-Language`, `Sec-Fetch-*`, and `Upgrade-Insecure-Requests` headers
 - content type: accepts empty content type, `text/html`, `application/xhtml+xml`, and (for text fetch) `text/plain`
-- body encoding: non-UTF-8 bodies are converted when possible (ISO-8859-1 / Windows-1252 via Content-Type or meta); tool results are always valid UTF-8
+- body encoding: non-UTF-8 bodies are converted from Content-Type / HTML meta charset when the name is built-in (UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U) or allowlisted for `iconv` (GBK, Big5, Shift_JIS, …). HTML `iso-8859-1` follows the browser Windows-1252 map. Unknown names fall back to Windows-1252 so tool JSON stays valid UTF-8. The `iconv` path uses a shell-free subprocess and an allowlist of encoding names only.
 - private/loopback/link-local/multicast/common metadata literal hosts and resolved socket addresses are refused unless `--allow-private-url-fetch` is set
 - agent `fetch` `max_bytes` limits the **returned Markdown/text** size; raw HTML may download under a larger safety ceiling before conversion
 
@@ -141,7 +141,7 @@ Defaults:
 - local installs: Searxng/Exa on loopback require `--allow-private-url-fetch`, matching URL-fetch private-address policy
 - agent `web_search` returns at most 3 results so models do not fan out into many fetches; overlong result URLs are truncated
 - URL fetch uses a desktop Firefox-like User-Agent and browser-style Accept / Sec-Fetch headers (still not a full browser)
-- Fetched HTML/text is normalized to **UTF-8** (ISO-8859-1 / Windows-1252 via Content-Type or meta charset). Raw legacy bytes are never put into tool-result JSON (that broke local llama.cpp with “ill-formed UTF-8”)
+- Fetched HTML/text is normalized to **UTF-8** from the declared charset (built-in European/Cyrillic maps, UTF-16, or allowlisted `iconv` CJK names). Raw legacy bytes are never put into tool-result JSON (that broke local llama.cpp with “ill-formed UTF-8”)
 
 Search results are untrusted third-party text. They are inserted as user-context messages and should be treated as external input by both users and models. DuckDuckGo HTML markup may change over time; parser failures surface a clear error rather than inventing results.
 

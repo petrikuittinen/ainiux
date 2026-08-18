@@ -114,6 +114,7 @@ largest counts are lower bounds):
 | search | 1 | ~20 | DDG JSON/HTML fixtures, Tavily, truncation |
 | json | 1 | 18 | parse, escapes, Unicode, numbers, trailing data |
 | http | 2 | 19 | URL validation, SSE transport (in fault binary: timeouts/connect) |
+| encoding | 1 | maps, aliases, UTF-16 detect, web charset, iconv allowlist |
 | fetch | 1 | 13 | URL/SSRF validation, charset conversion |
 | security | 1 | 11 | redaction helpers, sensitive header names |
 | runtime | 1 | 8 | queue, cancellation, job lifecycle |

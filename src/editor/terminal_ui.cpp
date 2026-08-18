@@ -2,6 +2,7 @@
 #include "editor/terminal_ui.hpp"
 
 #include "common.hpp"
+#include "encoding/encoding.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/detail/editor_common.hpp"
 #include "editor/detail/unicode.hpp"
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <new>
@@ -723,6 +725,52 @@ bool confirm_huge_load_before_terminal(const std::string& path, const FileLoadCh
         return false;
     }
     return ui::yes_answer(trim_ascii_copy(response));
+}
+
+bool confirm_encoding_before_terminal(const std::string& path,
+                                      LoadedFile& loaded,
+                                      const EditorSettings& settings) {
+    if (!loaded.needs_encoding_choice) {
+        return true;
+    }
+    const std::vector<encoding::EncodingChoice> choices = encoding::encoding_picker_choices();
+    std::cerr << "File is not valid UTF-8: " << path << "\n";
+    std::cerr << "Choose a character encoding (saving will write UTF-8):\n";
+    for (size_t i = 0; i < choices.size(); ++i) {
+        std::cerr << "  " << (i + 1) << ") " << choices[i].label << "\n";
+    }
+    std::cerr << "Enter a number, encoding name, 'as-is', or 'cancel': ";
+    std::cerr.flush();
+    std::string response;
+    if (!std::getline(std::cin, response)) {
+        return false;
+    }
+    response = trim_ascii_copy(response);
+    const std::string lower = ascii_lower(response);
+    if (lower.empty() || lower == "cancel" || lower == "q" || lower == "n") {
+        return false;
+    }
+    if (lower == "as-is" || lower == "asis" || lower == "raw") {
+        return finish_loaded_file(loaded, settings, {}).ok();
+    }
+    if (!response.empty() && response.find_first_not_of("0123456789") == std::string::npos) {
+        const unsigned long index = std::strtoul(response.c_str(), nullptr, 10);
+        if (index >= 1 && index <= choices.size()) {
+            return finish_loaded_file(loaded, settings, choices[index - 1].name).ok();
+        }
+    }
+    for (const encoding::EncodingChoice& choice : choices) {
+        if (ascii_lower(choice.label) == lower || ascii_lower(choice.name) == lower) {
+            return finish_loaded_file(loaded, settings, choice.name).ok();
+        }
+    }
+    encoding::Encoding parsed = encoding::Encoding::Unknown;
+    std::string canonical;
+    if (encoding::parse_encoding_name(response, parsed, canonical).ok()) {
+        return finish_loaded_file(loaded, settings, canonical).ok();
+    }
+    std::cerr << "Unknown encoding: " << response << "\n";
+    return false;
 }
 
 std::string search_found_message(const std::string& needle) {

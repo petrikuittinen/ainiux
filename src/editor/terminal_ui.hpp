@@ -196,6 +196,10 @@ void start_minibuffer(MinibufferState& minibuffer,
                       PathCompleter* path_completer = nullptr);
 
 bool confirm_huge_load_before_terminal(const std::string& path, const FileLoadCheck& check);
+// Returns false if the user cancelled. On success, `loaded` is finalized.
+bool confirm_encoding_before_terminal(const std::string& path,
+                                      LoadedFile& loaded,
+                                      const EditorSettings& settings);
 
 void recover_editor_from_autosave(EditorState& state,
                                   const std::string& path,

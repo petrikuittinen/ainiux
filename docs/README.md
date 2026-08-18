@@ -20,7 +20,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
 | [Security](security.md) | Credential, persistence, fetch, attachment, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
-| [Version history](version-history.md) | Compact v0.0–v1.18 release timeline plus unreleased work |
+| [Version history](version-history.md) | Compact v0.0–v1.19 release timeline plus unreleased work |
 
 ## Architecture and implementation references
 

@@ -38,6 +38,7 @@ struct InsertSourceOptions {
     size_t max_file_bytes = 1048576;
     fetch::Options fetch;
     bool auto_convert_html_to_markdown = true;
+    std::string encoding_name;
 };
 
 struct InsertSource {
@@ -66,7 +67,8 @@ Error load_image_file_bytes(const std::string& path,
 Error load_text_context_file(const std::string& path,
                              size_t max_bytes,
                              TextContext& context,
-                             runtime::CancellationToken cancellation = runtime::CancellationToken());
+                             runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                             const std::string& encoding_name = {});
 bool is_http_url(const std::string& source);
 Error load_insert_source(const std::string& source,
                          const InsertSourceOptions& options,
@@ -80,6 +82,7 @@ std::string text_context_message(const TextContext& context);
 Error read_local_text_file_for_attach(const std::string& path,
                                       size_t max_bytes,
                                       std::string& content,
-                                      runtime::CancellationToken cancellation = runtime::CancellationToken());
+                                      runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                                      const std::string& encoding_name = {});
 
 }  // namespace ainiux::input

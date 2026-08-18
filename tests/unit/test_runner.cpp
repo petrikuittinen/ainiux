@@ -19,6 +19,7 @@
 #include "config/test_config.hpp"
 #include "context/test_context.hpp"
 #include "editor/test_editor.hpp"
+#include "encoding/test_encoding.hpp"
 #include "fetch/test_fetch.hpp"
 #include "html/test_html.hpp"
 #include "highlight/test_highlight.hpp"
@@ -58,6 +59,7 @@ int main() {
     ainiux::test::input::run_all();
     ainiux::test::context::run_all();
     ainiux::test::http::run_all();
+    ainiux::test::encoding::run_all();
     ainiux::test::fetch::run_all();
     ainiux::test::search::run_all();
     ainiux::test::html::run_all();

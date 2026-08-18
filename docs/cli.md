@@ -37,7 +37,12 @@ ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
 ```
 
-Text, Markdown, and HTML are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript, implement a browser DOM, or transcode legacy encodings. PDF and DOCX are rejected rather than inserted as binary prompt text.
+Text, Markdown, and HTML are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. PDF and DOCX are rejected rather than inserted as binary prompt text.
+
+```sh
+ainiux --input letter.txt --encoding cp1251 --output-format plaintext
+ainiux --input export.txt --encoding utf-16 --output-format md
+```
 
 ## Prompt context and attachments
 

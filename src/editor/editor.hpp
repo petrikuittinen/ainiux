@@ -357,6 +357,11 @@ RenderedPanel render_panel(const PieceTable& text,
                            size_t tab_width = kDefaultTabWidth,
                            const std::vector<bool>* changed_source_lines = nullptr);
 
+enum class UnrecognizedEncodingPolicy {
+    AsIs,
+    Defer,
+};
+
 struct LoadedFile {
     PieceTable text;
     LineBreak linebreak = LineBreak::Lf;
@@ -365,6 +370,11 @@ struct LoadedFile {
     TabStyle tab_style = TabStyle::Spaces;
     bool tab_width_detected = false;
     bool tab_style_detected = false;
+    std::string source_encoding;
+    bool converted = false;
+    bool needs_encoding_choice = false;
+    bool unrecognized_encoding = false;
+    std::string raw_bytes;
 };
 
 struct IndentationDetection {
@@ -381,6 +391,13 @@ IndentationDetection detect_indentation(const std::string& text,
 Error load_file(const std::string& path, PieceTable& out);
 Error load_file(const std::string& path, const EditorSettings& settings, PieceTable& out);
 Error load_file(const std::string& path, const EditorSettings& settings, LoadedFile& out);
+Error load_file(const std::string& path,
+                const EditorSettings& settings,
+                LoadedFile& out,
+                UnrecognizedEncodingPolicy unrecognized);
+Error finish_loaded_file(LoadedFile& file,
+                         const EditorSettings& settings,
+                         const std::string& encoding_name);
 Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check);
 Error save_file(const std::string& path, const PieceTable& text);
 Error save_file(const std::string& path, const PieceTable& text, LineBreak linebreak);

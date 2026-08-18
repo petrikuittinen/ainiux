@@ -84,6 +84,15 @@ void test_iso8859_1_html_to_utf8() {
     check(json.find("Kesä") != std::string::npos, "JSON contains the poem title as UTF-8");
 }
 
+void test_windows1251_html_to_utf8() {
+    const std::string html =
+        "<html><head><meta charset=\"windows-1251\"></head><body>Ya \xff</body></html>";
+    const std::string utf8 =
+        ainiux::fetch::convert_fetched_body_to_utf8(html, "text/html");
+    check(ainiux::html::is_valid_utf8(utf8), "CP1251 fetch body is UTF-8");
+    check(utf8.find(u8"я") != std::string::npos, "declared windows-1251 uses the Cyrillic map");
+}
+
 void test_json_escape_rejects_raw_latin1() {
     // Safety net: even if a caller embeds ISO-8859-1, escape_string must not emit
     // raw 0xE4 into the JSON string.
@@ -101,6 +110,7 @@ void run_all() {
     test_safe_fetch_rejects_private_literal();
     test_fetch_validation_edge_cases();
     test_iso8859_1_html_to_utf8();
+    test_windows1251_html_to_utf8();
     test_json_escape_rejects_raw_latin1();
 }
 

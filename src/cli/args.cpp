@@ -7,6 +7,7 @@
 #include "chat/settings.hpp"
 #include "config/model_catalog.hpp"
 #include "cli/option_values.hpp"
+#include "encoding/encoding.hpp"
 #include "context/policy.hpp"
 #include "chat/generation_settings.hpp"
 #include "editor/autosave.hpp"
@@ -24,7 +25,8 @@ bool needs_value(const std::string& opt) {
         "--output",
         "--provider", "--profile", "--api", "--base-url", "--chat-url", "--models-url", "--responses-url",
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
-        "--proxy", "--fetch-url", "--search", "--web-search-provider", "--input", "--attach",
+        "--proxy", "--fetch-url", "--search", "--web-search-provider", "--input", "--encoding",
+        "--attach",
         "--html-file", "--html-format", "--max-fetch-bytes", "--max-web-search-results",
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--max-agent-response-bytes",
@@ -632,6 +634,14 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.web_search_provider = value;
             } else if (opt == "--input") {
                 opts.input_path = value;
+            } else if (opt == "--encoding") {
+                encoding::Encoding parsed = encoding::Encoding::Unknown;
+                std::string canonical;
+                Error err = encoding::parse_encoding_name(value, parsed, canonical);
+                if (!err.ok()) {
+                    return {opts, err};
+                }
+                opts.input_encoding = canonical.empty() ? value : canonical;
             } else if (opt == "--attach") {
                 opts.attachment_paths.push_back(value);
             } else if (opt == "--html-file") {
@@ -1251,6 +1261,10 @@ Options:
   Input and attachments:
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
                                 'stdin' reads UTF-8 plaintext from standard input.
+      --encoding NAME           Decode --input/--attach text as NAME instead of UTF-8.
+                                Built-in: utf-8, utf-16, windows-1250/1251/1252,
+                                iso-8859-1/2, koi8-r/u. CJK names (gbk, big5, …)
+                                use iconv when installed.
       --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
                                 'stdin' reads UTF-8 plaintext from standard input.
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.

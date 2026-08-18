@@ -42,6 +42,7 @@ error layers should serve:
 | v1.16 | Editor dired directory browser (`--dired`, F4, Ctrl+X d) | Landed |
 | v1.17 | Mid-turn agent↔editor/dired review, dired history line-diff, agent chrome/tool polish, Apple Silicon builds | Landed |
 | v1.18 | Short native tool API without legacy aliases, MCP client/vision bridge, and combined grep filters | Landed |
+| v1.19 | Settings widget, Goal-only `goal_met`, and charset conversion to UTF-8 | Landed |
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
@@ -52,7 +53,7 @@ ready.
 
 ## Current baseline
 
-Implementation status (2026-08-13): **v1.18**.
+Implementation status (2026-08-18): **v1.19**.
 
 The shipped product includes:
 
@@ -93,7 +94,7 @@ older Windows, and mintty full-screen operation are explicit non-goals.
 
 ## Release history
 
-The compact v0.0–v1.18 timeline lives in `docs/version-history.md`. Historical
+The compact v0.0–v1.19 timeline lives in `docs/version-history.md`. Historical
 implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing

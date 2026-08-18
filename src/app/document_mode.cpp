@@ -8,6 +8,7 @@
 #include <iostream>
 #include <utility>
 
+#include "encoding/encoding.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
@@ -56,17 +57,6 @@ Error read_local_file(const std::string& path,
     }
     body = std::move(loaded);
     return ok_error();
-}
-
-Error validate_html_utf8(const std::string& body, const std::string& source) {
-    size_t offset = 0;
-    if (html::is_valid_utf8(body, &offset)) {
-        return ok_error();
-    }
-    return {ErrorCode::UnsupportedFeature,
-            "HTML extraction expects UTF-8 input; charset conversion is not implemented yet for " + source +
-                " (invalid byte at offset " + std::to_string(offset) +
-                "). Convert the document to UTF-8 and try again."};
 }
 
 Error fetch_html_url(const cli::Options& options, std::string& body) {
@@ -121,27 +111,6 @@ Error validate_document_source_options(const cli::Options& options) {
         return {ErrorCode::BadArgs, "--input requires a non-empty path"};
     }
     return ok_error();
-}
-
-Error validate_not_binary(const std::string& body, const std::string& source) {
-    const size_t nul = body.find('\0');
-    if (nul != std::string::npos) {
-        return {ErrorCode::UnsupportedFeature,
-                "input appears to be binary: " + source + " contains a NUL byte at offset " +
-                    std::to_string(nul)};
-    }
-    return ok_error();
-}
-
-Error validate_text_utf8(const std::string& body, const std::string& source) {
-    size_t offset = 0;
-    if (html::is_valid_utf8(body, &offset)) {
-        return ok_error();
-    }
-    return {ErrorCode::UnsupportedFeature,
-            "Input expects UTF-8 text; charset conversion is not implemented yet for " + source +
-                " (invalid byte at offset " + std::to_string(offset) +
-                "). Convert the document to UTF-8 and try again."};
 }
 
 markdown::OutputFormat legacy_html_output_format(const cli::Options& options) {
@@ -330,17 +299,26 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
 
     document.source = document_source_label(options);
     document.input_kind = input_type.kind;
-    err = validate_not_binary(body, document.source);
-    if (!err.ok()) {
-        return err;
-    }
-    if (document.input_kind == InputKind::Html) {
-        err = validate_html_utf8(body, document.source);
-    } else {
-        err = validate_text_utf8(body, document.source);
-    }
-    if (!err.ok()) {
-        return err;
+    {
+        encoding::DecodeOptions decode;
+        decode.encoding_name = options.input_encoding;
+        decode.html_hints = document.input_kind == InputKind::Html || !options.fetch_url.empty();
+        if (!options.fetch_url.empty()) {
+            decode.allow_unlabeled_legacy = true;
+        }
+        std::string utf8;
+        encoding::DetectedEncoding used;
+        err = encoding::decode_incoming_text(body, decode, utf8, used);
+        if (!err.ok()) {
+            return {err.code, err.message + " (" + document.source + ")"};
+        }
+        const size_t nul = utf8.find('\0');
+        if (nul != std::string::npos) {
+            return {ErrorCode::UnsupportedFeature,
+                    "input appears to be binary: " + document.source +
+                        " contains a NUL byte at offset " + std::to_string(nul)};
+        }
+        body = std::move(utf8);
     }
 
     document.output_format = document_output_format(options, document.input_kind, standalone);
@@ -372,7 +350,8 @@ Error load_text_context_file(const cli::Options& options,
         return {ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
     }
     input::TextContext loaded;
-    Error err = input::load_text_context_file(path, static_cast<size_t>(options.max_input_bytes), loaded);
+    Error err = input::load_text_context_file(path, static_cast<size_t>(options.max_input_bytes), loaded,
+                                              runtime::CancellationToken(), options.input_encoding);
     if (!err.ok()) {
         return err;
     }

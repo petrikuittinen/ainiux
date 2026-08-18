@@ -128,6 +128,7 @@ struct Options {
     std::string exa_base_url;
     std::string searxng_base_url;
     std::string input_path;
+    std::string input_encoding;
     std::string html_file;
     std::string html_format = "markdown";
     ainiux::markdown::OutputFormat output_format = ainiux::markdown::OutputFormat::Markdown;

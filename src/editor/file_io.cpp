@@ -1,6 +1,7 @@
 #include "editor/editor.hpp"
 
 #include "common.hpp"
+#include "encoding/encoding.hpp"
 #include "platform/filesystem.hpp"
 
 #include <algorithm>
@@ -218,47 +219,7 @@ Error load_file(const std::string& path, const EditorSettings& settings, PieceTa
     return err;
 }
 
-Error load_file(const std::string& path, const EditorSettings& settings, LoadedFile& out) {
-    out = LoadedFile{};
-    out.tab_width = settings.tab_width;
-    out.tab_style = settings.tab_style;
-    const std::string resolved = expand_user_path(path);
-    FileLoadCheck check;
-    Error err = check_load_file_size(resolved, settings, check);
-    if (!err.ok()) {
-        return err;
-    }
-    if (check.size > static_cast<std::uintmax_t>(std::numeric_limits<size_t>::max())) {
-        return {ErrorCode::FileRead,
-                "editor file is too large for this platform address space: " + resolved +
-                    " (" + std::to_string(check.size) + " bytes)"};
-    }
-
-    std::ifstream in(std::filesystem::u8path(resolved), std::ios::binary);
-    if (!in) {
-        return {ErrorCode::FileRead, "could not open editor file for reading: " + resolved};
-    }
-
-    std::string content;
-    try {
-        content.reserve(static_cast<size_t>(check.size));
-        std::array<char, 65536> buffer{};
-        while (in) {
-            in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-            const std::streamsize count = in.gcount();
-            if (count <= 0) {
-                break;
-            }
-            content.append(buffer.data(), static_cast<size_t>(count));
-        }
-    } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to load editor file: " + resolved};
-    } catch (const std::length_error&) {
-        return {ErrorCode::FileRead, "editor file is too large to load into memory: " + resolved};
-    }
-    if (!in.good() && !in.eof()) {
-        return {ErrorCode::FileRead, "failed while reading editor file: " + resolved};
-    }
+Error finalize_editor_content(std::string content, const EditorSettings& settings, LoadedFile& out) {
     size_t lf_count = 0;
     size_t cr_count = 0;
     size_t crlf_count = 0;
@@ -301,11 +262,9 @@ Error load_file(const std::string& path, const EditorSettings& settings, LoadedF
             }
             content = std::move(normalized);
         } catch (const std::bad_alloc&) {
-            return {ErrorCode::Internal,
-                    "not enough memory to normalize editor line endings: " + resolved};
+            return {ErrorCode::Internal, "not enough memory to normalize editor line endings"};
         } catch (const std::length_error&) {
-            return {ErrorCode::FileRead,
-                    "editor file is too large to normalize line endings: " + resolved};
+            return {ErrorCode::FileRead, "editor file is too large to normalize line endings"};
         }
     }
     const IndentationDetection indentation =
@@ -317,11 +276,103 @@ Error load_file(const std::string& path, const EditorSettings& settings, LoadedF
     try {
         out.text = PieceTable::from_string(std::move(content));
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to initialize editor file: " + resolved};
+        return {ErrorCode::Internal, "not enough memory to initialize editor file"};
     } catch (const std::length_error&) {
-        return {ErrorCode::FileRead, "editor file is too large to initialize: " + resolved};
+        return {ErrorCode::FileRead, "editor file is too large to initialize"};
     }
     return ok_error();
+}
+
+Error load_file(const std::string& path, const EditorSettings& settings, LoadedFile& out) {
+    return load_file(path, settings, out, UnrecognizedEncodingPolicy::AsIs);
+}
+
+Error load_file(const std::string& path,
+                const EditorSettings& settings,
+                LoadedFile& out,
+                UnrecognizedEncodingPolicy unrecognized) {
+    out = LoadedFile{};
+    out.tab_width = settings.tab_width;
+    out.tab_style = settings.tab_style;
+    const std::string resolved = expand_user_path(path);
+    FileLoadCheck check;
+    Error err = check_load_file_size(resolved, settings, check);
+    if (!err.ok()) {
+        return err;
+    }
+    if (check.size > static_cast<std::uintmax_t>(std::numeric_limits<size_t>::max())) {
+        return {ErrorCode::FileRead,
+                "editor file is too large for this platform address space: " + resolved +
+                    " (" + std::to_string(check.size) + " bytes)"};
+    }
+
+    std::ifstream in(std::filesystem::u8path(resolved), std::ios::binary);
+    if (!in) {
+        return {ErrorCode::FileRead, "could not open editor file for reading: " + resolved};
+    }
+
+    std::string content;
+    try {
+        content.reserve(static_cast<size_t>(check.size));
+        std::array<char, 65536> buffer{};
+        while (in) {
+            in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize count = in.gcount();
+            if (count <= 0) {
+                break;
+            }
+            content.append(buffer.data(), static_cast<size_t>(count));
+        }
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to load editor file: " + resolved};
+    } catch (const std::length_error&) {
+        return {ErrorCode::FileRead, "editor file is too large to load into memory: " + resolved};
+    }
+    if (!in.good() && !in.eof()) {
+        return {ErrorCode::FileRead, "failed while reading editor file: " + resolved};
+    }
+
+    out.raw_bytes = content;
+    const encoding::DetectedEncoding detected = encoding::detect(content);
+    if (detected.confident) {
+        std::string utf8;
+        err = encoding::to_utf8(content, detected.encoding, utf8, detected.name);
+        if (!err.ok()) {
+            return {err.code, err.message + ": " + resolved};
+        }
+        out.source_encoding = detected.name;
+        out.converted = detected.encoding != encoding::Encoding::Utf8 || detected.stripped_bom;
+        return finalize_editor_content(std::move(utf8), settings, out);
+    }
+    if (unrecognized == UnrecognizedEncodingPolicy::Defer) {
+        out.needs_encoding_choice = true;
+        return ok_error();
+    }
+    out.unrecognized_encoding = true;
+    return finalize_editor_content(std::move(content), settings, out);
+}
+
+Error finish_loaded_file(LoadedFile& file,
+                         const EditorSettings& settings,
+                         const std::string& encoding_name) {
+    std::string content = file.raw_bytes;
+    if (!encoding_name.empty()) {
+        std::string utf8;
+        Error err = encoding::to_utf8_named(content, encoding_name, utf8);
+        if (!err.ok()) {
+            return err;
+        }
+        file.source_encoding = encoding_name;
+        file.converted = true;
+        file.needs_encoding_choice = false;
+        file.unrecognized_encoding = false;
+        return finalize_editor_content(std::move(utf8), settings, file);
+    }
+    file.source_encoding.clear();
+    file.converted = false;
+    file.needs_encoding_choice = false;
+    file.unrecognized_encoding = true;
+    return finalize_editor_content(std::move(content), settings, file);
 }
 
 Error save_file(const std::string& path, const PieceTable& text) {

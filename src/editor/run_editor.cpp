@@ -24,7 +24,9 @@
 #include "editor/text_layout.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
+#include "encoding/encoding.hpp"
 #include "input/input.hpp"
+#include "ui/text_selector.hpp"
 #include "runtime/runtime.hpp"
 #include "provider/model_selection.hpp"
 #include "search/search.hpp"
@@ -215,9 +217,14 @@ app::EditorRunResult run_editor(const std::string& path,
             const std::string& load_path =
                 recover_autosave ? recovery_offer.autosave_path : initial_path;
             LoadedFile loaded;
-            err = load_file(load_path, settings, loaded);
+            err = load_file(load_path, settings, loaded, UnrecognizedEncodingPolicy::Defer);
             if (!err.ok()) {
                 std::cerr << error_code_name(err.code) << ": " << err.message << "\n";
+                return {5, app::InteractiveUiTarget::Quit};
+            }
+            if (loaded.needs_encoding_choice &&
+                !confirm_encoding_before_terminal(load_path, loaded, settings)) {
+                std::cerr << "Editor load cancelled: " << load_path << "\n";
                 return {5, app::InteractiveUiTarget::Quit};
             }
             state.text = std::move(loaded.text);
@@ -233,6 +240,8 @@ app::EditorRunResult run_editor(const std::string& path,
             if (recover_autosave) {
                 state.dirty = true;
                 status = "Recovered auto-save";
+            } else if (loaded.converted && !loaded.source_encoding.empty()) {
+                status = "Converted from " + loaded.source_encoding + "; saving will write UTF-8";
             } else {
                 status = "Loaded";
             }
@@ -302,6 +311,15 @@ app::EditorRunResult run_editor(const std::string& path,
     EditorProviderModelPicker picker;
     ui::SettingsWidget settings_widget;
     int settings_scroll = 0;
+    bool encoding_picker_active = false;
+    size_t encoding_picker_selected = 0;
+    int encoding_picker_scroll = 0;
+    EditorState encoding_picker_view;
+    std::vector<encoding::EncodingChoice> encoding_choices;
+    LoadedFile pending_encoding_loaded;
+    std::string pending_encoding_open_path;
+    std::string pending_encoding_load_path;
+    bool pending_encoding_recovered = false;
     EditorModelListRuntime model_list;
     provider::ModelsResult cached_editor_models;
     bool have_cached_editor_models = false;
@@ -352,6 +370,7 @@ app::EditorRunResult run_editor(const std::string& path,
         insert_options.fetch.allow_private = runtime_options->allow_private_url_fetch;
         insert_options.auto_convert_html_to_markdown =
             runtime_options->auto_convert_html_to_markdown;
+        insert_options.encoding_name = runtime_options->input_encoding;
     }
     themes_ref.normalize_name(theme_name, theme_name);
     auto terminal_theme_style = [&]() {
@@ -495,7 +514,7 @@ app::EditorRunResult run_editor(const std::string& path,
         // pending_agent_guard is allowed: Ctrl+G leaves Guard Ask pending for
         // the agent TUI (must not auto-deny).
         return !help_view.active && !picker.active && !buffer_list_active &&
-               !settings_widget.active &&
+               !settings_widget.active && !encoding_picker_active &&
                !pending_close_confirm && !pending_agent_quit_confirm &&
                !minibuffer.active && !replace.active &&
                !assist_session.active && !reformat_session.active && !insert_session.active &&
@@ -681,6 +700,27 @@ app::EditorRunResult run_editor(const std::string& path,
                             {},
                             dired_status.c_str(),
                             changed);
+            return;
+        }
+        if (encoding_picker_active) {
+            ui::TextSelectorConfig config;
+            config.header = "Choose encoding · saving will write UTF-8";
+            std::vector<std::string> labels;
+            labels.reserve(encoding_choices.size());
+            for (const encoding::EncodingChoice& choice : encoding_choices) {
+                labels.push_back(choice.label);
+            }
+            encoding_picker_view = EditorState::from_text(
+                ui::render_text_selector(config, encoding_picker_selected, labels));
+            encoding_picker_view.path = "[encoding]";
+            encoding_picker_view.highlight_enabled = false;
+            render_terminal_panel(encoding_picker_view,
+                                  minibuffer,
+                                  terminal_frame_renderer,
+                                  theme_style,
+                                  tui::TuiMode::ThreadList,
+                                  encoding_picker_scroll,
+                                  "File encoding");
             return;
         }
         if (buffer_list_active) {
@@ -920,16 +960,29 @@ app::EditorRunResult run_editor(const std::string& path,
             activate_buffer(*existing);
             return;
         }
-        EditorState next;
-        next.set_undo_limit(settings.undo_limit);
-        next.set_path(open_path);
-        const Error lock_error = next.begin_file_session(open_path, true);
         LoadedFile loaded;
-        Error load_error = load_file(load_path, settings, loaded);
+        Error load_error = load_file(load_path, settings, loaded, UnrecognizedEncodingPolicy::Defer);
         if (!load_error.ok()) {
             minibuffer_message(minibuffer, load_error.message);
             return;
         }
+        if (loaded.needs_encoding_choice) {
+            encoding_choices = encoding::encoding_picker_choices();
+            encoding_picker_selected = 0;
+            encoding_picker_scroll = 0;
+            encoding_picker_active = true;
+            pending_encoding_loaded = std::move(loaded);
+            pending_encoding_open_path = open_path;
+            pending_encoding_load_path = load_path;
+            pending_encoding_recovered = recovered_from_autosave;
+            minibuffer_message(minibuffer,
+                               "Choose encoding for " + open_path + " · saving will write UTF-8");
+            return;
+        }
+        EditorState next;
+        next.set_undo_limit(settings.undo_limit);
+        next.set_path(open_path);
+        const Error lock_error = next.begin_file_session(open_path, true);
         sync_active_buffer();
         const bool mixed_linebreaks = loaded.mixed_linebreaks;
         next.text = std::move(loaded.text);
@@ -960,8 +1013,74 @@ app::EditorRunResult run_editor(const std::string& path,
                                    linebreak_name(next.linebreak) + " for saves");
         } else if (recovered_from_autosave) {
             minibuffer_message(minibuffer, "Recovered auto-save for " + open_path);
+        } else if (loaded.converted && !loaded.source_encoding.empty()) {
+            minibuffer_message(minibuffer,
+                               "Opened " + open_path + " (converted from " +
+                                   loaded.source_encoding + "; saving will write UTF-8)");
         } else {
             minibuffer_message(minibuffer, "Opened " + open_path);
+        }
+    };
+
+    auto cancel_encoding_picker = [&]() {
+        encoding_picker_active = false;
+        pending_encoding_loaded = LoadedFile{};
+        pending_encoding_open_path.clear();
+        pending_encoding_load_path.clear();
+        pending_encoding_recovered = false;
+        minibuffer_message(minibuffer, "Open cancelled");
+    };
+
+    auto confirm_encoding_picker = [&]() {
+        if (encoding_picker_selected >= encoding_choices.size()) {
+            return;
+        }
+        const std::string name = encoding_choices[encoding_picker_selected].name;
+        Error err = finish_loaded_file(pending_encoding_loaded, settings, name);
+        encoding_picker_active = false;
+        if (!err.ok()) {
+            minibuffer_message(minibuffer, err.message);
+            pending_encoding_loaded = LoadedFile{};
+            return;
+        }
+        const std::string open_path = pending_encoding_open_path;
+        const std::string load_path = pending_encoding_load_path;
+        const bool recovered = pending_encoding_recovered;
+        LoadedFile loaded = std::move(pending_encoding_loaded);
+        pending_encoding_open_path.clear();
+        pending_encoding_load_path.clear();
+        EditorState next;
+        next.set_undo_limit(settings.undo_limit);
+        next.set_path(open_path);
+        const Error lock_error = next.begin_file_session(open_path, true);
+        sync_active_buffer();
+        next.text = std::move(loaded.text);
+        next.invalidate_word_index();
+        next.tab_width = loaded.tab_width;
+        next.tab_style = loaded.tab_style;
+        next.linebreak = loaded.linebreak;
+        next.highlight_enabled = highlight_enabled;
+        next.cursor = 0;
+        next.preferred_column = 0;
+        next.scroll_line = 0;
+        next.scroll_column = 0;
+        next.dirty = recovered;
+        next.clear_selection();
+        next.clear_undo_history();
+        buffers.push_back(next);
+        active_buffer = buffers.size() - 1;
+        state = next;
+        split_layout.set_focused_buffer(active_buffer);
+        split_layout.set_focused_view(pane_view_from_state(state));
+        buffer_list_selected = active_buffer;
+        if (!lock_error.ok()) {
+            minibuffer_message(minibuffer, lock_error.message);
+        } else if (loaded.converted && !loaded.source_encoding.empty()) {
+            minibuffer_message(minibuffer,
+                               "Opened " + open_path + " (converted from " +
+                                   loaded.source_encoding + "; saving will write UTF-8)");
+        } else {
+            minibuffer_message(minibuffer, "Opened " + open_path + " as-is");
         }
     };
 
@@ -3411,6 +3530,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer.active || replace.active || assist_session.active ||
                 reformat_session.active || insert_session.active || shell_session.active ||
                 picker.active || buffer_list_active || settings_widget.active ||
+                encoding_picker_active ||
                 dired.active || pending_close_confirm ||
                 window_prefix_active;
             if (!command_unavailable) open_assist_command_minibuffer();
@@ -4033,6 +4153,32 @@ app::EditorRunResult run_editor(const std::string& path,
                 minibuffer_message(minibuffer, "Settings discarded");
             } else if (action == ui::SettingsWidgetAction::Handled) {
                 minibuffer_message(minibuffer, settings_widget.status);
+            }
+            return;
+        }
+        if (encoding_picker_active) {
+            if (ch == 17) {
+                quit = true;
+                return;
+            }
+            if (ch == 27) {
+                const std::string sequence =
+                    current_escape_was_decoded ? std::string{} : read_escape_suffix();
+                if (sequence.empty()) {
+                    cancel_encoding_picker();
+                    return;
+                }
+                MovementKeyEvent movement;
+                if (parse_movement_sequence(sequence, movement)) {
+                    encoding_picker_selected = ui::move_text_selector_selection(
+                        encoding_picker_selected, encoding_choices.size(), movement.key);
+                    return;
+                }
+                return;
+            }
+            if (ch == '\r' || ch == '\n') {
+                confirm_encoding_picker();
+                return;
             }
             return;
         }

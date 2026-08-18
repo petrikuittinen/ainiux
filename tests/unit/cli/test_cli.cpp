@@ -889,7 +889,19 @@ void test_cli_agent_mode_parse() {
 
 }  // namespace
 
+void test_cli_encoding_parse() {
+    const char* argv[] = {"ainiux", "--input", "notes.txt", "--encoding", "cp1251"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(5, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.input_encoding == "windows-1251",
+          "--encoding cp1251 canonicalizes to windows-1251");
+    const char* bad[] = {"ainiux", "--encoding", "gbk;rm"};
+    parsed = ainiux::cli::parse_args(3, const_cast<char**>(bad));
+    check(!parsed.error.ok() && parsed.error.code == ainiux::ErrorCode::UnsupportedFeature,
+          "--encoding rejects unsafe names");
+}
+
 void run_all() {
+    test_cli_encoding_parse();
     test_cli_empty_and_unicode_edge_cases();
     test_cli_chat_nocolors_parse();
     test_cli_theme_parse();

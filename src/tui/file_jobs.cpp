@@ -317,12 +317,13 @@ void TuiFileJobs::start_attach(const std::string& path) {
     const long text_limit = context.options.max_input_bytes;
     const long image_limit = context.options.max_image_bytes;
     const long inline_limit = context.options.media_max_size_to_store_to_db;
+    const std::string input_encoding = context.options.input_encoding;
     // Agent mode: request-local only (no ~/.ainiux/media, no chat SQLite).
     const bool persist_attachment = sqlite_available && !context.options.agent;
     const std::string media_database_path = sqlite_path;
     runtime::EventQueue<TuiEvent>& event_queue = events;
     file_job.start([path, type, text_limit, image_limit, inline_limit, persist_attachment,
-                    media_database_path, &event_queue](
+                    media_database_path, input_encoding, &event_queue](
                        runtime::CancellationToken token) mutable {
         TuiEvent event;
         event.type = TuiEventType::AttachDone;
@@ -358,7 +359,8 @@ void TuiFileJobs::start_attach(const std::string& path) {
         } else {
             // Convert once at import; Markdown is the native replay format.
             std::string body;
-            event.error = input::read_local_text_file_for_attach(path, static_cast<size_t>(text_limit), body, token);
+            event.error = input::read_local_text_file_for_attach(path, static_cast<size_t>(text_limit), body, token,
+                                                                input_encoding);
             if (event.error.ok()) {
                 if (type.kind == input::Kind::Html) {
                     try {

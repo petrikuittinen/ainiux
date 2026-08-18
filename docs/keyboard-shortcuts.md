@@ -102,7 +102,7 @@ Use `/pop` to remove the last user or assistant message.
 - `Esc` — cancel
 - `Ctrl+Q` — quit
 
-**Provider/model/reasoning pickers** — `↑`/`↓`, type-to-jump (single character contains match), `/` then query + `Enter` for case-insensitive partial find-next (`/` + `Enter` repeats the previous term), `.` toggles alphabetical (Unicode/UTF-8) order, `Enter` selects, `Esc` cancels (or leaves a search draft), `Ctrl+Q`. **Remove confirm** / **model confirm** — `y`/`n`/`Esc`, `Ctrl+Q` as appropriate.
+**Provider/model/reasoning pickers** — `↑`/`↓`, type-to-jump (single character contains match), `/` then query + `Enter` for case-insensitive partial find-next (`/` + `Enter` repeats the previous term), `.` toggles alphabetical (Unicode/UTF-8) order, `Enter` selects, `Esc` cancels (or leaves a search draft), `Ctrl+Q`. **Remove confirm** / **model confirm** — `y`/`n`/`Esc`, `Ctrl+Q` as appropriate. **Editor encoding picker** (unrecognized 8-bit file) — `↑`/`↓`, `Enter` convert (or **Open as-is**), `Esc` cancel. Converted buffers save as UTF-8.
 
 ### Slash commands (type in input, `Enter` to run if single-line)
 
