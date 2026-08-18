@@ -12,6 +12,9 @@ import tempfile
 import time
 
 
+TIME_SCALE = max(1.0, float(os.environ.get("AINIUX_TEST_TIME_SCALE", "1")))
+
+
 def drain(master, timeout=0.0):
     output = bytearray()
     deadline = time.time() + timeout
@@ -32,13 +35,26 @@ def drain(master, timeout=0.0):
 
 def send(master, text, delay=0.35):
     os.write(master, text.encode("utf-8"))
-    time.sleep(delay)
+    time.sleep(delay * TIME_SCALE)
     return drain(master)
 
 
 def require_running(process, description):
     if process.poll() is not None:
         raise RuntimeError(f"{description} exited early with status {process.returncode}")
+
+
+def wait_for_exit(master, process, timeout):
+    """Wait for a PTY child without letting its terminal output block shutdown."""
+    output = bytearray()
+    deadline = time.monotonic() + timeout
+    while process.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        output.extend(drain(master, timeout=min(0.1, remaining)))
+    output.extend(drain(master))
+    return bytes(output)
 
 
 def start_tui(binary, base, model, home_dir):
@@ -59,19 +75,19 @@ def start_tui(binary, base, model, home_dir):
     os.close(slave)
     # Wait briefly for the first paint, but keep the bytes: startup status
     # (for example the /list hint) is part of the transcript scenarios assert on.
-    time.sleep(0.3)
-    startup = drain(master, timeout=0.5)
+    time.sleep(0.3 * TIME_SCALE)
+    startup = drain(master, timeout=0.5 * TIME_SCALE)
     return master, process, startup
 
 
 def stop_tui(master, process, timeout=10):
     try:
         if process.poll() is None:
-            process.wait(timeout=timeout)
+            wait_for_exit(master, process, timeout)
     finally:
         if process.poll() is None:
             process.terminate()
-            process.wait(timeout=3)
+            wait_for_exit(master, process, 3)
         os.close(master)
     if process.returncode != 0:
         raise RuntimeError(f"TUI exited with status {process.returncode}")
@@ -79,6 +95,7 @@ def stop_tui(master, process, timeout=10):
 
 def run_tui(binary, base, model, home_dir, script, timeout=45,
             dismiss_startup_thread_list=True):
+    timeout *= TIME_SCALE
     master, process, startup = start_tui(binary, base, model, home_dir)
     transcript = bytearray(startup)
     try:
@@ -96,7 +113,7 @@ def run_tui(binary, base, model, home_dir, script, timeout=45,
                 break
             require_running(process, "TUI")
         if process.poll() is None:
-            process.wait(timeout=timeout)
+            transcript.extend(wait_for_exit(master, process, timeout))
     finally:
         if process.poll() is None:
             stop_tui(master, process, timeout)
@@ -108,6 +125,7 @@ def run_tui(binary, base, model, home_dir, script, timeout=45,
 
 
 def wait_for_thread_field(path, thread_id, column, expected, timeout=8.0):
+    timeout *= TIME_SCALE
     deadline = time.time() + timeout
     while time.time() < deadline:
         conn = query_db(path)

@@ -284,7 +284,7 @@ sanitize:
 
 test-sanitize:
 	$(MAKE) clean
-	$(MAKE) CXXFLAGS="$(CXXFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test-full
+	AINIUX_TEST_TIME_SCALE=4 $(MAKE) CXXFLAGS="$(CXXFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined" test-full
 
 leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 	@if command -v valgrind >/dev/null 2>&1; then \
