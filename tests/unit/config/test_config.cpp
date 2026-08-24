@@ -1247,6 +1247,8 @@ void test_editor_commands_config() {
         ainiux::editor::find_assist_command(options.editor_assist_config, "/style-humor");
     const ainiux::editor::EditorAssistCommand* marketing =
         ainiux::editor::find_assist_command(options.editor_assist_config, "/marketing");
+    const ainiux::editor::EditorAssistCommand* lyrics =
+        ainiux::editor::find_assist_command(options.editor_assist_config, "/lyrics");
     check(style_formal != nullptr && style_formal->prompt.find("formal") != std::string::npos,
           "editor-commands.conf defines style-formal");
     check(style_casual != nullptr && style_casual->prompt.find("casual") != std::string::npos,
@@ -1255,6 +1257,9 @@ void test_editor_commands_config() {
           "editor-commands.conf defines style-humor");
     check(marketing != nullptr && marketing->prompt.find("marketing materials") != std::string::npos,
           "editor-commands.conf defines marketing");
+    check(lyrics != nullptr && lyrics->prompt.find("song lyrics") != std::string::npos &&
+              lyrics->prompt.find("[Verse 1]") != std::string::npos,
+          "editor-commands.conf defines lyrics");
     check(options.editor_assist_config.behavior_rules.find("one-shot") != std::string::npos,
           "editor-commands.conf defines assist behavior rules");
 

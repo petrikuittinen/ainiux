@@ -222,6 +222,7 @@ Press **`Ctrl+E`**, **`Esc`**, or **`Alt+X`** to open the command minibuffer (`C
 | `/transliterate` | Convert text between scripts without translating it |
 | `/readability` | Score readability and suggest improvements |
 | `/speech` | Write a structured, compelling speech |
+| `/lyrics` | Write or refine song lyrics |
 | `/fiction` | Write a bold short fiction piece with lively dialogue |
 | `/blog` | Write an audience-aware, SEO-conscious blog post |
 | `/article` | Write a comprehensive, sourced article |
