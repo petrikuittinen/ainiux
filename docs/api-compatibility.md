@@ -14,7 +14,7 @@ Implemented for built-in OpenAI-compatible profiles:
 
 If the user does not provide `-m/--model`, `ainiux` calls the models endpoint before chat starts and uses the first returned model id. If the response has no model ids, the chat request omits the model field and user-facing startup status reports `Model: unknown`.
 
-Image request formatting supports multiple input images. In `auto` mode, the client combines registry-level provider capability with recognized vision-model names. Unknown compatible models require `--image-capability allow`, while `deny` disables image input. This is conservative client-side detection rather than a live provider capability protocol; endpoints can still reject formats their active model cannot decode. Responses API image input is not implemented in this slice.
+Image request formatting supports multiple input images. In `auto` mode, the client combines registry-level provider capability with a matched `models.conf` `images` flag when present, then recognized vision-model names. Catalog `images = off` keeps a family text-to-text (DeepSeek V4 Pro/Flash); `images = on` marks text-image-to-text (DeepSeek `deepseek-v4-flash-vision-exp`). Unknown compatible models require `--image-capability allow`, while `deny` disables image input. This is conservative client-side detection rather than a live provider capability protocol; endpoints can still reject formats their active model cannot decode.
 
 ## Responses API
 
@@ -54,7 +54,7 @@ generic_thinking            enable_thinking plus exact thinking_budget
 
 Disable spellings such as `none`, `off`, and numeric `0` are recognized where a protocol has an enable/disable shape. Other names—including `minimal`—are not globally rewritten because their meaning is model-specific. Auto is always omitted rather than converted to a guessed default.
 
-Catalog entries currently cover model-specific GPT-5 generations, Gemini/Gemma, Claude token budgets, Grok, DeepSeek, Kimi, GLM, Qwen 3.5/3.6 Chat/Responses, Qwen 3.8 Chat effort, MiniMax Chat/Responses, MiMo Chat/Responses, Stepfun, Nemotron, Hy3, Llama 3.x presets, and both 20B/120B gpt-oss variants. Model matching checks only the final component, so arbitrarily nested prefixes such as `gateway/vendor/GEMINI-...` work without becoming part of the family expression. Native Anthropic Messages is still not implemented; the catalog cannot add an API adapter by itself.
+Catalog entries currently cover model-specific GPT-5 generations, Gemini/Gemma, Claude token budgets, Grok, DeepSeek V4 text and `deepseek-v4-flash-vision-exp`, Kimi, GLM, Qwen 3.5/3.6 Chat/Responses, Qwen 3.8 Chat effort, MiniMax Chat/Responses, MiMo Chat/Responses, Stepfun, Nemotron, Hy3, Llama 3.x presets, and both 20B/120B gpt-oss variants. Model matching checks only the final component, so arbitrarily nested prefixes such as `gateway/vendor/GEMINI-...` work without becoming part of the family expression. Native Anthropic Messages is still not implemented; the catalog cannot add an API adapter by itself.
 
 ## Hosted web_search
 
@@ -65,7 +65,7 @@ family              name            wire                                        
 GPT-5               web_search      { "type": "web_search" }                     Responses (OpenAI default)
 Claude              web_search      { "type": "web_search" }                     Chat (OpenAI-compat; native Messages is not this slice)
 Grok 4              web_search      { "type": "web_search" }                     Responses
-DeepSeek V4         web_search      { "type": "web_search" }                     Responses
+DeepSeek V4 / Vision web_search     { "type": "web_search" }                     Responses
 Kimi K2/K3          $web_search     { "type": "builtin_function", "function": { "name": "$web_search" } }  Chat; client echoes arguments
 GLM-5               web_search      { "type": "web_search", "web_search": { "enable": true } }  Chat
 ```

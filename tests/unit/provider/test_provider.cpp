@@ -1,6 +1,7 @@
 #include "provider/test_provider.hpp"
 #include "support/test_support.hpp"
 #include "cli/args.hpp"
+#include "config/config.hpp"
 #include "json/json.hpp"
 #include "provider/names.hpp"
 #include "provider/model_selection.hpp"
@@ -632,6 +633,43 @@ void test_image_capability_detection() {
     context.api_kind = ainiux::provider::ApiKind::Responses;
     check(ainiux::provider::validate_image_input(context).ok(),
           "Responses accepts image input when the model is image-capable");
+
+    const std::vector<ainiux::provider::Profile> profiles = ainiux::provider::built_in_profiles();
+    bool deepseek_advertises_images = false;
+    for (const ainiux::provider::Profile& profile : profiles) {
+        if (profile.name == "deepseek") {
+            deepseek_advertises_images = profile.capabilities.images;
+            break;
+        }
+    }
+    check(deepseek_advertises_images, "DeepSeek profile advertises image input");
+
+    ainiux::cli::Options catalog_options;
+    ainiux::config::ParseResult models = ainiux::config::read_file("config/models.conf");
+    check(models.error.ok() &&
+              ainiux::config::apply_models_document(models.document, catalog_options).ok(),
+          "bundled models.conf loads for image capability checks");
+    ainiux::provider::RequestContext deepseek;
+    deepseek.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    deepseek.profile.name = "deepseek";
+    deepseek.profile.capabilities.images = true;
+    deepseek.options.model_catalog = catalog_options.model_catalog;
+    deepseek.options.model = "deepseek-v4-flash";
+    check(!ainiux::provider::detected_capabilities_for(deepseek).images &&
+              !ainiux::provider::validate_image_input(deepseek).ok(),
+          "DeepSeek V4 Flash remains text-to-text in auto image mode");
+    deepseek.options.model = "deepseek-v4-flash-vision-exp";
+    check(ainiux::provider::detected_capabilities_for(deepseek).images &&
+              ainiux::provider::validate_image_input(deepseek).ok(),
+          "DeepSeek V4 Flash Vision Exp is image-capable in auto mode");
+    deepseek.api_kind = ainiux::provider::ApiKind::Responses;
+    check(ainiux::provider::validate_image_input(deepseek).ok(),
+          "DeepSeek vision model accepts Responses image input");
+    deepseek.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    deepseek.options.model = "deepseek-v4-flash";
+    deepseek.options.image_capability = "allow";
+    check(ainiux::provider::validate_image_input(deepseek).ok(),
+          "explicit allow still overrides DeepSeek text-only catalog records");
 }
 
 void test_provider_lookup_metadata() {
@@ -2100,6 +2138,18 @@ void test_xai_and_deepseek_accept_responses() {
     ainiux::provider::ContextResult ds_ctx = ainiux::provider::build_context(ds_parsed.options);
     check(ds_ctx.error.ok() && ds_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
           "DeepSeek accepts --api responses");
+
+    ainiux::cli::Options vision_options = ds_parsed.options;
+    ainiux::config::ParseResult models = ainiux::config::read_file("config/models.conf");
+    check(models.error.ok() &&
+              ainiux::config::apply_models_document(models.document, vision_options).ok(),
+          "bundled models.conf loads for DeepSeek vision auto-Responses");
+    vision_options.model = "deepseek-v4-flash-vision-exp";
+    vision_options.api_explicit = false;
+    ainiux::provider::ContextResult vision_ctx = ainiux::provider::build_context(vision_options);
+    check(vision_ctx.error.ok() &&
+              vision_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
+          "DeepSeek V4 Flash Vision Exp auto-selects Responses like other V4 family ids");
 }
 
 void test_hosted_web_search_serialization() {

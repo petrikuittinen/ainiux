@@ -112,6 +112,8 @@ Use `-p` for a prompt, `-i` for the line-oriented REPL, and `--no-stream` when a
 ```sh
 ainiux openai -m MODEL -p "Summarize the tradeoffs" --no-stream
 ainiux openrouter -m MODEL -i
+ainiux deepseek -m deepseek-v4-flash-vision-exp -p "Describe this chart" \
+  --input tests/image_files/China_EV_sales_March_2024.png
 ainiux --input page.html --output-format md
 ainiux --fetch-url https://example.com --output-format plaintext
 printf 'piped text' | ainiux --input stdin --output stdout

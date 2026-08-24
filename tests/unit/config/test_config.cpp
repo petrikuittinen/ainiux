@@ -743,6 +743,31 @@ void test_model_catalog_layering_and_validation() {
     check(search_off != nullptr && !search_off->web_search,
           "web_search=off leaves hosted search disabled");
 
+    err = apply(
+        "[model]\n"
+        "id = images-on\nprovider = any\napi = any\nmodel = \"^images-on$\"\n"
+        "value = low\nreasoning_protocol = openai_effort\nimages = on\n"
+        "[model]\n"
+        "id = images-off\nprovider = any\napi = any\nmodel = \"^images-off$\"\n"
+        "value = low\nreasoning_protocol = openai_effort\nimages = off\n"
+        "[model]\n"
+        "id = images-omit\nprovider = any\napi = any\nmodel = \"^images-omit$\"\n"
+        "value = low\nreasoning_protocol = openai_effort\n",
+        "images-models.conf");
+    check(err.ok(), "images catalog keys parse");
+    const ainiux::ModelCapability* images_on = ainiux::config::resolve_model_capability(
+        options.model_catalog, "deepseek", "chat", "images-on");
+    const ainiux::ModelCapability* images_off = ainiux::config::resolve_model_capability(
+        options.model_catalog, "deepseek", "chat", "images-off");
+    const ainiux::ModelCapability* images_omit = ainiux::config::resolve_model_capability(
+        options.model_catalog, "deepseek", "chat", "images-omit");
+    check(images_on != nullptr && images_on->images.has_value() && *images_on->images,
+          "images=on stores text-image-to-text");
+    check(images_off != nullptr && images_off->images.has_value() && !*images_off->images,
+          "images=off stores text-to-text");
+    check(images_omit != nullptr && !images_omit->images.has_value(),
+          "omitted images leaves capability unknown");
+
     invalid = ainiux::config::parse(
         "[model]\nid = broken\nmodel = \".*\"\nvalue = low\nreasoning_protocol = openai_effort\n"
         "web_search_name =\n",
@@ -808,8 +833,15 @@ void test_config_reads_models_template() {
         ainiux::config::resolve_model_capability(
             options.model_catalog, "deepseek", "chat", "deepseek-v4-pro");
     check(deepseek_v4 != nullptr &&
-              deepseek_v4->context_window_tokens == 1000000,
-          "DeepSeek V4 catalog record supplies its documented 1M context fallback");
+              deepseek_v4->context_window_tokens == 1000000 &&
+              deepseek_v4->images.has_value() && !*deepseek_v4->images,
+          "DeepSeek V4 catalog record supplies its documented 1M context fallback as text-to-text");
+    const ainiux::ModelCapability* deepseek_v4_flash =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "deepseek", "chat", "deepseek-v4-flash");
+    check(deepseek_v4_flash != nullptr && deepseek_v4_flash->id == "deepseek-v4" &&
+              deepseek_v4_flash->images.has_value() && !*deepseek_v4_flash->images,
+          "DeepSeek V4 Flash stays on the text-to-text family");
     const ainiux::ModelCapability* deepseek_v4_dated =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "openrouter", "chat",
@@ -817,6 +849,21 @@ void test_config_reads_models_template() {
     check(deepseek_v4_dated != nullptr && deepseek_v4_dated->id == "deepseek-v4" &&
               !deepseek_v4_dated->reasoning_options.empty(),
           "DeepSeek V4 family rule covers dated OpenRouter-style flash revisions");
+    const ainiux::ModelCapability* deepseek_vision =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "deepseek", "chat",
+            "deepseek-v4-flash-vision-exp");
+    const ainiux::ModelCapability* deepseek_vision_routed =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat",
+            "deepseek/deepseek-v4-flash-vision-exp");
+    check(deepseek_vision != nullptr && deepseek_vision->id == "deepseek-v4-flash-vision" &&
+              deepseek_vision->images.has_value() && *deepseek_vision->images &&
+              deepseek_vision->reasoning_protocol == ainiux::ReasoningProtocol::DeepSeek,
+          "DeepSeek V4 Flash Vision Exp is cataloged as text-image-to-text");
+    check(deepseek_vision_routed != nullptr &&
+              deepseek_vision_routed->id == "deepseek-v4-flash-vision",
+          "DeepSeek vision family rule covers routed OpenRouter-style ids");
     ainiux::ReasoningSelection deepseek_next;
     check(ainiux::config::next_reasoning_selection(
               options.model_catalog, "openrouter", "chat",

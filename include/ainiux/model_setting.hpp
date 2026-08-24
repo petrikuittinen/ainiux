@@ -89,6 +89,8 @@ struct ModelCapability {
     std::optional<double> temperature_max;
     bool web_search = false;
     std::string web_search_name = "web_search";
+    // nullopt = unknown (name heuristics); true = text-image-to-text; false = text-to-text.
+    std::optional<bool> images;
     bool enabled = true;
     std::uint64_t load_order = 0;
 };

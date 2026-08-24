@@ -210,7 +210,7 @@ Catalogs: [mcpservers.org](https://mcpservers.org/), [modelcontextprotocol/serve
 
 ## Local vision bridge MCP
 
-Ainiux ships a stdlib Python helper that exposes a local vision model as an MCP tool. Use it when the **agent model is text-only** (e.g. DeepSeek) but you still want OCR/captions via a **vision-capable** OpenAI-compatible endpoint (llama.cpp, vLLM, LM Studio, …).
+Ainiux ships a stdlib Python helper that exposes a local vision model as an MCP tool. Use it when the **agent model is text-only** (e.g. DeepSeek V4 Flash) but you still want OCR/captions via a **vision-capable** OpenAI-compatible endpoint (llama.cpp, vLLM, LM Studio, …). Native DeepSeek vision is `deepseek-v4-flash-vision-exp` and does not need this bridge.
 
 Script: [`scripts/image_mcp_server.py`](../scripts/image_mcp_server.py) (Python 3.8+ stdlib core).
 

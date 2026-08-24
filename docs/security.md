@@ -152,7 +152,7 @@ Images are embedded in provider requests as data URLs, which sends the complete 
 
 `/cleanup` and automatic media expiration delete managed bytes but retain database tombstones and lock affected transcripts read-only, so missing media is never silently omitted from a later request. The same lock is applied when a managed file is manually removed or cannot be validated.
 
-The default `--image-capability auto` mode requires both a provider profile whose Chat Completions adapter can carry image parts and a recognized vision model name. `--image-capability allow` is an explicit trust decision for compatible unknown/custom models; it does not make an incompatible provider understand images.
+The default `--image-capability auto` mode requires both a provider profile whose adapter can carry image parts and either a catalog `images = on` match or a recognized vision-model name. Catalog `images = off` keeps text-only families (for example DeepSeek V4 Flash) from sending pixels. `--image-capability allow` is an explicit trust decision for compatible unknown/custom models; it does not make an incompatible provider understand images.
 
 ## Text Attachments
 

@@ -1424,6 +1424,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         std::optional<double> temperature_max;
         bool web_search = false;
         std::string web_search_name = "web_search";
+        std::optional<bool> images;
         bool enabled = true;
         SourceLocation source;
     };
@@ -1514,6 +1515,10 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
                 if (entry.value.string.empty())
                     return schema_error(entry, "web_search_name must not be empty");
                 partial.web_search_name = entry.value.string;
+            } else if (key == "images") {
+                Error err = require_type(entry, Value::Type::Boolean);
+                if (!err.ok()) return err;
+                partial.images = entry.value.boolean;
             } else {
                 return schema_error(entry, "unknown [model] key");
             }
@@ -1595,6 +1600,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         capability.temperature_max = partial.temperature_max;
         capability.web_search = partial.web_search;
         capability.web_search_name = partial.web_search_name;
+        capability.images = partial.images;
         capability.load_order = candidate.model_catalog.next_load_order++;
         candidate.model_catalog.models.push_back(std::move(capability));
     }

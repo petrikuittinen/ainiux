@@ -104,7 +104,7 @@ Profile make_profile(const std::string& name,
     profile.capabilities = profile_capabilities(requires_key, local, !chat_path.empty(), !responses_path.empty(), !models_path.empty());
     profile.capabilities.images = local || name == names::kOpenAi || name == "openrouter" || name == "gemini" ||
                                   name == "xai" || name == "mistral" || name == "qwen" ||
-                                  name == names::kCustomOpenAiChat;
+                                  name == "deepseek" || name == names::kCustomOpenAiChat;
     return profile;
 }
 
@@ -2434,7 +2434,7 @@ ContextResult build_context(const cli::Options& input_options) {
             api_kind == ApiKind::Responses ? "responses" : "chat", options.model);
         if (preview != nullptr && preview->web_search &&
             (preview->id == "xai-grok-4" || preview->id == "deepseek-v4" ||
-             preview->id == "openai-gpt-5")) {
+             preview->id == "deepseek-v4-flash-vision" || preview->id == "openai-gpt-5")) {
             options.api = "responses";
             api_kind = ApiKind::Responses;
         }
@@ -2790,6 +2790,13 @@ Capabilities detected_capabilities_for(const RequestContext& context) {
     }
     if (!caps.images) {
         return caps;
+    }
+
+    if (const ModelCapability* capability = matched_model_capability_impl(context)) {
+        if (capability->images.has_value()) {
+            caps.images = *capability->images;
+            return caps;
+        }
     }
 
     const std::string model = normalize_provider_key(context.options.model);

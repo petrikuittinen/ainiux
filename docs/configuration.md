@@ -109,7 +109,7 @@ If colors look wrong over SSH from Windows Terminal, try `--color-mode 256` or s
 
 ## Model catalog
 
-`models.conf` contains repeatable `[model]` and `[preset]` records. Model matching uses validated case-insensitive regular expressions against the final slash-separated model component. Records can describe API, context window, reasoning protocol and choices, temperature support, optional `temperature_max` (default 1.0; Gemini families use 2.0), priority, and optional hosted `web_search` / `web_search_name`. Purpose presets remain a CLI/catalog feature (`--purpose`) and are not shown in the interactive settings widget.
+`models.conf` contains repeatable `[model]` and `[preset]` records. Model matching uses validated case-insensitive regular expressions against the final slash-separated model component. Records can describe API, context window, reasoning protocol and choices, temperature support, optional `temperature_max` (default 1.0; Gemini families use 2.0), priority, optional hosted `web_search` / `web_search_name`, and optional `images` (`on` = text-image-to-text, `off` = text-to-text; omitted records keep name-heuristic detection). Purpose presets remain a CLI/catalog feature (`--purpose`) and are not shown in the interactive settings widget.
 
 Endpoint metadata and explicit CLI values outrank catalog fallbacks. Protocol names are closed because request JSON stays in provider adapter code rather than configuration.
 

@@ -51,6 +51,8 @@ Combine a prompt with converted input, repeatable attachments, fetches, or searc
 ```sh
 ainiux lmstudio -p "Summarize" --attach notes.md
 ainiux openai -m MODEL -p "Describe this" --input photo.png
+ainiux deepseek -m deepseek-v4-flash-vision-exp -p "Describe this" \
+  --input tests/image_files/China_EV_sales_March_2024.png
 ainiux lmstudio -p "Compare the sources" --fetch-url https://example.com --search "related topic"
 ```
 
