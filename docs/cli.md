@@ -111,24 +111,53 @@ Full guide: [MCP servers](mcp.md).
 
 ## Image generation
 
-`ainiux image` (or `--image`) generates **one** image from a prompt. The catalog in `images.conf` selects the protocol and model. OpenAI defaults to `gpt-image-2` (`openai_images`). `--provider replicate` uses official Replicate predictions (`replicate_predictions`); the default model is `prunaai/z-image-turbo`. This is a single-turn CLI mode: there is no TUI/REPL `/image`, no batch `n>1`, and no multi-turn editing.
+`ainiux image` (or `--image`) generates **one** image from a prompt. The catalog in `images.conf` selects the protocol and model. This is a single-turn CLI mode: there is no TUI/REPL `/image`, no batch `n>1`, and no multi-turn editing.
+
+| `--provider` | Protocol | Default `-m` | Credentials |
+| --- | --- | --- | --- |
+| `openai` | `openai_images` | `gpt-image-2` | `OPENAI_API_KEY` |
+| `replicate` | `replicate_predictions` | `prunaai/z-image-turbo` | `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN` (not `AINIUX_API_KEY`) |
+| `fal` / `fal_ai` | `fal_queue` | `fal-ai/flux/schnell` | `FAL_API_KEY` or `FAL_KEY` (not `AINIUX_API_KEY`) |
+| `gemini` | `gemini_interactions` | `gemini-3.1-flash-image` | `GEMINI_API_KEY` then `AINIUX_API_KEY` |
+
+Google’s native Gemini image models (Nano Banana) use `--provider gemini`. That is the Gemini Interactions API, not classic Imagen `:predict`. The same Nano Banana names also appear as Replicate (`google/nano-banana-2`) and fal (`fal-ai/nano-banana-2`) catalog records; those still use Replicate or fal credentials.
 
 ```sh
+# OpenAI Images (default provider/model)
 ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
 ainiux image -p "gift basket from these items" --attach lotion.png --attach soap.jpg --size 2k --ar 16:9
 ainiux image -p "otter" --format webp --output stdout > otter.webp
+
+# Replicate
 ainiux image --provider replicate -m prunaai/z-image-turbo -p "a red cube"
+ainiux image --provider replicate -m p-image -p "a cute chubby cat sitting on a windowsill"
 ainiux image --provider replicate -m google/nano-banana-2 -p "make it night" --attach photo.png --size 1k --ar 1:1
+
+# fal
+ainiux image --provider fal -m fal-ai/flux/schnell -p "a cute cat" --ar 1:1
+ainiux image --provider fal -m fal-ai/nano-banana-2 -p "a ramen shop at night" --size 1k --ar 1:1
+
+# Gemini native image (Nano Banana)
+ainiux image --provider gemini -p "a cute chubby cat" --size 1k --ar 1:1
+ainiux image --provider gemini -m gemini-3.1-flash-lite-image -p "a ramen shop at night"
+ainiux image --provider gemini -m gemini-3-pro-image -p "edit this photo" --attach photo.png --size 2k --ar 16:9
 ```
 
-- Prompt: `-p` / `--prompt` / `--prompt-file` (required)
-- Input images: repeatable `--attach` PNG or JPEG when the matched record sets `edits = on`. OpenAI uses `/v1/images/edits`; Replicate puts data URLs in the model’s image array field (`image_input`, `input_images`, or `images`).
-Image models and size/quality/format limits come from layered `images.conf` (not `models.conf`). Unknown `-m` values fail before HTTP. Replicate matching uses the final slash component, so `-m z-image-turbo` and `-m prunaai/z-image-turbo` both work. Credentials are `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN` (not `AINIUX_API_KEY`).
+Bundled `-m` values (short names and owner/name ids both work where matching allows):
 
-- `--size`: `WIDTHxHEIGHT`, or `1k` / `2k` / `4k` / `auto`. OpenAI maps `2k`+`16:9` to `2048x1152`. Replicate enum models send the catalog token (`2K`, `1 MP`) and keep `--ar` separate.
+- **OpenAI:** `gpt-image-2`
+- **Replicate:** `prunaai/z-image-turbo`, `bytedance/seedream-5-lite`, `bytedance/seedream-5-pro`, `wan-video/wan-2.7-image`, `black-forest-labs/flux-2-flex`, `black-forest-labs/flux-2-pro`, `prunaai/p-image`, `google/nano-banana-pro`, `google/nano-banana-2`
+- **fal:** `fal-ai/flux/schnell`, `fal-ai/flux/dev`, `fal-ai/flux-2-pro`, `fal-ai/z-image/turbo`, `fal-ai/nano-banana-2`, `openai/gpt-image-2`, `bytedance/seedream/v5/pro/text-to-image`, `xai/grok-imagine-image`, `xai/grok-imagine-image/v2.0/text-to-image`, `fal-ai/ideogram/v3`, `krea/v2/large/text-to-image`, `fal-ai/recraft/v3/text-to-image`
+- **Gemini:** `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`
+
+- Prompt: `-p` / `--prompt` / `--prompt-file` (required)
+- Input images: repeatable `--attach` PNG or JPEG when the matched record sets `edits = on`. OpenAI uses `/v1/images/edits`; Replicate and fal put data URLs in the model’s image array field; Gemini sends Interactions `image` content parts.
+Image models and size/quality/format limits come from layered `images.conf` (not `models.conf`). Unknown `-m` values fail before HTTP. Replicate matching uses the final slash component, so `-m z-image-turbo` and `-m prunaai/z-image-turbo` both work. fal matching also accepts the full endpoint id (`fal-ai/flux/schnell`, `bytedance/seedream/v5/pro/text-to-image`). Credentials: Replicate `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`; fal `FAL_API_KEY` or `FAL_KEY` (not `AINIUX_API_KEY`); Gemini `GEMINI_API_KEY` (then `AINIUX_API_KEY`, same as Gemini chat). OpenAI uses `OPENAI_API_KEY`.
+
+- `--size`: `WIDTHxHEIGHT`, or `1k` / `2k` / `4k` / `auto` (`0.5k` on Gemini 3.1 Flash Image). OpenAI maps `2k`+`16:9` to `2048x1152`. Replicate and Gemini enum models send the catalog token (`2K`, `1K`) and keep `--ar` separate. Gemini requires an uppercase `K` on the wire (`1K`, not `1k`).
 - `--ar W:H` (and named values such as `match_input_image` when listed)
 - `--quality low|medium|high|auto` (default auto; OpenAI Images)
-- `--format png|jpeg|webp|auto` (codec; default from the catalog record)
+- `--format png|jpeg|webp|auto` (codec; default from the catalog record). Gemini defaults to JPEG; `gemini-3.1-flash-lite-image` accepts JPEG only.
 - `--output PATH` writes that file; `stdout` writes raw bytes. If omitted, the first unused `imageN.EXT` in the current directory is used.
 - `--force` overwrites an existing `--output` file.
 

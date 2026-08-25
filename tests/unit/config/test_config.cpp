@@ -1589,8 +1589,8 @@ void test_image_catalog_parse_and_match() {
     ainiux::cli::Options options;
     const ainiux::Error err =
         ainiux::config::apply_images_document(parsed.document, options);
-    check(err.ok() && options.image_catalog.models.size() >= 10,
-          "bundled images.conf applies gpt-image-2 and Replicate models");
+    check(err.ok() && options.image_catalog.models.size() >= 26,
+          "bundled images.conf applies gpt-image-2, Replicate, fal, and Gemini models");
     const ainiux::ImageCapability* capability = ainiux::config::resolve_image_capability(
         options.image_catalog, "openai", "gpt-image-2");
     check(capability != nullptr && capability->protocol == ainiux::ImageProtocol::OpenAiImages &&
@@ -1626,8 +1626,55 @@ void test_image_catalog_parse_and_match() {
           "openai_images is implemented");
     check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::ReplicatePredictions),
           "replicate_predictions is implemented");
-    check(!ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::FalQueue),
-          "fal_queue is reserved until the adapter exists");
+    check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::FalQueue),
+          "fal_queue is implemented");
+    check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::GeminiInteractions),
+          "gemini_interactions is implemented");
+    check(ainiux::config::default_image_model(options.image_catalog, "gemini") ==
+              "gemini-3.1-flash-image",
+          "gemini default image model is gemini-3.1-flash-image");
+    const ainiux::ImageCapability* gemini_flash = ainiux::config::resolve_image_capability(
+        options.image_catalog, "gemini", "gemini-3.1-flash-image");
+    const ainiux::ImageCapability* gemini_lite = ainiux::config::resolve_image_capability(
+        options.image_catalog, "gemini", "gemini-3.1-flash-lite-image");
+    const ainiux::ImageCapability* gemini_pro = ainiux::config::resolve_image_capability(
+        options.image_catalog, "gemini", "gemini-3-pro-image");
+    const ainiux::ImageCapability* gemini_25 = ainiux::config::resolve_image_capability(
+        options.image_catalog, "gemini", "gemini-2.5-flash-image");
+    check(gemini_flash != nullptr && gemini_lite != nullptr && gemini_pro != nullptr &&
+              gemini_25 != nullptr && gemini_flash != gemini_lite &&
+              gemini_flash->protocol == ainiux::ImageProtocol::GeminiInteractions &&
+              gemini_flash->api_model == "gemini-3.1-flash-image" && gemini_flash->edits &&
+              gemini_flash->max_input_images == 14 && gemini_25->max_input_images == 3 &&
+              gemini_25->size_field.empty() && gemini_lite->format_default == "jpeg" &&
+              gemini_lite->format.size() == 1 && gemini_lite->format.front() == "jpeg",
+          "four Gemini Nano Banana records match gemini_interactions");
+    check(ainiux::config::default_image_model(options.image_catalog, "fal") == "fal-ai/flux/schnell",
+          "fal default image model is fal-ai/flux/schnell");
+    const ainiux::ImageCapability* schnell = ainiux::config::resolve_image_capability(
+        options.image_catalog, "fal", "fal-ai/flux/schnell");
+    check(schnell != nullptr && schnell->protocol == ainiux::ImageProtocol::FalQueue,
+          "fal-ai/flux/schnell matches fal_queue");
+    check(ainiux::config::resolve_image_capability(options.image_catalog, "fal", "schnell") == schnell,
+          "schnell matches the flux/schnell record");
+    const ainiux::ImageCapability* seedream_fal = ainiux::config::resolve_image_capability(
+        options.image_catalog, "fal", "bytedance/seedream/v5/pro/text-to-image");
+    const ainiux::ImageCapability* krea = ainiux::config::resolve_image_capability(
+        options.image_catalog, "fal", "krea/v2/large/text-to-image");
+    const ainiux::ImageCapability* recraft = ainiux::config::resolve_image_capability(
+        options.image_catalog, "fal", "fal-ai/recraft/v3/text-to-image");
+    const ainiux::ImageCapability* grok2 = ainiux::config::resolve_image_capability(
+        options.image_catalog, "fal", "xai/grok-imagine-image/v2.0/text-to-image");
+    check(seedream_fal != nullptr && krea != nullptr && recraft != nullptr && grok2 != nullptr &&
+              seedream_fal != krea && krea != recraft && recraft != grok2,
+          "fal text-to-image endpoints do not steal each other");
+    check(ainiux::config::resolve_image_capability(options.image_catalog, "fal", "text-to-image") ==
+              nullptr,
+          "bare text-to-image does not match a fal record");
+    const ainiux::ImageCapability* grok1 = ainiux::config::resolve_image_capability(
+        options.image_catalog, "fal", "xai/grok-imagine-image");
+    check(grok1 != nullptr && grok1->api_model == "xai/grok-imagine-image" && grok1 != grok2,
+          "grok-imagine-image v1 stays distinct from v2.0");
 }
 
 void test_image_catalog_layering_and_validation() {
@@ -1712,6 +1759,14 @@ void test_image_catalog_layering_and_validation() {
     err = ainiux::config::apply_images_document(invalid.document, options);
     check(!err.ok() && err.message.find("api_model") != std::string::npos,
           "replicate_predictions records require api_model");
+
+    invalid = ainiux::config::parse(
+        "[image]\nid = broken-gemini\nprovider = gemini\nmodel = \"^x$\"\n"
+        "protocol = gemini_interactions\n",
+        "invalid-gemini-api-model.conf");
+    err = ainiux::config::apply_images_document(invalid.document, options);
+    check(!err.ok() && err.message.find("api_model") != std::string::npos,
+          "gemini_interactions records require api_model");
 
     invalid = ainiux::config::parse(
         "[image]\nid = broken-json\nprovider = replicate\nmodel = \"^x$\"\n"

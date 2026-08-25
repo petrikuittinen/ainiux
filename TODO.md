@@ -24,7 +24,7 @@
 ## Deferred roadmap
 
 - Local OpenAI-compatible server mode remains planned but follows v1.1.
-- Image generation v1.2 CLI (`ainiux image`) is landed (`openai_images` and `replicate_predictions`); REPL `/image`, TUI jobs, batch, streaming, multi-turn editing, and FAL remain. Further Replicate image/video models should be `images.conf` records.
+- Image generation v1.2 CLI (`ainiux image`) is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Further provider image/video models should be `images.conf` records.
 - Browser web UI remains postponed behind the local server/runtime foundation.
 
 ## Web search / fetch

@@ -107,6 +107,24 @@ ainiux http://localhost:8000/v1 -m MODEL -p "Hello"
 
 Do not put long-lived keys directly on the command line. Use provider environment variables, `--key-env`, `--key-file`, or `--key-stdin`. The complete profile and key table is in the [project README](../README.md#provider-profiles-and-credentials).
 
+## Generate an image
+
+`ainiux image` is one-shot CLI image generation. Models come from `images.conf`. OpenAI, Replicate, fal, and Gemini (native Nano Banana, not classic Imagen) are bundled. Full examples: [CLI and scripting](cli.md#image-generation).
+
+```sh
+export OPENAI_API_KEY=...
+ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
+
+export REPLICATE_API_KEY=...
+ainiux image --provider replicate -m p-image -p "a cute chubby cat"
+
+export FAL_API_KEY=...
+ainiux image --provider fal -m fal-ai/flux/schnell -p "a cute cat" --ar 1:1
+
+export GEMINI_API_KEY=...
+ainiux image --provider gemini -p "a ramen shop at night"
+```
+
 ## Try each surface
 
 ```sh
@@ -124,7 +142,7 @@ User chat threads and media are stored under `~/.ainiux/`. Interactive and one-s
 
 ## Next steps
 
-- Read [CLI and scripting](cli.md) for pipelines and output formats.
+- Read [CLI and scripting](cli.md) for pipelines, output formats, and `ainiux image`.
 - Read [Chat TUI](chat.md) or [Editor help](editor_help.md) for interactive use.
 - Read [Agent workflows](agent.md) before granting workspace permissions.
 - Use [Configuration](configuration.md) for endpoints, models, themes, and custom commands.

@@ -30,6 +30,7 @@ void test_redact_secrets_edge_cases() {
 void test_sensitive_header_names() {
     check(ainiux::is_sensitive_header_name("Authorization"), "Authorization is sensitive");
     check(ainiux::is_sensitive_header_name("x-api-key"), "x-api-key is sensitive");
+    check(ainiux::is_sensitive_header_name("x-goog-api-key"), "x-goog-api-key is sensitive");
     check(ainiux::is_sensitive_header_name("Set-Cookie"), "Set-Cookie is sensitive");
     check(!ainiux::is_sensitive_header_name("Content-Type"), "Content-Type is not sensitive");
     check(!ainiux::is_sensitive_header_name(""), "empty header name is not sensitive");

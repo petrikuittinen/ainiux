@@ -5,6 +5,7 @@
 
 #include "ainiux/image_setting.hpp"
 #include "common.hpp"
+#include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
@@ -68,7 +69,26 @@ Error parse_images_response(const std::string& body, ImageGenerateResult& result
 
 std::string image_endpoint_url(const RequestContext& context, bool edits);
 
+Error build_catalog_image_input(const ImageGenerateRequest& request, json::Value& input);
+bool extract_first_http_url(const json::Value& value, std::string& url);
+
 Error serialize_replicate_request(const ImageGenerateRequest& request, std::string& body);
+Error serialize_fal_request(const ImageGenerateRequest& request, std::string& body);
+Error serialize_gemini_request(const ImageGenerateRequest& request, std::string& body);
+Error parse_gemini_interaction(const std::string& body, ImageGenerateResult& result);
+std::string gemini_interactions_url(const RequestContext& context);
+Error parse_fal_queue_submit(const std::string& body,
+                             std::string& request_id,
+                             std::string& status_url,
+                             std::string& response_url,
+                             std::string& cancel_url);
+Error parse_fal_queue_status(const std::string& body,
+                             std::string& status,
+                             std::string& error_text);
+Error parse_fal_queue_result(const std::string& body, std::string& output_url);
+std::string fal_queue_url(const RequestContext& context, const std::string& api_model);
+bool fal_status_completed(const std::string& status);
+bool fal_status_failed(const std::string& status);
 Error parse_replicate_prediction(const std::string& body,
                                  std::string& status,
                                  std::string& output_url,

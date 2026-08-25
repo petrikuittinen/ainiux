@@ -1269,6 +1269,8 @@ Usage:
   ainiux image -p TEXT [--size 1k|2k|4k|WIDTHxHEIGHT] [--ar W:H] [--quality low|medium|high|auto]
               [--format png|jpeg|webp|auto] [--attach IMAGE]... [--output PATH]
   ainiux image --provider replicate -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
+  ainiux image --provider fal -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
+  ainiux image --provider gemini -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
 
 Examples:
   ainiux lmstudio -p "Hello"
@@ -1300,6 +1302,10 @@ Examples:
   ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
   ainiux image -p "gift basket" --attach lotion.png --attach soap.jpg --size 2k --ar 16:9
   ainiux image --provider replicate -m prunaai/z-image-turbo -p "a red cube"
+  ainiux image --provider fal -m fal-ai/flux/schnell -p "a cute cat" --ar 1:1
+  ainiux image --provider replicate -m p-image -p "a cute chubby cat"
+  ainiux image --provider gemini -p "a cute chubby cat" --size 1k --ar 1:1
+  ainiux image --provider gemini -m gemini-3.1-flash-lite-image -p "a ramen shop at night"
 
 Options:
   Mode:
@@ -1348,8 +1354,8 @@ Options:
       --plan-file PATH          One-shot Plan goal from a file; use '-' for stdin.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
-      --image                   Generate one image (OpenAI gpt-image-2 or Replicate
-                                models from images.conf; also: ainiux image ...).
+      --image                   Generate one image (OpenAI, Replicate, fal, or
+                                Gemini models from images.conf; also: ainiux image ...).
       --size 1k|2k|4k|WIDTHxHEIGHT|auto
                                 Image output size. With --ar 16:9, 2k is 2048x1152 and
                                 4k is 3840x2160. Default: provider auto.
@@ -1458,7 +1464,7 @@ Options:
 
   Provider and endpoint:
       --provider NAME           none (offline), openrouter, openai, kimi, llama.cpp,
-                                lm_studio, ollama, vllm, sglang, zai, qwen, replicate, etc.
+                                lm_studio, ollama, vllm, sglang, zai, qwen, replicate, fal, etc.
       --profile NAME            Alias for --provider.
       --api chat|responses      Use Chat Completions or Responses API. Official OpenAI
                                 defaults to Responses; openai_chat and --api chat stay

@@ -116,7 +116,18 @@ Endpoint metadata and explicit CLI values outrank catalog fallbacks. Protocol na
 
 ## Image catalog
 
-`images.conf` contains repeatable `[image]` records for `ainiux image`. Matching uses the same final-component regex as `models.conf`. `protocol` selects a compiled HTTP adapter (`openai_images` and `replicate_predictions`; `fal_queue` is reserved). Replicate records set `api_model` to `owner/name` and optional field names (`size_field`, `aspect_field`, `images_field`, `defaults_json`) so a new model is a catalog change. User `~/.config/ainiux/images.conf` overlays bundled records by `id`. `models.conf` `images = on` means vision **input** (text-image-to-text), not image generation.
+`images.conf` contains repeatable `[image]` records for `ainiux image`. Matching uses the full model id or the final slash component. `protocol` selects a compiled HTTP adapter (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`). Replicate, fal, and Gemini records set `api_model` to the provider endpoint id and optional field names (`size_field`, `aspect_field`, `images_field`, `defaults_json`) so a new model is a catalog change. User `~/.config/ainiux/images.conf` overlays bundled records by `id`. `models.conf` `images = on` means vision **input** (text-image-to-text), not image generation.
+
+Bundled provider defaults:
+
+| Provider | Protocol | Default `api_model` |
+| --- | --- | --- |
+| `openai` | `openai_images` | `gpt-image-2` |
+| `replicate` | `replicate_predictions` | `prunaai/z-image-turbo` |
+| `fal` | `fal_queue` | `fal-ai/flux/schnell` |
+| `gemini` | `gemini_interactions` | `gemini-3.1-flash-image` |
+
+The bundled file currently lists one OpenAI Images model, nine Replicate models, twelve fal models, and four Gemini Nano Banana models (`gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`). Gemini Lite output is JPEG-only. Classic Google Imagen `:predict` is not a catalog protocol. CLI examples and the full `-m` list are in [CLI and scripting](cli.md#image-generation).
 
 ## Custom editor commands
 

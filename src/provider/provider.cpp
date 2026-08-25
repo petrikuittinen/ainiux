@@ -182,6 +182,8 @@ const std::vector<Profile>& profile_registry() {
         make_profile("dashscope", {}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("replicate", {}, "https://api.replicate.com/v1", "", "", "",
                      {"REPLICATE_API_KEY", "REPLICATE_API_TOKEN"}, true, false),
+        make_profile("fal", {"fal_ai"}, "https://queue.fal.run", "", "", "",
+                     {"FAL_API_KEY", "FAL_KEY"}, true, false),
         make_profile(names::kCustomOpenAiChat,
                      {names::kCustom},
                      "",
@@ -2478,7 +2480,7 @@ ContextResult build_context(const cli::Options& input_options) {
 
     bool changed = false;
     Error err;
-    if (!base.empty()) {
+    if (!base.empty() && !profile.chat_path.empty()) {
         base = normalize_base_url(base, &changed, err);
         if (!err.ok()) {
             return {{}, err};

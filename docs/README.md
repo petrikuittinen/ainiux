@@ -15,7 +15,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Keyboard shortcuts](keyboard-shortcuts.md) | Current chat, editor, agent, and dired bindings |
 | [Agent workflows](agent.md) | Act/Plan, permissions, Guard, goals, compaction, indexing, and security review |
 | [MCP servers](mcp.md) | Install/list MCP servers; agent/run/plan tools (`mcp__server__tool`); mock and CLI |
-| [Configuration](configuration.md) | Layering, credentials, themes, models, benchmark prompts, and editor commands |
+| [Configuration](configuration.md) | Layering, credentials, themes, models, image catalog, benchmark prompts, and editor commands |
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
 | [Security](security.md) | Credential, persistence, fetch, attachment, image generation, and agent boundaries |

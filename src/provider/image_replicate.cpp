@@ -19,26 +19,6 @@ constexpr long kReplicateDownloadMaxBytes = 40L * 1024L * 1024L;
 constexpr int kReplicatePollSliceMs = 100;
 constexpr int kReplicatePollIntervalMs = 1000;
 
-json::Value json_string(const std::string& text) {
-    json::Value value;
-    value.type = json::Value::Type::String;
-    value.string = text;
-    return value;
-}
-
-json::Value json_number(double number) {
-    json::Value value;
-    value.type = json::Value::Type::Number;
-    value.number = number;
-    return value;
-}
-
-json::Value json_array() {
-    json::Value value;
-    value.type = json::Value::Type::Array;
-    return value;
-}
-
 std::string compact_detail(std::string text) {
     text = ascii_trim(std::move(text));
     for (char& ch : text) {
@@ -51,73 +31,6 @@ std::string compact_detail(std::string text) {
 std::string json_string_field(const json::Value* value) {
     if (value != nullptr && value->is_string()) return value->string;
     return {};
-}
-
-bool looks_like_url(const std::string& text) {
-    const std::string lower = ascii_lower(text);
-    return lower.rfind("https://", 0) == 0 || lower.rfind("http://", 0) == 0;
-}
-
-bool extract_first_url(const json::Value& value, std::string& url, int depth) {
-    if (depth > 6) return false;
-    if (value.is_string()) {
-        if (looks_like_url(value.string)) {
-            url = value.string;
-            return true;
-        }
-        return false;
-    }
-    if (value.is_array()) {
-        for (const json::Value& item : value.array) {
-            if (extract_first_url(item, url, depth + 1)) return true;
-        }
-        return false;
-    }
-    if (value.is_object()) {
-        if (const json::Value* direct = value.get("url")) {
-            if (extract_first_url(*direct, url, depth + 1)) return true;
-        }
-        if (const json::Value* href = value.get("href")) {
-            if (extract_first_url(*href, url, depth + 1)) return true;
-        }
-        for (const auto& item : value.object) {
-            if (extract_first_url(item.second, url, depth + 1)) return true;
-        }
-    }
-    return false;
-}
-
-bool parse_wh_size(const std::string& text, int& width, int& height) {
-    const std::string lower = ascii_lower(ascii_trim(text));
-    const size_t sep = lower.find('x');
-    if (sep == std::string::npos || sep == 0 || sep + 1 >= lower.size()) return false;
-    try {
-        const long w = std::stol(lower.substr(0, sep));
-        const long h = std::stol(lower.substr(sep + 1));
-        if (w <= 0 || h <= 0) return false;
-        width = static_cast<int>(w);
-        height = static_cast<int>(h);
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
-bool list_has_ci(const std::vector<std::string>& values, const std::string& token) {
-    const std::string lower = ascii_lower(token);
-    for (const std::string& value : values) {
-        if (ascii_lower(value) == lower) return true;
-    }
-    return false;
-}
-
-std::string api_output_format(const ImageCapability& capability, const std::string& format) {
-    if (format.empty()) return {};
-    if (format == "jpeg" && list_has_ci(capability.format, "jpg") &&
-        !list_has_ci(capability.format, "jpeg")) {
-        return "jpg";
-    }
-    return format;
 }
 
 bool valid_replicate_model(const std::string& api_model) {
@@ -302,61 +215,9 @@ bool replicate_status_terminal(const std::string& status) {
 
 Error serialize_replicate_request(const ImageGenerateRequest& request, std::string& body) {
     body.clear();
-    const ImageCapability& capability = request.capability;
     json::Value input;
-    input.type = json::Value::Type::Object;
-    if (!capability.defaults_json.empty()) {
-        const json::ParseResult parsed = json::parse(capability.defaults_json);
-        if (!parsed.error.ok() || !parsed.value.is_object()) {
-            return {ErrorCode::Config, "image model " + capability.id +
-                                           " has invalid defaults_json; expected a JSON object"};
-        }
-        input = parsed.value;
-    }
-
-    const std::string prompt_field =
-        capability.prompt_field.empty() ? std::string("prompt") : capability.prompt_field;
-    input.object[prompt_field] = json_string(request.prompt);
-
-    int width = 0;
-    int height = 0;
-    const bool pixel_size = parse_wh_size(request.size, width, height);
-    if (pixel_size && !capability.width_field.empty() && !capability.height_field.empty()) {
-        input.object[capability.width_field] = json_number(width);
-        input.object[capability.height_field] = json_number(height);
-        if (!capability.aspect_field.empty() && request.aspect.empty()) {
-            input.object[capability.aspect_field] = json_string("custom");
-        }
-    } else if (!request.size.empty() && !capability.size_field.empty() && !pixel_size) {
-        input.object[capability.size_field] = json_string(request.size);
-    }
-
-    if (!request.aspect.empty() && !capability.aspect_field.empty()) {
-        input.object[capability.aspect_field] = json_string(request.aspect);
-    }
-
-    const std::string format = api_output_format(capability, request.output_format);
-    if (!format.empty() && !capability.format_field.empty()) {
-        input.object[capability.format_field] = json_string(format);
-    }
-    if (!request.quality.empty() && !capability.quality_field.empty()) {
-        input.object[capability.quality_field] = json_string(request.quality);
-    }
-
-    if (!request.images.empty()) {
-        if (capability.images_field.empty()) {
-            return {ErrorCode::BadArgs, "image model " + capability.id +
-                                            " does not support --attach reference images"};
-        }
-        json::Value images = json_array();
-        images.array.reserve(request.images.size());
-        for (const ImageInput& image : request.images) {
-            images.array.push_back(
-                json_string("data:" + image.mime_type + ";base64," + image.base64_data));
-        }
-        input.object[capability.images_field] = std::move(images);
-    }
-
+    Error err = build_catalog_image_input(request, input);
+    if (!err.ok()) return err;
     json::Value root;
     root.type = json::Value::Type::Object;
     root.object["input"] = std::move(input);
@@ -391,7 +252,7 @@ Error parse_replicate_prediction(const std::string& body,
         if (!id.empty()) poll_url = "https://api.replicate.com/v1/predictions/" + id;
     }
     if (const json::Value* output = parsed.value.get("output")) {
-        (void)extract_first_url(*output, output_url, 0);
+        (void)extract_first_http_url(*output, output_url);
     }
     return ok_error();
 }

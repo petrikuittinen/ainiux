@@ -175,7 +175,7 @@ revived.
 
 ## Current implementation
 
-CLI-only single-turn `ainiux image` / `--image` is landed. Image **models** are `[image]` records in `images.conf`; image **protocols** are compiled adapters. `openai_images` (`/images/generations` or `/images/edits`) and `replicate_predictions` are implemented. The bundled catalog defaults `--provider openai` to `gpt-image-2` and `--provider replicate` to `prunaai/z-image-turbo`. `--size` / `--ar` / `--quality` / `--format` are mapped from the matched record (OpenAI 2k+16:9 → `2048x1152`; Replicate enum models keep class tokens such as `2K` plus `--ar`). FAL remains later work. Further Replicate image or video models should be catalog-only.
+CLI-only single-turn `ainiux image` / `--image` is landed. Image **models** are `[image]` records in `images.conf`; image **protocols** are compiled adapters. `openai_images`, `replicate_predictions`, `fal_queue`, and `gemini_interactions` are implemented. The bundled catalog defaults `--provider openai` to `gpt-image-2`, `--provider replicate` to `prunaai/z-image-turbo`, `--provider fal` to `fal-ai/flux/schnell`, and `--provider gemini` to `gemini-3.1-flash-image`. `--size` / `--ar` / `--quality` / `--format` are mapped from the matched record. Further image or video models for those protocols should be catalog-only.
 
 ## Goal
 
@@ -209,6 +209,9 @@ Example direction:
 ainiux image -p "A quiet terminal workspace at night" -m gpt-image-2
 ainiux image --prompt-file prompt.txt --size 1024x1024 --format png
 ainiux image -p "diagram of provider adapters" --output diagram.png
+ainiux image --provider replicate -m p-image -p "a cute chubby cat"
+ainiux image --provider fal -m fal-ai/flux/schnell -p "a cute cat" --ar 1:1
+ainiux image --provider gemini -p "a ramen shop at night"
 ```
 
 Keep stdout script-friendly: print intentional output such as the saved path, while

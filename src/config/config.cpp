@@ -1724,8 +1724,8 @@ Error parse_size_map_entry(const Entry& entry, std::vector<ImageSizeMapEntry>& m
             item.size_class = left.substr(0, comma);
             item.aspect = left.substr(comma + 1);
         }
-        if (item.size_class.empty() || item.output.empty()) {
-            return schema_error(entry, "size_map entries must be CLASS,AR:WIDTHxHEIGHT");
+        if (item.output.empty() || (item.size_class.empty() && item.aspect.empty())) {
+            return schema_error(entry, "size_map entries must be CLASS,AR:TOKEN or ,AR:TOKEN");
         }
         mapped.push_back(std::move(item));
     }
@@ -1896,11 +1896,14 @@ Error apply_configured_image_catalog(const Document& document, cli::Options& can
                     partial.source.path + ":" + std::to_string(partial.source.line) +
                         ": [image] " + *partial.id + " sets default = on but omits api_model"};
         }
-        if (*partial.protocol == ImageProtocol::ReplicatePredictions && partial.api_model.empty()) {
+        if ((*partial.protocol == ImageProtocol::ReplicatePredictions ||
+             *partial.protocol == ImageProtocol::FalQueue ||
+             *partial.protocol == ImageProtocol::GeminiInteractions) &&
+            partial.api_model.empty()) {
             return {ErrorCode::Config,
                     partial.source.path + ":" + std::to_string(partial.source.line) +
-                        ": [image] " + *partial.id +
-                        " uses replicate_predictions but omits api_model (owner/name)"};
+                        ": [image] " + *partial.id + " uses " +
+                        image_protocol_name(*partial.protocol) + " but omits api_model"};
         }
         try {
             (void)std::regex(*partial.regex, std::regex::ECMAScript | std::regex::icase);

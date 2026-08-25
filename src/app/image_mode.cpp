@@ -199,7 +199,9 @@ int run_image_mode(provider::RequestContext context) {
     provider::ImageGenerateRequest request;
     request.capability = *capability;
     request.protocol = capability->protocol;
-    request.model = (capability->protocol == ImageProtocol::ReplicatePredictions &&
+    request.model = ((capability->protocol == ImageProtocol::ReplicatePredictions ||
+                      capability->protocol == ImageProtocol::FalQueue ||
+                      capability->protocol == ImageProtocol::GeminiInteractions) &&
                      !capability->api_model.empty())
                         ? capability->api_model
                         : context.options.model;

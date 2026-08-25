@@ -2771,6 +2771,348 @@ void test_replicate_image_catalog_and_requests() {
           "missing output URL is reported as empty");
 }
 
+void test_fal_image_catalog_and_requests() {
+    const std::vector<ainiux::provider::Profile> profiles = ainiux::provider::built_in_profiles();
+    const ainiux::provider::Profile* fal_ptr = nullptr;
+    for (const ainiux::provider::Profile& profile : profiles) {
+        if (profile.name == "fal") {
+            fal_ptr = &profile;
+            break;
+        }
+    }
+    check(fal_ptr != nullptr, "fal profile exists");
+    if (fal_ptr == nullptr) return;
+    const ainiux::provider::Profile& fal = *fal_ptr;
+    check(fal.base_url == "https://queue.fal.run", "fal queue base URL");
+    check(!fal.aliases.empty() && fal.aliases.front() == "fal_ai", "fal_ai is an alias");
+    check(!fal.key_envs.empty() && fal.key_envs.front() == "FAL_API_KEY", "fal prefers FAL_API_KEY");
+    bool has_fal_key = false;
+    bool has_ainiux = false;
+    for (const std::string& env : fal.key_envs) {
+        if (env == "FAL_KEY") has_fal_key = true;
+        if (env == "AINIUX_API_KEY") has_ainiux = true;
+    }
+    check(has_fal_key && !has_ainiux, "fal accepts FAL_KEY and not AINIUX_API_KEY");
+    check(!ainiux::provider::is_selectable_provider(fal),
+          "fal is image-only and not a chat picker profile");
+
+    const char* argv[] = {"ainiux",
+                          "--provider",
+                          "fal",
+                          "--image",
+                          "-p",
+                          "a cube",
+                          "-m",
+                          "fal-ai/flux/schnell",
+                          "--header",
+                          "Authorization: Key test"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(10, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.image, "fal image args parse");
+    ainiux::provider::ContextResult ctx = ainiux::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "fal image context builds without a chat endpoint");
+    check(ctx.context.profile.name == "fal", "fal image context uses fal");
+
+    const ainiux::ImageCapability* schnell = load_image_model("fal", "fal-ai/flux/schnell");
+    if (schnell == nullptr) return;
+    std::string size;
+    std::string aspect;
+    check(ainiux::provider::resolve_image_size(*schnell, "", "16:9", size, aspect).ok() &&
+              size == "landscape_16_9",
+          "fal flux --ar 16:9 maps to landscape_16_9");
+    check(ainiux::provider::resolve_image_size(*schnell, "1k", "", size, aspect).ok() &&
+              size == "square_hd",
+          "fal flux --size 1k maps to square_hd");
+    check(ainiux::provider::resolve_image_size(*schnell, "1024x768", "", size, aspect).ok() &&
+              size == "1024x768",
+          "fal flux accepts WIDTHxHEIGHT for an ImageSize object");
+
+    ainiux::provider::ImageGenerateRequest request;
+    request.capability = *schnell;
+    request.protocol = ainiux::ImageProtocol::FalQueue;
+    request.model = schnell->api_model;
+    request.prompt = "a cat";
+    request.size = "landscape_16_9";
+    request.output_format = "jpeg";
+    std::string body;
+    check(ainiux::provider::serialize_fal_request(request, body).ok(), "fal schnell input serializes");
+    ainiux::json::ParseResult json_body = ainiux::json::parse(body);
+    check(json_body.error.ok() && json_body.value.get("input") == nullptr,
+          "fal body is the input object, not wrapped");
+    check(json_body.value.get("prompt") && json_body.value.get("prompt")->string == "a cat",
+          "fal prompt is sent");
+    check(json_body.value.get("image_size") &&
+              json_body.value.get("image_size")->string == "landscape_16_9",
+          "fal image_size preset is sent");
+    check(json_body.value.get("enable_safety_checker") &&
+              !json_body.value.get("enable_safety_checker")->boolean,
+          "fal enable_safety_checker is false");
+    check(json_body.value.get("num_images") && json_body.value.get("num_images")->number == 1.0,
+          "fal num_images is 1");
+
+    request.size = "1024x768";
+    check(ainiux::provider::serialize_fal_request(request, body).ok(), "fal WxH serializes");
+    json_body = ainiux::json::parse(body);
+    const ainiux::json::Value* dims = json_body.value.get("image_size");
+    check(dims && dims->is_object() && dims->get("width") && dims->get("width")->number == 1024.0 &&
+              dims->get("height") && dims->get("height")->number == 768.0,
+          "fal WIDTHxHEIGHT becomes an image_size object");
+
+    const ainiux::ImageCapability* nano = load_image_model("fal", "fal-ai/nano-banana-2");
+    if (nano == nullptr) return;
+    check(ainiux::provider::resolve_image_size(*nano, "1k", "1:1", size, aspect).ok() &&
+              size == "1K" && aspect == "1:1",
+          "fal nano-banana-2 keeps resolution and aspect separate");
+    ainiux::provider::ImageGenerateRequest nano_req;
+    nano_req.capability = *nano;
+    nano_req.prompt = "bridge";
+    nano_req.size = "1K";
+    nano_req.aspect = "1:1";
+    nano_req.output_format = "png";
+    check(ainiux::provider::serialize_fal_request(nano_req, body).ok(), "fal nano-banana serializes");
+    json_body = ainiux::json::parse(body);
+    check(json_body.value.get("resolution") && json_body.value.get("resolution")->string == "1K",
+          "fal nano-banana resolution is sent");
+    check(json_body.value.get("aspect_ratio") && json_body.value.get("aspect_ratio")->string == "1:1",
+          "fal nano-banana aspect_ratio is sent");
+    check(json_body.value.get("safety_tolerance") &&
+              json_body.value.get("safety_tolerance")->string == "6",
+          "fal nano-banana safety_tolerance is 6");
+
+    const ainiux::ImageCapability* ideogram = load_image_model("fal", "fal-ai/ideogram/v3");
+    if (ideogram == nullptr) return;
+    ainiux::provider::ImageGenerateRequest edit;
+    edit.capability = *ideogram;
+    edit.prompt = "poster";
+    ainiux::provider::ImageInput first{"image/png", "AAAA"};
+    edit.images.push_back(first);
+    check(ainiux::provider::serialize_fal_request(edit, body).ok(), "fal ideogram attach serializes");
+    json_body = ainiux::json::parse(body);
+    const ainiux::json::Value* urls = json_body.value.get("image_urls");
+    check(urls && urls->is_array() && urls->array.size() == 1 &&
+              urls->at(0)->string.find("data:image/png;base64,AAAA") == 0,
+          "fal ideogram image_urls is a data URL array");
+
+    ainiux::provider::RequestContext context;
+    context.base_url = "https://queue.fal.run";
+    check(ainiux::provider::fal_queue_url(context, "fal-ai/flux/schnell") ==
+              "https://queue.fal.run/fal-ai/flux/schnell",
+          "fal queue URL is base plus endpoint id");
+
+    std::string request_id;
+    std::string status_url;
+    std::string response_url;
+    std::string cancel_url;
+    check(ainiux::provider::parse_fal_queue_submit(
+              "{\"request_id\":\"abc\",\"status_url\":\"https://queue.fal.run/x/status\","
+              "\"response_url\":\"https://queue.fal.run/x/response\","
+              "\"cancel_url\":\"https://queue.fal.run/x/cancel\"}",
+              request_id, status_url, response_url, cancel_url)
+              .ok() &&
+              request_id == "abc" && status_url.find("/status") != std::string::npos,
+          "fal submit URLs parse");
+    std::string status;
+    std::string error_text;
+    check(ainiux::provider::parse_fal_queue_status("{\"status\":\"IN_QUEUE\",\"queue_position\":2}",
+                                                   status, error_text)
+              .ok() &&
+              status == "IN_QUEUE" && !ainiux::provider::fal_status_completed(status),
+          "fal IN_QUEUE is not complete");
+    check(ainiux::provider::parse_fal_queue_status("{\"status\":\"COMPLETED\"}", status, error_text)
+              .ok() &&
+              ainiux::provider::fal_status_completed(status),
+          "fal COMPLETED is terminal");
+    std::string output_url;
+    check(ainiux::provider::parse_fal_queue_result(
+              "{\"images\":[{\"url\":\"https://v3.fal.media/files/a.png\",\"width\":1024}]}",
+              output_url)
+              .ok() &&
+              output_url == "https://v3.fal.media/files/a.png",
+          "fal images[0].url is parsed");
+    check(ainiux::provider::parse_fal_queue_status(
+              "{\"status\":\"COMPLETED\",\"error\":\"nsfw\"}", status, error_text)
+              .ok() &&
+              error_text.find("nsfw") != std::string::npos,
+          "fal completed-with-error surfaces the message");
+}
+
+void test_gemini_image_catalog_and_requests() {
+    const std::vector<ainiux::provider::Profile> profiles = ainiux::provider::built_in_profiles();
+    const ainiux::provider::Profile* gemini_ptr = nullptr;
+    for (const ainiux::provider::Profile& profile : profiles) {
+        if (profile.name == "gemini") {
+            gemini_ptr = &profile;
+            break;
+        }
+    }
+    check(gemini_ptr != nullptr, "gemini profile exists");
+    if (gemini_ptr == nullptr) return;
+    const ainiux::provider::Profile& gemini = *gemini_ptr;
+    check(!gemini.key_envs.empty() && gemini.key_envs.front() == "GEMINI_API_KEY",
+          "gemini prefers GEMINI_API_KEY");
+    bool has_ainiux = false;
+    for (const std::string& env : gemini.key_envs) {
+        if (env == "AINIUX_API_KEY") has_ainiux = true;
+    }
+    check(has_ainiux, "gemini chat still accepts AINIUX_API_KEY");
+    check(ainiux::provider::is_selectable_provider(gemini), "gemini stays a chat picker profile");
+
+    const char* argv[] = {"ainiux",
+                          "--provider",
+                          "gemini",
+                          "--image",
+                          "-p",
+                          "a cube",
+                          "-m",
+                          "gemini-3.1-flash-image",
+                          "--header",
+                          "x-goog-api-key: test"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(10, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.image, "gemini image args parse");
+    ainiux::provider::ContextResult ctx = ainiux::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "gemini image context builds");
+    check(ctx.context.profile.name == "gemini", "gemini image context uses gemini");
+
+    const ainiux::ImageCapability* flash =
+        load_image_model("gemini", "gemini-3.1-flash-image");
+    if (flash == nullptr) return;
+    std::string size;
+    std::string aspect;
+    check(ainiux::provider::resolve_image_size(*flash, "0.5k", "1:1", size, aspect).ok() &&
+              size == "0.5K" && aspect == "1:1",
+          "gemini flash --size 0.5k maps to 0.5K");
+    check(ainiux::provider::resolve_image_size(*flash, "1k", "16:9", size, aspect).ok() &&
+              size == "1K" && aspect == "16:9",
+          "gemini flash keeps image_size and aspect_ratio separate");
+    check(ainiux::provider::resolve_image_size(*flash, "2k", "", size, aspect).ok() &&
+              size == "2K",
+          "gemini flash --size 2k maps to 2K");
+
+    const ainiux::ImageCapability* lite =
+        load_image_model("gemini", "gemini-3.1-flash-lite-image");
+    if (lite == nullptr) return;
+    check(!ainiux::provider::resolve_image_size(*lite, "2k", "", size, aspect).ok(),
+          "gemini lite rejects --size 2k");
+    check(ainiux::provider::resolve_image_size(*lite, "1k", "21:9", size, aspect).ok() &&
+              size == "1K" && aspect == "21:9",
+          "gemini lite accepts 1K and 21:9");
+    check(lite->format_default == "jpeg" && lite->format.size() == 1 &&
+              lite->format.front() == "jpeg",
+          "gemini lite output is jpeg-only");
+    std::string format_token;
+    check(ainiux::provider::normalize_image_format(*lite, "jpeg", format_token).ok() &&
+              format_token == "jpeg",
+          "gemini lite accepts jpeg");
+    check(!ainiux::provider::normalize_image_format(*lite, "png", format_token).ok(),
+          "gemini lite rejects png");
+
+    ainiux::provider::ImageGenerateRequest request;
+    request.capability = *flash;
+    request.protocol = ainiux::ImageProtocol::GeminiInteractions;
+    request.model = flash->api_model;
+    request.prompt = "a cat";
+    request.size = "1K";
+    request.aspect = "1:1";
+    request.output_format = "jpeg";
+    std::string body;
+    check(ainiux::provider::serialize_gemini_request(request, body).ok(),
+          "gemini flash request serializes");
+    ainiux::json::ParseResult json_body = ainiux::json::parse(body);
+    check(json_body.error.ok(), "gemini body is JSON");
+    check(json_body.value.get("model") &&
+              json_body.value.get("model")->string == "gemini-3.1-flash-image",
+          "gemini model is sent");
+    check(json_body.value.get("store") && json_body.value.get("store")->type ==
+                                             ainiux::json::Value::Type::Bool &&
+              !json_body.value.get("store")->boolean,
+          "gemini store is false");
+    const ainiux::json::Value* input = json_body.value.get("input");
+    check(input && input->is_array() && input->array.size() == 1 &&
+              input->at(0)->get("type") && input->at(0)->get("type")->string == "text" &&
+              input->at(0)->get("text") && input->at(0)->get("text")->string == "a cat",
+          "gemini input is a text part");
+    const ainiux::json::Value* format = json_body.value.get("response_format");
+    check(format && format->get("type") && format->get("type")->string == "image" &&
+              format->get("image_size") && format->get("image_size")->string == "1K" &&
+              format->get("aspect_ratio") && format->get("aspect_ratio")->string == "1:1" &&
+              format->get("mime_type") && format->get("mime_type")->string == "image/jpeg",
+          "gemini response_format uses uppercase K and image/jpeg");
+    check(json_body.value.get("safety_settings") == nullptr,
+          "gemini omits safety_settings (consumer Gemini API rejects it)");
+
+    ainiux::provider::ImageInput first{"image/png", "AAAA"};
+    request.images.push_back(first);
+    check(ainiux::provider::serialize_gemini_request(request, body).ok(),
+          "gemini attach serializes");
+    json_body = ainiux::json::parse(body);
+    input = json_body.value.get("input");
+    check(input && input->is_array() && input->array.size() == 2 &&
+              input->at(1)->get("type") && input->at(1)->get("type")->string == "image" &&
+              input->at(1)->get("data") && input->at(1)->get("data")->string == "AAAA" &&
+              input->at(1)->get("mime_type") &&
+              input->at(1)->get("mime_type")->string == "image/png",
+          "gemini --attach is an image content part, not a data URL");
+
+    const ainiux::ImageCapability* legacy =
+        load_image_model("gemini", "gemini-2.5-flash-image");
+    if (legacy == nullptr) return;
+    ainiux::provider::ImageGenerateRequest legacy_req;
+    legacy_req.capability = *legacy;
+    legacy_req.prompt = "bridge";
+    legacy_req.size = "1K";
+    legacy_req.aspect = "16:9";
+    legacy_req.output_format = "jpeg";
+    check(ainiux::provider::serialize_gemini_request(legacy_req, body).ok(),
+          "gemini 2.5 request serializes");
+    json_body = ainiux::json::parse(body);
+    format = json_body.value.get("response_format");
+    check(format && format->get("image_size") == nullptr && format->get("aspect_ratio") &&
+              format->get("aspect_ratio")->string == "16:9" && format->get("mime_type") &&
+              format->get("mime_type")->string == "image/jpeg",
+          "gemini 2.5 omits image_size and defaults mime_type to image/jpeg");
+
+    ainiux::provider::RequestContext context;
+    context.base_url = "https://generativelanguage.googleapis.com/v1beta/openai";
+    check(ainiux::provider::gemini_interactions_url(context) ==
+              "https://generativelanguage.googleapis.com/v1beta/interactions",
+          "gemini interactions URL strips /openai");
+    context.base_url = "https://generativelanguage.googleapis.com/v1beta/openai/";
+    check(ainiux::provider::gemini_interactions_url(context) ==
+              "https://generativelanguage.googleapis.com/v1beta/interactions",
+          "gemini interactions URL strips trailing slash and /openai");
+    context.base_url = "https://proxy.example/v1beta";
+    check(ainiux::provider::gemini_interactions_url(context) ==
+              "https://proxy.example/v1beta/interactions",
+          "gemini interactions URL joins /interactions on a native base");
+
+    ainiux::provider::ImageGenerateResult generated;
+    check(ainiux::provider::parse_gemini_interaction(
+              "{\"status\":\"completed\",\"steps\":["
+              "{\"type\":\"thought\",\"content\":[{\"type\":\"image\",\"data\":\"dGhvdWdodA==\"}]},"
+              "{\"type\":\"model_output\",\"content\":["
+              "{\"type\":\"text\",\"text\":\"ok\"},"
+              "{\"type\":\"image\",\"mime_type\":\"image/png\",\"data\":\" aGk= \"}]}]}",
+              generated)
+              .ok() &&
+              generated.bytes == "hi" && generated.output_format == "png",
+          "gemini parser takes the last model_output image and ignores thought images");
+    check(ainiux::provider::parse_gemini_interaction(
+              "{\"output_image\":{\"type\":\"image\",\"data\":\"aGk=\",\"mime_type\":\"image/jpeg\"}}",
+              generated)
+              .ok() &&
+              generated.bytes == "hi" && generated.output_format == "jpeg",
+          "gemini parser falls back to output_image.data");
+    check(!ainiux::provider::parse_gemini_interaction(
+               "{\"status\":\"failed\",\"errors\":[{\"message\":\"blocked\"}]}", generated)
+               .ok(),
+          "gemini failed status is an error");
+    check(!ainiux::provider::parse_gemini_interaction("{\"status\":\"completed\",\"steps\":[]}",
+                                                      generated)
+               .ok(),
+          "gemini completed without an image is an error");
+}
+
 void test_image_output_path_allocation() {
     namespace fs = std::filesystem;
     const fs::path dir = fs::temp_directory_path() / "ainiux-image-alloc-test";
@@ -2796,6 +3138,8 @@ void run_all() {
     test_image_size_resolver();
     test_image_request_and_response();
     test_replicate_image_catalog_and_requests();
+    test_fal_image_catalog_and_requests();
+    test_gemini_image_catalog_and_requests();
     test_image_output_path_allocation();
     test_http_status_errors_are_friendly();
     test_openrouter_nested_provider_errors_are_unwrapped();

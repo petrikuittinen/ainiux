@@ -2,7 +2,7 @@
 
 ![Ainiux logo](docs/ainiux_logo.png)
 
-Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compatible APIs. It combines a script-friendly chat CLI, a full-screen chat client, a standalone editor with optional AI assistance, local agent workflows, document conversion, benchmarks, and judge grading in one binary. You can freely cycle between the modes from chat/agent to editor by pressing ctrl+g. One binary to rule them all.
+Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compatible APIs. It combines a script-friendly chat CLI, a full-screen chat client, a standalone editor with optional AI assistance, local agent workflows, document conversion, CLI image generation, benchmarks, and judge grading in one binary. You can freely cycle between the modes from chat/agent to editor by pressing ctrl+g. One binary to rule them all.
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
@@ -120,6 +120,10 @@ printf 'piped text' | ainiux --input stdin --output stdout
 ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
 ainiux image -p "gift basket from these items" --attach lotion.png --attach soap.jpg --size 2k --ar 16:9
 ainiux image --provider replicate -m prunaai/z-image-turbo -p "a red cube on white"
+ainiux image --provider fal -m fal-ai/flux/schnell -p "a cute cat" --ar 1:1
+ainiux image --provider gemini -p "a cute chubby cat" --size 1k --ar 1:1
+ainiux image --provider replicate -m p-image -p "a cute chubby cat sitting on a windowsill"
+ainiux image --provider gemini -m gemini-3.1-flash-lite-image -p "a ramen shop at night"
 ```
 
 Text, Markdown, and HTML can be attached with `--attach`. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. PDF and DOCX conversion are not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
@@ -224,7 +228,7 @@ Datasets and results are line-oriented so failed cases do not make all preceding
 
 ## Provider profiles and credentials
 
-Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw base URL is also accepted. Local profiles normally require no key, although LM Studio and custom servers can be configured to require one. Cloud profiles use the first available variable shown below. `AINIUX_API_KEY` is the shared fallback for every keyed built-in chat profile. Replicate image generation uses only `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`.
+Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw base URL is also accepted. Local profiles normally require no key, although LM Studio and custom servers can be configured to require one. Cloud profiles use the first available variable shown below. `AINIUX_API_KEY` is the shared fallback for every keyed built-in chat profile. Replicate image generation uses `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`. fal image generation uses `FAL_API_KEY` or `FAL_KEY`. Gemini native image generation uses `GEMINI_API_KEY` (same as Gemini chat). See [CLI image generation](docs/cli.md#image-generation) for bundled models and examples.
 
 | Profile | Aliases | Provider-specific key variables |
 | --- | --- | --- |
@@ -253,6 +257,7 @@ Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw ba
 | `qwen` | `dashscope_intl` | `DASHSCOPE_API_KEY`, `QWEN_API_KEY` |
 | `dashscope` | — | `DASHSCOPE_API_KEY` |
 | `replicate` | — | `REPLICATE_API_KEY`, `REPLICATE_API_TOKEN` (image generation; not a chat profile) |
+| `fal` | `fal_ai` | `FAL_API_KEY`, `FAL_KEY` (image generation; not a chat profile) |
 | `custom_openai_chat` | `custom` | `AINIUX_API_KEY` |
 
 The Anthropic profile uses its OpenAI compatibility layer; a native Anthropic Messages adapter is not implemented. OpenAI Responses support is text-only for ordinary chat. Capability metadata is a starting point, not live proof that a particular model supports every feature.
@@ -316,7 +321,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not currently implement a local OpenAI-compatible server, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot CLI image generation (`ainiux image`) uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate models; key `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not currently implement a local OpenAI-compatible server, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot CLI image generation (`ainiux image`) uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

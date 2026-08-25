@@ -43,7 +43,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 | One-shot plan | `plan` / `--plan` / `--plan-file` | headless Plan mode; read/research tools plus planning-document-only writes |
 | Security review | `--security-review` | headless read-only whole-project review |
 | Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux-pr/index.sqlite` |
-| One-shot image generation | `image` / `--image` | CLI-only; `images.conf` selects protocol/model (`openai_images` / `gpt-image-2`, `replicate_predictions` / Replicate `owner/name`); `--attach` PNG/JPEG references; one output image |
+| One-shot image generation | `image` / `--image` | CLI-only; `images.conf` selects protocol/model (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); `--attach` PNG/JPEG references; one output image |
 
 ### Implemented capabilities agents must respect
 
@@ -55,7 +55,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 - Cancellable runtime jobs; libcurl HTTP + incremental SSE streaming
 - Request-only context policies; full transcript preserved on disk
 - Bounded text/HTML/Markdown attachments; JPEG/PNG/GIF image input (Chat Completions)
-- CLI `ainiux image` / `--image` for one-shot generation (`gpt-image-2` or Replicate models from `images.conf`) and PNG/JPEG reference edits
+- CLI `ainiux image` / `--image` for one-shot generation (`gpt-image-2`, Replicate, fal, or Gemini Nano Banana models from `images.conf`) and PNG/JPEG reference edits
 - Safe URL fetching; web search (`--search`, `/search`) with API providers and keyless fallbacks
 - Automatic system/user TOML-alike configuration (`config.conf`), plus `themes.conf`, `editor-commands.conf`, `benchmarks.conf`, `models.conf`, and `images.conf`
 - Shared syntax highlighting for editor and chat; grapheme-aware editor navigation
@@ -68,7 +68,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is a postponed-design snapshot)
 - Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
 - `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)
-- REPL `/image`, TUI image-generation jobs, batch `n>1`, streaming partials, and multi-turn image editing (CLI `ainiux image` / `--image` for `gpt-image-2` and Replicate catalog models is landed)
+- REPL `/image`, TUI image-generation jobs, batch `n>1`, streaming partials, and multi-turn image editing (CLI `ainiux image` / `--image` for OpenAI, Replicate, fal, and Gemini catalog models is landed)
 - Agent session resume/list UI and richer tool-call transcript chrome; Guard Ask y/n in interactive agent is landed (headless Ask still denies); one-shot `ainiux run` / `--run` and interactive `ainiux agent` / `--agent` with multi-turn tools + mode cycling are landed
 - PDF / DOCX conversion modules
 - Native Anthropic Messages adapter; full live capability probing for all models
@@ -228,7 +228,7 @@ openrouter
 deepseek, gemini, anthropic, xai (grok), moonshot (kimi)
 llamacpp, lm_studio (lmstudio), ollama, vllm, sglang
 groq, mistral, together, perplexity, cerebras, fireworks,
-deepinfra, nvidia_nim, zai, qwen, dashscope, replicate
+deepinfra, nvidia_nim, zai, qwen, dashscope, replicate, fal
 custom_openai_chat (custom)
 ```
 
@@ -317,7 +317,7 @@ Layering: installed defaults, then user file, then CLI (authoritative). There is
 - `editor-commands.conf` — editor AI slash commands
 - `benchmarks.conf` — judge grading prompts (no compiled fallback grading prose)
 - `models.conf` — model capabilities, reasoning selector options, and optional purpose presets
-- `images.conf` — image-generation models and protocol (`openai_images`, `replicate_predictions`)
+- `images.conf` — image-generation models and protocol (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`)
 
 Bundled templates live in `config/` and install via `make install`. See `docs/decisions.md`.
 
@@ -358,7 +358,7 @@ If `-k` / `--key` is used, warn that argv may be visible to other local users un
 Always redact from logs, errors, traces, saved chats, and debug output:
 
 ```text
-Authorization, api-key, x-api-key, cookie, set-cookie
+Authorization, api-key, x-api-key, x-goog-api-key, cookie, set-cookie
 ```
 
 ### URL / base URL handling

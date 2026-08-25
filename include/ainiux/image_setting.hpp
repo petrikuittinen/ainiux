@@ -11,6 +11,7 @@ enum class ImageProtocol {
     OpenAiImages,
     ReplicatePredictions,
     FalQueue,
+    GeminiInteractions,
 };
 
 enum class ImageSizeMode {

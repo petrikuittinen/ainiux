@@ -12,6 +12,8 @@
 #include "config/image_catalog.hpp"
 #include "input/input.hpp"
 #include "json/json.hpp"
+#include "provider/image_fal.hpp"
+#include "provider/image_gemini.hpp"
 #include "provider/image_replicate.hpp"
 
 namespace ainiux::provider {
@@ -409,7 +411,153 @@ std::string json_string(const json::Value* value) {
     return {};
 }
 
+json::Value json_string_value(const std::string& text) {
+    json::Value value;
+    value.type = json::Value::Type::String;
+    value.string = text;
+    return value;
+}
+
+json::Value json_number_value(double number) {
+    json::Value value;
+    value.type = json::Value::Type::Number;
+    value.number = number;
+    return value;
+}
+
+json::Value json_object_value() {
+    json::Value value;
+    value.type = json::Value::Type::Object;
+    return value;
+}
+
+json::Value json_array_value() {
+    json::Value value;
+    value.type = json::Value::Type::Array;
+    return value;
+}
+
+bool looks_like_http_url(const std::string& text) {
+    const std::string lower = ascii_lower(text);
+    return lower.rfind("https://", 0) == 0 || lower.rfind("http://", 0) == 0;
+}
+
+bool extract_first_http_url_depth(const json::Value& value, std::string& url, int depth) {
+    if (depth > 6) return false;
+    if (value.is_string()) {
+        if (looks_like_http_url(value.string)) {
+            url = value.string;
+            return true;
+        }
+        return false;
+    }
+    if (value.is_array()) {
+        for (const json::Value& item : value.array) {
+            if (extract_first_http_url_depth(item, url, depth + 1)) return true;
+        }
+        return false;
+    }
+    if (value.is_object()) {
+        if (const json::Value* direct = value.get("url")) {
+            if (extract_first_http_url_depth(*direct, url, depth + 1)) return true;
+        }
+        if (const json::Value* href = value.get("href")) {
+            if (extract_first_http_url_depth(*href, url, depth + 1)) return true;
+        }
+        if (const json::Value* images = value.get("images")) {
+            if (extract_first_http_url_depth(*images, url, depth + 1)) return true;
+        }
+        for (const auto& item : value.object) {
+            if (extract_first_http_url_depth(item.second, url, depth + 1)) return true;
+        }
+    }
+    return false;
+}
+
+bool catalog_format_listed(const ImageCapability& capability, const std::string& token) {
+    if (list_allows(capability.format, token)) return true;
+    if (token == "jpeg") return list_allows(capability.format, "jpg");
+    if (token == "jpg") return list_allows(capability.format, "jpeg");
+    return false;
+}
+
+std::string catalog_api_format(const ImageCapability& capability, const std::string& format) {
+    if (format.empty()) return {};
+    if (format == "jpeg" && catalog_format_listed(capability, "jpg") &&
+        !list_allows(capability.format, "jpeg")) {
+        return "jpg";
+    }
+    return format;
+}
+
 }  // namespace
+
+bool extract_first_http_url(const json::Value& value, std::string& url) {
+    url.clear();
+    return extract_first_http_url_depth(value, url, 0);
+}
+
+Error build_catalog_image_input(const ImageGenerateRequest& request, json::Value& input) {
+    const ImageCapability& capability = request.capability;
+    input = json_object_value();
+    if (!capability.defaults_json.empty()) {
+        const json::ParseResult parsed = json::parse(capability.defaults_json);
+        if (!parsed.error.ok() || !parsed.value.is_object()) {
+            return {ErrorCode::Config, "image model " + capability.id +
+                                           " has invalid defaults_json; expected a JSON object"};
+        }
+        input = parsed.value;
+    }
+
+    const std::string prompt_field =
+        capability.prompt_field.empty() ? std::string("prompt") : capability.prompt_field;
+    input.object[prompt_field] = json_string_value(request.prompt);
+
+    int width = 0;
+    int height = 0;
+    const bool pixel_size = parse_wh(request.size, width, height).ok();
+    if (pixel_size && !capability.width_field.empty() && !capability.height_field.empty()) {
+        input.object[capability.width_field] = json_number_value(width);
+        input.object[capability.height_field] = json_number_value(height);
+        if (!capability.aspect_field.empty() && request.aspect.empty()) {
+            input.object[capability.aspect_field] = json_string_value("custom");
+        }
+    } else if (pixel_size && !capability.size_field.empty()) {
+        json::Value dims = json_object_value();
+        dims.object["width"] = json_number_value(width);
+        dims.object["height"] = json_number_value(height);
+        input.object[capability.size_field] = std::move(dims);
+    } else if (!request.size.empty() && !capability.size_field.empty()) {
+        input.object[capability.size_field] = json_string_value(request.size);
+    }
+
+    if (!request.aspect.empty() && !capability.aspect_field.empty()) {
+        input.object[capability.aspect_field] = json_string_value(request.aspect);
+    }
+
+    const std::string format = catalog_api_format(capability, request.output_format);
+    if (!format.empty() && !capability.format_field.empty()) {
+        input.object[capability.format_field] = json_string_value(format);
+    }
+    if (!request.quality.empty() && !capability.quality_field.empty()) {
+        input.object[capability.quality_field] = json_string_value(request.quality);
+    }
+
+    if (!request.images.empty()) {
+        if (capability.images_field.empty()) {
+            return {ErrorCode::BadArgs, "image model " + capability.id +
+                                            " does not support --attach reference images"};
+        }
+        json::Value images = json_array_value();
+        images.array.reserve(request.images.size());
+        for (const ImageInput& image : request.images) {
+            images.array.push_back(
+                json_string_value("data:" + image.mime_type + ";base64," + image.base64_data));
+        }
+        input.object[capability.images_field] = std::move(images);
+    }
+    return ok_error();
+}
 
 Error finish_resolved_size(const ImageCapability& capability, std::string& out_wh) {
     if (capability.size_mode == ImageSizeMode::EnumMode && !out_wh.empty()) {
@@ -434,10 +582,7 @@ Error resolve_aspect_token(const ImageCapability& capability,
     if (trimmed.empty()) return ok_error();
 
     std::string canonical;
-    const bool named = list_canonical(capability.aspect_ratios, trimmed, canonical);
-    const bool looks_ratio = trimmed.find(':') != std::string::npos &&
-                             trimmed.find_first_of("0123456789") != std::string::npos;
-    if (named && !looks_ratio) {
+    if (list_canonical(capability.aspect_ratios, trimmed, canonical)) {
         out_ar = canonical;
         return ok_error();
     }
@@ -446,10 +591,6 @@ Error resolve_aspect_token(const ImageCapability& capability,
     int ar_h = 0;
     Error ar_error = parse_ar(trimmed, capability, ar_w, ar_h);
     if (!ar_error.ok()) {
-        if (named) {
-            out_ar = canonical;
-            return ok_error();
-        }
         return ar_error;
     }
     const std::string reduced = reduced_ar_text(ar_w, ar_h);
@@ -537,13 +678,18 @@ Error resolve_enum_size(const ImageCapability& capability,
         out_size = canonical;
         return ok_error();
     }
-    if (has_width_height_fields(capability) && size_text.find('x') != std::string::npos) {
+    if (size_text.find('x') != std::string::npos &&
+        (has_width_height_fields(capability) || !capability.size_field.empty())) {
         int width = 0;
         int height = 0;
         Error err = parse_wh(size_text, width, height);
         if (!err.ok()) return err;
         out_size = format_wh(width, height);
-        return validate_wh(capability, width, height, out_size);
+        if (capability.multiple > 1 || capability.max_edge > 0 || capability.min_pixels > 0 ||
+            capability.max_pixels > 0 || capability.max_ratio > 0) {
+            return validate_wh(capability, width, height, out_size);
+        }
+        return ok_error();
     }
     out_size = size_text;
     return require_enum_size(capability, out_size);
@@ -573,11 +719,20 @@ Error resolve_image_size(const ImageCapability& capability,
 
     if (capability.size_mode == ImageSizeMode::EnumMode) {
         if (!ar_text.empty()) {
-            if (capability.aspect_ratios.empty() && capability.aspect_field.empty()) {
+            if (capability.aspect_ratios.empty() && capability.aspect_field.empty() &&
+                capability.size_map.empty()) {
                 return {ErrorCode::BadArgs, "this image model does not use --ar"};
             }
             Error ar_error = resolve_aspect_token(capability, ar_text, out_ar);
             if (!ar_error.ok()) return ar_error;
+        }
+        std::string mapped;
+        const std::string class_key = size_text.empty() ? std::string("1k") : size_text;
+        if (!out_ar.empty() && capability.aspect_field.empty() &&
+            (lookup_size_map(capability, class_key, out_ar, mapped) ||
+             lookup_size_map(capability, "", out_ar, mapped))) {
+            out_size = mapped;
+            return ok_error();
         }
         if (size_text.empty()) return ok_error();
         return resolve_enum_size(capability, size_text, out_size);
@@ -809,6 +964,12 @@ Error generate_or_edit_image(const RequestContext& context,
     }
     if (request.protocol == ImageProtocol::ReplicatePredictions) {
         return generate_replicate_image(context, request, result, cancellation);
+    }
+    if (request.protocol == ImageProtocol::FalQueue) {
+        return generate_fal_image(context, request, result, cancellation);
+    }
+    if (request.protocol == ImageProtocol::GeminiInteractions) {
+        return generate_gemini_image(context, request, result, cancellation);
     }
 
     const bool edits = !request.images.empty();

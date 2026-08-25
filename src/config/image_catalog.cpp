@@ -3,6 +3,7 @@
 #include "config/model_catalog.hpp"
 
 #include <algorithm>
+#include <regex>
 #include <sstream>
 
 namespace ainiux::config {
@@ -41,6 +42,10 @@ bool parse_image_protocol(const std::string& text, ImageProtocol& protocol) {
         protocol = ImageProtocol::FalQueue;
         return true;
     }
+    if (lower == "gemini_interactions") {
+        protocol = ImageProtocol::GeminiInteractions;
+        return true;
+    }
     return false;
 }
 
@@ -52,17 +57,31 @@ const char* image_protocol_name(ImageProtocol protocol) {
             return "replicate_predictions";
         case ImageProtocol::FalQueue:
             return "fal_queue";
+        case ImageProtocol::GeminiInteractions:
+            return "gemini_interactions";
     }
     return "openai_images";
 }
 
 std::string image_protocol_names() {
-    return "openai_images, replicate_predictions, or fal_queue";
+    return "openai_images, replicate_predictions, fal_queue, or gemini_interactions";
 }
 
 bool image_protocol_implemented(ImageProtocol protocol) {
     return protocol == ImageProtocol::OpenAiImages ||
-           protocol == ImageProtocol::ReplicatePredictions;
+           protocol == ImageProtocol::ReplicatePredictions ||
+           protocol == ImageProtocol::FalQueue ||
+           protocol == ImageProtocol::GeminiInteractions;
+}
+
+bool image_model_regex_matches(const std::string& expression, const std::string& model) {
+    if (model_regex_matches(expression, model)) return true;
+    try {
+        const std::regex pattern(expression, std::regex::ECMAScript | std::regex::icase);
+        return std::regex_search(model, pattern);
+    } catch (const std::regex_error&) {
+        return false;
+    }
 }
 
 bool parse_image_size_mode(const std::string& text, ImageSizeMode& mode) {
@@ -106,7 +125,7 @@ const ImageCapability* resolve_image_capability(const ImageCatalog& catalog,
     const ImageCapability* best = nullptr;
     for (const ImageCapability& candidate : catalog.models) {
         if (!candidate.enabled || !scope_matches(candidate.provider, provider) ||
-            !model_regex_matches(candidate.model_regex, model)) {
+            !image_model_regex_matches(candidate.model_regex, model)) {
             continue;
         }
         if (best == nullptr || candidate.priority > best->priority ||
