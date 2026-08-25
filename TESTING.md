@@ -78,6 +78,7 @@ transport, filesystem, or PTY boundary is involved.
 - Full editor-language code-index definition parity: Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript and React/module endings, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI; plus embedded HTML scanning, qualification, ranges, documentation, false-positive masking, static importance, deterministic lexical ranking, incremental refresh, line totals, stale detection, schema migration, graph-storage removal, clearing, and Markdown reports.
 - Provider registry, every registered reasoning request protocol, ordinary response parsing, and native-tool readable-reasoning extraction for Chat/Responses streams, summaries, details, think tags, and encrypted-state omission
 - Main configuration plus `models.conf` parsing, embedded fallback availability outside the source directory, layering, disabling, regex validation, context-window fallback precedence, and final-component/case-insensitive family matching
+- `images.conf` parsing, id overlay, default image model, `openai_images` / `replicate_predictions` mapping, and catalog-driven size/quality/format mapping for `ainiux image`
 - HTML/Markdown/input/output conversion, including punctuation-adjacent emphasis,
   literal intraword underscores, exact inline-code delimiter runs, blockquote
   text preservation across editor and TUI styling, and pretty table layout

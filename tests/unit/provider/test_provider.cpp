@@ -6,6 +6,9 @@
 #include "provider/names.hpp"
 #include "provider/model_selection.hpp"
 #include "provider/provider.hpp"
+#include "provider/image.hpp"
+#include "config/image_catalog.hpp"
+#include "input/input.hpp"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -23,6 +26,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <thread>
@@ -2402,9 +2407,396 @@ void test_credit_balance_parsing_and_formatting() {
           "normalized official DeepSeek base URL enables credit lookup");
 }
 
+const ainiux::ImageCapability* load_gpt_image_2() {
+    static ainiux::cli::Options options;
+    static bool loaded = false;
+    if (!loaded) {
+        const ainiux::config::ParseResult parsed =
+            ainiux::config::read_file("config/images.conf");
+        check(parsed.error.ok(), "bundled images.conf parses for size tests");
+        check(ainiux::config::apply_images_document(parsed.document, options).ok(),
+              "bundled images.conf applies for size tests");
+        loaded = true;
+    }
+    const ainiux::ImageCapability* capability =
+        ainiux::config::resolve_image_capability(options.image_catalog, "openai", "gpt-image-2");
+    check(capability != nullptr, "gpt-image-2 is in images.conf");
+    return capability;
+}
+
+void test_image_size_resolver() {
+    const ainiux::ImageCapability* capability = load_gpt_image_2();
+    if (capability == nullptr) return;
+    std::string size;
+    check(ainiux::provider::resolve_image_size(*capability, "", "", size).ok() && size.empty(),
+          "empty size and ar resolve to auto");
+    check(ainiux::provider::resolve_image_size(*capability, "auto", "", size).ok() && size.empty(),
+          "--size auto omits WIDTHxHEIGHT");
+    check(ainiux::provider::resolve_image_size(*capability, "1536x1024", "", size).ok() &&
+              size == "1536x1024",
+          "explicit 1536x1024 is accepted");
+    check(ainiux::provider::resolve_image_size(*capability, "1k", "", size).ok() &&
+              size == "1024x1024",
+          "1k without --ar is 1024x1024");
+    check(ainiux::provider::resolve_image_size(*capability, "2k", "", size).ok() &&
+              size == "2048x2048",
+          "2k without --ar is 2048x2048");
+    check(ainiux::provider::resolve_image_size(*capability, "4k", "", size).ok() &&
+              size == "2880x2880",
+          "4k without --ar is the max valid square");
+    check(ainiux::provider::resolve_image_size(*capability, "2k", "16:9", size).ok() &&
+              size == "2048x1152",
+          "2k 16:9 is 2048x1152");
+    check(ainiux::provider::resolve_image_size(*capability, "4k", "16:9", size).ok() &&
+              size == "3840x2160",
+          "4k 16:9 is 3840x2160");
+    check(ainiux::provider::resolve_image_size(*capability, "2k", "9:16", size).ok() &&
+              size == "1152x2048",
+          "2k 9:16 is 1152x2048");
+    check(ainiux::provider::resolve_image_size(*capability, "4k", "9:16", size).ok() &&
+              size == "2160x3840",
+          "4k 9:16 is 2160x3840");
+    check(ainiux::provider::resolve_image_size(*capability, "1k", "16:9", size).ok() &&
+              size == "1280x720",
+          "1k 16:9 scales up to 1280x720");
+    check(ainiux::provider::resolve_image_size(*capability, "1k", "3:2", size).ok() &&
+              size == "1008x672",
+          "1k 3:2 snaps to the 16-pixel 3:2 grid");
+    check(ainiux::provider::resolve_image_size(*capability, "2K", "16:9", size).ok() &&
+              size == "2048x1152",
+          "size class is case-insensitive");
+
+    check(!ainiux::provider::resolve_image_size(*capability, "1023x1024", "", size).ok(),
+          "non-multiple-of-16 is rejected");
+    check(!ainiux::provider::resolve_image_size(*capability, "64x64", "", size).ok(),
+          "below pixel floor is rejected");
+    check(!ainiux::provider::resolve_image_size(*capability, "3840x3840", "", size).ok(),
+          "over pixel ceiling is rejected");
+    check(!ainiux::provider::resolve_image_size(*capability, "4000x16", "", size).ok(),
+          "edge over 3840 is rejected");
+    check(ainiux::provider::resolve_image_size(*capability, "3072x1024", "", size).ok() &&
+              size == "3072x1024",
+          "exact 3:1 is accepted");
+    check(!ainiux::provider::resolve_image_size(*capability, "3200x1024", "", size).ok(),
+          "ratio over 3:1 is rejected");
+    check(!ainiux::provider::resolve_image_size(*capability, "1536x1024", "16:9", size).ok(),
+          "explicit WIDTHxHEIGHT cannot take --ar");
+    check(!ainiux::provider::resolve_image_size(*capability, "", "16:9", size).ok(),
+          "--ar without size class is rejected");
+    check(!ainiux::provider::resolve_image_size(*capability, "2k", "5:1", size).ok(),
+          "aspect over 3:1 is rejected");
+    check(ainiux::provider::image_size_is_experimental("3840x2160"),
+          "4k landscape is experimental");
+    check(!ainiux::provider::image_size_is_experimental("1024x1024"),
+          "1k square is not experimental");
+
+    std::string quality;
+    check(ainiux::provider::normalize_image_quality(*capability, "HIGH", quality).ok() &&
+              quality == "high",
+          "quality is case-insensitive");
+    check(ainiux::provider::normalize_image_quality(*capability, "auto", quality).ok() &&
+              quality.empty(),
+          "quality auto is omitted");
+    check(!ainiux::provider::normalize_image_quality(*capability, "hd", quality).ok(),
+          "dall-e hd quality is rejected");
+    std::string format;
+    check(ainiux::provider::normalize_image_format(*capability, "JPG", format).ok() &&
+              format == "jpeg",
+          "jpg becomes jpeg");
+    check(ainiux::provider::normalize_image_format(*capability, "auto", format).ok() &&
+              format.empty(),
+          "format auto is omitted");
+    check(ainiux::provider::image_extension_for_format("jpeg") == "jpg",
+          "jpeg files use .jpg");
+    check(ainiux::provider::image_extension_for_format("png") == "png",
+          "png files use .png");
+}
+
+void test_image_request_and_response() {
+    ainiux::provider::ImageGenerateRequest request;
+    request.model = "gpt-image-2";
+    request.prompt = "a cat";
+    request.output_format = "png";
+    std::string body = ainiux::provider::serialize_image_request(request);
+    ainiux::json::ParseResult parsed = ainiux::json::parse(body);
+    check(parsed.error.ok(), "generations body is JSON");
+    check(parsed.value.get("model") && parsed.value.get("model")->string == "gpt-image-2",
+          "generations body includes model");
+    check(parsed.value.get("prompt") && parsed.value.get("prompt")->string == "a cat",
+          "generations body includes prompt");
+    check(parsed.value.get("n") && parsed.value.get("n")->number == 1.0, "n is 1");
+    check(parsed.value.get("output_format") && parsed.value.get("output_format")->string == "png",
+          "default png is sent");
+    check(parsed.value.get("images") == nullptr, "generations body has no images array");
+    check(parsed.value.get("size") == nullptr, "unset size is omitted");
+
+    request.size = "2048x1152";
+    request.quality = "high";
+    ainiux::provider::ImageInput first{"image/png", "AAAA"};
+    ainiux::provider::ImageInput second{"image/jpeg", "BBBB"};
+    request.images.push_back(first);
+    request.images.push_back(second);
+    body = ainiux::provider::serialize_image_request(request);
+    parsed = ainiux::json::parse(body);
+    check(parsed.error.ok(), "edits body is JSON");
+    check(parsed.value.get("size") && parsed.value.get("size")->string == "2048x1152",
+          "edits body includes size");
+    check(parsed.value.get("quality") && parsed.value.get("quality")->string == "high",
+          "edits body includes quality");
+    const ainiux::json::Value* images = parsed.value.get("images");
+    check(images && images->is_array() && images->array.size() == 2, "edits body has two images");
+    const ainiux::json::Value* url0 = images->at(0) ? images->at(0)->get("image_url") : nullptr;
+    check(url0 && url0->string.find("data:image/png;base64,AAAA") == 0,
+          "first image is a png data URL");
+    const ainiux::json::Value* url1 = images->at(1) ? images->at(1)->get("image_url") : nullptr;
+    check(url1 && url1->string.find("data:image/jpeg;base64,BBBB") == 0,
+          "second image is a jpeg data URL");
+
+    std::string encoded;
+    check(ainiux::input::decode_base64("aGk=", encoded).ok() && encoded == "hi",
+          "base64 decode of aGk= is hi");
+    const std::string response_json =
+        "{\"created\":1,\"data\":[{\"b64_json\":\"aGk=\"},{\"b64_json\":\"xxxx\"}],"
+        "\"output_format\":\"png\",\"size\":\"1024x1024\",\"quality\":\"high\","
+        "\"usage\":{\"total_tokens\":12,\"input_tokens\":4,\"output_tokens\":8}}";
+    ainiux::provider::ImageGenerateResult result;
+    check(ainiux::provider::parse_images_response(response_json, result).ok(),
+          "image response parses");
+    check(result.bytes == "hi", "first b64_json is decoded; extra images ignored");
+    check(result.output_format == "png" && result.size == "1024x1024",
+          "response metadata is captured");
+    check(result.total_tokens == 12 && result.input_tokens == 4 && result.output_tokens == 8,
+          "usage tokens are captured");
+
+    ainiux::provider::ImageGenerateResult missing;
+    check(!ainiux::provider::parse_images_response("{\"data\":[]}", missing).ok(),
+          "empty data array is a schema error");
+    check(!ainiux::provider::parse_images_response("{\"data\":[{}]}", missing).ok(),
+          "missing b64_json is a schema error");
+
+    ainiux::provider::RequestContext context;
+    context.base_url = "https://api.openai.com/v1";
+    check(ainiux::provider::image_endpoint_url(context, false) ==
+              "https://api.openai.com/v1/images/generations",
+          "generations URL is derived from base");
+    check(ainiux::provider::image_endpoint_url(context, true) ==
+              "https://api.openai.com/v1/images/edits",
+          "edits URL is derived from base");
+}
+
+const ainiux::ImageCapability* load_image_model(const std::string& provider,
+                                                const std::string& model) {
+    static ainiux::cli::Options options;
+    static bool loaded = false;
+    if (!loaded) {
+        const ainiux::config::ParseResult parsed =
+            ainiux::config::read_file("config/images.conf");
+        check(parsed.error.ok(), "bundled images.conf parses for Replicate tests");
+        check(ainiux::config::apply_images_document(parsed.document, options).ok(),
+              "bundled images.conf applies for Replicate tests");
+        loaded = true;
+    }
+    const ainiux::ImageCapability* capability =
+        ainiux::config::resolve_image_capability(options.image_catalog, provider, model);
+    check(capability != nullptr, provider + " " + model + " is in images.conf");
+    return capability;
+}
+
+void test_replicate_image_catalog_and_requests() {
+    const std::vector<ainiux::provider::Profile> profiles = ainiux::provider::built_in_profiles();
+    const ainiux::provider::Profile* replicate_ptr = nullptr;
+    for (const ainiux::provider::Profile& profile : profiles) {
+        if (profile.name == "replicate") {
+            replicate_ptr = &profile;
+            break;
+        }
+    }
+    check(replicate_ptr != nullptr, "replicate profile exists");
+    if (replicate_ptr == nullptr) return;
+    const ainiux::provider::Profile& replicate = *replicate_ptr;
+    check(replicate.base_url == "https://api.replicate.com/v1", "replicate base URL");
+    check(!replicate.key_envs.empty() && replicate.key_envs.front() == "REPLICATE_API_KEY",
+          "replicate prefers REPLICATE_API_KEY");
+    bool has_token = false;
+    bool has_ainiux = false;
+    for (const std::string& env : replicate.key_envs) {
+        if (env == "REPLICATE_API_TOKEN") has_token = true;
+        if (env == "AINIUX_API_KEY") has_ainiux = true;
+    }
+    check(has_token && !has_ainiux, "replicate accepts REPLICATE_API_TOKEN and not AINIUX_API_KEY");
+    check(!ainiux::provider::is_selectable_provider(replicate),
+          "replicate is image-only and not a chat picker profile");
+    check(!replicate.capabilities.chat_completions, "replicate has no Chat Completions path");
+
+    const char* argv[] = {"ainiux",
+                          "--provider",
+                          "replicate",
+                          "--image",
+                          "-p",
+                          "a cube",
+                          "-m",
+                          "z-image-turbo",
+                          "--header",
+                          "Authorization: Bearer test"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(10, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.image, "replicate image args parse");
+    ainiux::provider::ContextResult ctx = ainiux::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "replicate image context builds without a chat endpoint");
+    check(ctx.context.profile.name == "replicate", "replicate image context uses replicate");
+
+    const ainiux::ImageCapability* seedream =
+        load_image_model("replicate", "seedream-5-lite");
+    if (seedream == nullptr) return;
+    std::string size;
+    std::string aspect;
+    check(ainiux::provider::resolve_image_size(*seedream, "2k", "2:3", size, aspect).ok() &&
+              size == "2K" && aspect == "2:3",
+          "seedream --size 2k --ar 2:3 stays as 2K plus 2:3");
+    check(ainiux::provider::resolve_image_size(*seedream, "", "match_input_image", size, aspect)
+              .ok() &&
+              size.empty() && aspect == "match_input_image",
+          "named match_input_image aspect is accepted");
+    check(!ainiux::provider::resolve_image_size(*seedream, "1k", "", size, aspect).ok(),
+          "seedream-5-lite rejects unsupported 1k");
+
+    const ainiux::ImageCapability* turbo = load_image_model("replicate", "z-image-turbo");
+    if (turbo == nullptr) return;
+    check(ainiux::provider::resolve_image_size(*turbo, "1024x768", "", size, aspect).ok() &&
+              size == "1024x768" && aspect.empty(),
+          "z-image-turbo accepts explicit WIDTHxHEIGHT");
+    check(ainiux::provider::resolve_image_size(*turbo, "1k", "4:3", size, aspect).ok() &&
+              size.find('x') != std::string::npos && aspect.empty(),
+          "z-image-turbo converts size class plus --ar to pixels");
+    std::string format;
+    check(ainiux::provider::normalize_image_format(*turbo, "jpg", format).ok() && format == "jpeg",
+          "jpg is accepted when the catalog lists jpg");
+    check(ainiux::provider::normalize_image_format(*turbo, "jpeg", format).ok() && format == "jpeg",
+          "jpeg is accepted as an alias of catalog jpg");
+
+    const ainiux::ImageCapability* pimage = load_image_model("replicate", "p-image");
+    if (pimage == nullptr) return;
+    check(ainiux::provider::resolve_image_size(*pimage, "", "2:3", size, aspect).ok() &&
+              size.empty() && aspect == "2:3",
+          "p-image uses --ar only");
+
+    ainiux::provider::ImageGenerateRequest request;
+    request.capability = *turbo;
+    request.protocol = ainiux::ImageProtocol::ReplicatePredictions;
+    request.model = turbo->api_model;
+    request.prompt = "a cat";
+    request.size = "1024x768";
+    request.output_format = "jpeg";
+    std::string body;
+    check(ainiux::provider::serialize_replicate_request(request, body).ok(),
+          "z-image-turbo input serializes");
+    ainiux::json::ParseResult json_body = ainiux::json::parse(body);
+    check(json_body.error.ok() && json_body.value.get("input") != nullptr,
+          "replicate body wraps input");
+    const ainiux::json::Value* input = json_body.value.get("input");
+    check(input->get("prompt") && input->get("prompt")->string == "a cat", "prompt is sent");
+    check(input->get("width") && input->get("width")->number == 1024.0, "width is sent");
+    check(input->get("height") && input->get("height")->number == 768.0, "height is sent");
+    check(input->get("output_format") && input->get("output_format")->string == "jpg",
+          "jpeg is sent as jpg when the catalog uses jpg");
+    check(input->get("enable_safety_checker") && !input->get("enable_safety_checker")->boolean,
+          "enable_safety_checker is false");
+    check(input->get("disable_safety_checker") && input->get("disable_safety_checker")->boolean,
+          "disable_safety_checker is true");
+    check(input->get("image_input") == nullptr && input->get("images") == nullptr,
+          "empty attach lists are omitted");
+
+    ainiux::provider::ImageGenerateRequest edit = request;
+    edit.capability = *seedream;
+    edit.size = "2K";
+    edit.aspect = "2:3";
+    edit.output_format = "png";
+    ainiux::provider::ImageInput first{"image/png", "AAAA"};
+    ainiux::provider::ImageInput second{"image/jpeg", "BBBB"};
+    edit.images.push_back(first);
+    edit.images.push_back(second);
+    check(ainiux::provider::serialize_replicate_request(edit, body).ok(),
+          "seedream input with attaches serializes");
+    json_body = ainiux::json::parse(body);
+    input = json_body.value.get("input");
+    check(input && input->get("size") && input->get("size")->string == "2K",
+          "seedream size token is sent");
+    check(input->get("aspect_ratio") && input->get("aspect_ratio")->string == "2:3",
+          "seedream aspect is sent");
+    const ainiux::json::Value* images = input->get("image_input");
+    check(images && images->is_array() && images->array.size() == 2,
+          "seedream image_input has two data URLs");
+    check(images->at(0) && images->at(0)->string.find("data:image/png;base64,AAAA") == 0,
+          "first attach is a png data URL");
+
+    ainiux::provider::RequestContext context;
+    context.base_url = "https://api.replicate.com/v1";
+    check(ainiux::provider::replicate_prediction_url(context, "prunaai/z-image-turbo") ==
+              "https://api.replicate.com/v1/models/prunaai/z-image-turbo/predictions",
+          "official-model predictions URL uses owner/name");
+
+    std::string status;
+    std::string output_url;
+    std::string poll_url;
+    std::string cancel_url;
+    std::string error_text;
+    check(ainiux::provider::parse_replicate_prediction(
+              "{\"status\":\"succeeded\",\"output\":\"https://replicate.delivery/xezq/a.png\","
+              "\"urls\":{\"get\":\"https://api.replicate.com/v1/predictions/abc\","
+              "\"cancel\":\"https://api.replicate.com/v1/predictions/abc/cancel\"}}",
+              status, output_url, poll_url, cancel_url, error_text)
+              .ok() &&
+              ainiux::provider::replicate_status_succeeded(status) &&
+              output_url == "https://replicate.delivery/xezq/a.png",
+          "string output URL is parsed");
+    check(ainiux::provider::parse_replicate_prediction(
+              "{\"status\":\"successful\",\"output\":[\"https://replicate.delivery/xezq/b.png\"]}",
+              status, output_url, poll_url, cancel_url, error_text)
+              .ok() &&
+              ainiux::provider::replicate_status_succeeded(status) &&
+              output_url == "https://replicate.delivery/xezq/b.png",
+          "array output URL is parsed");
+    check(ainiux::provider::parse_replicate_prediction(
+              "{\"status\":\"failed\",\"error\":\"nsfw\"}",
+              status, output_url, poll_url, cancel_url, error_text)
+              .ok() &&
+              ainiux::provider::replicate_status_failed(status) &&
+              error_text.find("nsfw") != std::string::npos,
+          "failed predictions surface error text");
+    check(ainiux::provider::parse_replicate_prediction(
+              "{\"status\":\"succeeded\",\"output\":null}",
+              status, output_url, poll_url, cancel_url, error_text)
+              .ok() &&
+              output_url.empty(),
+          "missing output URL is reported as empty");
+}
+
+void test_image_output_path_allocation() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "ainiux-image-alloc-test";
+    std::error_code ignored;
+    fs::remove_all(dir, ignored);
+    fs::create_directories(dir, ignored);
+    const std::string dir_utf8 = dir.u8string();
+    {
+        std::ofstream existing(dir / "image1.png", std::ios::binary);
+        existing << "x";
+    }
+    std::string path;
+    check(ainiux::provider::allocate_unused_image_path(dir_utf8, "png", path).ok(),
+          "allocate unused image path");
+    check(path.find("image2.png") != std::string::npos,
+          "allocation skips an existing image1.png");
+    fs::remove_all(dir, ignored);
+}
+
 }  // namespace
 
 void run_all() {
+    test_image_size_resolver();
+    test_image_request_and_response();
+    test_replicate_image_catalog_and_requests();
+    test_image_output_path_allocation();
     test_http_status_errors_are_friendly();
     test_openrouter_nested_provider_errors_are_unwrapped();
     test_chat_sse_accepts_cr_only_event_boundaries();

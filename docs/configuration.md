@@ -33,6 +33,7 @@ Bundled templates live in `config/` and are installed by `make install`:
 | `editor-commands.conf` | Built-in and custom editor AI prompts |
 | `benchmarks.conf` | Judge grading instructions |
 | `models.conf` | Model capabilities, reasoning choices, context metadata, and purpose presets |
+| `images.conf` | Image-generation models, protocol, size/quality/format vocabulary, and edits |
 
 The bundled documents are installed beside the binary's other shared data. User
 copies can override or extend them; see the comments in the bundled templates for
@@ -112,6 +113,10 @@ If colors look wrong over SSH from Windows Terminal, try `--color-mode 256` or s
 `models.conf` contains repeatable `[model]` and `[preset]` records. Model matching uses validated case-insensitive regular expressions against the final slash-separated model component. Records can describe API, context window, reasoning protocol and choices, temperature support, optional `temperature_max` (default 1.0; Gemini families use 2.0), priority, optional hosted `web_search` / `web_search_name`, and optional `images` (`on` = text-image-to-text, `off` = text-to-text; omitted records keep name-heuristic detection). Purpose presets remain a CLI/catalog feature (`--purpose`) and are not shown in the interactive settings widget.
 
 Endpoint metadata and explicit CLI values outrank catalog fallbacks. Protocol names are closed because request JSON stays in provider adapter code rather than configuration.
+
+## Image catalog
+
+`images.conf` contains repeatable `[image]` records for `ainiux image`. Matching uses the same final-component regex as `models.conf`. `protocol` selects a compiled HTTP adapter (`openai_images` and `replicate_predictions`; `fal_queue` is reserved). Replicate records set `api_model` to `owner/name` and optional field names (`size_field`, `aspect_field`, `images_field`, `defaults_json`) so a new model is a catalog change. User `~/.config/ainiux/images.conf` overlays bundled records by `id`. `models.conf` `images = on` means vision **input** (text-image-to-text), not image generation.
 
 ## Custom editor commands
 

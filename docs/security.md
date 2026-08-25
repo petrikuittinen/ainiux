@@ -152,6 +152,8 @@ Images are embedded in provider requests as data URLs, which sends the complete 
 
 `/cleanup` and automatic media expiration delete managed bytes but retain database tombstones and lock affected transcripts read-only, so missing media is never silently omitted from a later request. The same lock is applied when a managed file is manually removed or cannot be validated.
 
+One-shot `ainiux image` sends the prompt and any `--attach` PNG/JPEG bytes to the matched `images.conf` protocol. OpenAI uses `/v1/images/generations` or `/v1/images/edits`. Replicate uses `{base}/models/{owner}/{name}/predictions` with data-URL attachments, then downloads the first output file (Authorization on `replicate.delivery` URLs). Generated files are written in the current working directory (or `--output`) with ordinary umask permissions via atomic replace; they are not stored in `~/.ainiux/` or `.ainiux-pr/`. Overwrite of an existing `--output` path requires `--force`. `--output stdout` writes raw image bytes. Replicate credentials are `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`.
+
 The default `--image-capability auto` mode requires both a provider profile whose adapter can carry image parts and either a catalog `images = on` match or a recognized vision-model name. Catalog `images = off` keeps text-only families (for example DeepSeek V4 Flash) from sending pixels. `--image-capability allow` is an explicit trust decision for compatible unknown/custom models; it does not make an incompatible provider understand images.
 
 ## Text Attachments

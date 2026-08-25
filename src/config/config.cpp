@@ -4,11 +4,14 @@
 #include "chat/generation_settings.hpp"
 #include "cli/option_values.hpp"
 #include "context/policy.hpp"
+#include "config/image_catalog.hpp"
 #include "config/model_catalog.hpp"
+#include "json/json.hpp"
 #include "platform/environment.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
 #include "embedded_editor_commands.hpp"
+#include "embedded_images_config.hpp"
 #include "embedded_models_config.hpp"
 #include "ainiux/model_setting.hpp"
 #include "tui/theme_registry.hpp"
@@ -430,7 +433,7 @@ class Parser {
 
     static bool is_repeatable_section(const std::string& name) {
         return name == "command" || name == "theme" || name == "model" ||
-               name == "preset";
+               name == "preset" || name == "image";
     }
 
     Error parse_multiline_quoted(size_t opening_offset,
@@ -1616,6 +1619,336 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
     return ok_error();
 }
 
+Error split_pipe_list(const Entry& entry,
+                      std::vector<std::string>& values,
+                      const char* what,
+                      bool lowercase = true) {
+    Error err = require_type(entry, Value::Type::String);
+    if (!err.ok()) return err;
+    values.clear();
+    std::string text = trim_config_ascii(entry.value.string);
+    if (text.empty()) return ok_error();
+    size_t begin = 0;
+    while (begin <= text.size()) {
+        const size_t separator = text.find('|', begin);
+        std::string token = trim_config_ascii(separator == std::string::npos
+                                                 ? text.substr(begin)
+                                                 : text.substr(begin, separator - begin));
+        if (lowercase) token = lower_config_ascii(std::move(token));
+        if (token.empty()) {
+            return schema_error(entry, std::string(what) + " must not contain an empty entry");
+        }
+        const std::string lookup = lowercase ? token : lower_config_ascii(token);
+        for (const std::string& existing : values) {
+            if ((lowercase ? existing : lower_config_ascii(existing)) == lookup) {
+                return schema_error(entry, std::string(what) + " contains duplicate " + token);
+            }
+        }
+        values.push_back(token);
+        if (separator == std::string::npos) break;
+        begin = separator + 1;
+    }
+    return ok_error();
+}
+
+Error parse_size_classes_entry(const Entry& entry,
+                               std::vector<std::pair<std::string, int>>& classes) {
+    std::vector<std::string> tokens;
+    Error err = split_pipe_list(entry, tokens, "size_classes");
+    if (!err.ok()) return err;
+    classes.clear();
+    for (const std::string& token : tokens) {
+        const size_t colon = token.find(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= token.size()) {
+            return schema_error(entry, "size_classes entries must be NAME:EDGE (for example 2k:2048)");
+        }
+        const std::string name = token.substr(0, colon);
+        int edge = 0;
+        try {
+            const long parsed = std::stol(token.substr(colon + 1));
+            if (parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+                return schema_error(entry, "size_classes edge must be a positive integer");
+            }
+            edge = static_cast<int>(parsed);
+        } catch (const std::exception&) {
+            return schema_error(entry, "size_classes edge must be a positive integer");
+        }
+        classes.emplace_back(name, edge);
+    }
+    return ok_error();
+}
+
+Error parse_size_enum_entry(const Entry& entry,
+                            std::vector<std::pair<std::string, std::string>>& mapped) {
+    std::vector<std::string> tokens;
+    Error err = split_pipe_list(entry, tokens, "size_enum", false);
+    if (!err.ok()) return err;
+    mapped.clear();
+    for (const std::string& token : tokens) {
+        const size_t colon = token.find(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= token.size()) {
+            return schema_error(entry, "size_enum entries must be CLASS:TOKEN (for example 2k:2K)");
+        }
+        const std::string name = lower_config_ascii(trim_config_ascii(token.substr(0, colon)));
+        const std::string value = trim_config_ascii(token.substr(colon + 1));
+        if (name.empty() || value.empty()) {
+            return schema_error(entry, "size_enum entries must be CLASS:TOKEN (for example 2k:2K)");
+        }
+        for (const auto& existing : mapped) {
+            if (existing.first == name) {
+                return schema_error(entry, "size_enum contains duplicate " + name);
+            }
+        }
+        mapped.emplace_back(name, value);
+    }
+    return ok_error();
+}
+
+Error parse_size_map_entry(const Entry& entry, std::vector<ImageSizeMapEntry>& mapped) {
+    std::vector<std::string> tokens;
+    Error err = split_pipe_list(entry, tokens, "size_map");
+    if (!err.ok()) return err;
+    mapped.clear();
+    for (const std::string& token : tokens) {
+        const size_t colon = token.rfind(':');
+        if (colon == std::string::npos || colon == 0 || colon + 1 >= token.size()) {
+            return schema_error(entry, "size_map entries must be CLASS,AR:WIDTHxHEIGHT");
+        }
+        ImageSizeMapEntry item;
+        item.output = token.substr(colon + 1);
+        const std::string left = token.substr(0, colon);
+        const size_t comma = left.find(',');
+        if (comma == std::string::npos) {
+            item.size_class = left;
+        } else {
+            item.size_class = left.substr(0, comma);
+            item.aspect = left.substr(comma + 1);
+        }
+        if (item.size_class.empty() || item.output.empty()) {
+            return schema_error(entry, "size_map entries must be CLASS,AR:WIDTHxHEIGHT");
+        }
+        mapped.push_back(std::move(item));
+    }
+    return ok_error();
+}
+
+Error apply_configured_image_catalog(const Document& document, cli::Options& candidate) {
+    struct PartialImage {
+        std::optional<std::string> id;
+        std::string provider = "any";
+        std::optional<std::string> regex;
+        std::string api_model;
+        std::optional<ImageProtocol> protocol;
+        bool default_for_provider = false;
+        bool edits = false;
+        int max_input_images = 0;
+        ImageSizeMode size_mode = ImageSizeMode::Pixels;
+        std::vector<std::pair<std::string, int>> size_classes;
+        std::vector<std::pair<std::string, std::string>> size_enum;
+        std::vector<ImageSizeMapEntry> size_map;
+        std::vector<std::string> sizes;
+        std::vector<std::string> aspect_ratios;
+        int max_edge = 0;
+        long long min_pixels = 0;
+        long long max_pixels = 0;
+        int max_ratio = 0;
+        int multiple = 16;
+        bool have_multiple = false;
+        std::vector<std::string> quality;
+        std::vector<std::string> format;
+        std::string format_default = "png";
+        std::string prompt_field = "prompt";
+        std::string width_field;
+        std::string height_field;
+        std::string size_field;
+        std::string aspect_field;
+        std::string format_field;
+        std::string quality_field;
+        std::string images_field;
+        std::string defaults_json;
+        int priority = 0;
+        bool enabled = true;
+        SourceLocation source;
+    };
+
+    std::map<size_t, PartialImage> images;
+    for (const auto& item : document.entries) {
+        const Entry& entry = item.second;
+        size_t index = 0;
+        std::string key;
+        if (!repeatable_entry_parts(item.first, "image", index, key)) continue;
+        PartialImage& partial = images[index];
+        if (partial.source.path.empty()) partial.source = entry.source;
+        if (key == "id" || key == "provider" || key == "model" || key == "api_model" ||
+            key == "format_default" || key == "prompt_field" || key == "width_field" ||
+            key == "height_field" || key == "size_field" || key == "aspect_field" ||
+            key == "format_field" || key == "quality_field" || key == "images_field" ||
+            key == "defaults_json") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) return err;
+            if (entry.value.string.empty()) return schema_error(entry, key + " must not be empty");
+            if (key == "id") partial.id = entry.value.string;
+            else if (key == "provider") partial.provider = entry.value.string;
+            else if (key == "model") partial.regex = entry.value.string;
+            else if (key == "api_model") partial.api_model = entry.value.string;
+            else if (key == "format_default") {
+                partial.format_default = lower_config_ascii(entry.value.string);
+            } else if (key == "prompt_field") {
+                partial.prompt_field = entry.value.string;
+            } else if (key == "width_field") {
+                partial.width_field = entry.value.string;
+            } else if (key == "height_field") {
+                partial.height_field = entry.value.string;
+            } else if (key == "size_field") {
+                partial.size_field = entry.value.string;
+            } else if (key == "aspect_field") {
+                partial.aspect_field = entry.value.string;
+            } else if (key == "format_field") {
+                partial.format_field = entry.value.string;
+            } else if (key == "quality_field") {
+                partial.quality_field = entry.value.string;
+            } else if (key == "images_field") {
+                partial.images_field = entry.value.string;
+            } else {
+                const json::ParseResult parsed = json::parse(entry.value.string);
+                if (!parsed.error.ok() || !parsed.value.is_object()) {
+                    return schema_error(entry, "defaults_json must be a JSON object");
+                }
+                partial.defaults_json = entry.value.string;
+            }
+        } else if (key == "protocol") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) return err;
+            ImageProtocol protocol;
+            if (!parse_image_protocol(entry.value.string, protocol)) {
+                return schema_error(entry, "unknown image protocol; expected " + image_protocol_names());
+            }
+            partial.protocol = protocol;
+        } else if (key == "size_mode") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) return err;
+            ImageSizeMode mode;
+            if (!parse_image_size_mode(entry.value.string, mode)) {
+                return schema_error(entry, "size_mode must be pixels, enum, aspect, or width_height");
+            }
+            partial.size_mode = mode;
+        } else if (key == "default" || key == "edits" || key == "enabled") {
+            Error err = require_type(entry, Value::Type::Boolean);
+            if (!err.ok()) return err;
+            if (key == "default") partial.default_for_provider = entry.value.boolean;
+            else if (key == "edits") partial.edits = entry.value.boolean;
+            else partial.enabled = entry.value.boolean;
+        } else if (key == "max_input_images" || key == "max_edge" || key == "max_ratio" ||
+                   key == "multiple" || key == "priority") {
+            int value = 0;
+            Error err = nonnegative_int(entry, value);
+            if (!err.ok()) return err;
+            if (key == "max_input_images") partial.max_input_images = value;
+            else if (key == "max_edge") partial.max_edge = value;
+            else if (key == "max_ratio") partial.max_ratio = value;
+            else if (key == "multiple") {
+                if (value <= 0) return schema_error(entry, "multiple must be greater than zero");
+                partial.multiple = value;
+                partial.have_multiple = true;
+            } else partial.priority = value;
+        } else if (key == "min_pixels" || key == "max_pixels") {
+            long long value = 0;
+            Error err = nonnegative_long_long(entry, value);
+            if (!err.ok()) return err;
+            if (key == "min_pixels") partial.min_pixels = value;
+            else partial.max_pixels = value;
+        } else if (key == "size_classes") {
+            Error err = parse_size_classes_entry(entry, partial.size_classes);
+            if (!err.ok()) return err;
+        } else if (key == "size_enum") {
+            Error err = parse_size_enum_entry(entry, partial.size_enum);
+            if (!err.ok()) return err;
+        } else if (key == "size_map") {
+            Error err = parse_size_map_entry(entry, partial.size_map);
+            if (!err.ok()) return err;
+        } else if (key == "sizes") {
+            Error err = split_pipe_list(entry, partial.sizes, "sizes", false);
+            if (!err.ok()) return err;
+        } else if (key == "aspect_ratios") {
+            Error err = split_pipe_list(entry, partial.aspect_ratios, "aspect_ratios");
+            if (!err.ok()) return err;
+        } else if (key == "quality") {
+            Error err = split_pipe_list(entry, partial.quality, "quality");
+            if (!err.ok()) return err;
+        } else if (key == "format") {
+            Error err = split_pipe_list(entry, partial.format, "format");
+            if (!err.ok()) return err;
+        } else {
+            return schema_error(entry, "unknown [image] key");
+        }
+    }
+
+    for (const auto& item : images) {
+        const PartialImage& partial = item.second;
+        if (!partial.id.has_value()) return catalog_required(partial.source, "image", "id");
+        erase_matching(candidate.image_catalog.models,
+                       [&](const ImageCapability& value) { return value.id == *partial.id; });
+        if (!partial.enabled) continue;
+        if (!partial.regex.has_value()) return catalog_required(partial.source, "image", "model");
+        if (!partial.protocol.has_value()) return catalog_required(partial.source, "image", "protocol");
+        if (partial.default_for_provider && partial.api_model.empty()) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) +
+                        ": [image] " + *partial.id + " sets default = on but omits api_model"};
+        }
+        if (*partial.protocol == ImageProtocol::ReplicatePredictions && partial.api_model.empty()) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) +
+                        ": [image] " + *partial.id +
+                        " uses replicate_predictions but omits api_model (owner/name)"};
+        }
+        try {
+            (void)std::regex(*partial.regex, std::regex::ECMAScript | std::regex::icase);
+        } catch (const std::regex_error& err) {
+            return {ErrorCode::Config,
+                    partial.source.path + ":" + std::to_string(partial.source.line) + ":" +
+                        std::to_string(partial.source.column) +
+                        ": invalid model regex for [image] " + *partial.id + ": " + err.what()};
+        }
+        ImageCapability capability;
+        capability.id = *partial.id;
+        capability.provider = partial.provider;
+        capability.model_regex = *partial.regex;
+        capability.api_model = partial.api_model;
+        capability.protocol = *partial.protocol;
+        capability.default_for_provider = partial.default_for_provider;
+        capability.edits = partial.edits;
+        capability.max_input_images = partial.max_input_images;
+        capability.size_mode = partial.size_mode;
+        capability.size_classes = partial.size_classes;
+        capability.size_enum = partial.size_enum;
+        capability.size_map = partial.size_map;
+        capability.sizes = partial.sizes;
+        capability.aspect_ratios = partial.aspect_ratios;
+        capability.max_edge = partial.max_edge;
+        capability.min_pixels = partial.min_pixels;
+        capability.max_pixels = partial.max_pixels;
+        capability.max_ratio = partial.max_ratio;
+        capability.multiple = partial.multiple;
+        capability.quality = partial.quality;
+        capability.format = partial.format;
+        capability.format_default = partial.format_default;
+        capability.prompt_field = partial.prompt_field;
+        capability.width_field = partial.width_field;
+        capability.height_field = partial.height_field;
+        capability.size_field = partial.size_field;
+        capability.aspect_field = partial.aspect_field;
+        capability.format_field = partial.format_field;
+        capability.quality_field = partial.quality_field;
+        capability.images_field = partial.images_field;
+        capability.defaults_json = partial.defaults_json;
+        capability.priority = partial.priority;
+        capability.load_order = candidate.image_catalog.next_load_order++;
+        candidate.image_catalog.models.push_back(std::move(capability));
+    }
+    return ok_error();
+}
+
 Error apply_configured_assist_commands(const Document& document, cli::Options& candidate) {
     struct PartialCommand {
         std::optional<std::string> string;
@@ -1819,6 +2152,32 @@ Error apply_models_document_impl(const Document& document, cli::Options& options
     return ok_error();
 }
 
+Error apply_images_document_impl(const Document& document, cli::Options& options) {
+    cli::Options candidate = options;
+    for (const auto& item : document.entries) {
+        const std::string& name = item.first;
+        const Entry& entry = item.second;
+        if (name == "config_version") {
+            Error err = require_type(entry, Value::Type::Integer);
+            if (!err.ok()) return err;
+            if (entry.value.integer != 1) {
+                return schema_error(entry,
+                                    "unsupported images config version " +
+                                        std::to_string(entry.value.integer) +
+                                        "; supported version is 1");
+            }
+            continue;
+        }
+        if (name.rfind("image.", 0) != 0) {
+            return schema_error(entry, "unknown images setting; expected [image]");
+        }
+    }
+    Error err = apply_configured_image_catalog(document, candidate);
+    if (!err.ok()) return err;
+    options = std::move(candidate);
+    return ok_error();
+}
+
 }  // namespace
 
 Error apply_editor_commands_document(const Document& document, cli::Options& options) {
@@ -1835,6 +2194,10 @@ Error apply_benchmarks_document(const Document& document, cli::Options& options)
 
 Error apply_models_document(const Document& document, cli::Options& options) {
     return apply_models_document_impl(document, options);
+}
+
+Error apply_images_document(const Document& document, cli::Options& options) {
+    return apply_images_document_impl(document, options);
 }
 
 Error validate_benchmark_grading_prompts(const cli::BenchmarkGradingPrompts& prompts) {
@@ -2504,6 +2867,28 @@ std::vector<std::string> bundled_models_paths() {
     return paths;
 }
 
+std::string user_images_path(const Environment& environment) {
+    if (absolute_path(environment.xdg_config_home)) {
+        return (std::filesystem::u8path(environment.xdg_config_home) / "ainiux" /
+                "images.conf")
+            .u8string();
+    }
+    if (!absolute_path(environment.home)) return {};
+    return (std::filesystem::u8path(environment.home) / ".config" / "ainiux" /
+            "images.conf")
+        .u8string();
+}
+
+std::vector<std::string> bundled_images_paths() {
+    std::vector<std::string> paths;
+    const std::string override_path = environment_value("AINIUX_IMAGES");
+    if (!override_path.empty()) paths.push_back(override_path);
+    paths.emplace_back("config/images.conf");
+    append_executable_share_path(paths, "images.conf");
+    append_installed_share_paths(paths, "images.conf");
+    return paths;
+}
+
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config) {
@@ -2578,6 +2963,75 @@ LoadResult load_automatic(const cli::Options& base_options,
         Error err = load_models_path(user_models, ConfigScope::User, user_models_loaded);
         if (!err.ok()) { result.error = std::move(err); return result; }
         (void)user_models_loaded;
+    }
+
+    auto load_images_path = [&](const std::string& path, ConfigScope scope, bool& loaded) -> Error {
+        std::error_code filesystem_error;
+        const bool exists = std::filesystem::exists(path, filesystem_error);
+        if (filesystem_error) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Images, ConfigFileState::Error, path});
+            return {ErrorCode::Config, "could not inspect images file: " + path};
+        }
+        if (!exists) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Images, ConfigFileState::Missing, path});
+            return ok_error();
+        }
+        ParseResult parsed = read_file(path);
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Images, ConfigFileState::Error, path});
+            return parsed.error;
+        }
+        Error err = apply_images_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Images, ConfigFileState::Error, path});
+            return err;
+        }
+        loaded = true;
+        result.loaded_paths.push_back(path);
+        result.diagnostics.push_back({scope, ConfigFileKind::Images, ConfigFileState::Loaded, path});
+        return ok_error();
+    };
+
+    bool bundled_images_loaded = false;
+    for (const std::string& path : bundled_images_paths()) {
+        Error err = load_images_path(path, ConfigScope::Bundled, bundled_images_loaded);
+        if (!err.ok()) { result.error = std::move(err); return result; }
+        if (bundled_images_loaded) break;
+    }
+    if (!bundled_images_loaded) {
+        ParseResult parsed = parse(kEmbeddedImagesConfig, "embedded images.conf");
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back(
+                {ConfigScope::Bundled, ConfigFileKind::Images,
+                 ConfigFileState::Error, "embedded images.conf"});
+            result.error = std::move(parsed.error);
+            return result;
+        }
+        Error err = apply_images_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back(
+                {ConfigScope::Bundled, ConfigFileKind::Images,
+                 ConfigFileState::Error, "embedded images.conf"});
+            result.error = std::move(err);
+            return result;
+        }
+        result.loaded_paths.push_back("embedded images.conf");
+        result.diagnostics.push_back(
+            {ConfigScope::Bundled, ConfigFileKind::Images,
+             ConfigFileState::Loaded, "embedded images.conf"});
+    }
+    const std::string user_images = user_images_path(environment);
+    if (user_images.empty()) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Images, ConfigFileState::Unavailable, {}});
+    } else if (!load_user_config) {
+        result.diagnostics.push_back(
+            {ConfigScope::User, ConfigFileKind::Images, ConfigFileState::Skipped, user_images});
+    } else {
+        bool user_images_loaded = false;
+        Error err = load_images_path(user_images, ConfigScope::User, user_images_loaded);
+        if (!err.ok()) { result.error = std::move(err); return result; }
+        (void)user_images_loaded;
     }
 
     auto load_benchmarks_path = [&](const std::string& path,

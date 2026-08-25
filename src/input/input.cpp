@@ -199,7 +199,44 @@ std::string base64_encode(const std::string& data) {
     return out;
 }
 
+int base64_value(unsigned char ch) {
+    if (ch >= 'A' && ch <= 'Z') return ch - 'A';
+    if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
+    if (ch >= '0' && ch <= '9') return ch - '0' + 52;
+    if (ch == '+') return 62;
+    if (ch == '/') return 63;
+    return -1;
+}
+
 }  // namespace
+
+Error decode_base64(const std::string& encoded, std::string& decoded) {
+    if (encoded.empty() || encoded.size() % 4 != 0) {
+        return {ErrorCode::ProviderSchema, "base64 has an invalid length"};
+    }
+    decoded.clear();
+    decoded.reserve((encoded.size() / 4) * 3);
+    for (size_t i = 0; i < encoded.size(); i += 4) {
+        const bool last = i + 4 == encoded.size();
+        const int a = base64_value(static_cast<unsigned char>(encoded[i]));
+        const int b = base64_value(static_cast<unsigned char>(encoded[i + 1]));
+        const bool pad_c = encoded[i + 2] == '=';
+        const bool pad_d = encoded[i + 3] == '=';
+        const int c = pad_c ? 0 : base64_value(static_cast<unsigned char>(encoded[i + 2]));
+        const int d = pad_d ? 0 : base64_value(static_cast<unsigned char>(encoded[i + 3]));
+        if (a < 0 || b < 0 || c < 0 || d < 0 || (!last && (pad_c || pad_d)) || (pad_c && !pad_d)) {
+            return {ErrorCode::ProviderSchema, "base64 is malformed"};
+        }
+        decoded.push_back(static_cast<char>((a << 2) | (b >> 4)));
+        if (!pad_c) {
+            decoded.push_back(static_cast<char>(((b & 0x0f) << 4) | (c >> 2)));
+        }
+        if (!pad_d) {
+            decoded.push_back(static_cast<char>(((c & 0x03) << 6) | d));
+        }
+    }
+    return ok_error();
+}
 
 bool path_has_supported_image_extension(const std::string& path) {
     const std::string lower = ascii_lower(path);

@@ -58,13 +58,16 @@ EDITOR_COMMANDS_CONFIG := config/editor-commands.conf
 THEMES_CONFIG := config/themes.conf
 BENCHMARKS_CONFIG := config/benchmarks.conf
 MODELS_CONFIG := config/models.conf
+IMAGES_CONFIG := config/images.conf
 COMMON_CONFIG_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/config.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
+IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
 THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/themes.conf
 BENCHMARKS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/benchmarks.conf
 MODELS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/models.conf
+IMAGES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/images.conf
 BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/ainiux/benchmarks
 BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
 EDITOR_HELP_SRC := docs/editor_help.md
@@ -182,7 +185,17 @@ $(EDITOR_COMMANDS_CONFIG_HEADER): $(EDITOR_COMMANDS_CONFIG)
 	} >$@.tmp
 	@mv $@.tmp $@
 
-$(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
+$(IMAGES_CONFIG_HEADER): $(IMAGES_CONFIG)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' 'namespace ainiux::config {' \
+			'inline constexpr char kEmbeddedImagesConfig[] = R"AINIUX_IMAGES('; \
+		cat $<; \
+		printf '%s\n' ')AINIUX_IMAGES";' '}  // namespace ainiux::config'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(IMAGES_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
 
 $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 	@mkdir -p $(dir $@)
@@ -298,7 +311,7 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(IMAGES_CONFIG) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
 	install -d "$(BENCHMARK_DATA_DIR)"
@@ -310,6 +323,7 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 	install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_INSTALL)"
 	install -m 0644 "$(BENCHMARKS_CONFIG)" "$(BENCHMARKS_INSTALL)"
 	install -m 0644 "$(MODELS_CONFIG)" "$(MODELS_INSTALL)"
+	install -m 0644 "$(IMAGES_CONFIG)" "$(IMAGES_INSTALL)"
 	install -d "$(AGENT_PROMPTS_INSTALL_DIR)"
 	install -m 0644 "$(MASTER_PROMPT_SRC)" "$(SECURITY_PROMPT_SRC)" "$(AGENT_PROMPT_SRC)" \
 		"$(AGENT_PROMPTS_INSTALL_DIR)"

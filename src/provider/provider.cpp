@@ -180,6 +180,8 @@ const std::vector<Profile>& profile_registry() {
         make_profile("zai", {"z.ai", "z_ai"}, "https://api.z.ai/api/paas/v4", "/chat/completions", "", "", {"ZAI_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("qwen", {"dashscope_intl"}, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "QWEN_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("dashscope", {}, "https://dashscope.aliyuncs.com/compatible-mode/v1", "/chat/completions", "/models", "", {"DASHSCOPE_API_KEY", "AINIUX_API_KEY"}, true, false),
+        make_profile("replicate", {}, "https://api.replicate.com/v1", "", "", "",
+                     {"REPLICATE_API_KEY", "REPLICATE_API_TOKEN"}, true, false),
         make_profile(names::kCustomOpenAiChat,
                      {names::kCustom},
                      "",
@@ -2496,13 +2498,15 @@ ContextResult build_context(const cli::Options& input_options) {
         }
     }
 
-    if (!profile.offline && api_kind == ApiKind::ChatCompletions &&
-        !profile.capabilities.chat_completions && options.chat_url.empty()) {
-        return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a Chat Completions endpoint"}};
-    }
-    if (!profile.offline && api_kind == ApiKind::Responses &&
-        !profile.capabilities.responses_api && options.responses_url.empty()) {
-        return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a built-in Responses API endpoint; use --responses-url or --api chat"}};
+    if (!options.image) {
+        if (!profile.offline && api_kind == ApiKind::ChatCompletions &&
+            !profile.capabilities.chat_completions && options.chat_url.empty()) {
+            return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a Chat Completions endpoint"}};
+        }
+        if (!profile.offline && api_kind == ApiKind::Responses &&
+            !profile.capabilities.responses_api && options.responses_url.empty()) {
+            return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a built-in Responses API endpoint; use --responses-url or --api chat"}};
+        }
     }
 
     std::string key = resolve_key(options, profile);
@@ -2734,7 +2738,8 @@ std::string canonical_profile_name(const std::string& name) {
 }
 
 bool is_selectable_provider(const Profile& profile) {
-    return !profile.offline && profile.name != names::kCustomOpenAiChat;
+    return !profile.offline && profile.name != names::kCustomOpenAiChat &&
+           profile.capabilities.chat_completions;
 }
 
 bool needs_interactive_model_selection(const RequestContext& context) {

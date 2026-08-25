@@ -35,7 +35,8 @@ bool needs_value(const std::string& opt) {
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
         "--summary-format",
-        "-r", "--run", "--run-file", "--plan", "--plan-file"};
+        "-r", "--run", "--run-file", "--plan", "--plan-file",
+        "--size", "--ar", "--quality"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -310,6 +311,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if ((arg == "plan" && i == 1)) {
             opts.agent_run = true;
             opts.agent_plan = true;
+        } else if ((arg == "image" && i == 1) || arg == "--image") {
+            opts.image = true;
+        } else if (arg == "--force") {
+            opts.image_force = true;
         } else if ((arg == "grade" && i == 1) || arg == "--grade") {
             opts.grade = true;
             opts.format = OutputFormat::Ndjson;
@@ -550,15 +555,32 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 }
                 opts.has_max_output_tokens = true;
             } else if (opt == "--format") {
-                if (value == "text") {
+                const std::string lower = ascii_lower(value);
+                if (lower == "text") {
                     opts.format = OutputFormat::Text;
-                } else if (value == "json") {
+                    opts.format_cli_explicit = true;
+                } else if (lower == "json") {
                     opts.format = OutputFormat::Json;
-                } else if (value == "ndjson" || value == "jsond" || value == "jsonl") {
+                    opts.format_cli_explicit = true;
+                } else if (lower == "ndjson" || lower == "jsond" || lower == "jsonl") {
                     opts.format = OutputFormat::Ndjson;
+                    opts.format_cli_explicit = true;
+                } else if (lower == "png" || lower == "jpeg" || lower == "jpg" || lower == "webp" ||
+                           lower == "auto") {
+                    opts.image_format = lower == "jpg" ? "jpeg" : lower;
+                    opts.image_format_explicit = true;
                 } else {
-                    return {opts, {ErrorCode::BadArgs, "--format must be text, json, ndjson, jsonl, or jsond"}};
+                    return {opts,
+                            {ErrorCode::BadArgs,
+                             "--format must be text, json, ndjson, jsonl, or jsond"
+                             " (image mode: png, jpeg, webp, or auto)"}};
                 }
+            } else if (opt == "--size") {
+                opts.image_size = value;
+            } else if (opt == "--ar") {
+                opts.image_ar = value;
+            } else if (opt == "--quality") {
+                opts.image_quality = value;
             } else if (opt == "--output-format") {
                 if (value == "json") {
                     opts.format = OutputFormat::Json;
@@ -1116,6 +1138,106 @@ Error validate_agent_interactive_arguments(int argc, char** argv, const Options&
     return ok_error();
 }
 
+Error validate_image_mode_arguments(const Options& options) {
+    if (!options.image) {
+        if (!options.image_size.empty()) {
+            return {ErrorCode::BadArgs, "--size requires image mode (ainiux image / --image)"};
+        }
+        if (!options.image_ar.empty()) {
+            return {ErrorCode::BadArgs, "--ar requires image mode (ainiux image / --image)"};
+        }
+        if (!options.image_quality.empty()) {
+            return {ErrorCode::BadArgs, "--quality requires image mode (ainiux image / --image)"};
+        }
+        if (options.image_format_explicit) {
+            return {ErrorCode::BadArgs,
+                    "--format png|jpeg|webp|auto requires image mode (ainiux image / --image)"};
+        }
+        if (options.image_force) {
+            return {ErrorCode::BadArgs, "--force requires image mode (ainiux image / --image)"};
+        }
+        return ok_error();
+    }
+    if (options.editor || options.dired) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --editor or --dired"};
+    }
+    if (options.repl) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --repl"};
+    }
+    if (options.tui) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --chat"};
+    }
+    if (options.agent || options.agent_run) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --agent, --run, or --plan"};
+    }
+    if (options.benchmark || options.grade) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --benchmark or --grade"};
+    }
+    if (options.security_review) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --security-review"};
+    }
+    if (options.list_models) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --list-models"};
+    }
+    if (options.index_code || options.print_index || options.clear_index) {
+        return {ErrorCode::BadArgs, "image mode cannot be combined with code index commands"};
+    }
+    if (!options.system.empty() || !options.system_file.empty()) {
+        return {ErrorCode::BadArgs, "image mode does not use -s/--system or --system-file"};
+    }
+    if (options.temperature_cli_explicit || options.has_top_p || options.has_top_k ||
+        options.has_min_p || options.has_repeat_penalty || options.has_presence_penalty) {
+        return {ErrorCode::BadArgs, "image mode does not use sampling options such as --temperature"};
+    }
+    if (options.reasoning_cli_explicit) {
+        return {ErrorCode::BadArgs, "image mode does not use --reasoning"};
+    }
+    if (!options.chat_purpose.empty()) {
+        return {ErrorCode::BadArgs, "image mode does not use --purpose"};
+    }
+    if (options.has_max_output_tokens) {
+        return {ErrorCode::BadArgs, "image mode does not use --max-output-tokens"};
+    }
+    if (options.stream_cli_explicit) {
+        return {ErrorCode::BadArgs, "image mode does not stream; omit --stream and --no-stream"};
+    }
+    if (!options.save_chat_path.empty() || !options.load_chat_path.empty()) {
+        return {ErrorCode::BadArgs, "image mode does not use --save-chat or --load-chat"};
+    }
+    if (!options.input_path.empty() || !options.html_file.empty()) {
+        return {ErrorCode::BadArgs,
+                "image mode uses --attach for input images; --input is not supported"};
+    }
+    if (!options.fetch_url.empty() || !options.search_query.empty()) {
+        return {ErrorCode::BadArgs, "image mode does not use --fetch-url or --search"};
+    }
+    if (options.format_cli_explicit) {
+        return {ErrorCode::BadArgs,
+                "--format in image mode must be png, jpeg, webp, or auto"};
+    }
+    if (options.output_format_explicit || options.rendered_output_format_explicit) {
+        return {ErrorCode::BadArgs, "image mode does not use --output-format"};
+    }
+    if (options.prompt.empty() && options.prompt_file.empty()) {
+        return {ErrorCode::BadArgs, "image mode requires -p/--prompt or --prompt-file"};
+    }
+    if (!options.prompt.empty() && !options.prompt_file.empty()) {
+        return {ErrorCode::BadArgs, "use either -p/--prompt or --prompt-file, not both"};
+    }
+    if (options.attachment_paths.size() > 16) {
+        return {ErrorCode::BadArgs, "image generation accepts at most 16 --attach images"};
+    }
+    for (const std::string& path : options.attachment_paths) {
+        if (path.empty()) {
+            return {ErrorCode::BadArgs, "--attach requires a non-empty path"};
+        }
+        if (path == "stdin" || path == "-") {
+            return {ErrorCode::BadArgs, "image mode --attach requires a PNG or JPEG file path"};
+        }
+    }
+    return ok_error();
+}
+
 std::string help_text() {
     return app_version_label() + R"( - script-friendly OpenAI-compatible chat CLI
 
@@ -1144,6 +1266,9 @@ Usage:
   ainiux plan "goal" --provider PROFILE -m MODEL
   ainiux [BASE_URL|PROFILE] -m MODEL --plan "goal"
   ainiux [BASE_URL|PROFILE] -m MODEL --plan-file PATH
+  ainiux image -p TEXT [--size 1k|2k|4k|WIDTHxHEIGHT] [--ar W:H] [--quality low|medium|high|auto]
+              [--format png|jpeg|webp|auto] [--attach IMAGE]... [--output PATH]
+  ainiux image --provider replicate -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
 
 Examples:
   ainiux lmstudio -p "Hello"
@@ -1172,6 +1297,9 @@ Examples:
   ainiux --grade --category reasoning --output results/ --provider openai -m JUDGE_MODEL
   ainiux --index-code
   ainiux lmstudio -m MODEL --security-review
+  ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
+  ainiux image -p "gift basket" --attach lotion.png --attach soap.jpg --size 2k --ar 16:9
+  ainiux image --provider replicate -m prunaai/z-image-turbo -p "a red cube"
 
 Options:
   Mode:
@@ -1220,6 +1348,15 @@ Options:
       --plan-file PATH          One-shot Plan goal from a file; use '-' for stdin.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
+      --image                   Generate one image (OpenAI gpt-image-2 or Replicate
+                                models from images.conf; also: ainiux image ...).
+      --size 1k|2k|4k|WIDTHxHEIGHT|auto
+                                Image output size. With --ar 16:9, 2k is 2048x1152 and
+                                4k is 3840x2160. Default: provider auto.
+      --ar W:H                  Aspect ratio used with --size 1k|2k|4k (for example 16:9).
+      --quality low|medium|high|auto
+                                Image quality; default auto.
+      --force                   Overwrite --output if the file already exists.
       --index-code              Create or incrementally refresh .ainiux-pr/index.sqlite.
       --print-index             Print the stored project code index as Markdown.
       --clear-index             Remove the project code index database.
@@ -1255,8 +1392,10 @@ Options:
 
   Output:
       --format text|json|ndjson|jsonl|jsond
+                                In image mode: png|jpeg|webp|auto (default png).
       --output-format html|md|plaintext|json|jsond|ndjson
       --output PATH             Use 'stdout' to write to standard output.
+                                In image mode, omit to write the first unused imageN.png.
 
   Input and attachments:
       --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
@@ -1267,6 +1406,7 @@ Options:
                                 use iconv when installed.
       --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
                                 'stdin' reads UTF-8 plaintext from standard input.
+                                In image mode: PNG/JPEG references only (repeatable, max 16).
       --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
       --search QUERY            Run a web search and use results as prompt context with -p.
                                 Hosted model search is used instead when the catalog
@@ -1318,7 +1458,7 @@ Options:
 
   Provider and endpoint:
       --provider NAME           none (offline), openrouter, openai, kimi, llama.cpp,
-                                lm_studio, ollama, vllm, sglang, zai, qwen, etc.
+                                lm_studio, ollama, vllm, sglang, zai, qwen, replicate, etc.
       --profile NAME            Alias for --provider.
       --api chat|responses      Use Chat Completions or Responses API. Official OpenAI
                                 defaults to Responses; openai_chat and --api chat stay

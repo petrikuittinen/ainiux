@@ -20,10 +20,11 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 - future local OpenAI-compatible server mode
 - postponed browser web UI
 - local agent mode with session-scoped Act/Plan task modes
+- one-shot CLI image generation (`ainiux image`)
 
 ## Current product snapshot
 
-Status: **v1.19 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, mid-turn editor/dired review without cancelling the agent turn (`AgentController`, Ctrl+G / F4), project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals (answerable from the editor), and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. Compact native tool schemas use short industry-aligned names; removed long names and aliases are unknown tools. Agent/run/plan can also load explicitly installed MCP tools. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Apple Silicon macOS source builds are supported. The Windows target remains unreleased until its native parity gate passes. Local server mode is deferred behind v1.1, image generation moves to v1.2, and browser web UI remains postponed.
+Status: **v1.19 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, mid-turn editor/dired review without cancelling the agent turn (`AgentController`, Ctrl+G / F4), project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals (answerable from the editor), and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. Compact native tool schemas use short industry-aligned names; removed long names and aliases are unknown tools. Agent/run/plan can also load explicitly installed MCP tools. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Apple Silicon macOS source builds are supported. The Windows target remains unreleased until its native parity gate passes. Local server mode is deferred behind v1.1. CLI `ainiux image` is the first v1.2 slice; REPL/TUI image generation remains later. Browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -42,6 +43,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 | One-shot plan | `plan` / `--plan` / `--plan-file` | headless Plan mode; read/research tools plus planning-document-only writes |
 | Security review | `--security-review` | headless read-only whole-project review |
 | Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux-pr/index.sqlite` |
+| One-shot image generation | `image` / `--image` | CLI-only; `images.conf` selects protocol/model (`openai_images` / `gpt-image-2`, `replicate_predictions` / Replicate `owner/name`); `--attach` PNG/JPEG references; one output image |
 
 ### Implemented capabilities agents must respect
 
@@ -53,8 +55,9 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 - Cancellable runtime jobs; libcurl HTTP + incremental SSE streaming
 - Request-only context policies; full transcript preserved on disk
 - Bounded text/HTML/Markdown attachments; JPEG/PNG/GIF image input (Chat Completions)
+- CLI `ainiux image` / `--image` for one-shot generation (`gpt-image-2` or Replicate models from `images.conf`) and PNG/JPEG reference edits
 - Safe URL fetching; web search (`--search`, `/search`) with API providers and keyless fallbacks
-- Automatic system/user TOML-alike configuration (`config.conf`), plus `themes.conf`, `editor-commands.conf`, `benchmarks.conf`, and `models.conf`
+- Automatic system/user TOML-alike configuration (`config.conf`), plus `themes.conf`, `editor-commands.conf`, `benchmarks.conf`, `models.conf`, and `images.conf`
 - Shared syntax highlighting for editor and chat; grapheme-aware editor navigation
 - Editor AI assist (`Ctrl+Space`, slash commands); window splits; file locking sessions
 - Concurrent JSONL benchmarks and configurable judge grading with runtime prompts from `benchmarks.conf`
@@ -65,7 +68,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is a postponed-design snapshot)
 - Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
 - `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)
-- Image generation (`ainiux image` / `/image`; moved to v1.2)
+- REPL `/image`, TUI image-generation jobs, batch `n>1`, streaming partials, and multi-turn image editing (CLI `ainiux image` / `--image` for `gpt-image-2` and Replicate catalog models is landed)
 - Agent session resume/list UI and richer tool-call transcript chrome; Guard Ask y/n in interactive agent is landed (headless Ask still denies); one-shot `ainiux run` / `--run` and interactive `ainiux agent` / `--agent` with multi-turn tools + mode cycling are landed
 - PDF / DOCX conversion modules
 - Native Anthropic Messages adapter; full live capability probing for all models
@@ -126,11 +129,13 @@ This is the **authoritative** layout. Put new code in the matching module. Do no
 │   ├── themes.conf
 │   ├── editor-commands.conf
 │   ├── benchmarks.conf
-│   └── models.conf
+│   ├── models.conf
+│   └── images.conf
 ├── benchmarks/                  # JSONL datasets (builtin parts + long-context)
 ├── include/ainiux/
 │   ├── version.hpp
-│   └── model_setting.hpp
+│   ├── model_setting.hpp
+│   └── image_setting.hpp
 ├── src/
 │   ├── main.cpp                 # mode dispatch
 │   ├── common.{hpp,cpp}
@@ -223,7 +228,7 @@ openrouter
 deepseek, gemini, anthropic, xai (grok), moonshot (kimi)
 llamacpp, lm_studio (lmstudio), ollama, vllm, sglang
 groq, mistral, together, perplexity, cerebras, fireworks,
-deepinfra, nvidia_nim, zai, qwen, dashscope
+deepinfra, nvidia_nim, zai, qwen, dashscope, replicate
 custom_openai_chat (custom)
 ```
 
@@ -312,6 +317,7 @@ Layering: installed defaults, then user file, then CLI (authoritative). There is
 - `editor-commands.conf` — editor AI slash commands
 - `benchmarks.conf` — judge grading prompts (no compiled fallback grading prose)
 - `models.conf` — model capabilities, reasoning selector options, and optional purpose presets
+- `images.conf` — image-generation models and protocol (`openai_images`, `replicate_predictions`)
 
 Bundled templates live in `config/` and install via `make install`. See `docs/decisions.md`.
 

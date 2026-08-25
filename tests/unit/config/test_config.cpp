@@ -2,6 +2,7 @@
 #include "support/test_support.hpp"
 #include "cli/args.hpp"
 #include "config/config.hpp"
+#include "config/image_catalog.hpp"
 #include "config/model_catalog.hpp"
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
@@ -154,13 +155,14 @@ void test_config_applies_user_settings() {
     ainiux::config::Environment environment{config_home, "/nonexistent"};
     ainiux::config::LoadResult loaded = ainiux::config::load_automatic(ainiux::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic user config loading succeeds");
-    check(loaded.loaded_paths.size() == 6 &&
+    check(loaded.loaded_paths.size() == 7 &&
               loaded.loaded_paths[0].find("models.conf") != std::string::npos &&
-              loaded.loaded_paths[1].find("benchmarks.conf") != std::string::npos &&
-              loaded.loaded_paths[2].find("themes.conf") != std::string::npos &&
-              loaded.loaded_paths[3].find("editor-commands.conf") != std::string::npos &&
-              loaded.loaded_paths[4].find("ainiux.conf") != std::string::npos &&
-              loaded.loaded_paths[5] == config_home + "/ainiux/config.conf",
+              loaded.loaded_paths[1].find("images.conf") != std::string::npos &&
+              loaded.loaded_paths[2].find("benchmarks.conf") != std::string::npos &&
+              loaded.loaded_paths[3].find("themes.conf") != std::string::npos &&
+              loaded.loaded_paths[4].find("editor-commands.conf") != std::string::npos &&
+              loaded.loaded_paths[5].find("ainiux.conf") != std::string::npos &&
+              loaded.loaded_paths[6] == config_home + "/ainiux/config.conf",
           "automatic loading applies installed defaults before user config");
     check(loaded.options.tui_themes.has("dark") && loaded.options.tui_themes.has("light") &&
               loaded.options.tui_themes.has("sepia"),
@@ -208,12 +210,13 @@ void test_config_applies_user_settings() {
     check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
               !system_only.options.show_thinking_traces && system_only.options.tui_theme == "dark",
           "disabling user config retains installed defaults");
-    check(system_only.loaded_paths.size() == 5 &&
+    check(system_only.loaded_paths.size() == 6 &&
               system_only.loaded_paths[0].find("models.conf") != std::string::npos &&
-              system_only.loaded_paths[1].find("benchmarks.conf") != std::string::npos &&
-              system_only.loaded_paths[2].find("themes.conf") != std::string::npos &&
-              system_only.loaded_paths[3].find("editor-commands.conf") != std::string::npos &&
-              system_only.loaded_paths[4].find("ainiux.conf") != std::string::npos,
+              system_only.loaded_paths[1].find("images.conf") != std::string::npos &&
+              system_only.loaded_paths[2].find("benchmarks.conf") != std::string::npos &&
+              system_only.loaded_paths[3].find("themes.conf") != std::string::npos &&
+              system_only.loaded_paths[4].find("editor-commands.conf") != std::string::npos &&
+              system_only.loaded_paths[5].find("ainiux.conf") != std::string::npos,
           "disabling user config still loads installed defaults");
     bool skipped_user_config = false;
     for (const ainiux::config::ConfigDiagnostic& diagnostic : system_only.diagnostics) {
@@ -1579,9 +1582,152 @@ void test_agent_input_height_config() {
 
 }  // namespace
 
+void test_image_catalog_parse_and_match() {
+    const ainiux::config::ParseResult parsed =
+        ainiux::config::read_file("config/images.conf");
+    check(parsed.error.ok(), "bundled images.conf parses");
+    ainiux::cli::Options options;
+    const ainiux::Error err =
+        ainiux::config::apply_images_document(parsed.document, options);
+    check(err.ok() && options.image_catalog.models.size() >= 10,
+          "bundled images.conf applies gpt-image-2 and Replicate models");
+    const ainiux::ImageCapability* capability = ainiux::config::resolve_image_capability(
+        options.image_catalog, "openai", "gpt-image-2");
+    check(capability != nullptr && capability->protocol == ainiux::ImageProtocol::OpenAiImages &&
+              capability->edits && capability->api_model == "gpt-image-2",
+          "gpt-image-2 matches openai_images with edits");
+    check(ainiux::config::resolve_image_capability(
+              options.image_catalog, "openai", "gpt-image-2-2026-04-21") != nullptr,
+          "dated gpt-image-2 snapshot matches the family regex");
+    check(ainiux::config::default_image_model(options.image_catalog, "openai") == "gpt-image-2",
+          "openai default image model is gpt-image-2");
+    check(ainiux::config::default_image_model(options.image_catalog, "lm_studio").empty(),
+          "providers without a default image model do not inherit gpt-image-2");
+    check(ainiux::config::default_image_model(options.image_catalog, "replicate") ==
+              "prunaai/z-image-turbo",
+          "replicate default image model is prunaai/z-image-turbo");
+    const ainiux::ImageCapability* turbo = ainiux::config::resolve_image_capability(
+        options.image_catalog, "replicate", "z-image-turbo");
+    check(turbo != nullptr && turbo->protocol == ainiux::ImageProtocol::ReplicatePredictions &&
+              turbo->api_model == "prunaai/z-image-turbo" && !turbo->edits,
+          "z-image-turbo matches replicate_predictions");
+    check(ainiux::config::resolve_image_capability(
+              options.image_catalog, "replicate", "prunaai/z-image-turbo") == turbo,
+          "owner/name Replicate ids match the final component");
+    const ainiux::ImageCapability* seedream = ainiux::config::resolve_image_capability(
+        options.image_catalog, "replicate", "bytedance/seedream-5-lite");
+    check(seedream != nullptr && seedream->edits && seedream->images_field == "image_input" &&
+              seedream->max_input_images == 14,
+          "seedream-5-lite advertises multi-image input");
+    check(ainiux::config::resolve_image_capability(
+              options.image_catalog, "openai", "flux-schnell") == nullptr,
+          "unknown image models do not match");
+    check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::OpenAiImages),
+          "openai_images is implemented");
+    check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::ReplicatePredictions),
+          "replicate_predictions is implemented");
+    check(!ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::FalQueue),
+          "fal_queue is reserved until the adapter exists");
+}
+
+void test_image_catalog_layering_and_validation() {
+    ainiux::cli::Options options;
+    const auto apply = [&](const std::string& text, const std::string& path) {
+        const ainiux::config::ParseResult parsed = ainiux::config::parse(text, path);
+        check(parsed.error.ok(), path + " parses");
+        return parsed.error.ok()
+                   ? ainiux::config::apply_images_document(parsed.document, options)
+                   : parsed.error;
+    };
+
+    ainiux::Error err = apply(
+        "config_version = 1\n"
+        "[image]\n"
+        "id = openai-gpt-image-2\n"
+        "provider = openai\n"
+        "model = \"^gpt-image-2(?:-.*)?$\"\n"
+        "api_model = gpt-image-2\n"
+        "protocol = openai_images\n"
+        "default = on\n"
+        "edits = on\n"
+        "quality = low|high\n",
+        "bundled-images.conf");
+    check(err.ok() && options.image_catalog.models.size() == 1, "first image layer applies");
+
+    err = apply(
+        "[image]\n"
+        "id = openai-gpt-image-2\n"
+        "provider = openai\n"
+        "model = \"^gpt-image-2(?:-.*)?$\"\n"
+        "api_model = gpt-image-2\n"
+        "protocol = openai_images\n"
+        "edits = off\n"
+        "quality = low\n",
+        "user-images.conf");
+    check(err.ok() && options.image_catalog.models.size() == 1 &&
+              !options.image_catalog.models.front().edits &&
+              options.image_catalog.models.front().quality.size() == 1,
+          "later images.conf records replace by id");
+
+    err = apply(
+        "[image]\n"
+        "id = replicate-flux\n"
+        "provider = replicate\n"
+        "model = \"^flux-schnell$\"\n"
+        "api_model = black-forest-labs/flux-schnell\n"
+        "protocol = replicate_predictions\n"
+        "edits = off\n"
+        "size_mode = aspect\n"
+        "aspect_ratios = 1:1|16:9\n"
+        "aspect_field = aspect_ratio\n"
+        "defaults_json = {\"disable_safety_checker\":true}\n",
+        "flux-images.conf");
+    check(err.ok(), "replicate_predictions records parse");
+    const ainiux::ImageCapability* flux = ainiux::config::resolve_image_capability(
+        options.image_catalog, "replicate", "flux-schnell");
+    check(flux != nullptr && flux->protocol == ainiux::ImageProtocol::ReplicatePredictions &&
+              ainiux::config::image_protocol_implemented(flux->protocol) &&
+              flux->api_model == "black-forest-labs/flux-schnell" &&
+              flux->defaults_json.find("disable_safety_checker") != std::string::npos,
+          "replicate_predictions catalog records are implemented");
+
+    ainiux::config::ParseResult invalid = ainiux::config::parse(
+        "[image]\nid = broken\nmodel = \"^x$\"\nprotocol = not_a_protocol\n",
+        "invalid-image-protocol.conf");
+    err = ainiux::config::apply_images_document(invalid.document, options);
+    check(!err.ok() && err.message.find("unknown image protocol") != std::string::npos,
+          "unknown image protocols are rejected");
+
+    invalid = ainiux::config::parse(
+        "[image]\nid = broken-default\nmodel = \"^x$\"\nprotocol = openai_images\ndefault = on\n",
+        "invalid-image-default.conf");
+    err = ainiux::config::apply_images_document(invalid.document, options);
+    check(!err.ok() && err.message.find("api_model") != std::string::npos,
+          "default image records require api_model");
+
+    invalid = ainiux::config::parse(
+        "[image]\nid = broken-replicate\nprovider = replicate\nmodel = \"^x$\"\n"
+        "protocol = replicate_predictions\n",
+        "invalid-replicate-api-model.conf");
+    err = ainiux::config::apply_images_document(invalid.document, options);
+    check(!err.ok() && err.message.find("api_model") != std::string::npos,
+          "replicate_predictions records require api_model");
+
+    invalid = ainiux::config::parse(
+        "[image]\nid = broken-json\nprovider = replicate\nmodel = \"^x$\"\n"
+        "api_model = owner/name\nprotocol = replicate_predictions\n"
+        "defaults_json = [1,2]\n",
+        "invalid-defaults-json.conf");
+    err = ainiux::config::apply_images_document(invalid.document, options);
+    check(!err.ok() && err.message.find("defaults_json") != std::string::npos,
+          "defaults_json must be a JSON object");
+}
+
 void run_all() {
     test_config_applies_user_settings();
     test_config_applies_model_catalog();
+    test_image_catalog_parse_and_match();
+    test_image_catalog_layering_and_validation();
     test_model_catalog_layering_and_validation();
     test_config_reads_models_template();
     test_user_api_setting_is_explicit();

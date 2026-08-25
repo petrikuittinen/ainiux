@@ -117,6 +117,9 @@ ainiux deepseek -m deepseek-v4-flash-vision-exp -p "Describe this chart" \
 ainiux --input page.html --output-format md
 ainiux --fetch-url https://example.com --output-format plaintext
 printf 'piped text' | ainiux --input stdin --output stdout
+ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
+ainiux image -p "gift basket from these items" --attach lotion.png --attach soap.jpg --size 2k --ar 16:9
+ainiux image --provider replicate -m prunaai/z-image-turbo -p "a red cube on white"
 ```
 
 Text, Markdown, and HTML can be attached with `--attach`. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. PDF and DOCX conversion are not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
@@ -221,7 +224,7 @@ Datasets and results are line-oriented so failed cases do not make all preceding
 
 ## Provider profiles and credentials
 
-Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw base URL is also accepted. Local profiles normally require no key, although LM Studio and custom servers can be configured to require one. Cloud profiles use the first available variable shown below. `AINIUX_API_KEY` is the shared fallback for every keyed built-in profile.
+Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw base URL is also accepted. Local profiles normally require no key, although LM Studio and custom servers can be configured to require one. Cloud profiles use the first available variable shown below. `AINIUX_API_KEY` is the shared fallback for every keyed built-in chat profile. Replicate image generation uses only `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`.
 
 | Profile | Aliases | Provider-specific key variables |
 | --- | --- | --- |
@@ -249,6 +252,7 @@ Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw ba
 | `zai` | `z.ai`, `z_ai` | `ZAI_API_KEY` |
 | `qwen` | `dashscope_intl` | `DASHSCOPE_API_KEY`, `QWEN_API_KEY` |
 | `dashscope` | — | `DASHSCOPE_API_KEY` |
+| `replicate` | — | `REPLICATE_API_KEY`, `REPLICATE_API_TOKEN` (image generation; not a chat profile) |
 | `custom_openai_chat` | `custom` | `AINIUX_API_KEY` |
 
 The Anthropic profile uses its OpenAI compatibility layer; a native Anthropic Messages adapter is not implemented. OpenAI Responses support is text-only for ordinary chat. Capability metadata is a starting point, not live proof that a particular model supports every feature.
@@ -312,7 +316,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not currently implement a local OpenAI-compatible server, browser UI, image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not currently implement a local OpenAI-compatible server, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot CLI image generation (`ainiux image`) uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate models; key `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

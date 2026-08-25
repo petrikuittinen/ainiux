@@ -8,6 +8,7 @@
 #include "editor/editor.hpp"
 #include "editor/editor_prompts.hpp"
 #include "markdown/markdown.hpp"
+#include "ainiux/image_setting.hpp"
 #include "ainiux/model_setting.hpp"
 #include "ainiux/compaction_strategy.hpp"
 #include "tui/theme_registry.hpp"
@@ -93,6 +94,15 @@ struct Options {
     bool agent_log_cli_explicit = false;
     // Session-scoped strict A/B control. Never persisted to configuration.
     bool disable_indexing = false;
+    // One-shot image generation: ainiux image / --image
+    bool image = false;
+    bool image_force = false;
+    bool image_format_explicit = false;
+    bool format_cli_explicit = false;
+    std::string image_size;
+    std::string image_ar;
+    std::string image_quality;
+    std::string image_format = "png";
 
     std::string positional_url;
     std::string prompt;
@@ -249,6 +259,7 @@ struct Options {
     std::vector<std::string> headers;
     std::vector<std::string> attachment_paths;
     ModelCatalog model_catalog;
+    ImageCatalog image_catalog;
 };
 
 // Parse a context-window token count accepted by both --context and interactive
@@ -269,6 +280,7 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
 // Interactive agent TUI: --agent / -a / ainiux agent
 Error validate_agent_interactive_arguments(int argc, char** argv, const Options& options);
 Error validate_disable_indexing_arguments(const Options& options);
+Error validate_image_mode_arguments(const Options& options);
 std::string help_text();
 const char* format_name(OutputFormat format);
 

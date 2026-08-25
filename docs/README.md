@@ -8,7 +8,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | --- | --- |
 | [Getting started](getting-started.md) | Dependencies, installation, providers, first commands, and platform expectations |
 | [Native Windows](windows.md) | UCRT64 build/package, Win32 terminal, PowerShell, clipboard, paths, and parity gate |
-| [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, attachments, fetch/search, output, and context |
+| [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, image generation, attachments, fetch/search, output, and context |
 | [Chat TUI](chat.md) | Threads, persistence, commands, attachments, and mode switching |
 | [Editor help](editor_help.md) | Complete editor operation and embedded help content |
 | [Dired mode](dired-mode.md) | Full-screen directory browser: keys, listing, dirty markers, CLI `-d` / `--dired` |
@@ -18,7 +18,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Configuration](configuration.md) | Layering, credentials, themes, models, benchmark prompts, and editor commands |
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
-| [Security](security.md) | Credential, persistence, fetch, attachment, and agent boundaries |
+| [Security](security.md) | Credential, persistence, fetch, attachment, image generation, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
 | [Version history](version-history.md) | Compact v0.0–v1.19 release timeline plus unreleased work |
 

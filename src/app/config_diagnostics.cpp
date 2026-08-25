@@ -33,6 +33,8 @@ void print_config_diagnostics(const config::LoadResult& configured) {
             kind = "benchmark prompts";
         } else if (diagnostic.kind == config::ConfigFileKind::Models) {
             kind = "models";
+        } else if (diagnostic.kind == config::ConfigFileKind::Images) {
+            kind = "images";
         }
         std::cerr << "Config debug: " << state << " " << scope << " " << kind;
         if (!diagnostic.path.empty()) {

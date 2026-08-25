@@ -900,6 +900,88 @@ void test_cli_encoding_parse() {
           "--encoding rejects unsafe names");
 }
 
+void test_cli_image_mode_parse() {
+    const char* argv[] = {"ainiux",
+                          "image",
+                          "-p",
+                          "a cat",
+                          "--size",
+                          "2k",
+                          "--ar",
+                          "16:9",
+                          "--quality",
+                          "high",
+                          "--format",
+                          "png",
+                          "--attach",
+                          "one.png",
+                          "--attach",
+                          "two.jpg",
+                          "--output",
+                          "out.png"};
+    ainiux::cli::ParseResult parsed =
+        ainiux::cli::parse_args(18, const_cast<char**>(argv));
+    check(parsed.error.ok(), "image subcommand args parse");
+    check(parsed.options.image, "image subcommand sets image mode");
+    check(parsed.options.prompt == "a cat", "image prompt parsed");
+    check(parsed.options.image_size == "2k", "image --size parsed");
+    check(parsed.options.image_ar == "16:9", "image --ar parsed");
+    check(parsed.options.image_quality == "high", "image --quality parsed");
+    check(parsed.options.image_format == "png", "image --format png parsed");
+    check(parsed.options.image_format_explicit, "image --format is explicit");
+    check(parsed.options.attachment_paths.size() == 2, "image --attach is repeatable");
+    check(parsed.options.output_path == "out.png", "image --output parsed");
+    check(ainiux::cli::validate_image_mode_arguments(parsed.options).ok(),
+          "valid image options pass validation");
+
+    const char* flag_argv[] = {"ainiux", "--image", "-p", "otter", "--format=webp", "--force"};
+    parsed = ainiux::cli::parse_args(6, const_cast<char**>(flag_argv));
+    check(parsed.error.ok() && parsed.options.image, "--image flag parses");
+    check(parsed.options.image_format == "webp", "--format=webp in image mode");
+    check(parsed.options.image_force, "--force parsed");
+
+    const char* jpeg_argv[] = {"ainiux", "image", "-p", "x", "--format", "jpg"};
+    parsed = ainiux::cli::parse_args(6, const_cast<char**>(jpeg_argv));
+    check(parsed.error.ok() && parsed.options.image_format == "jpeg",
+          "--format jpg normalizes to jpeg");
+
+    const char* size_argv[] = {"ainiux", "image", "--size", "1536x1024", "--prompt", "x"};
+    parsed = ainiux::cli::parse_args(6, const_cast<char**>(size_argv));
+    check(parsed.error.ok() && parsed.options.image_size == "1536x1024",
+          "WIDTHxHEIGHT --size parsed");
+
+    const char* missing_prompt[] = {"ainiux", "image", "--size", "1k"};
+    parsed = ainiux::cli::parse_args(4, const_cast<char**>(missing_prompt));
+    check(parsed.error.ok(), "image without prompt still parses");
+    check(!ainiux::cli::validate_image_mode_arguments(parsed.options).ok(),
+          "image mode without prompt is rejected");
+
+    const char* chat_format[] = {"ainiux", "image", "-p", "x", "--format", "json"};
+    parsed = ainiux::cli::parse_args(6, const_cast<char**>(chat_format));
+    check(parsed.error.ok(), "image --format json parses as chat format");
+    check(!ainiux::cli::validate_image_mode_arguments(parsed.options).ok(),
+          "image mode rejects chat --format json");
+
+    const char* with_chat[] = {"ainiux", "image", "--chat", "-p", "x"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(with_chat));
+    check(parsed.error.ok(), "image+chat still parses");
+    check(!ainiux::cli::validate_image_mode_arguments(parsed.options).ok(),
+          "image mode rejects --chat");
+
+    const char* size_only[] = {"ainiux", "-p", "hello", "--size", "1k"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(size_only));
+    check(parsed.error.ok(), "--size without image mode still parses");
+    check(!ainiux::cli::validate_image_mode_arguments(parsed.options).ok(),
+          "--size without image mode is rejected");
+
+    const char* png_chat[] = {"ainiux", "-p", "hello", "--format", "png"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(png_chat));
+    check(parsed.error.ok() && parsed.options.image_format_explicit,
+          "--format png is accepted at parse time");
+    check(!ainiux::cli::validate_image_mode_arguments(parsed.options).ok(),
+          "--format png without image mode is rejected");
+}
+
 void run_all() {
     test_cli_encoding_parse();
     test_cli_empty_and_unicode_edge_cases();
@@ -913,6 +995,7 @@ void run_all() {
     test_cli_agent_mode_parse();
     test_cli_editor_parse();
     test_cli_help_displays_version();
+    test_cli_image_mode_parse();
     test_cli_web_search_parse();
     test_cli_agent_max_response_bytes_parse();
     test_cli_html_extract_parse();

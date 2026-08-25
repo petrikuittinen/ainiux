@@ -54,6 +54,7 @@ bool path_has_supported_image_extension(const std::string& path);
 // Paths mentioned in free text that look like local image files (quoted or bare).
 // Does not open files or resolve existence; caller validates with classify/load.
 std::vector<std::string> extract_local_image_path_candidates(const std::string& text);
+Error decode_base64(const std::string& encoded, std::string& decoded);
 Error load_image_file(const std::string& path,
                       const FileType& type,
                       size_t max_bytes,

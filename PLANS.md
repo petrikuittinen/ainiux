@@ -45,7 +45,7 @@ error layers should serve:
 | v1.19 | Settings widget, Goal-only `goal_met`, and charset conversion to UTF-8 | Landed |
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
-| **v1.2** | **Image generation across CLI and interactive surfaces** | Planned after v1.1 |
+| **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 Do not begin the postponed browser UI before the local server/runtime foundation is
@@ -173,14 +173,17 @@ revived.
 
 # v1.2 - Image generation
 
+## Current implementation
+
+CLI-only single-turn `ainiux image` / `--image` is landed. Image **models** are `[image]` records in `images.conf`; image **protocols** are compiled adapters. `openai_images` (`/images/generations` or `/images/edits`) and `replicate_predictions` are implemented. The bundled catalog defaults `--provider openai` to `gpt-image-2` and `--provider replicate` to `prunaai/z-image-turbo`. `--size` / `--ar` / `--quality` / `--format` are mapped from the matched record (OpenAI 2k+16:9 → `2048x1152`; Replicate enum models keep class tokens such as `2K` plus `--ar`). FAL remains later work. Further Replicate image or video models should be catalog-only.
+
 ## Goal
 
-Add first-class provider-backed image generation after v1.1, reusing provider profiles,
+Finish first-class provider-backed image generation after v1.1, reusing provider profiles,
 runtime jobs, cancellation, error handling, persistence, and credential redaction.
 
-Initial surfaces:
+Remaining surfaces:
 
-- explicit non-interactive `ainiux image` command
 - REPL `/image` commands
 - cancellable TUI image-generation job
 - future server/browser exposure only after those surfaces exist securely
@@ -203,7 +206,7 @@ image count
 Example direction:
 
 ```sh
-ainiux image -p "A quiet terminal workspace at night" --image-model MODEL
+ainiux image -p "A quiet terminal workspace at night" -m gpt-image-2
 ainiux image --prompt-file prompt.txt --size 1024x1024 --format png
 ainiux image -p "diagram of provider adapters" --output diagram.png
 ```

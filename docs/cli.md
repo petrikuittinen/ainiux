@@ -109,3 +109,28 @@ These flags cannot be combined with `--agent` / `--run` / chat / editor. After i
 
 Full guide: [MCP servers](mcp.md).
 
+## Image generation
+
+`ainiux image` (or `--image`) generates **one** image from a prompt. The catalog in `images.conf` selects the protocol and model. OpenAI defaults to `gpt-image-2` (`openai_images`). `--provider replicate` uses official Replicate predictions (`replicate_predictions`); the default model is `prunaai/z-image-turbo`. This is a single-turn CLI mode: there is no TUI/REPL `/image`, no batch `n>1`, and no multi-turn editing.
+
+```sh
+ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
+ainiux image -p "gift basket from these items" --attach lotion.png --attach soap.jpg --size 2k --ar 16:9
+ainiux image -p "otter" --format webp --output stdout > otter.webp
+ainiux image --provider replicate -m prunaai/z-image-turbo -p "a red cube"
+ainiux image --provider replicate -m google/nano-banana-2 -p "make it night" --attach photo.png --size 1k --ar 1:1
+```
+
+- Prompt: `-p` / `--prompt` / `--prompt-file` (required)
+- Input images: repeatable `--attach` PNG or JPEG when the matched record sets `edits = on`. OpenAI uses `/v1/images/edits`; Replicate puts data URLs in the model’s image array field (`image_input`, `input_images`, or `images`).
+Image models and size/quality/format limits come from layered `images.conf` (not `models.conf`). Unknown `-m` values fail before HTTP. Replicate matching uses the final slash component, so `-m z-image-turbo` and `-m prunaai/z-image-turbo` both work. Credentials are `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN` (not `AINIUX_API_KEY`).
+
+- `--size`: `WIDTHxHEIGHT`, or `1k` / `2k` / `4k` / `auto`. OpenAI maps `2k`+`16:9` to `2048x1152`. Replicate enum models send the catalog token (`2K`, `1 MP`) and keep `--ar` separate.
+- `--ar W:H` (and named values such as `match_input_image` when listed)
+- `--quality low|medium|high|auto` (default auto; OpenAI Images)
+- `--format png|jpeg|webp|auto` (codec; default from the catalog record)
+- `--output PATH` writes that file; `stdout` writes raw bytes. If omitted, the first unused `imageN.EXT` in the current directory is used.
+- `--force` overwrites an existing `--output` file.
+
+Stdout prints the saved path (or raw bytes for `--output stdout`). Status goes to stderr. GPT Image models may require OpenAI organization verification. Ordinary chat never generates images from a text prompt.
+
