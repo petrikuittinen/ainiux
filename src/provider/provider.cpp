@@ -104,7 +104,8 @@ Profile make_profile(const std::string& name,
     profile.capabilities = profile_capabilities(requires_key, local, !chat_path.empty(), !responses_path.empty(), !models_path.empty());
     profile.capabilities.images = local || name == names::kOpenAi || name == "openrouter" || name == "gemini" ||
                                   name == "xai" || name == "mistral" || name == "qwen" ||
-                                  name == "deepseek" || name == names::kCustomOpenAiChat;
+                                  name == "deepseek" || name == "zai" ||
+                                  name == names::kCustomOpenAiChat;
     return profile;
 }
 

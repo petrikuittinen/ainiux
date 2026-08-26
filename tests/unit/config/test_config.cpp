@@ -893,6 +893,42 @@ void test_config_reads_models_template() {
             options.model_catalog, "qwen", "chat", "qwen3.8-max-preview");
     check(qwen38_preview != nullptr && qwen38_preview->id == "qwen-3.8-chat",
           "Qwen 3.8 family rule covers max-preview ids");
+    const ainiux::ModelCapability* qwen38_flash_next =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "qwen", "chat", "Qwen3.8-Flash-Next");
+    const ainiux::ModelCapability* qwen38_flash_next_routed =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "Qwen/Qwen3.8-Flash-Next");
+    check(qwen38_flash_next != nullptr && qwen38_flash_next->id == "qwen-3.8-flash-next" &&
+              qwen38_flash_next->reasoning_protocol == ainiux::ReasoningProtocol::QwenChatEffort &&
+              qwen38_flash_next->reasoning_default == ainiux::ReasoningSelection::named("xhigh") &&
+              qwen38_flash_next->context_window_tokens == 262144 &&
+              qwen38_flash_next->images.has_value() && *qwen38_flash_next->images &&
+              qwen38_flash_next->reasoning_options.size() == 4 &&
+              qwen38_flash_next->reasoning_options[0] == ainiux::ReasoningSelection::named("none") &&
+              qwen38_flash_next->reasoning_options[1] == ainiux::ReasoningSelection::named("low") &&
+              qwen38_flash_next->reasoning_options[2] == ainiux::ReasoningSelection::named("medium") &&
+              qwen38_flash_next->reasoning_options[3] == ainiux::ReasoningSelection::named("xhigh"),
+          "Qwen3.8-Flash-Next is multimodal with none|low|medium|xhigh and 256K fallback");
+    check(qwen38_flash_next_routed != nullptr &&
+              qwen38_flash_next_routed->id == "qwen-3.8-flash-next",
+          "Qwen3.8-Flash-Next family rule covers routed Hugging Face-style ids");
+    const ainiux::ModelSetting* flash_next_thinking = ainiux::config::find_model_preset(
+        options.model_catalog, *qwen38_flash_next, "creative");
+    const ainiux::ModelSetting* flash_next_instruct = ainiux::config::find_model_preset(
+        options.model_catalog, *qwen38_flash_next, "instruct");
+    check(flash_next_thinking != nullptr && flash_next_thinking->temperature == 1.0 &&
+              flash_next_thinking->top_p == 0.95 && flash_next_thinking->top_k == 20 &&
+              flash_next_thinking->min_p == 0.0 &&
+              flash_next_thinking->presence_penalty == 0.0 &&
+              flash_next_thinking->repeat_penalty == 1.0,
+          "Qwen3.8-Flash-Next creative preset uses thinking-mode sampling");
+    check(flash_next_instruct != nullptr && flash_next_instruct->temperature == 0.7 &&
+              flash_next_instruct->top_p == 0.8 && flash_next_instruct->top_k == 20 &&
+              flash_next_instruct->min_p == 0.0 &&
+              flash_next_instruct->presence_penalty == 1.5 &&
+              flash_next_instruct->repeat_penalty == 1.0,
+          "Qwen3.8-Flash-Next instruct preset uses non-thinking sampling");
 
     const ainiux::ModelCapability* gpt54 = ainiux::config::resolve_model_capability(
         options.model_catalog, "openai", "responses", "gpt-5.4");
@@ -928,8 +964,48 @@ void test_config_reads_models_template() {
           "Kimi K3 family uses the builtin $web_search tool");
     const ainiux::ModelCapability* glm52 = ainiux::config::resolve_model_capability(
         options.model_catalog, "zai", "chat", "glm-5.2");
-    check(glm52 != nullptr && glm52->web_search && glm52->web_search_name == "web_search",
-          "GLM-5 family advertises hosted web_search");
+    check(glm52 != nullptr && glm52->id == "zai-glm-5" && glm52->web_search &&
+              glm52->web_search_name == "web_search" &&
+              !glm52->reasoning_options.empty() &&
+              ainiux::config::reasoning_selection_disables(glm52->reasoning_options[0]),
+          "GLM-5.2 stays on the disableable GLM-5 family with hosted web_search");
+    const ainiux::ModelCapability* glm53 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "zai", "chat", "glm-5.3");
+    check(glm53 != nullptr && glm53->id == "zai-glm-5.3" &&
+              glm53->reasoning_protocol == ainiux::ReasoningProtocol::Zai &&
+              glm53->reasoning_default == ainiux::ReasoningSelection::named("max") &&
+              glm53->context_window_tokens == 1000000 &&
+              glm53->images.has_value() && !*glm53->images && glm53->web_search &&
+              glm53->reasoning_options.size() == 3 &&
+              glm53->reasoning_options[0] == ainiux::ReasoningSelection::named("low") &&
+              glm53->reasoning_options[1] == ainiux::ReasoningSelection::named("high") &&
+              glm53->reasoning_options[2] == ainiux::ReasoningSelection::named("max") &&
+              !ainiux::config::reasoning_selection_disables(glm53->reasoning_options[0]),
+          "GLM-5.3 is text-to-text with always-on low|high|max thinking");
+    const ainiux::ModelCapability* glm53_flash = ainiux::config::resolve_model_capability(
+        options.model_catalog, "zai", "chat", "glm-5.3-flash");
+    const ainiux::ModelCapability* glm53_flash_routed =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "z-ai/glm-5.3-flash");
+    check(glm53_flash != nullptr && glm53_flash->id == "zai-glm-5.3-flash" &&
+              glm53_flash->images.has_value() && *glm53_flash->images &&
+              glm53_flash->reasoning_protocol == ainiux::ReasoningProtocol::Zai &&
+              glm53_flash->reasoning_default == ainiux::ReasoningSelection::named("max") &&
+              glm53_flash->context_window_tokens == 1000000 &&
+              glm53_flash->reasoning_options.size() == 3 &&
+              !ainiux::config::reasoning_selection_disables(glm53_flash->reasoning_options[0]),
+          "GLM-5.3-Flash is cataloged as text-image-to-text with always-on thinking");
+    check(glm53_flash_routed != nullptr && glm53_flash_routed->id == "zai-glm-5.3-flash",
+          "GLM-5.3-Flash family rule covers routed OpenRouter-style ids");
+    ainiux::ReasoningSelection glm53_off = ainiux::ReasoningSelection::named("off");
+    const ainiux::Error glm53_off_error = ainiux::config::resolve_reasoning_off(
+        options.model_catalog, "zai", "chat", "glm-5.3", glm53_off);
+    const ainiux::Error glm53_flash_off_error = ainiux::config::resolve_reasoning_off(
+        options.model_catalog, "zai", "chat", "glm-5.3-flash", glm53_off);
+    check(!glm53_off_error.ok() &&
+              glm53_off_error.message.find("low|high|max") != std::string::npos &&
+              !glm53_flash_off_error.ok(),
+          "GLM-5.3 and GLM-5.3-Flash reject reasoning off");
     const ainiux::ModelCapability* qwen36 = ainiux::config::resolve_model_capability(
         options.model_catalog, "deepinfra", "chat", "vendor/qwen/QWEN3.6-27B");
     check(qwen36 != nullptr && qwen36->id == "qwen-3-hybrid-chat" &&

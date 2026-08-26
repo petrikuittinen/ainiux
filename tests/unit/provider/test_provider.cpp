@@ -641,13 +641,17 @@ void test_image_capability_detection() {
 
     const std::vector<ainiux::provider::Profile> profiles = ainiux::provider::built_in_profiles();
     bool deepseek_advertises_images = false;
+    bool zai_advertises_images = false;
     for (const ainiux::provider::Profile& profile : profiles) {
         if (profile.name == "deepseek") {
             deepseek_advertises_images = profile.capabilities.images;
-            break;
+        }
+        if (profile.name == "zai") {
+            zai_advertises_images = profile.capabilities.images;
         }
     }
     check(deepseek_advertises_images, "DeepSeek profile advertises image input");
+    check(zai_advertises_images, "Z.AI profile advertises image input");
 
     ainiux::cli::Options catalog_options;
     ainiux::config::ParseResult models = ainiux::config::read_file("config/models.conf");
@@ -675,6 +679,34 @@ void test_image_capability_detection() {
     deepseek.options.image_capability = "allow";
     check(ainiux::provider::validate_image_input(deepseek).ok(),
           "explicit allow still overrides DeepSeek text-only catalog records");
+
+    ainiux::provider::RequestContext zai;
+    zai.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    zai.profile.name = "zai";
+    zai.profile.capabilities.images = true;
+    zai.options.model_catalog = catalog_options.model_catalog;
+    zai.options.model = "glm-5.3";
+    check(!ainiux::provider::detected_capabilities_for(zai).images &&
+              !ainiux::provider::validate_image_input(zai).ok(),
+          "GLM-5.3 remains text-to-text in auto image mode");
+    zai.options.model = "glm-5.3-flash";
+    check(ainiux::provider::detected_capabilities_for(zai).images &&
+              ainiux::provider::validate_image_input(zai).ok(),
+          "GLM-5.3-Flash is image-capable in auto mode");
+    zai.options.model = "glm-5.2";
+    check(!ainiux::provider::detected_capabilities_for(zai).images &&
+              !ainiux::provider::validate_image_input(zai).ok(),
+          "GLM-5.2 stays off image input without a vision catalog flag");
+
+    ainiux::provider::RequestContext qwen;
+    qwen.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    qwen.profile.name = "qwen";
+    qwen.profile.capabilities.images = true;
+    qwen.options.model_catalog = catalog_options.model_catalog;
+    qwen.options.model = "Qwen3.8-Flash-Next";
+    check(ainiux::provider::detected_capabilities_for(qwen).images &&
+              ainiux::provider::validate_image_input(qwen).ok(),
+          "Qwen3.8-Flash-Next is image-capable in auto mode");
 }
 
 void test_provider_lookup_metadata() {
