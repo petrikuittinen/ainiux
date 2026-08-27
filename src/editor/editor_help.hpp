@@ -25,6 +25,7 @@ enum class EditorSlashCommand {
     Maximize,
     GotoLine,
     Dired,
+    Statistics,
 };
 
 struct ParsedEditorSlashCommand {

@@ -21,6 +21,7 @@
 #include "editor/path_completion.hpp"
 #include "editor/reformat.hpp"
 #include "editor/split.hpp"
+#include "editor/statistics.hpp"
 #include "editor/text_layout.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
@@ -829,6 +830,21 @@ app::EditorRunResult run_editor(const std::string& path,
         state.clear_selection();
         state.clear_undo_history();
         minibuffer_message(minibuffer, "Help (read-only) — Ctrl+H, Esc /help, or Ctrl+Q to return");
+    };
+
+    auto show_buffer_statistics = [&]() {
+        std::string source;
+        bool selection = false;
+        if (help_view.active) {
+            source = help_view.saved.content;
+        } else if (state.selection.has_range()) {
+            source = state.selected_text();
+            selection = true;
+        } else {
+            source = state.text.str();
+        }
+        minibuffer_message(minibuffer,
+                           format_statistics_message(buffer_statistics(source), selection));
     };
 
     auto close_editor_settings = [&]() {
@@ -2729,6 +2745,11 @@ app::EditorRunResult run_editor(const std::string& path,
                 pending_assist = PendingAssist{};
                 exit_assist_command_mode(minibuffer, assist_completer);
                 enter_dired(slash.path);
+                return;
+            case EditorSlashCommand::Statistics:
+                pending_assist = PendingAssist{};
+                exit_assist_command_mode(minibuffer, assist_completer);
+                show_buffer_statistics();
                 return;
             case EditorSlashCommand::None:
                 break;

@@ -213,7 +213,7 @@ slash. Chat and agent modes use `/chat`, `/agent`, and `/editor`.
 
 Built-in AI: `/spell`, `/grammar`, `/continue`, `/fact`, `/comment`, `/rewrite`, `/style-formal`, `/style-casual`, `/style-humor`, `/marketing`, `/lyrics`, `/English`, `/Chinese`, `/Finnish`, `/German`, `/French`, `/Italian`, `/Spanish`, `/Portuguese`, `/Arabic`, `/Hindi`, `/Japanese`, `/Korean`, `/Swedish`, `/Polish`, `/Russian`, `/prompt`, `/regenerate` (and many more from `editor-commands.conf`)
 
-File/editor: `/save`, `/saveas`, `/find`, `/replace` (`replace-string`), `/open`, `/dired [path|glob]`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/quit`
+File/editor: `/save`, `/saveas`, `/find`, `/replace` (`replace-string`), `/open`, `/dired [path|glob]`, `/new`, `/list`, `/close`, `/vsplit`, `/hsplit`, `/closesplit`, `/maximize` (`/nosplit`), `/chat`, `/agent`, `/editor`, `/help`, `/statistics` (`/word-count`), `/quit`
 
 ### Dired (full-screen directory browser)
 

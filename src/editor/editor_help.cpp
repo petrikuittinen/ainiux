@@ -80,6 +80,9 @@ EditorSlashCommand command_from_token(const std::string& command_token) {
     if (command_token == "dired") {
         return EditorSlashCommand::Dired;
     }
+    if (command_token == "statistics" || command_token == "word-count") {
+        return EditorSlashCommand::Statistics;
+    }
     return EditorSlashCommand::None;
 }
 
@@ -178,7 +181,8 @@ ParsedEditorSlashCommand parse_editor_slash_command(const std::string& line) {
             parsed.command == EditorSlashCommand::Editor ||
             parsed.command == EditorSlashCommand::VSplit || parsed.command == EditorSlashCommand::HSplit ||
             parsed.command == EditorSlashCommand::CloseSplit ||
-            parsed.command == EditorSlashCommand::Maximize) {
+            parsed.command == EditorSlashCommand::Maximize ||
+            parsed.command == EditorSlashCommand::Statistics) {
             parsed.command = EditorSlashCommand::None;
             return parsed;
         }

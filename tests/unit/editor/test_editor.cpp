@@ -21,6 +21,7 @@
 #include "editor/reformat.hpp"
 #include "editor/selection.hpp"
 #include "editor/split.hpp"
+#include "editor/statistics.hpp"
 #include "editor/text_layout.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
@@ -1411,6 +1412,26 @@ void test_editor_assist_helpers() {
     completion = ainiux::editor::complete_assist_command(input, completer, default_config);
     check(input == "setting" && completion.match_count == 1,
           "slashless editor tab completion matches setting");
+    input = "/stat";
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
+    check(completion.changed && input == "/statistics" && completion.match_count == 1,
+          "assist tab completion completes /stat to /statistics");
+    input = "statistics";
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
+    check(input == "statistics" && completion.match_count == 1,
+          "slashless editor tab completion matches statistics");
+    input = "/word";
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
+    check(completion.changed && input == "/word-count" && completion.match_count == 1,
+          "assist tab completion completes /word to /word-count");
+    input = "word-c";
+    completer = ainiux::editor::AssistCompleterState{};
+    completion = ainiux::editor::complete_assist_command(input, completer, default_config);
+    check(completion.changed && input == "word-count" && completion.match_count == 1,
+          "slashless editor tab completion completes word-c to word-count");
     check(ainiux::editor::editor_assist_path_prefix_length("open notes") == 5 &&
               ainiux::editor::editor_assist_path_prefix_length("/saveas notes") == 8,
           "slashless and slashed path commands expose path completion");
@@ -5243,6 +5264,10 @@ void test_editor_help_document_and_command() {
           "editor help document documents bare offline startup");
     check(help_text.find("/provider") != std::string::npos && help_text.find("/model") != std::string::npos,
           "editor help document documents /provider and /model");
+    const std::string embedded_help = ainiux::editor::embedded_editor_help_markdown();
+    check(embedded_help.find("/statistics") != std::string::npos &&
+              embedded_help.find("/word-count") != std::string::npos,
+          "embedded editor help documents /statistics and /word-count");
 
     check(ainiux::editor::is_editor_help_command("/help"), "editor /help command is recognized");
     check(ainiux::editor::is_editor_help_command("  /HELP  "), "editor /help command is case-insensitive");
@@ -5252,6 +5277,10 @@ void test_editor_help_document_and_command() {
         ainiux::editor::assist_command_completions(ainiux::editor::default_editor_assist_config());
     check(std::find(completions.begin(), completions.end(), "/help") != completions.end(),
           "assist command completions include /help");
+    check(std::find(completions.begin(), completions.end(), "/statistics") != completions.end(),
+          "assist command completions include /statistics");
+    check(std::find(completions.begin(), completions.end(), "/word-count") != completions.end(),
+          "assist command completions include /word-count");
     check(std::find(completions.begin(), completions.end(), "/save") != completions.end(),
           "assist command completions include /save");
     check(std::find(completions.begin(), completions.end(), "/open ") != completions.end(),
@@ -5376,6 +5405,24 @@ void test_editor_help_document_and_command() {
     slash = ainiux::editor::parse_editor_slash_command("/editor");
     check(slash.command == ainiux::editor::EditorSlashCommand::Editor && slash.path.empty(),
           "editor /editor command is recognized");
+    slash = ainiux::editor::parse_editor_slash_command("/statistics");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Statistics && slash.path.empty(),
+          "editor /statistics slash command is recognized");
+    slash = ainiux::editor::parse_editor_slash_command("statistics");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Statistics && slash.path.empty(),
+          "editor statistics command works without a slash");
+    slash = ainiux::editor::parse_editor_slash_command("/word-count");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Statistics && slash.path.empty(),
+          "editor /word-count is an alias for /statistics");
+    slash = ainiux::editor::parse_editor_slash_command("word-count");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Statistics && slash.path.empty(),
+          "editor word-count command works without a slash");
+    slash = ainiux::editor::parse_editor_slash_command("/statistics extra");
+    check(slash.command == ainiux::editor::EditorSlashCommand::None,
+          "editor /statistics rejects arguments");
+    slash = ainiux::editor::parse_editor_slash_command("/WORD-COUNT");
+    check(slash.command == ainiux::editor::EditorSlashCommand::Statistics && slash.path.empty(),
+          "editor /word-count is case-insensitive");
     check(std::find(completions.begin(), completions.end(), "/chat") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/agent") != completions.end() &&
               std::find(completions.begin(), completions.end(), "/editor") != completions.end(),
@@ -5686,6 +5733,49 @@ void test_editor_markdown_mode_and_structured_highlighting() {
 }
 
 
+void test_editor_buffer_statistics() {
+    using ainiux::editor::EditorBufferStats;
+    using ainiux::editor::buffer_statistics;
+    using ainiux::editor::format_statistics_message;
+
+    const EditorBufferStats empty = buffer_statistics("");
+    check(empty.characters == 0 && empty.words == 0 && empty.total_lines == 1 &&
+              empty.empty_lines == 1,
+          "empty buffer is one empty line with no characters or words");
+
+    const EditorBufferStats hello = buffer_statistics("hello world");
+    check(hello.characters == 11 && hello.words == 2 && hello.total_lines == 1 &&
+              hello.empty_lines == 0,
+          "single-line text counts characters, words, and no empty lines");
+
+    const EditorBufferStats multiline = buffer_statistics("one\n\n  \nthree four\n");
+    check(multiline.characters == 15 && multiline.words == 3 && multiline.total_lines == 5 &&
+              multiline.empty_lines == 3,
+          "statistics count blank and whitespace-only lines and a trailing empty line");
+
+    const EditorBufferStats crlf = buffer_statistics("ab\r\ncd");
+    check(crlf.characters == 4 && crlf.words == 2 && crlf.total_lines == 2 &&
+              crlf.empty_lines == 0,
+          "CRLF is one line break and CR is omitted from the character count");
+
+    const std::string cafe_nfd = std::string("cafe") + "\xCC\x81";
+    const EditorBufferStats combining = buffer_statistics(cafe_nfd);
+    check(combining.characters == 4 && combining.words == 1,
+          "character count uses graphemes so a combining accent stays one character");
+
+    const EditorBufferStats emoji = buffer_statistics("hi 👋");
+    check(emoji.characters == 4 && emoji.words == 2,
+          "emoji graphemes count as one character and a word");
+
+    const std::string message = format_statistics_message(multiline, false);
+    check(message == "Character count: 15 · Word count: 3 · Total lines: 5 · Empty lines: 3",
+          "statistics minibuffer lists character, word, total-line, and empty-line counts");
+    check(format_statistics_message(hello, true) ==
+              "Selection — Character count: 11 · Word count: 2 · Total lines: 1 · Empty lines: 0",
+          "selection statistics prefix the minibuffer line");
+}
+
+
 void test_editor_text_layout_align_and_cleanup() {
     using ainiux::editor::TextAlignMode;
     using ainiux::editor::TextLayoutResult;
@@ -5812,6 +5902,7 @@ void run_all() {
     test_editor_missing_file_error_message();
     test_editor_buffer_list_helpers();
     test_editor_markdown_mode_and_structured_highlighting();
+    test_editor_buffer_statistics();
     test_editor_ai_continue_helpers();
     test_editor_ai_setup_helpers();
     test_editor_reasoning_picker();

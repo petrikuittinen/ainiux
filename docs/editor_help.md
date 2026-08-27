@@ -293,6 +293,7 @@ Press **`Ctrl+E`**, **`Esc`**, or **`Alt+X`** to open the command minibuffer (`C
 | `/agent` | Switch directly to interactive agent mode |
 | `/editor` | Stay in editor mode (reports that it is already active) |
 | `/help` | Toggle this help view |
+| `/statistics` or `/word-count` | Show character count, word count, total lines, and empty lines in the minibuffer. Counts the selection when one is active |
 | `/quit` | Quit the editor |
 
 The leading slash is optional for these mode commands, as for other editor
