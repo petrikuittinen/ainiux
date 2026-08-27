@@ -271,18 +271,28 @@ Error read_file(const std::string& path, std::string& out) {
     return ok_error();
 }
 
+std::string take_api_key(std::string raw, bool quiet) {
+    const std::string key = sanitize_api_key(raw);
+    if (!quiet && key != raw && !raw.empty()) {
+        std::cerr << "Warning: API key contained whitespace or a line break; using the unwrapped value.\n";
+    }
+    return key;
+}
+
 std::string resolve_key(const cli::Options& options, const Profile& profile) {
     if (!options.key.empty()) {
-        return options.key;
+        return take_api_key(options.key, options.quiet);
     }
     if (!options.key_env.empty()) {
-        return platform::environment_value(options.key_env.c_str());
+        return take_api_key(platform::environment_value(options.key_env.c_str()), options.quiet);
     }
     for (const std::string& env : profile.key_envs) {
         const std::string value = platform::environment_value(env.c_str());
-        if (!value.empty()) return value;
+        if (!value.empty()) {
+            return take_api_key(value, options.quiet);
+        }
     }
-    return profile.dummy_api_key;
+    return take_api_key(profile.dummy_api_key, true);
 }
 
 std::string join_url(const std::string& base, const std::string& suffix) {
@@ -296,6 +306,9 @@ std::string join_url(const std::string& base, const std::string& suffix) {
 }
 
 Error validate_header(const std::string& header) {
+    if (header.find('\r') != std::string::npos || header.find('\n') != std::string::npos) {
+        return {ErrorCode::BadArgs, "--header values cannot contain line breaks"};
+    }
     const size_t colon = header.find(':');
     if (colon == std::string::npos || colon == 0) {
         return {ErrorCode::BadArgs, "--header expects a value like \"Name: Value\""};
@@ -2513,6 +2526,9 @@ ContextResult build_context(const cli::Options& input_options) {
     }
 
     std::string key = resolve_key(options, profile);
+    if (!options.key.empty()) {
+        options.key = key;
+    }
     if (profile.requires_bearer_key && key.empty() && !has_authorization_header(options.headers)) {
         return {{}, {ErrorCode::Config, "provider " + profile.name + " requires an API key; set " +
                                       (profile.key_envs.empty() ? "AINIUX_API_KEY" : profile.key_envs[0]) +

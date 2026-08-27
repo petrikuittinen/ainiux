@@ -154,6 +154,12 @@ class ReadToolRegistry {
     void set_vision_hooks(VisionAttachHooks hooks) {
         vision_hooks_ = std::move(hooks);
     }
+    // Hosted vs client web_search follows the current adapter, not prepare-time
+    // catalog. Live /provider and /model switches call this before each round.
+    void set_hosted_web_search(bool enabled, std::string name = "web_search") {
+        hosted_web_search_ = enabled;
+        hosted_web_search_name_ = name.empty() ? "web_search" : std::move(name);
+    }
     // Optional MCP tools (agent/run/plan only). Not owned; caller keeps Manager alive.
     void set_mcp_bridge(mcp::ToolBridge* bridge) { mcp_bridge_ = bridge; }
     mcp::ToolBridge* mcp_bridge() const { return mcp_bridge_; }

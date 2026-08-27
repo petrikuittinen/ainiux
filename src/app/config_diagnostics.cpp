@@ -7,7 +7,7 @@ namespace ainiux::app {
 void print_config_diagnostics(const config::LoadResult& configured) {
     for (const config::ConfigDiagnostic& diagnostic : configured.diagnostics) {
         const char* scope = diagnostic.scope == config::ConfigScope::Bundled ? "bundled" : "user";
-        const char* state = "not found";
+        const char* state = "missing";
         switch (diagnostic.state) {
             case config::ConfigFileState::Loaded:
                 state = "loaded";

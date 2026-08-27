@@ -5,6 +5,7 @@
 #include "agent/read_only_command.hpp"
 #include "platform/environment.hpp"
 #include "platform/filesystem.hpp"
+#include "provider/provider.hpp"
 #include "runtime/subprocess.hpp"
 
 #include <algorithm>
@@ -72,6 +73,45 @@ std::string fixed_command_path() {
 #else
     return "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
 #endif
+}
+
+#if defined(_WIN32)
+std::string env_name_key(std::string name) {
+    for (char& ch : name) {
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch + ('a' - 'A'));
+    }
+    return name;
+}
+#else
+std::string env_name_key(std::string name) { return name; }
+#endif
+
+bool environment_has_name(const std::vector<std::string>& environment, const std::string& name) {
+    const std::string key = env_name_key(name);
+    for (const std::string& entry : environment) {
+        const std::size_t eq = entry.find('=');
+        if (eq == std::string::npos || eq == 0) continue;
+        if (env_name_key(entry.substr(0, eq)) == key) return true;
+    }
+    return false;
+}
+
+void append_inherited_environment(std::vector<std::string>& environment, const char* name) {
+    if (name == nullptr || name[0] == '\0') return;
+    if (environment_has_name(environment, name)) return;
+    const std::string value = platform::environment_value(name);
+    if (value.empty()) return;
+    environment.push_back(std::string(name) + "=" + value);
+}
+
+bool same_running_executable(const std::string& resolved) {
+    const std::string self = platform::executable_path();
+    if (self.empty() || resolved.empty()) return false;
+    std::error_code ec;
+    const fs::path left = fs::weakly_canonical(fs::absolute(fs::u8path(self), ec), ec);
+    if (ec || left.empty()) return false;
+    const fs::path right = fs::weakly_canonical(fs::absolute(fs::u8path(resolved), ec), ec);
+    return !ec && !right.empty() && left == right;
 }
 
 #if defined(_WIN32)
@@ -735,6 +775,48 @@ Error tokenize_command(const std::string& command, std::vector<std::string>& arg
 
 }  // namespace
 
+std::vector<std::string> agent_command_environment(const std::string& resolved_executable) {
+    std::vector<std::string> environment = {
+        std::string("PATH=") + fixed_command_path(),
+#if defined(_WIN32)
+        "PAGER=cat",
+        "GIT_PAGER=cat",
+        "GIT_EXTERNAL_DIFF=",
+        "GIT_OPTIONAL_LOCKS=0",
+        "RIPGREP_CONFIG_PATH=NUL"};
+    const char* inherited_names[] = {"SystemRoot", "WINDIR", "HOME", "USERPROFILE",
+                                     "TEMP", "TMP"};
+    for (const char* name : inherited_names) append_inherited_environment(environment, name);
+    environment.push_back("PATHEXT=.COM;.EXE;.BAT;.CMD");
+    const std::string system_root_for_env = platform::environment_value("SystemRoot");
+    if (!system_root_for_env.empty() && !environment_has_name(environment, "COMSPEC"))
+        environment.push_back(
+            "COMSPEC=" +
+            (std::filesystem::u8path(system_root_for_env) / "System32" / "cmd.exe").u8string());
+#else
+        "LC_ALL=C.UTF-8",
+        "LANG=C.UTF-8",
+        "PAGER=cat",
+        "GIT_PAGER=cat",
+        "GIT_EXTERNAL_DIFF=",
+        "GIT_OPTIONAL_LOCKS=0",
+        "RIPGREP_CONFIG_PATH=/dev/null"};
+    append_inherited_environment(environment, "HOME");
+    append_inherited_environment(environment, "USER");
+#endif
+    if (same_running_executable(resolved_executable)) {
+        append_inherited_environment(environment, "XDG_CONFIG_HOME");
+        append_inherited_environment(environment, "XDG_CONFIG_DIRS");
+        std::set<std::string> key_names = {"AINIUX_API_KEY"};
+        for (const provider::Profile& profile : provider::built_in_profiles()) {
+            for (const std::string& name : profile.key_envs) key_names.insert(name);
+        }
+        for (const std::string& name : key_names)
+            append_inherited_environment(environment, name.c_str());
+    }
+    return environment;
+}
+
 Error parse_inspection_command(const std::string& command, std::vector<std::string>& arguments) {
     std::string unused_rule;
     return parse_command(command, arguments, CommandPolicy::InspectionOnly, unused_rule);
@@ -835,25 +917,8 @@ Error execute_resolved_command(ProcessResult& output,
     subprocess.background = options.background;
     subprocess.startup_ms = options.startup_ms;
     subprocess.cancellation = options.cancellation;
-    subprocess.environment = {
-        std::string("PATH=") + fixed_command_path(),
+    subprocess.environment = agent_command_environment(executable);
 #if defined(_WIN32)
-        "PAGER=cat",
-        "GIT_PAGER=cat",
-        "GIT_EXTERNAL_DIFF=",
-        "GIT_OPTIONAL_LOCKS=0",
-        "RIPGREP_CONFIG_PATH=NUL"};
-    const char* inherited_names[] = {"SystemRoot", "WINDIR",
-                                     "HOME", "USERPROFILE", "TEMP", "TMP"};
-    for (const char* name : inherited_names) {
-        const std::string value = platform::environment_value(name);
-        if (!value.empty()) subprocess.environment.push_back(std::string(name) + "=" + value);
-    }
-    subprocess.environment.push_back("PATHEXT=.COM;.EXE;.BAT;.CMD");
-    const std::string system_root_for_env = platform::environment_value("SystemRoot");
-    if (!system_root_for_env.empty())
-        subprocess.environment.push_back(
-            "COMSPEC=" + (fs::u8path(system_root_for_env) / "System32" / "cmd.exe").u8string());
     const std::string extension = ascii_lower(fs::u8path(executable).extension().u8string());
     if (extension == ".bat" || extension == ".cmd") {
         const std::string system_root = platform::environment_value("SystemRoot");
@@ -870,14 +935,6 @@ Error execute_resolved_command(ProcessResult& output,
         subprocess.arguments.insert(subprocess.arguments.begin(), executable);
         subprocess.windows_batch = true;
     }
-#else
-        "LC_ALL=C.UTF-8",
-        "LANG=C.UTF-8",
-        "PAGER=cat",
-        "GIT_PAGER=cat",
-        "GIT_EXTERNAL_DIFF=",
-        "GIT_OPTIONAL_LOCKS=0",
-        "RIPGREP_CONFIG_PATH=/dev/null"};
 #endif
     runtime::SubprocessResult process_result;
     error = runtime::run_subprocess(subprocess, process_result);

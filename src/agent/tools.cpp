@@ -352,6 +352,58 @@ bool resolved_path_is_under(const fs::path& root, const fs::path& candidate) {
 #endif
 }
 
+// Expand ~ on the user path and the workspace, then compare canonical forms.
+// In-project absolute or ~/ paths become workspace-relative (empty = project root).
+Error rewrite_workspace_user_path(const std::string& workspace,
+                                  const std::string& requested,
+                                  std::string& relative,
+                                  const char* action = "manipulate") {
+    relative.clear();
+    if (requested.empty() || requested == ".") return ok_error();
+    if (requested[0] == '$')
+        return {ErrorCode::BadArgs, unsafe_path_message(requested, action)};
+    if (requested[0] == '~' && requested != "~" && requested.rfind("~/", 0) != 0
+#if defined(_WIN32)
+        && requested.rfind("~\\", 0) != 0
+#endif
+    ) {
+        return {ErrorCode::BadArgs, "~user paths are not supported"};
+    }
+
+    const std::string expanded_request = expand_user_path(requested);
+    std::string expanded_workspace = expand_user_path(workspace);
+    if (expanded_workspace.empty()) expanded_workspace = workspace;
+
+    const fs::path supplied = fs::u8path(expanded_request);
+    if (!supplied.is_absolute()) {
+        if (!safe_relative_path(expanded_request))
+            return {ErrorCode::BadArgs, unsafe_path_message(requested, action)};
+        relative = supplied.generic_u8string();
+        if (relative == ".") relative.clear();
+        return ok_error();
+    }
+
+    std::error_code ec;
+    const fs::path root =
+        fs::weakly_canonical(fs::absolute(fs::u8path(expanded_workspace), ec), ec);
+    if (ec || root.empty())
+        return {ErrorCode::FileRead,
+                "could not resolve project root for path validation: " + ec.message()};
+    const fs::path candidate = fs::weakly_canonical(fs::absolute(supplied, ec), ec);
+    if (ec || candidate.empty())
+        return {ErrorCode::FileRead, "could not resolve path: " + requested};
+    if (!resolved_path_is_under(root, candidate))
+        return {ErrorCode::BadArgs, unsafe_path_message(requested, action)};
+    const fs::path within = fs::relative(candidate, root, ec);
+    if (ec)
+        return {ErrorCode::BadArgs, unsafe_path_message(requested, action)};
+    relative = within.generic_u8string();
+    if (relative == ".") relative.clear();
+    if (!relative.empty() && !safe_relative_path(relative))
+        return {ErrorCode::BadArgs, unsafe_path_message(requested, action)};
+    return ok_error();
+}
+
 bool resolved_path_is_under_system_temp(const fs::path& candidate) {
     std::error_code ec;
     const fs::path temp =
@@ -1518,31 +1570,16 @@ Error ReadToolRegistry::normalize_mutation_path(const std::string& input,
     if (input.empty())
         return {ErrorCode::BadArgs, "path must not be empty"};
 #if defined(_WIN32)
-    Error syntax = platform::validate_windows_path_syntax(input);
-    if (!syntax.ok()) return syntax;
+    if (input[0] != '~') {
+        Error syntax = platform::validate_windows_path_syntax(input);
+        if (!syntax.ok()) return syntax;
+    }
 #endif
-    const fs::path supplied = fs::u8path(input);
-    if (!supplied.is_absolute()) {
-        relative = supplied.generic_u8string();
-        if (!safe_relative_path(relative))
-            return {ErrorCode::BadArgs, unsafe_path_message(input, "create or modify")};
-        return ok_error();
-    }
-
-    std::error_code ec;
-    const fs::path workspace = fs::absolute(fs::u8path(snapshot_.workspace), ec).lexically_normal();
-    if (ec)
-        return {ErrorCode::FileWrite,
-                "could not resolve project workspace for path validation: " + ec.message()};
-    const fs::path normalized = supplied.lexically_normal();
-    const fs::path within = normalized.lexically_relative(workspace);
-    relative = within.generic_u8string();
-    if (relative.empty() || relative == "." || !safe_relative_path(relative)) {
-        relative.clear();
-        return {ErrorCode::BadArgs,
-                "absolute path is outside the project directory: " + input +
-                    " (use a project-relative path)"};
-    }
+    const Error rewritten =
+        rewrite_workspace_user_path(snapshot_.workspace, input, relative);
+    if (!rewritten.ok()) return rewritten;
+    if (relative.empty() || relative == ".")
+        return {ErrorCode::BadArgs, "path must name a file, not the workspace root"};
     return ok_error();
 }
 
@@ -4180,6 +4217,12 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         fs::path absolute;
         if (retired_project_script_path(path))
             return tool_error_result("policy_denied", retired_project_script_message());
+        {
+            std::string relative;
+            const Error rewritten =
+                rewrite_workspace_user_path(snapshot_.workspace, path, relative);
+            if (rewritten.ok()) path = relative;
+        }
         if (!safe_relative_path(path)) {
             Error resolved =
                 resolve_external_directory_path(snapshot_.workspace, path, absolute);
@@ -4419,11 +4462,17 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         Error error;
         if (retired_project_script_path(path)) {
             error = {ErrorCode::BadArgs, retired_project_script_message()};
-        } else if (safe_relative_path(path) && !path.empty()) {
+        } else {
+            std::string relative;
+            const Error rewritten =
+                rewrite_workspace_user_path(snapshot_.workspace, path, relative);
+            if (rewritten.ok()) path = relative;
+        }
+        if (error.ok() && safe_relative_path(path) && !path.empty()) {
             error = mutation_policy_ == MutationPolicy::Disabled
                         ? read_source(path, start, end, maximum, range)
                         : read_workspace_source(path, start, end, maximum, range);
-        } else {
+        } else if (error.ok()) {
             fs::path absolute;
             error = resolve_external_file_path(snapshot_.workspace, path, true, absolute);
             if (error.ok()) {
@@ -4505,8 +4554,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             if (!get_string(item, "path", item_path, true, item_error)) continue;
             if (retired_project_script_path(item_path))
                 return tool_error_result("policy_denied", retired_project_script_message());
-            if (safe_relative_path(item_path) &&
-                !item_path.empty())
+            std::string relative;
+            const Error rewritten =
+                rewrite_workspace_user_path(snapshot_.workspace, item_path, relative);
+            if (rewritten.ok() && safe_relative_path(relative) && !relative.empty())
                 continue;
             fs::path absolute;
             Error resolved =
@@ -4563,6 +4614,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             Error error;
             const auto external = external_paths.find(index);
             if (external == external_paths.end()) {
+                std::string relative;
+                const Error rewritten =
+                    rewrite_workspace_user_path(snapshot_.workspace, path, relative);
+                if (rewritten.ok()) path = relative;
                 error = mutation_policy_ == MutationPolicy::Disabled
                             ? read_source(path, start, end, effective_maximum, range)
                             : read_workspace_source(path, start, end, effective_maximum, range);
@@ -4620,9 +4675,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result(
                 "invalid_arguments",
                 "missing required non-empty string argument: query (pattern is accepted as an alias)");
-        if (!path.empty() && !safe_relative_path(path))
-            return tool_error_result("policy_denied",
-                                     unsafe_path_message(path, "search"));
+        if (!path.empty()) {
+            std::string relative;
+            const Error rewritten =
+                rewrite_workspace_user_path(snapshot_.workspace, path, relative, "search");
+            if (!rewritten.ok())
+                return tool_error_result("policy_denied", rewritten.message);
+            path = relative;
+        }
         const std::string search_root = normalize_glob_path(path);
         const bool regex_was_supplied = args.get("regex") != nullptr;
         const bool inferred_regex =
@@ -5044,6 +5104,17 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             !get_string(args, "cwd", cwd, false, validation_error) ||
             !get_bool(args, "background", false, background, validation_error))
             return tool_error_result("invalid_arguments", validation_error);
+        if (!cwd.empty()) {
+            std::string relative;
+            const Error rewritten =
+                rewrite_workspace_user_path(snapshot_.workspace, cwd, relative);
+            if (rewritten.ok()) {
+                cwd = relative;
+            } else {
+                const std::string expanded = expand_user_path(cwd);
+                if (fs::u8path(expanded).is_absolute()) cwd = expanded;
+            }
+        }
         if (background) {
             if (!full)
                 return tool_error_result(

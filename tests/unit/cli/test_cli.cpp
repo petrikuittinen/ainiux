@@ -934,6 +934,12 @@ void test_cli_image_mode_parse() {
     check(ainiux::cli::validate_image_mode_arguments(parsed.options).ok(),
           "valid image options pass validation");
 
+    const char* debug_argv[] = {"ainiux", "--debug", "image", "-p", "a cube"};
+    parsed = ainiux::cli::parse_args(5, const_cast<char**>(debug_argv));
+    check(parsed.error.ok() && parsed.options.image && parsed.options.debug &&
+              parsed.options.positional_url.empty() && parsed.options.prompt == "a cube",
+          "ainiux --debug image is image mode, not a positional URL");
+
     const char* flag_argv[] = {"ainiux", "--image", "-p", "otter", "--format=webp", "--force"};
     parsed = ainiux::cli::parse_args(6, const_cast<char**>(flag_argv));
     check(parsed.error.ok() && parsed.options.image, "--image flag parses");

@@ -38,10 +38,15 @@ The current native names are `index`, `ls`, `glob`, `grep`, `symbol`, `outline`,
 `read`, `run`, `fetch`, `web_search`, `goal_met` (active `/goal` only), `attach`,
 `edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on
 index, network, session, and mutation policy. When `models.conf` marks the current model
-`web_search=on`, agent/run/plan attach the provider-hosted search tool and do
+`web_search=on` **and** the current adapter can emit that family's hosted tool,
+agent/run/plan attach the provider-hosted search tool and do
 not advertise the client Tavily/DuckDuckGo `web_search` function. Official
 Gemini OpenAI-compat Chat stays on client `web_search` because that adapter
-rejects hosted `google_search`. `fetch` stays. `read` accepts either one `path` or an `items` batch
+rejects hosted `google_search`. GPT-5, Grok 4, and DeepSeek V4 / Vision host
+search only on Responses; a Chat Completions session (including a live
+`/provider` or `/model` switch that stays on Chat) uses client `web_search`.
+Live provider/model changes re-resolve hosted vs client search for the next
+round; they do not auto-promote the session to Responses. `fetch` stays. `read` accepts either one `path` or an `items` batch
 of 1–100 ranges. `grep` can combine a file/directory `path` with a name/type
 `glob` filter.
 

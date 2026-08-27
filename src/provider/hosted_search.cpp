@@ -42,9 +42,13 @@ HostedWebSearchKind kind_for(const ModelCapability& capability,
     return HostedWebSearchKind::ChatType;
 }
 
+bool family_requires_responses(const std::string& catalog_id) {
+    return catalog_id == "openai-gpt-5" || catalog_id == "xai-grok-4" ||
+           catalog_id == "deepseek-v4" || catalog_id == "deepseek-v4-flash-vision";
+}
+
 bool family_requires_responses(const ModelCapability& capability) {
-    return capability.id == "openai-gpt-5" || capability.id == "xai-grok-4" ||
-           capability.id == "deepseek-v4";
+    return family_requires_responses(capability.id);
 }
 
 bool hosted_search_unsupported_on_adapter(const ModelCapability& capability,
@@ -74,8 +78,7 @@ HostedWebSearch resolve_hosted_web_search(const RequestContext& context) {
 }
 
 bool hosted_web_search_requires_responses(const HostedWebSearch& search) {
-    return search.catalog_id == "openai-gpt-5" || search.catalog_id == "xai-grok-4" ||
-           search.catalog_id == "deepseek-v4";
+    return family_requires_responses(search.catalog_id);
 }
 
 json::Value hosted_web_search_tool_json(const HostedWebSearch& search) {

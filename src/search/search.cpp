@@ -25,13 +25,13 @@ std::string getenv_string(const char* name) {
 
 std::string resolve_key_env(const std::string& configured_env, const char* fallback_env) {
     if (!configured_env.empty()) {
-        const std::string value = getenv_string(configured_env.c_str());
+        const std::string value = sanitize_api_key(getenv_string(configured_env.c_str()));
         if (!value.empty()) {
             return value;
         }
     }
     if (fallback_env != nullptr) {
-        return getenv_string(fallback_env);
+        return sanitize_api_key(getenv_string(fallback_env));
     }
     return {};
 }

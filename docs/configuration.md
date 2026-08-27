@@ -71,7 +71,7 @@ key_file =
 
 Provider profiles already know their normal variables and share `AINIUX_API_KEY` as a fallback where applicable. LM Studio accepts both `LMSTUDIO_API_KEY` and `LM_STUDIO_API_KEY`; DeepInfra also accepts `DEEPINFRA_TOKEN`; Qwen accepts `QWEN_API_KEY` or `DASHSCOPE_API_KEY`. The full table is in the [README](../README.md#provider-profiles-and-credentials).
 
-At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic alternatives. Avoid storing keys in `-k` or headers on the command line because local process listings may expose arguments.
+At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic alternatives. Avoid storing keys in `-k` or headers on the command line because local process listings may expose arguments. Keys copied with a wrap (`\` plus newline, or a mid-key line break) are unwrapped automatically; `--header` values that contain a line break are rejected.
 
 ## Major settings
 

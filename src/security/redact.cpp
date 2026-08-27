@@ -24,4 +24,23 @@ bool is_sensitive_header_name(const std::string& name) {
            lower == "x-goog-api-key" || lower == "cookie" || lower == "set-cookie";
 }
 
+std::string sanitize_api_key(std::string key) {
+    std::string out;
+    out.reserve(key.size());
+    for (std::string::size_type i = 0; i < key.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(key[i]);
+        if (c == '\\' && i + 1 < key.size()) {
+            const unsigned char next = static_cast<unsigned char>(key[i + 1]);
+            if (next == '\n' || next == '\r') {
+                continue;
+            }
+        }
+        if (c == '\n' || c == '\r' || c == '\t') {
+            continue;
+        }
+        out.push_back(static_cast<char>(c));
+    }
+    return ascii_trim(std::move(out));
+}
+
 }  // namespace ainiux

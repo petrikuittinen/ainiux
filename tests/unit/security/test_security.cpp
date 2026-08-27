@@ -36,11 +36,24 @@ void test_sensitive_header_names() {
     check(!ainiux::is_sensitive_header_name(""), "empty header name is not sensitive");
 }
 
+void test_sanitize_api_key_unwraps_line_continuations() {
+    check(ainiux::sanitize_api_key("sk-abc") == "sk-abc", "clean API keys are unchanged");
+    check(ainiux::sanitize_api_key("  sk-abc\n") == "sk-abc", "API keys trim surrounding whitespace");
+    check(ainiux::sanitize_api_key(std::string("sk-ab\\\n") + "c-key") == "sk-abc-key",
+          "API keys unwrap POSIX backslash-newline line continuations");
+    check(ainiux::sanitize_api_key("sk-ab\nc-key") == "sk-abc-key",
+          "API keys drop an interior line break from a wrapped paste");
+    check(ainiux::sanitize_api_key("sk-ab\tc-key") == "sk-abc-key",
+          "API keys drop interior tabs");
+    check(ainiux::sanitize_api_key("") == "", "empty API keys stay empty");
+}
+
 }  // namespace
 
 void run_all() {
     test_redact_secrets_edge_cases();
     test_sensitive_header_names();
+    test_sanitize_api_key_unwraps_line_continuations();
 }
 
 }  // namespace ainiux::test::security

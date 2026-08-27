@@ -105,7 +105,7 @@ ainiux http://localhost:8000/v1 --list-models
 ainiux http://localhost:8000/v1 -m MODEL -p "Hello"
 ```
 
-Do not put long-lived keys directly on the command line. Use provider environment variables, `--key-env`, `--key-file`, or `--key-stdin`. The complete profile and key table is in the [project README](../README.md#provider-profiles-and-credentials).
+Do not put long-lived keys directly on the command line. Use provider environment variables, `--key-env`, `--key-file`, or `--key-stdin`. Paste the key as a single line; Ainiux unwraps accidental `\`-newline wraps so HTTP/2 providers such as OpenAI can send the `Authorization` header. The complete profile and key table is in the [project README](../README.md#provider-profiles-and-credentials).
 
 ## Generate an image
 

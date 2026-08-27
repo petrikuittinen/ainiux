@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "ainiux/version.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::http {
@@ -71,6 +72,9 @@ class CurlHeaders {
     CurlHeaders& operator=(const CurlHeaders&) = delete;
 
     Error append(const std::string& header) {
+        if (header.find('\r') != std::string::npos || header.find('\n') != std::string::npos) {
+            return {ErrorCode::BadArgs, "HTTP request header cannot contain line breaks"};
+        }
         curl_slist* next = curl_slist_append(list_, header.c_str());
         if (next == nullptr) {
             return {ErrorCode::Internal, "could not allocate HTTP request header list"};
@@ -114,7 +118,8 @@ bool is_proxy_connect_line(const std::string& line) {
 }
 
 Error classify_curl_error(CURLcode code, const std::string& detail, const std::string& url) {
-    const std::string msg = "libcurl transport failed for " + url + ": " + detail;
+    const std::string msg = "libcurl transport failed for " + url + " [" +
+                            curl_easy_strerror(code) + "]: " + detail;
     switch (code) {
         case CURLE_COULDNT_RESOLVE_HOST:
         case CURLE_COULDNT_RESOLVE_PROXY:
@@ -130,6 +135,11 @@ Error classify_curl_error(CURLcode code, const std::string& detail, const std::s
             return {ErrorCode::Tls, msg};
         case CURLE_OUT_OF_MEMORY:
             return {ErrorCode::Internal, msg};
+        case CURLE_BAD_FUNCTION_ARGUMENT:
+            return {ErrorCode::Internal,
+                    msg +
+                        " HTTP/2 may have rejected a request header (line breaks in API keys or "
+                        "--header values are invalid)"};
         default:
             return {ErrorCode::Internal, msg};
     }
@@ -355,6 +365,9 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
     if (!err.ok()) return {{}, err};
     err = setopt_long(curl, CURLOPT_NOSIGNAL, 1L);
     if (!err.ok()) return {{}, err};
+    const std::string user_agent = std::string("ainiux/") + versionNumber;
+    err = setopt(curl, CURLOPT_USERAGENT, user_agent.c_str());
+    if (!err.ok()) return {{}, err};
     err = setopt_long(curl, CURLOPT_CONNECTTIMEOUT, request.connect_timeout_seconds);
     if (!err.ok()) return {{}, err};
     if (request.timeout_seconds > 0) {
@@ -442,17 +455,40 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         }
     }
 
+    auto capture_timings = [&]() {
+        state.response.dns_ms = curl_elapsed_ms(curl, CURLINFO_NAMELOOKUP_TIME);
+        state.response.connect_ms = curl_elapsed_ms(curl, CURLINFO_CONNECT_TIME);
+        state.response.tls_ms = curl_elapsed_ms(curl, CURLINFO_APPCONNECT_TIME);
+        state.response.time_to_first_byte_ms = curl_elapsed_ms(curl, CURLINFO_STARTTRANSFER_TIME);
+        state.response.total_ms = curl_elapsed_ms(curl, CURLINFO_TOTAL_TIME);
+        if (state.response.status == 0) {
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &state.response.status);
+        }
+        state.response.stderr_text = redact_secrets(state.debug_text, secrets);
+    };
+
     state.transfer_start = std::chrono::steady_clock::now();
     code = curl_easy_perform(curl);
-    state.response.dns_ms = curl_elapsed_ms(curl, CURLINFO_NAMELOOKUP_TIME);
-    state.response.connect_ms = curl_elapsed_ms(curl, CURLINFO_CONNECT_TIME);
-    state.response.tls_ms = curl_elapsed_ms(curl, CURLINFO_APPCONNECT_TIME);
-    state.response.time_to_first_byte_ms = curl_elapsed_ms(curl, CURLINFO_STARTTRANSFER_TIME);
-    state.response.total_ms = curl_elapsed_ms(curl, CURLINFO_TOTAL_TIME);
-    if (state.response.status == 0) {
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &state.response.status);
+    capture_timings();
+    if (code == CURLE_SEND_ERROR && request.method == "POST" && !state.cancelled &&
+        !request.cancellation.cancelled()) {
+        (void)setopt_long(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+        state.response.body.clear();
+        state.response.status = 0;
+        state.response.content_type.clear();
+        state.response.diagnostic_headers.clear();
+        state.current_status = 0;
+        state.final_headers_seen = false;
+        state.first_body_seen = false;
+        error_buffer[0] = '\0';
+        state.transfer_start = std::chrono::steady_clock::now();
+        code = curl_easy_perform(curl);
+        capture_timings();
+        if (request.trace && !state.debug_text.empty()) {
+            state.debug_text.append("\n[ainiux retried the POST with HTTP/1.1 after a send error]\n");
+            state.response.stderr_text = redact_secrets(state.debug_text, secrets);
+        }
     }
-    state.response.stderr_text = redact_secrets(state.debug_text, secrets);
 
     if (code != CURLE_OK) {
         if (state.cancelled || request.cancellation.cancelled() || code == CURLE_ABORTED_BY_CALLBACK) {
@@ -472,7 +508,11 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         }
         std::string detail = error_buffer[0] == '\0' ? curl_easy_strerror(code) : error_buffer;
         detail = redact_secrets(detail, secrets);
-        return {state.response, classify_curl_error(code, detail, request.url)};
+        Error classified = classify_curl_error(code, detail, request.url);
+        if (request.trace && !state.response.stderr_text.empty()) {
+            classified.message += "\n" + state.response.stderr_text;
+        }
+        return {state.response, classified};
     }
     return {state.response, ok_error()};
 }

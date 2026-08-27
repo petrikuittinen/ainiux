@@ -10,6 +10,9 @@ std::string environment_value(const char* ascii_name);
 // HOME with the product's compatibility fallback: USERPROFILE on Windows only.
 std::string home_directory();
 
+// Absolute path of the running executable, or empty on failure.
+std::string executable_path();
+
 // Absolute directory containing the running executable, or empty on failure.
 std::string executable_directory();
 

@@ -1723,7 +1723,9 @@ void test_image_catalog_parse_and_match() {
               gemini_flash->api_model == "gemini-3.1-flash-image" && gemini_flash->edits &&
               gemini_flash->max_input_images == 14 && gemini_25->max_input_images == 3 &&
               gemini_25->size_field.empty() && gemini_lite->format_default == "jpeg" &&
-              gemini_lite->format.size() == 1 && gemini_lite->format.front() == "jpeg",
+              gemini_lite->format.size() == 1 && gemini_lite->format.front() == "jpeg" &&
+              gemini_flash->format_default == "jpeg" && gemini_flash->format.size() == 1 &&
+              gemini_flash->format.front() == "jpeg",
           "four Gemini Nano Banana records match gemini_interactions");
     check(ainiux::config::default_image_model(options.image_catalog, "fal") == "fal-ai/flux/schnell",
           "fal default image model is fal-ai/flux/schnell");

@@ -22,6 +22,20 @@ void test_http_private_address_socket_block() {
           "resolved-address refusal identifies the blocked address");
 }
 
+void test_http_rejects_header_line_breaks() {
+    ainiux::http::Request request;
+    request.url = "http://127.0.0.1:1/";
+    request.method = "POST";
+    request.body = "{}";
+    request.headers.push_back("Authorization: Bearer test\nX-Injected: 1");
+    request.connect_timeout_seconds = 1;
+    ainiux::http::Result result = ainiux::http::perform(request, {});
+    check(!result.error.ok() && result.error.code == ainiux::ErrorCode::BadArgs,
+          "HTTP transport rejects request headers that contain line breaks");
+    check(result.error.message.find("line break") != std::string::npos,
+          "header line-break error names the rejected character class");
+}
+
 void test_http_request_validation_and_cancellation() {
     ainiux::http::Request request;
     request.url = "";
@@ -45,6 +59,7 @@ void test_http_request_validation_and_cancellation() {
 
 void run_all() {
     test_http_private_address_socket_block();
+    test_http_rejects_header_line_breaks();
     test_http_request_validation_and_cancellation();
 }
 

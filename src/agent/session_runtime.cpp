@@ -2444,17 +2444,11 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
 
         // Native tools when protocol allows; empty definitions on pure XML channel.
         // Re-check hosted search here: the model/API may have changed since prepare.
+        tools_.set_hosted_web_search(provider::hosted_web_search_enabled(context),
+                                     provider::hosted_web_search_display_name(context));
         std::vector<provider::FunctionDefinition> definitions =
             state_.protocol == ToolProtocol::Xml ? std::vector<provider::FunctionDefinition>{}
                                                  : tools_.definitions();
-        if (provider::hosted_web_search_enabled(context)) {
-            definitions.erase(
-                std::remove_if(definitions.begin(), definitions.end(),
-                               [](const provider::FunctionDefinition& definition) {
-                                   return definition.name == "web_search";
-                               }),
-                definitions.end());
-        }
 
         provider::ToolRoundResult round;
         active_round_id = state_.turn + 1;

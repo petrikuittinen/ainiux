@@ -99,4 +99,10 @@ Error run_argv(std::vector<std::string> arguments,
 // True when a trusted system `rg` binary is on the fixed process PATH.
 bool ripgrep_available();
 
+// Sanitized environment for an agent `run` child. Arbitrary commands do not
+// inherit API keys. When resolved_executable is this Ainiux process (nested
+// `ainiux image`, `--list-models`, …), provider credential env vars and user
+// config location variables are forwarded so the child can use the same keys.
+std::vector<std::string> agent_command_environment(const std::string& resolved_executable);
+
 }  // namespace ainiux::agent

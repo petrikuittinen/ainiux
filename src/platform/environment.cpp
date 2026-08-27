@@ -50,7 +50,7 @@ std::string home_directory() {
     return home;
 }
 
-std::string executable_directory() {
+std::string executable_path() {
 #if defined(_WIN32)
     std::wstring path(512, L'\0');
     for (;;) {
@@ -65,7 +65,7 @@ std::string executable_directory() {
         path.resize(path.size() * 2);
     }
     std::string utf8;
-    if (!utf16_to_utf8(std::filesystem::path(path).parent_path().wstring(), utf8).ok()) return {};
+    if (!utf16_to_utf8(path, utf8).ok()) return {};
     return utf8;
 #elif defined(__APPLE__)
     std::uint32_t size = 0;
@@ -75,7 +75,8 @@ std::string executable_directory() {
     if (_NSGetExecutablePath(path.data(), &size) != 0) return {};
     path.resize(std::char_traits<char>::length(path.c_str()));
     std::error_code ec;
-    return std::filesystem::canonical(path, ec).parent_path().string();
+    const std::filesystem::path canonical = std::filesystem::canonical(path, ec);
+    return ec ? path : canonical.string();
 #else
     std::string path(512, '\0');
     for (;;) {
@@ -83,12 +84,18 @@ std::string executable_directory() {
         if (length < 0) return {};
         if (static_cast<std::size_t>(length) < path.size()) {
             path.resize(static_cast<std::size_t>(length));
-            return std::filesystem::path(path).parent_path().string();
+            return path;
         }
         if (path.size() >= static_cast<std::size_t>(PATH_MAX) * 4U) return {};
         path.resize(path.size() * 2U);
     }
 #endif
+}
+
+std::string executable_directory() {
+    const std::string path = executable_path();
+    if (path.empty()) return {};
+    return std::filesystem::path(path).parent_path().string();
 }
 
 void initialize_process_environment() {

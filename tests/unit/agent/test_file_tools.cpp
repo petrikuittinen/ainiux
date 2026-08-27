@@ -1915,6 +1915,31 @@ void test_git_and_network_tools_policy() {
             hosted_tools.execute("$web_search", R"JSON({"query":"news"})JSON");
         check(echoed.find("news") != std::string::npos,
               "Kimi $web_search echoes arguments instead of running client search");
+
+        hosted_tools.set_hosted_web_search(false);
+        bool saw_client_after_flip = false;
+        for (const provider::FunctionDefinition& def : hosted_tools.definitions()) {
+            if (def.name == "web_search") saw_client_after_flip = true;
+        }
+        check(saw_client_after_flip,
+              "disabling hosted web_search restores the client search tool");
+        const std::string client_after_flip =
+            hosted_tools.execute("web_search", R"JSON({"term":"ainiux agent"})JSON");
+        check(json_ok(client_after_flip) || !json_error_code(client_after_flip).empty(),
+              "client web_search executes after hosted search is turned off: " +
+                  client_after_flip);
+
+        hosted_tools.set_hosted_web_search(true, "$web_search");
+        saw_client_search = false;
+        for (const provider::FunctionDefinition& def : hosted_tools.definitions()) {
+            if (def.name == "web_search") saw_client_search = true;
+        }
+        check(!saw_client_search, "re-enabling hosted web_search omits the client tool");
+        const std::string echoed_again =
+            hosted_tools.execute("web_search", R"JSON({"term":"after-switch"})JSON");
+        check(!json_ok(echoed_again) && json_error_code(echoed_again).empty() &&
+                  echoed_again.find("after-switch") != std::string::npos,
+              "hosted web_search echoes arguments after it is turned back on");
     }
 
     agent::ReadToolRegistry review = make_registry(workspace, false);
@@ -2436,6 +2461,13 @@ void test_project_scripts_trust_and_execution() {
     check(json_ok(first) && first.find("first\\n") != std::string::npos &&
               smart_asks == 0,
           "Smart runs project scripts without asking: " + first);
+    const std::string abs_cwd = smart.execute(
+        "run",
+        std::string("{\"command\":\"sh scripts/ainiux/count.sh abs-cwd\",\"cwd\":") +
+            json::quote(workspace) + "}");
+    check(json_ok(abs_cwd) && abs_cwd.find("abs-cwd") != std::string::npos &&
+              smart_asks == 0,
+          "project script cwd may be the absolute project root: " + abs_cwd);
     const std::string reused = smart.execute(
         "run",
         R"JSON({"command":"sh scripts/ainiux/count.sh second"})JSON");
@@ -2642,6 +2674,68 @@ void test_project_scripts_trust_and_execution() {
 
 }  // namespace
 
+void test_in_project_absolute_and_tilde_paths() {
+    const std::string workspace = write_temp_workspace("abs-root");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+    const std::string hello =
+        (fs::path(workspace) / "src" / "hello.cpp").u8string();
+
+    const std::string abs_grep = tools.execute(
+        "grep",
+        std::string("{\"query\":\"main\",\"path\":") + json::quote(workspace) + "}");
+    check(json_ok(abs_grep) && abs_grep.find("hello.cpp") != std::string::npos,
+          "grep of absolute project root is in-project: " + abs_grep);
+
+    const std::string abs_file = tools.execute(
+        "grep", std::string("{\"query\":\"main\",\"path\":") + json::quote(hello) + "}");
+    check(json_ok(abs_file) && abs_file.find("hello.cpp") != std::string::npos,
+          "grep of absolute project file is in-project: " + abs_file);
+
+    const std::string abs_ls = tools.execute(
+        "ls", std::string("{\"path\":") + json::quote(workspace) + "}");
+    check(json_ok(abs_ls) && abs_ls.find("src") != std::string::npos,
+          "ls of absolute project root is in-project: " + abs_ls);
+
+    const std::string abs_read = tools.execute(
+        "read", std::string("{\"path\":") + json::quote(hello) + "}");
+    check(json_ok(abs_read) && abs_read.find("int main") != std::string::npos,
+          "read of absolute project file is in-project: " + abs_read);
+
+    const fs::path outside = fs::temp_directory_path() / "ainiux-outside-grep-root";
+    const std::string outside_grep = tools.execute(
+        "grep",
+        std::string("{\"query\":\"x\",\"path\":") + json::quote(outside.u8string()) + "}");
+    check(!json_ok(outside_grep) && json_error_code(outside_grep) == "policy_denied",
+          "grep of an outside absolute path stays denied: " + outside_grep);
+
+    const std::string home = platform::home_directory();
+    if (!home.empty()) {
+        const fs::path tilde_root =
+            fs::path(home) / ("ainiux-agent-tilde-" +
+                              std::to_string(platform::current_process_id()));
+        std::error_code ec;
+        fs::remove_all(tilde_root, ec);
+        fs::create_directories(tilde_root / "src", ec);
+        write_text(tilde_root / "src" / "hello.cpp", "int main() { return 0; }\n");
+        agent::ReadToolRegistry home_tools = make_registry(tilde_root.u8string(), true);
+        const std::string tilde =
+            std::string("~/") + (tilde_root.filename().u8string());
+        const std::string tilde_grep = home_tools.execute(
+            "grep",
+            std::string("{\"query\":\"main\",\"path\":") + json::quote(tilde) + "}");
+        check(json_ok(tilde_grep) && tilde_grep.find("hello.cpp") != std::string::npos,
+              "grep of ~/project root matches the expanded workspace: " + tilde_grep);
+        const std::string tilde_ls = home_tools.execute(
+            "ls", std::string("{\"path\":") + json::quote(tilde) + "}");
+        check(json_ok(tilde_ls) && tilde_ls.find("src") != std::string::npos,
+              "ls of ~/project root matches the expanded workspace: " + tilde_ls);
+        fs::remove_all(tilde_root, ec);
+    }
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void run_all() {
     test_permission_modes_and_native_path_tools();
     test_tool_schemas_gemini_compatible();
@@ -2669,6 +2763,7 @@ void run_all() {
     test_attach_image_tool_hooks();
     test_workspace_script_review_path();
     test_project_scripts_trust_and_execution();
+    test_in_project_absolute_and_tilde_paths();
 }
 
 }  // namespace ainiux::test::agent_file_tools

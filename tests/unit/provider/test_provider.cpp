@@ -994,6 +994,50 @@ class ScopedUnsetenv {
     std::optional<std::string> previous_value_;
 };
 
+class ScopedSetenv {
+   public:
+    ScopedSetenv(std::string name, std::string value) : name_(std::move(name)) {
+        previous_value_ = ainiux::test::test_environment(name_.c_str());
+        ainiux::test::set_test_environment(name_.c_str(), value);
+    }
+
+    ~ScopedSetenv() {
+        if (previous_value_.has_value())
+            ainiux::test::set_test_environment(name_.c_str(), *previous_value_);
+        else
+            ainiux::test::unset_test_environment(name_.c_str());
+    }
+
+   private:
+    std::string name_;
+    std::optional<std::string> previous_value_;
+};
+
+void test_openai_unwraps_line_wrapped_api_key() {
+    ScopedUnsetenv unset_ainiux("AINIUX_API_KEY");
+    const std::string wrapped = std::string("sk-test-wrap") + "\\\n" + "ped-key";
+    ScopedSetenv set_openai("OPENAI_API_KEY", wrapped);
+    ainiux::cli::Options options;
+    options.provider = "openai";
+    options.prompt = "hello";
+    options.quiet = true;
+    ainiux::provider::ContextResult context = ainiux::provider::build_context(options);
+    check(context.error.ok(), "openai context builds with a line-wrapped API key");
+    check(context.context.api_key == "sk-test-wrapped-key",
+          "openai unwraps POSIX line-continued API keys");
+}
+
+void test_header_rejects_line_breaks() {
+    ainiux::cli::Options options;
+    options.provider = "openai";
+    options.prompt = "hello";
+    options.headers.push_back("X-Test: one\ntwo");
+    options.quiet = true;
+    ainiux::provider::ContextResult context = ainiux::provider::build_context(options);
+    check(!context.error.ok() && context.error.code == ainiux::ErrorCode::BadArgs,
+          "provider rejects header values that contain line breaks");
+}
+
 void test_apply_provider_target_accepts_custom_url() {
     ainiux::cli::Options options;
     options.tui = true;
@@ -2230,6 +2274,41 @@ void test_hosted_web_search_serialization() {
     check(tools == nullptr || tools->array.empty(),
           "Gemini OpenAI-compat Chat does not attach hosted google_search");
 
+    const auto has_hosted_web_search_type = [](const ainiux::json::Value* tools_value) {
+        if (tools_value == nullptr || !tools_value->is_array()) return false;
+        for (const ainiux::json::Value& item : tools_value->array) {
+            const ainiux::json::Value* type = item.get("type");
+            if (type != nullptr && type->is_string() && type->string == "web_search")
+                return true;
+        }
+        return false;
+    };
+
+    context.options.model = "deepseek-v4-flash";
+    context.options.model_catalog.models.clear();
+    context.options.model_catalog.models.push_back(
+        with_capability("deepseek-v4", "^deepseek-v4-(?:pro|flash).*$", "web_search", true));
+    request = serialized_request_json(context);
+    check(!has_hosted_web_search_type(field(request, "tools")),
+          "DeepSeek V4 Chat Completions does not attach hosted web_search");
+
+    context.options.model = "deepseek-v4-flash-vision-exp";
+    context.options.model_catalog.models.clear();
+    context.options.model_catalog.models.push_back(
+        with_capability("deepseek-v4-flash-vision", "^deepseek-v4-flash-vision.*$",
+                        "web_search", true));
+    request = serialized_request_json(context);
+    check(!has_hosted_web_search_type(field(request, "tools")),
+          "DeepSeek V4 Flash Vision Chat Completions does not attach hosted web_search");
+
+    context.api_kind = ainiux::provider::ApiKind::Responses;
+    request = serialized_request_json(context);
+    tools = field(request, "tools");
+    check(has_hosted_web_search_type(tools),
+          "DeepSeek V4 Flash Vision Responses still attaches hosted web_search");
+
+    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+
     context.options.model = "glm-5.2";
     context.options.model_catalog.models.clear();
     ainiux::ModelCapability glm = with_capability("zai-glm-5", "^glm-5.*$", "web_search", true);
@@ -2301,6 +2380,40 @@ void test_hosted_web_search_serialization() {
     }
     check(saw_hosted && saw_ls && !saw_client_search && ls_strict_false,
           "hosted web_search replaces the client function and ls is not strict");
+
+    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+    context.options.model = "deepseek-v4-flash-vision-exp";
+    context.options.model_catalog.models.clear();
+    context.options.model_catalog.models.push_back(
+        with_capability("deepseek-v4-flash-vision", "^deepseek-v4-flash-vision.*$",
+                        "web_search", true));
+    parsed = ainiux::json::parse(
+        ainiux::provider::serialize_tool_request(context, conversation, client_tools));
+    check(parsed.error.ok(), "DeepSeek Vision Chat mixed tool request is valid JSON");
+    tools = parsed.value.get("tools");
+    check(tools != nullptr && tools->is_array(), "DeepSeek Vision Chat mixed tools serialize");
+    saw_hosted = false;
+    saw_client_search = false;
+    saw_ls = false;
+    for (const ainiux::json::Value& item : tools->array) {
+        const ainiux::json::Value* type = item.get("type");
+        const ainiux::json::Value* name = item.get("name");
+        const ainiux::json::Value* function = item.get("function");
+        if (type != nullptr && type->is_string() && type->string == "web_search")
+            saw_hosted = true;
+        if (name != nullptr && name->is_string() && name->string == "web_search")
+            saw_client_search = true;
+        if (function != nullptr && function->is_object()) {
+            const ainiux::json::Value* function_name = function->get("name");
+            if (function_name != nullptr && function_name->is_string()) {
+                if (function_name->string == "web_search") saw_client_search = true;
+                if (function_name->string == "ls") saw_ls = true;
+            }
+        }
+        if (name != nullptr && name->is_string() && name->string == "ls") saw_ls = true;
+    }
+    check(!saw_hosted && saw_ls && saw_client_search,
+          "DeepSeek Vision Chat keeps client web_search and omits hosted type=web_search");
 }
 
 void test_hosted_web_search_parse_and_images() {
@@ -3032,12 +3145,17 @@ void test_gemini_image_catalog_and_requests() {
     check(lite->format_default == "jpeg" && lite->format.size() == 1 &&
               lite->format.front() == "jpeg",
           "gemini lite output is jpeg-only");
+    check(flash->format_default == "jpeg" && flash->format.size() == 1 &&
+              flash->format.front() == "jpeg",
+          "gemini 3.1 flash-image output is jpeg-only");
     std::string format_token;
     check(ainiux::provider::normalize_image_format(*lite, "jpeg", format_token).ok() &&
               format_token == "jpeg",
           "gemini lite accepts jpeg");
     check(!ainiux::provider::normalize_image_format(*lite, "png", format_token).ok(),
           "gemini lite rejects png");
+    check(!ainiux::provider::normalize_image_format(*flash, "png", format_token).ok(),
+          "gemini 3.1 flash-image rejects png");
 
     ainiux::provider::ImageGenerateRequest request;
     request.capability = *flash;
@@ -3205,6 +3323,8 @@ void run_all() {
     test_tui_startup_provider_selection_helpers();
     test_editor_startup_local_only_default();
     test_editor_defaults_offline_without_credentials();
+    test_openai_unwraps_line_wrapped_api_key();
+    test_header_rejects_line_breaks();
     test_editor_model_selection_restore_requires_available_endpoint();
     test_cli_target_change_clears_stale_remembered_model();
     test_none_provider_allows_an_empty_endpoint();

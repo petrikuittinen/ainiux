@@ -402,9 +402,13 @@ void test_workspace_script_execution() {
     const std::string script_name = "server.sh";
     {
         std::ofstream out(fs::path(workspace) / script_name);
-        out << "#!/bin/sh\necho \"arg=$1\"\n";
+        out << "#!/bin/sh\necho \"arg=$1\"\necho \"secret=${OPENAI_API_KEY-}\"\n";
     }
     ::chmod((fs::path(workspace) / script_name).c_str(), 0755);
+    const std::optional<std::string> previous_api_key =
+        ainiux::test::test_environment("OPENAI_API_KEY");
+    constexpr const char* inherited_secret = "ainiux-agent-secret-must-not-leak";
+    ainiux::test::set_test_environment("OPENAI_API_KEY", inherited_secret);
 #endif
 
     agent::ProcessOptions options;
@@ -418,18 +422,16 @@ void test_workspace_script_execution() {
     const std::string bare_command = script_name + " start";
     Error error = agent::run_command(relative_command, options, result,
                                      agent::CommandPolicy::Agent);
-#if defined(_WIN32)
     if (previous_api_key.has_value())
         ainiux::test::set_test_environment("OPENAI_API_KEY", *previous_api_key);
     else
         ainiux::test::unset_test_environment("OPENAI_API_KEY");
-#endif
     check(error.ok() && result.exit_status == 0 &&
               result.stdout_text.find("arg=start") != std::string::npos,
           "agent runs ./server.sh with args: " + error.message + " out=" + result.stdout_text);
-#if defined(_WIN32)
     check(result.stdout_text.find(inherited_secret) == std::string::npos,
-          "Windows agent subprocess environment excludes inherited API keys");
+          "agent subprocess environment excludes inherited API keys");
+#if defined(_WIN32)
     result = {};
     error = agent::run_command("./server.cmd \"unsafe&argument\"", options, result,
                                agent::CommandPolicy::Agent);
@@ -593,6 +595,33 @@ void test_run_command_cancellation_remains_effective() {
 
 }  // namespace
 
+void test_nested_ainiux_environment_forwards_keys() {
+    const std::optional<std::string> previous_api_key =
+        ainiux::test::test_environment("OPENAI_API_KEY");
+    constexpr const char* inherited_secret = "ainiux-nested-image-key";
+    ainiux::test::set_test_environment("OPENAI_API_KEY", inherited_secret);
+    const std::vector<std::string> foreign =
+        agent::agent_command_environment("/usr/bin/true");
+    bool foreign_has_key = false;
+    bool self_has_key = false;
+    for (const std::string& entry : foreign) {
+        if (entry.rfind("OPENAI_API_KEY=", 0) == 0) foreign_has_key = true;
+    }
+    const std::string self = platform::executable_path();
+    const std::vector<std::string> nested = agent::agent_command_environment(self);
+    for (const std::string& entry : nested) {
+        if (entry == std::string("OPENAI_API_KEY=") + inherited_secret) self_has_key = true;
+    }
+    if (previous_api_key.has_value())
+        ainiux::test::set_test_environment("OPENAI_API_KEY", *previous_api_key);
+    else
+        ainiux::test::unset_test_environment("OPENAI_API_KEY");
+    check(!foreign_has_key,
+          "non-ainiux agent commands do not inherit OPENAI_API_KEY");
+    check(!self.empty() && self_has_key,
+          "nested ainiux (this process) inherits OPENAI_API_KEY for image/CLI");
+}
+
 void run_all() {
     test_guard_patterns();
 #if defined(_WIN32)
@@ -602,6 +631,7 @@ void run_all() {
     test_read_only_command_classifier();
     test_tool_agent_python_and_security_deny();
     test_workspace_script_execution();
+    test_nested_ainiux_environment_forwards_keys();
     test_interactive_approval_allows_then_denies();
     test_approval_gate_resolve_and_cancel();
     test_ask_raw_decision_not_finalized();

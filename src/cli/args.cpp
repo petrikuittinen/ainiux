@@ -299,23 +299,37 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             return std::nullopt;
         };
 
+        auto is_global_switch = [](const std::string& flag) {
+            return flag == "--debug" || flag == "--trace-http" || flag == "--quiet" ||
+                   flag == "--verbose" || flag == "-v" || flag == "--no-config" ||
+                   flag == "--nocolors" || flag == "--no-colors" ||
+                   flag == "--insecure-tls" || flag == "--help" || flag == "-h";
+        };
+        auto verb_after_globals = [&]() {
+            if (i == 1) return true;
+            for (int j = 1; j < i; ++j) {
+                if (!is_global_switch(argv[j])) return false;
+            }
+            return true;
+        };
+
         if (arg == "--help" || arg == "-h") {
             opts.help = true;
-        } else if ((arg == "benchmark" && i == 1) || arg == "--benchmark") {
+        } else if ((arg == "benchmark" && verb_after_globals()) || arg == "--benchmark") {
             opts.benchmark = true;
             opts.format = OutputFormat::Ndjson;
-        } else if ((arg == "agent" && i == 1) || arg == "--agent" || arg == "-a") {
+        } else if ((arg == "agent" && verb_after_globals()) || arg == "--agent" || arg == "-a") {
             opts.agent = true;
-        } else if ((arg == "run" && i == 1)) {
+        } else if ((arg == "run" && verb_after_globals())) {
             opts.agent_run = true;
-        } else if ((arg == "plan" && i == 1)) {
+        } else if ((arg == "plan" && verb_after_globals())) {
             opts.agent_run = true;
             opts.agent_plan = true;
-        } else if ((arg == "image" && i == 1) || arg == "--image") {
+        } else if ((arg == "image" && verb_after_globals()) || arg == "--image") {
             opts.image = true;
         } else if (arg == "--force") {
             opts.image_force = true;
-        } else if ((arg == "grade" && i == 1) || arg == "--grade") {
+        } else if ((arg == "grade" && verb_after_globals()) || arg == "--grade") {
             opts.grade = true;
             opts.format = OutputFormat::Ndjson;
             if (!opts.stream_cli_explicit) {
