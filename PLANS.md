@@ -46,11 +46,12 @@ error layers should serve:
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
-| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, thin editor, remote dired | Specified; **do not implement yet** |
+| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | Specified; **do not implement yet** |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
-Do not begin the postponed browser UI before the v1.3 control-API foundation is
-ready. Do not start v1.3 implementation until the user explicitly asks.
+The embedded browser controller is the final v1.3 PR, after the control API and
+remote operations are stable. Do not start v1.3 implementation until the user
+explicitly asks.
 
 ## Current baseline
 
@@ -260,517 +261,565 @@ Generated-image routes, if later added, may serve only controlled generated asse
 
 # v1.3 - Remote control API (`ainiux server`)
 
-**Specified. Do not implement until the user explicitly asks.**
-
-A WUI, VS Code extension, and other Ainiux agents are **consumers** of this API,
-not deliverables of v1.3. The CLI skill for foreign agents to shell out to the
-existing one-shot CLI is already at `docs/skills/ainiux-cli/SKILL.md`.
-
-Follows current v1.1 / remaining v1.2 work unless the user reprioritizes it.
+Status: specified; do not implement until explicitly requested.
 
 ## Goal
 
-Run Ainiux as a long-lived headless **server** so a remote host can drive it
-over the network:
+Add a local Ainiux control server that lets trusted clients drive Ainiux without
+remoting terminal keys or reimplementing provider behavior. The server exposes
+an Ainiux-native HTTP API under `/ainiux/v1/`, then a scoped MCP adapter, and
+finally an embedded browser controller written in vanilla JavaScript.
 
-- one-shot chat, `run` / `plan`, `image`
-- interactive agent sessions with live events, cancel, Guard Ask, and a safe
-  settings subset
-- chat threads on the user sqlite library
-- thin editor (paths + AI assist jobs, not a remote piece table)
-- **remote dired** (listing, RO preview, dirty/history-diff, file ops)
-- MCP server adapter so another Ainiux (already an MCP client) can call this
-  workspace
+This is not an OpenAI-compatible proxy. Keep `/v1/` reserved for a later,
+separate OpenAI adapter. The control API must preserve Ainiux concepts that an
+OpenAI-only endpoint cannot represent: jobs, sessions, cancellation, Guard
+approvals, task modes, settings, review, dired, and editor operations.
 
-The server owns **provider keys**, **workspace disk**, and **databases**
-(`~/.ainiux/` chat library, project `.ainiux-pr/`). The remote host is a
-controller, not a file-sync client.
+The v1.3 release is complete only when the embedded WUI ships as the final PR
+over the stable control API. No server or WUI implementation begins merely
+because this specification exists.
 
-## Why this is not the old OpenAI proxy
+## Product decisions
 
-An OpenAI-compatible `/v1/models` + `/v1/chat/completions` server would let
-SDKs treat Ainiux as OpenAI. That does not give sessions, Guard, cancel,
-settings, dired, or workspace tools.
+- Entry points: `ainiux server` and `--server`; do not overload `--web`.
+- Default bind: `127.0.0.1`. Initial server PRs are loopback-only.
+- One server owns one workspace, selected at startup with `--workspace`
+  (default: current directory). Remote requests cannot choose another root.
+- One persistent interactive-agent lane exists per workspace. Concurrent
+  requests that would mutate that agent session fail clearly instead of racing
+  or silently creating a second controller.
+- HTTP job control and the MCP adapter provide the first useful remote surface.
+- The WUI is an Ainiux-served, same-origin, full controller implemented with
+  vanilla HTML, CSS, and JavaScript ES modules. Its assets are embedded in the
+  executable.
+- Provider credentials, the controller secret, chat databases, project state
+  databases, absolute filesystem paths, and arbitrary local files are never
+  exposed through the API or WUI.
 
-v1.3 is an **Ainiux control plane**. The same listen/auth stack can grow a
-`/v1/chat/completions` adapter later. Keep URL namespaces distinct:
+## Architecture boundary
 
-| Prefix | Role |
-| --- | --- |
-| `/ainiux/v1/...` | Control API (this milestone) |
-| `/v1/...` | Reserved for a future OpenAI-compatible proxy |
-| `/mcp` | MCP Streamable HTTP adapter (PR 5) |
+Before adding sockets, extract surface-neutral operations from current CLI,
+agent, chat, image, editor, and dired runners. A service operation must accept
+explicit input plus a cancellation token and publish typed progress/result
+events. It must not own terminal state, process signals, stdout/stderr policy,
+or output-file selection.
 
-## Product choices
+Reuse the existing provider registry, HTTP/SSE transport, runtime jobs,
+`AgentController`, `ApprovalGate`, `DiredState`, chat persistence,
+configuration, path containment, and credential redaction. UI and protocol
+adapters translate their inputs into the same operations; they do not duplicate
+provider requests, agent loops, permission decisions, or filesystem logic.
 
-| Topic | Choice |
-| --- | --- |
-| Surface | HTTP control API + later MCP adapter on the same daemon |
-| Process | Headless `ainiux server` / `--server`. Not attach-to-TUI |
-| Bind | Default `127.0.0.1:8745`. `--bind 0.0.0.0` is explicit |
-| Auth | `Authorization: Bearer` with `AINIUX_SERVER_SECRET` (**not** `AINIUX_API_KEY`) |
-| TLS | Required for non-loopback unless `--insecure-plain-bind` |
-| Keys / disk | Stay on the server. One `--workspace` (default cwd) |
-| Guard Ask | HTTP sessions proxy Ask to the remote host. MCP chaining stays headless (Ask deny) |
-| TAB | Remote host draws it. Completions endpoint is later |
-| Priority | CLI (skill, landed) → agent → chat → editor → **dired** |
+The public wire model is versioned independently from internal C++ event types.
+Do not serialize `AgentSurfaceEvent` or other internal enums directly. Define
+stable DTOs for requests, job state, events, errors, approvals, directory
+entries, revisions, and capabilities, with explicit conversion at the server
+boundary.
 
-## Architecture
-
-```text
-  WUI / VS Code / curl          other Ainiux (MCP client)        bash SKILL
-           |                              |                          |
-    HTTP control API                 MCP adapter              existing CLI
-    /ainiux/v1 + SSE                  /mcp                     (unchanged)
-           \                              |                          /
-            session hub (jobs, cancel, Guard gate, settings, dired)
-            AgentController / SessionRuntime / chat sqlite / image / DiredState
-            provider + runtime + redaction (unchanged)
-```
-
-Rules:
-
-- UI code (TUI, editor paint) does not speak HTTP. The daemon never owns an
-  alternate screen.
-- Provider HTTP, SSE parsing, credentials, cancellation, and persistence stay
-  in existing modules. The server **drives** them.
-- `AgentController` is already surface-neutral (`AgentSurfaceEvent`, including
-  `GuardApproval`). The TUI is one subscriber; the control API is another.
-- `DiredState` and `src/editor/dired.*` already own listing, hashes, history
-  line-diff, and file ops. The server maps those functions to JSON. Do not
-  reimplement dired in `src/server/`.
-- New listen/auth/router code lives under `src/server/` and
-  `src/app/server_mode.cpp`. Do **not** use reserved `src/web/`.
-- One authenticated principal per server process (holder of the server secret).
-  No multi-user ACLs.
-
-### Session hub
-
-| Session kind | Backing | PR |
-| --- | --- | --- |
-| One-shot job | In-memory job id + `CancellationSource` | 2 |
-| Agent | `AgentController` + project `.ainiux-pr/agent.sqlite` | 3 |
-| Chat | existing TUI sqlite thread in `~/.ainiux/ainiux.db` | 4 |
-| Editor | buffer list + read/write + AI assist jobs — not a remote piece table | 7 |
-| Dired | `ainiux::editor::DiredState` under `--workspace` | 8 |
-
-Constraints:
-
-- Server `--workspace PATH` (default: process cwd). All agent/dired/editor
-  paths stay under that root. Per-session arbitrary roots are **denied**.
-- At most one in-flight generation per session.
-- Global cap on concurrent generations (default **4**, `--max-concurrent-jobs`)
-  and sessions (default **32**, `--max-sessions`).
-- Disconnect of an SSE subscriber does **not** auto-cancel. Cancel is an
-  explicit POST. Optional later: `cancel_on_disconnect=true` per turn.
-
-## CLI entry
+Planned modules:
 
 ```text
-ainiux server [options]
-ainiux --server [options]
+src/server/
+  server.{hpp,cpp}          lifecycle and shutdown
+  listener.{hpp,cpp}        socket ownership and connection limits
+  http_parser.{hpp,cpp}     bounded HTTP/1.1 subset
+  router.{hpp,cpp}          /ainiux/v1 routing
+  auth.{hpp,cpp}            full-control and MCP-only credentials
+  wire.{hpp,cpp}            stable JSON DTOs and error envelopes
+  job_registry.{hpp,cpp}    jobs, retention, cancellation, idempotency
+  event_broker.{hpp,cpp}    ordered bounded replay and subscribers
+  session_hub.{hpp,cpp}     chat/agent/dired/editor session ownership
+  mcp_adapter.{hpp,cpp}     MCP 2026-07-28 transport and tools
+  embedded_assets.*         generated WUI asset table
+src/web/
+  index.html
+  css/
+  js/                       vanilla ES modules
 ```
 
-Foreground only. No double-fork. systemd/nssm may wrap it. SIGINT/SIGTERM
-cancel jobs, finish open agent sessions, join workers, close sockets.
+Keep browser source in the reserved `src/web/` tree. The build may generate an
+embedded resource table, but it must not require Node.js, npm, a runtime
+bundler, a CDN, or external scripts.
+
+## Concurrency and ownership
+
+- Listener threads parse and authenticate bounded requests, then dispatch work
+  through the runtime/job layer.
+- Provider chat and image jobs obey an explicit global concurrency cap.
+- Agent `run`, `plan`, and interactive turns share one workspace mutation
+  lane and one persistent `AgentController`. At most one such operation runs
+  at a time.
+- Conflicting agent work returns a typed conflict response (HTTP 409) with the
+  active job/session identifier; it is not silently queued.
+- The owning session loop alone mutates session, approval, dired, editor, or
+  terminal-independent controller state.
+- Every worker, socket, subscriber, timer, job, and session has RAII ownership.
+  Shutdown stops accepts, rejects new work, cancels active jobs, closes SSE
+  streams, joins workers, and releases listeners and TLS state.
+- Slow clients cannot block producers. Each subscriber has a bounded queue;
+  overflow closes that stream with a resumable error.
+
+## Command-line contract
+
+Initial loopback options:
 
 ```text
---bind 127.0.0.1          # default; also 0.0.0.0. Later: ::1 / ::
---port 8745
---workspace PATH          # default cwd
---server-secret TOKEN     # or --server-secret-file PATH, or env AINIUX_SERVER_SECRET
---tls-cert PATH --tls-key PATH
---insecure-plain-bind     # extra flag required to serve 0.0.0.0 without TLS
---cors-origin URL         # repeatable; default none
---max-sessions 32
---max-concurrent-jobs 4
+ainiux server
+ainiux --server
+  --workspace PATH
+  --port PORT
+  --server-secret-file PATH
+  --mcp-secret-file PATH
+  --max-connections N
+  --max-jobs N
 ```
 
-Exclusive of TUI/editor/repl (same idea as `--list-models` / `--add-mcp`).
+Credential environment variables:
 
-`[server]` keys may live in `config.conf` for bind/port/workspace/tls **paths**.
-The **secret must not** be stored in `config.conf`. Only flag, env, or a 0600 /
-protected-DACL secret file.
+```text
+AINIUX_SERVER_SECRET   full controller/API access
+AINIUX_MCP_SECRET      MCP-only access to /mcp
+```
 
-## Security
+Never reuse `AINIUX_API_KEY`. Literal secret arguments, if retained for
+compatibility, warn that argv may be visible; environment variables or
+permission-restricted files are preferred. Secrets and TLS keys must live
+outside the served workspace.
 
-### Server secret vs provider key
+Non-loopback options land only with the TLS PR:
 
-Do **not** reuse `AINIUX_API_KEY`. That env var is already a provider
-credential. Mixing them would put the OpenAI key on the wire as the bind
-password, or block provider auth when the server is up.
+```text
+  --bind ADDRESS
+  --tls-cert PATH
+  --tls-key PATH
+  --insecure-plain-bind
+  --allow-remote-yolo
+```
 
-Clients send `Authorization: Bearer <secret>`. Constant-time compare. Never log
-the secret. Never accept it in query strings. Redact `Authorization` like
-existing HTTP client redaction.
+## Network and authentication policy
 
-- **Loopback:** secret required. If omitted, generate 32 random bytes (hex),
-  print **once** on stderr (`server secret: …`).
-- **Non-loopback (`0.0.0.0`):** `--server-secret` or secret-file is mandatory
-  (no auto-generate). TLS is required unless `--insecure-plain-bind` is also
-  set (loud stderr banner, still requires the secret).
+Loopback is the safe default and the only supported bind during the first
+server slices. Remote users may put an authenticated tunnel or reverse proxy in
+front of that listener.
 
-### TLS
+Direct non-loopback binding requires all of the following:
 
-Plaintext + secret on `0.0.0.0` is MITM-able. That is a test escape hatch, not
-the supported WAN mode.
+- a full-control server secret;
+- TLS, unless `--insecure-plain-bind` is explicitly supplied;
+- strict `Host` and `Origin` allowlists;
+- startup warnings that identify the exposed workspace and security mode.
 
-Listen/auth ships HTTP/1.1 first. TLS is PR 6 (`--tls-cert` / `--tls-key`):
+Remote Yolo permissions are denied unless the server was started with
+`--allow-remote-yolo`. Existing project permission state must not silently
+enable it over the network.
 
-- Prefer OpenSSL via pkg-config when present. Justify in `docs/decisions.md`.
-  If devel headers are missing, the binary still serves HTTP; non-loopback
-  without `--insecure-plain-bind` fails with a rebuild-or-Caddy message.
-- Native Windows can use UCRT64 OpenSSL or a later SChannel path; do not block
-  the POSIX server on SChannel.
-- Until TLS ships, the supported remote pattern is SSH/Tailscale to loopback.
+Use bearer authentication over TLS for direct remote access. Compare secrets in
+constant time where practical and redact them from logs, errors, metrics, URLs,
+and persisted artifacts. The full-control token may use all enabled
+`/ainiux/v1/` routes. The MCP token is accepted only at `/mcp` and receives
+only the MCP tool scope. A credential valid for one scope must fail in the
+other.
 
-CORS: default deny. A browser WUI on another origin must pass `--cors-origin`.
-Never `Access-Control-Allow-Origin: *` when a secret is in use. Do not add
-cookie auth (loopback CSRF).
+Browser assets may be fetched without embedding credentials, but every API
+request and event stream is authenticated. Do not use query-string tokens,
+authentication cookies, or implicit ambient authority.
 
-### Never expose
+## Bounded HTTP/1.1 contract
 
-- Provider keys, `--header` values, secret files
-- Raw chat DB / `agent.sqlite` files
-- Paths outside `--workspace` (and existing agent Guard rules inside it)
-- Unredacted tool logs
+Implement and document a deliberately small HTTP/1.1 subset:
 
-`GET /health` may be unauthenticated and returns only `{"ok":true}`.
-Authenticated `GET /ainiux/v1/status` may show version, bind, workspace,
-session counts.
+- request line and header size limits;
+- JSON body and upload size limits per route;
+- header-read, body-read, idle, and total request timeouts;
+- connection and in-flight job caps;
+- exact `Content-Length` handling and a documented decision on supported
+  transfer encodings;
+- rejection of conflicting framing, request smuggling patterns, invalid header
+  syntax, unexpected bodies, and unsupported methods;
+- safe keep-alive rules and bounded requests per connection;
+- normalized paths with rejection of traversal and ambiguous encodings;
+- explicit content types, `Cache-Control`, `X-Content-Type-Options`, and CSP
+  for browser responses.
 
-## HTTP control API
+CORS is disabled by default. The embedded WUI is same-origin and needs no CORS.
+If a later configuration enables another origin, it must use an exact allowlist
+and must not combine wildcard origins with credentials.
 
-HTTP/1.1, in-tree. No extra HTTP library for listen. Bounded request bodies.
-`Host` must match bind. RAII sockets (POSIX `close`, Win32 `closesocket` +
-existing Winsock init). Workers post events; they do not mutate sockets from
-random threads without a queue. JSON via `src/json/`.
+## Wire errors
 
-Errors use existing `ErrorCode` mapping plus HTTP status (`400` bad args,
-`401` auth, `404` session, `409` turn already running, `429` cap, `500`
-internal). Body shape:
+All failures use one stable JSON envelope:
 
 ```json
-{"error":{"code":"cancelled","message":"…"}}
+{
+  "error": {
+    "code": "conflict",
+    "message": "an agent operation is already active",
+    "details": {},
+    "request_id": "..."
+  }
+}
 ```
 
-### One-shot (PR 2)
+Map internal `ainiux::ErrorCode` values consistently to HTTP status and public
+codes. Provider bodies are included only when safe. Validation errors identify
+the field, accepted shape, and actionable correction without exposing secrets
+or local absolute paths.
+
+## Jobs, events, cancellation, and replay
+
+Long-running calls are asynchronous jobs. A successful submission normally
+returns `202 Accepted` with a job resource. Job states are:
 
 ```text
-GET  /health
-GET  /ainiux/v1/status
-POST /ainiux/v1/chat
-POST /ainiux/v1/run
-POST /ainiux/v1/plan
-POST /ainiux/v1/image
-POST /ainiux/v1/jobs/:id/cancel
-GET  /ainiux/v1/jobs/:id
+queued -> running -> succeeded | failed | cancelled
 ```
 
-Reuse `app::run_agent_goal`, CLI chat, and image mode. Optional SSE when
-`Accept: text/event-stream`. Headless Guard Ask remains deny (same as CLI
-`run`).
-
-### Interactive agent (PR 3)
+Core routes:
 
 ```text
-POST   /ainiux/v1/sessions                  { "kind":"agent", "permission_mode"?:… }
-GET    /ainiux/v1/sessions
-GET    /ainiux/v1/sessions/:id
-DELETE /ainiux/v1/sessions/:id
-
-POST   /ainiux/v1/sessions/:id/turns        { "content":"…" }
-POST   /ainiux/v1/sessions/:id/cancel
-GET    /ainiux/v1/sessions/:id/events       SSE of AgentSurfaceEvent
-
-POST   /ainiux/v1/sessions/:id/approval     { "decision":"allow"|"deny" }
-GET    /ainiux/v1/sessions/:id/settings
-PUT    /ainiux/v1/sessions/:id/settings
-GET    /ainiux/v1/sessions/:id/review-file  bounded UTF-8 when Guard has review_path
+POST /ainiux/v1/jobs/chat
+POST /ainiux/v1/jobs/run
+POST /ainiux/v1/jobs/plan
+POST /ainiux/v1/jobs/image
+GET  /ainiux/v1/jobs/:job_id
+GET  /ainiux/v1/jobs/:job_id/events
+POST /ainiux/v1/jobs/:job_id/cancel
 ```
 
-SSE names map from `AgentSurfaceEvent::Type`: `progress`, `phase`, `prepare`,
-`index`, `delta`, `tool`, `notice`, `thinking`, `guard`, `turn_done`,
-`turn_error`. Thinking/notice stay display-only.
+Job creation supports an idempotency key. Reusing a key with the same operation
+and payload returns the existing job; reusing it with different input is a
+conflict. Terminal jobs and replay events have bounded, server-configured
+in-memory retention and are not promised to survive a restart.
 
-Guard: worker blocks in `ApprovalGate::request`; SSE emits `guard`; remote POST
-`allow`/`deny` calls `resolve`. Turn cancel → `Cancelled`. The remote host
-draws y/n/review; the server does not. Full dired review of `review_path` is
-PR 8.
+SSE events use monotonically increasing IDs and a stable envelope:
 
-Settings subset: model, provider, api, reasoning, temperature, max_tokens,
-permission_mode, task_mode, goal text, thinking preview cap, cmd-out.
-Never settable: keys, extra auth headers, server secret, bind, workspace root,
-`--insecure-tls`, MCP stdio argv.
+```json
+{
+  "id": 42,
+  "type": "progress",
+  "created_at": "...",
+  "job_id": "...",
+  "session_id": null,
+  "turn_id": null,
+  "data": {}
+}
+```
 
-### Chat (PR 4)
+Clients reconnect with `Last-Event-ID`. The event broker replays retained
+events in order. If the requested event was evicted, return an explicit
+replay-expired response and require a fresh job/session snapshot. Heartbeats,
+disconnect detection, bounded queues, and cancellation must not leak threads or
+retain completed request buffers.
 
-`kind: "chat"`. Persistence is `~/.ainiux/ainiux.db`. No workspace tools.
-Cancel in-flight provider stream.
+Cancellation is idempotent. A terminal job remains terminal, and cancelling one
+job must not cancel unrelated session work.
 
-### Thin editor (PR 7)
-
-Do **not** serialize the piece table, splits, or `FILE.LOCK` over the wire.
-VS Code already edits files on the shared disk. If needed:
-
-- list/open/save paths under workspace
-- cancellable AI assist job (existing editor assist)
-
-### Remote dired (PR 8)
-
-Do **not** remote the TUI key map, cheat sheet, or styled listing paint. The
-remote host implements the widget (WUI, VS Code tree, another TUI). The server
-exposes `DiredState` and the existing operations in `src/editor/dired.hpp`.
-
-This is the remote equivalent of `ainiux -d` / F4 / Guard **Review**: browse
-the server workspace, preview files, see content-hash dirty markers and
-`.ainiux-pr/history` line-diff, and run the same light file ops.
-
-Reuse, do not fork:
-
-- `dired_open` / `dired_refresh` / `dired_sync_live`
-- `dired_set_sort` / selection
-- `dired_activate_selection` / `dired_go_parent` / `dired_go_deeper`
-- RO view + `view_changed_lines` / `dired_goto_next_changed_block`
-- `dired_toggle_pass_selected`
-- `dired_rename_selected` / `dired_copy_selected` / `dired_delete_selected` /
-  `dired_touch_selected` / `dired_create_file` / `dired_create_directory`
+## Status and capabilities
 
 ```text
-POST /ainiux/v1/sessions                    { "kind":"dired", "path"?: "." }
-GET  /ainiux/v1/sessions/:id/dired          listing snapshot
-POST /ainiux/v1/sessions/:id/dired/open     { "path_or_glob" }
-POST /ainiux/v1/sessions/:id/dired/refresh
-POST /ainiux/v1/sessions/:id/dired/sync     # dired_sync_live (agent writes)
-POST /ainiux/v1/sessions/:id/dired/sort     { "key":"name"|"size"|"date", "ascending": true }
-POST /ainiux/v1/sessions/:id/dired/select   { "index" } or { "name" }
-POST /ainiux/v1/sessions/:id/dired/enter
-POST /ainiux/v1/sessions/:id/dired/parent
-POST /ainiux/v1/sessions/:id/dired/deeper
-GET  /ainiux/v1/sessions/:id/dired/view     RO preview + changed_lines + hashes
-POST /ainiux/v1/sessions/:id/dired/view     { "path"? }  open RO view
-POST /ainiux/v1/sessions/:id/dired/view/close
-POST /ainiux/v1/sessions/:id/dired/pass     toggle dirty/reviewed on selected file
-POST /ainiux/v1/sessions/:id/dired/rename   { "to":"…", "overwrite": false }
-POST /ainiux/v1/sessions/:id/dired/copy     { "to":"…", "overwrite": false }
-POST /ainiux/v1/sessions/:id/dired/delete   { "recursive": false }
-POST /ainiux/v1/sessions/:id/dired/touch
-POST /ainiux/v1/sessions/:id/dired/create-file { "name":"…" }
-POST /ainiux/v1/sessions/:id/dired/create-dir  { "name":"…" }
+GET /ainiux/v1/health
+GET /ainiux/v1/status
+GET /ainiux/v1/capabilities
 ```
 
-Listing JSON is a snapshot of `DiredEntry` fields (name, path, directory,
-parent, symlink, hidden, executable, size, mtime, POSIX mode/owner/group when
-non-Windows, content_hash, dirty) plus directory, glob, sort, focus, selected
-index. Do not send `tui::StyledLine`.
+`health` is minimal and reveals no workspace details. Authenticated status and
+capabilities describe the public API version, supported operations, enabled
+authentication scope, bind security, job limits, provider availability without
+credentials, and optional adapters. Clients must capability-detect instead of
+assuming every provider or mode supports every operation.
 
-RO view JSON: path, UTF-8 content (existing editor/dired size caps),
-`content_hash`, `changed_lines` (bool per source line, or a compact run-length
-form), `has_history_baseline`, optional `[diff N]`. This is the same
-poor-man's history line review as local dired, not git.
+## Interactive agent protocol
 
-**Containment:** every path is resolved then compared to `--workspace`. Reject
-escape, `~user`, mid-path `~`, and writes into `.ainiux-pr` except **reading**
-history backups for the line-diff. Same symlink/reparse refusal as local dired
-and agent tools.
+Session routes:
 
-**Mutations** are user-initiated (authenticated remote host), same as local
-dired: they do **not** go through agent Guard. They still cannot leave the
-workspace. Overwrite and recursive-delete flags are explicit in the JSON body
-(local dired prompts in the minibuffer; the remote host prompts, then sends
-the confirmed request).
+```text
+POST   /ainiux/v1/sessions/agent
+GET    /ainiux/v1/sessions/:session_id
+GET    /ainiux/v1/sessions/:session_id/events
+POST   /ainiux/v1/sessions/:session_id/turns
+POST   /ainiux/v1/sessions/:session_id/turns/:turn_id/cancel
+POST   /ainiux/v1/sessions/:session_id/approvals/:approval_id
+GET    /ainiux/v1/sessions/:session_id/approvals/:approval_id/review-file
+DELETE /ainiux/v1/sessions/:session_id
+```
 
-**Live agent review:** if an agent session is turning and a dired session is
-open on the same workspace, call `dired_sync_live` and optionally emit SSE
-`dired_changed` (listing and/or view hash changed). Guard `review_path` may
-open or reuse a dired session focused on that file (`dired_return_to_guard`
-semantics: after preview, the remote still POSTs `allow`/`deny` on the agent
-session). Mid-turn F4-style review must not cancel the agent turn
-(`AgentController` already preserves the turn).
+Each turn has a server-generated `turn_id`; every Guard request has an
+`approval_id` tied to that turn. Approval replies must include the matching
+identifiers. Reject late, duplicate, expired, or cross-turn approvals. A session
+event stream supports ordered replay and a current-state snapshot so reconnects
+cannot silently lose an approval.
 
-**Not in PR 8** (same as local dired today): multi-file marks, trash, git
-status colors, side-by-side diffs, recursive `**` globs, theme paint, opening
-a writable editor buffer (`o` / `n` locally leave dired — remotely that is PR 7
-or the host’s own editor on a GET of the file).
+HTTP interactive agent uses the existing Guard Ask flow. Headless MCP tool
+chaining remains Ask-deny. Closing a session disarms tools and ends the active
+project session but does not erase durable history.
 
-## MCP adapter (PR 5)
+Do not promise incremental assistant-answer deltas for agent turns until the
+provider tool-round layer exposes them without changing context or tool
+semantics. Tool activity, thinking notices, approval requests, state changes,
+and the final result can ship first.
 
-Ainiux is an MCP **client** today. Serving Streamable HTTP on `/mcp` is the
-agent-to-agent path. Reuse `src/mcp/protocol.cpp` JSON-RPC helpers; add a
-server dispatcher.
+## MCP adapter
 
-| Tool | Maps to |
-| --- | --- |
-| `run` | one-shot Act on **this** server workspace |
-| `plan` | one-shot Plan |
-| `chat` | one-shot chat |
-| `image` | one-shot image |
-| `status` | authenticated status |
+Implement MCP after the job API is stable, targeting the 2026-07-28 MCP
+protocol. Include server discovery and current required protocol headers.
+Expose a small deterministic tool set backed by the same job operations, for
+example:
 
-Do **not** expose `read`/`edit`/`bash` of the server disk as MCP tools
-(chaining means “ask the other Ainiux to work on its workspace”). Guard for
-MCP tools is headless Ask-deny. Humans use the HTTP control API.
+```text
+ainiux_chat
+ainiux_run
+ainiux_plan
+ainiux_image
+ainiux_job_get
+ainiux_job_cancel
+```
 
-stdio MCP (`ainiux server --mcp-stdio`) is optional later.
+Long operations return task/job handles rather than holding an unbounded HTTP
+request open. MCP calls are stateless with respect to interactive Guard
+prompts; they cannot answer approvals or acquire the full controller scope.
+Tool schemas, errors, cancellation, and capability discovery must pass protocol
+conformance tests.
 
-## Listen implementation
+## Chat and persistence
 
-| File | Role |
-| --- | --- |
-| `src/server/listen.*` | RAII listen/accept, IPv4, loopback vs any, port 0 for tests |
-| `src/server/http1.*` | Request parse, response writer, SSE writer |
-| `src/server/auth.*` | Bearer secret, bind policy, generate-on-loopback |
-| `src/server/router.*` | Path table |
-| `src/server/hub.*` | Session/job table, caps, cancel |
-| `src/server/events.*` | `AgentSurfaceEvent` → JSON |
-| `src/server/dired_api.*` | JSON map over `DiredState` (PR 8) |
-| `src/server/tls.*` | Later OpenSSL wrap of accepted fds |
-| `src/app/server_mode.cpp` | Accept loop (main thread mutates hub) |
+Remote chat uses revision-safe thread operations over the existing chat store,
+not direct SQLite exposure:
 
-Tests: `tests/unit/server/` parse, auth, bind policy, router, JSON errors,
-loopback libcurl against port 0, Guard allow/deny, dired containment and
-rename/delete refusal outside workspace. Default loop: `make` + `make test-unit`
-plus targeted server tests. Slow suites only if requested.
+```text
+GET  /ainiux/v1/chat/threads
+POST /ainiux/v1/chat/threads
+GET  /ainiux/v1/chat/threads/:thread_id
+POST /ainiux/v1/chat/threads/:thread_id/messages
+```
 
-## Documentation when code ships
+Mutating requests include the last observed revision. Stale revisions fail with
+a conflict and return enough metadata to reload. Never return database paths,
+raw tables, provider secrets, or unrestricted attachment paths.
 
-`docs/server.md` (new), `docs/cli.md`, `docs/security.md`, `docs/decisions.md`,
-`docs/dired-mode.md` (remote pointer), `docs/mcp.md` (when adapter ships),
-`README.md`, `AGENTS.md`, this file, `TODO.md`, `docs/version-history.md`.
-Do not pretend a WUI exists.
+## Review, dired, and editor
 
-## Non-goals
+Remote filesystem work is JSON over existing domain operations, not TUI
+keystrokes, terminal paint, or a second browser.
 
-- Implementing v1.3 until the user asks
-- Shipping a WUI or VS Code extension
-- Attach/control a running TUI session
-- OpenAI `/v1/chat/completions` proxy in the first PR series
-- Remote piece-table, splits, or `FILE.LOCK`
-- File sync / workspace upload
-- Multi-tenant users, OAuth, cookies
-- `/loop` and sub-agents
-- Reusing `AINIUX_API_KEY` as the bind password
-- Storing the server secret in `config.conf`
-- MCP `read`/`edit` of the server disk
-- Auto-cancel on SSE drop
-- HTTP/2 or WebSockets (SSE + POST is enough)
-- New package manager; no Rust/Go
-- Remoting dired keybindings or styled TUI rows
+First ship read-only review and dired:
 
-## Key decisions
+```text
+GET /ainiux/v1/workspace/review
+GET /ainiux/v1/dired?path=RELATIVE_PATH
+GET /ainiux/v1/files?path=RELATIVE_PATH
+```
 
-1. Control API is native; MCP is an adapter; OpenAI `/v1` is a later adapter.
-2. Headless daemon, not TUI attach.
-3. `/ainiux/v1` prefix so a future OpenAI proxy can own `/v1`.
-4. `AINIUX_SERVER_SECRET`, not `AINIUX_API_KEY`.
-5. Loopback default; `0.0.0.0` is explicit; TLS required for non-loopback
-   unless `--insecure-plain-bind`.
-6. In-tree HTTP/1.1. New dependency only for optional TLS (OpenSSL).
-7. Reuse `AgentController`, `ApprovalGate`, and `DiredState`.
-8. Single workspace per server process. No remote-supplied roots.
-9. HTTP Guard proxy for humans; MCP Ask-deny for agents.
-10. Provider keys never leave the server.
-11. Phase 0 skill is documentation of the existing CLI (landed).
-12. Thin editor is path I/O + assist, not a remote TUI.
-13. Remote dired is JSON over existing `dired_*` operations, not a second
-    directory browser.
+Wire paths are workspace-relative slash-separated paths. The server resolves
+them beneath its fixed workspace and never returns native absolute paths.
+Project-private `.ainiux-pr/` state and sensitive configuration paths are
+excluded.
 
-## PR plan
+Later mutation routes must use root-aware filesystem primitives, exact file
+identity, optimistic concurrency tokens, and atomic saves. They must not map a
+remote row selection directly onto existing selection-based dired mutation
+methods. A client supplies explicit target identities and the revision it
+reviewed; stale, replaced, symlink-swapped, or out-of-root targets fail safely.
 
-### PR 0 — CLI skill for external agents (landed)
+Planned later operations include create directory, rename/move, copy, delete
+with explicit confirmation policy, file save, and editor AI assist. Bulk
+actions are bounded and report per-target results. No endpoint accepts a remote
+workspace root or arbitrary host path.
 
-- **Title:** Document existing one-shot CLI as `SKILL.md`
-- **Files:** `docs/skills/ainiux-cli/SKILL.md` (installed under
-  `share/ainiux/skills/ainiux-cli/`)
-- **Status:** In tree. No daemon.
+## Embedded vanilla-JavaScript WUI
 
-### PR 1 — `ainiux server` listen, HTTP/1.1, auth, health
+The final v1.3 PR adds a same-origin browser application at `/ui/`. It is a
+full remote controller for the stable API, not an alternate implementation of
+Ainiux logic.
 
-- **Files:** `src/server/listen.*`, `http1.*`, `auth.*`, `router.*`,
-  `src/app/server_mode.cpp`, `src/main.cpp`, `src/cli/args.*`,
-  `tests/unit/server/`, `docs/server.md` stub, `docs/decisions.md`,
-  `docs/security.md`
-- **Depends on:** nothing (PR 0 is independent)
-- **Changes:** Bind default 127.0.0.1:8745; secret policy; `GET /health`;
-  `GET /ainiux/v1/status`; reject unauthenticated product routes; graceful
-  SIGINT. No model calls. `0.0.0.0` without secret refused; without TLS
-  requires `--insecure-plain-bind`.
+Technical constraints:
 
-### PR 2 — One-shot control endpoints + job cancel
+- vanilla HTML, CSS, and JavaScript ES modules;
+- no framework, Node.js runtime, npm runtime dependency, runtime bundler, CDN,
+  third-party hosted font, or external script;
+- source assets under `src/web/`, generated into an embedded binary resource
+  table at build time;
+- content-hashed or versioned static asset URLs, correct MIME types, cache
+  policy, CSP, and no directory serving;
+- `fetch` for JSON operations and a fetch-based SSE parser so the
+  `Authorization` header and `Last-Event-ID` can be controlled;
+- controller token kept in memory by default, with an explicit optional
+  tab-scoped `sessionStorage` choice; never store it in `localStorage`,
+  cookies, URLs, logs, or rendered DOM;
+- safe rendering with DOM construction and `textContent`; model/tool output is
+  never assigned as raw HTML;
+- responsive CSS Grid/Flex layouts for desktop, tablet, and narrow mobile
+  screens;
+- keyboard, pointer, and touch operation; visible focus; semantic controls;
+  labelled dialogs; reduced-motion support; sensible contrast and live-region
+  announcements.
 
-- **Depends on:** PR 1
-- **Changes:** `POST /ainiux/v1/{chat,run,plan,image}`; job ids;
-  `POST .../cancel` via existing `CancellationToken`. Optional SSE. Caps.
-  Workspace = `--workspace`. Headless Ask remains deny.
+The WUI includes:
 
-### PR 3 — Interactive agent sessions
+- connection/authentication and capability status;
+- active/completed jobs, progress, results, cancellation, and reconnect/replay;
+- ordinary chat and revision conflict recovery;
+- interactive agent turns, task mode, Guard review/approve/deny, and stale
+  approval handling;
+- image job submission and result display;
+- workspace review and read-only dired, followed by revision-safe mutations
+  when those API routes exist;
+- file editor load/save with optimistic concurrency and explicit conflict UI;
+- a safe settings view limited to server-exposed non-secret settings.
 
-- **Depends on:** PR 2
-- **Changes:** Hub wrapping `AgentController`. SSE of `AgentSurfaceEvent`.
-  Guard POST allow/deny. Review-file GET. Safe settings subset in
-  `agent.sqlite`. Delete session → `shutdown(true)`.
+The browser receives neither provider credentials nor the server's stored
+secret. It receives only the user-supplied controller token in JS memory and
+sanitized API data. Server responses must not reveal raw databases, absolute
+paths, environment variables, TLS material, or hidden project state.
 
-### PR 4 — Chat sessions
+## Testing and validation
 
-- **Depends on:** PR 3 (session/SSE/cancel)
-- **Changes:** `kind:chat` on the user sqlite library. No tools.
+Add focused unit and integration coverage with each implementation PR. The
+v1.3 release matrix includes:
 
-### PR 5 — MCP server adapter
+- fragmented request lines/headers/bodies, malformed framing, conflicting
+  lengths, unsupported transfer encodings, timeouts, keep-alive limits, and
+  connection exhaustion;
+- authentication scope separation, constant-time comparison behavior where
+  testable, Host/Origin rejection, redaction, and loopback/non-loopback startup
+  policy;
+- job state transitions, idempotency collisions, cancellation races, bounded
+  retention, event order, replay, replay expiry, slow subscribers, disconnects,
+  and clean shutdown;
+- one-agent-lane conflicts, turn/approval correlation, stale approval rejection,
+  reconnect during Guard Ask, and cancellation without cross-session effects;
+- workspace containment, encoded traversal, symlink/reparse races, hidden-state
+  exclusion, exact identity, optimistic concurrency, and atomic save failure
+  paths;
+- MCP 2026-07-28 discovery, headers, schemas, task handles, errors,
+  cancellation, scope enforcement, and conformance;
+- chat revision conflicts and database failure paths;
+- WUI API flows against the mock server: authentication, capability fallback,
+  SSE fragmentation/reconnect/replay, Guard review, cancellation, safe text
+  rendering, editor conflicts, and error recovery;
+- responsive desktop/tablet/mobile layouts; keyboard-only, pointer, and touch
+  flows; focus management; reduced motion; CSP; absence of external resources;
+  and absence of secret/path leakage;
+- sanitizer/leak and fault-injection coverage for listener, TLS, job registry,
+  event broker, session shutdown, and embedded-asset failure paths.
 
-- **Depends on:** PR 2 (one-shot). PR 3 not required.
-- **Changes:** `/mcp` Streamable HTTP. Tools `run`/`plan`/`chat`/`image`/`status`.
-  Ask-deny. Same Bearer secret. Other Ainiux installs the URL with
-  `--add-mcp --mcp-allow-private` when loopback.
+Use a controllable mock provider and raw-socket HTTP fixtures. Browser tests may
+use a small documented development dependency only if explicitly approved;
+the shipped WUI and normal Ainiux runtime remain dependency-free beyond the
+project baseline.
 
-### PR 6 — TLS for non-loopback
+## Documentation deliverables
 
-- **Depends on:** PR 1 (can land after PR 2+)
-- **Changes:** `--tls-cert`/`--tls-key`. Clear error if OpenSSL missing at
-  build. Caddy-in-front remains documented.
+Update, as the corresponding slices land:
 
-### PR 7 — Thin editor
+- `README.md` and `docs/README.md` with startup, local use, authentication,
+  WUI access, cancellation, and examples;
+- `docs/api.md` with schemas, status codes, event ordering/replay, limits,
+  idempotency, and compatibility rules;
+- `docs/security.md` with bind policy, scopes, TLS, tunnels, browser token
+  handling, remote Yolo, workspace containment, and threat model;
+- `docs/mcp.md` with discovery, configuration, tools, scopes, and examples;
+- `docs/web-mode.md` rewritten from postponed snapshot to the shipped WUI
+  architecture and accessibility contract;
+- `docs/decisions.md` with service boundaries, HTTP subset, concurrency,
+  event DTOs, asset embedding, and any approved new dependency.
 
-- **Depends on:** PR 1 (workspace containment). Chat (PR 4) is not required.
-- **Changes:** list/read/write paths under workspace + cancellable AI assist.
-  No piece table on the wire.
+## Non-goals for v1.3
 
-### PR 8 — Remote dired
+- OpenAI-compatible `/v1/chat/completions` or Responses proxy.
+- Multi-workspace routing in one server.
+- Remoting terminal keys, ANSI frames, TUI paint, or editor internals.
+- Exposing arbitrary filesystem paths, chat databases, provider keys, config
+  secrets, project-private state, or unrestricted shell access.
+- Multiple simultaneous interactive agents in one workspace.
+- MCP sub-agents or interactive MCP Guard chaining.
+- A framework-based SPA, hosted cloud dashboard, extension marketplace, or
+  VS Code extension.
+- Internet-facing multi-user tenancy, accounts, roles, billing, or untrusted
+  shared hosting.
 
-- **Depends on:** PR 1. Guard-review integration and live `dired_changed`
-  need PR 3. Can ship listing/preview/file-ops after PR 1 alone, then hook
-  agent review.
-- **Files:** `src/server/dired_api.*`, hub `kind:dired`, tests for
-  containment and overwrite/recursive flags, `docs/server.md`, pointer from
-  `docs/dired-mode.md`
-- **Changes:** JSON snapshots of `DiredState`; map POST verbs onto existing
-  `dired_*` functions; RO view includes `changed_lines`; pass/rename/copy/
-  delete/touch/mkdir/create-file; path containment under `--workspace`;
-  optional SSE while an agent turn mutates files; Guard `review_path` can
-  open this session without cancelling the turn.
-- **Not in this PR:** remoting keys/paint, multi-mark, git, writable `o`/`n`
-  into a piece-table buffer (that is PR 7 or the host editor).
+## Implementation order
 
-### Suggested implementation order (when asked)
+Each PR must preserve CLI behavior and include its nearest tests and
+documentation.
 
-1. PR 1 + PR 2 — usable remote one-shot
-2. PR 3 — interactive agent (product priority after CLI)
-3. PR 8 — remote dired (agent review surface for a WUI)
-4. PR 5 when chaining is needed (can precede chat)
-5. PR 4 chat, PR 6 TLS, PR 7 thin editor
+### PR 0 - Existing CLI skill
 
-## Definition of done (whole v1.3, not one PR)
+No behavior change. Record current CLI chat, run, plan, image, agent, Guard,
+dired, editor, persistence, cancellation, and error behavior as the compatibility
+baseline.
 
-- `ainiux server` listens on loopback with a secret and does not leak provider keys
-- Remote can one-shot chat/run/plan/image and cancel
-- Remote can run an interactive agent turn, see tool rows, cancel the provider
-  call, and answer Guard Ask
-- Remote can browse the workspace with dired semantics (list, preview, dirty,
-  history line-diff, contained file ops) without a TUI
-- MCP adapter designed so a second Ainiux can `--add-mcp` this server
-- CLI skill remains valid for bash agents without the daemon
-- Tests cover auth, bind policy, cancel, Guard allow/deny, dired containment,
-  and error-path cleanup
-- Docs match: this is the Ainiux server, not a WUI and not an OpenAI-only proxy
+### PR 1 - Surface-neutral operations and wire contract
+
+Extract reusable operation boundaries, define public DTOs/error mappings,
+document concurrency and HTTP limits, and add tests proving CLI output and
+cancellation remain unchanged. No listener yet.
+
+### PR 2 - Loopback listener, strict parser, auth, and status
+
+Add lifecycle, bounded HTTP/1.1 parsing, full-control and MCP-only authentication,
+`health`, `status`, `capabilities`, connection caps, and clean shutdown.
+Bind loopback only.
+
+### PR 3 - One-shot jobs and serialized agent lane
+
+Add job registry, idempotency, status, SSE replay, cancellation, and chat/run/
+plan/image operations. Enforce the one-workspace agent lane and typed conflicts.
+
+### PR 4 - MCP 2026-07-28 adapter
+
+Add discovery, protocol headers, deterministic tools, task/job handles,
+MCP-only scope, conformance coverage, and documentation.
+
+### PR 5 - Interactive agent and Guard
+
+Add the persistent session controller, correlated turns/approvals, session
+snapshots, replay, cancel, review-file, stale-response rejection, and shutdown
+semantics.
+
+### PR 6 - Read-only review and dired
+
+Expose workspace-relative review, directory listing, and bounded file reads over
+the existing contained filesystem logic. Do not add mutations yet.
+
+### PR 7 - Revision-safe chat threads
+
+Add thread listing/loading/creation/messages with optimistic revision checks and
+no raw database exposure.
+
+### PR 8 - TLS and direct non-loopback access
+
+Add the optional TLS dependency and RAII wrappers, strict Host/Origin policy,
+remote startup gates, remote-Yolo opt-in, certificate tests, and security docs.
+
+### PR 9 - Revision-safe dired/editor mutations
+
+Add root-aware explicit-target mutations, file editing and assist, optimistic
+concurrency, atomic saves, conflict UI data, and focused race/failure tests.
+
+### PR 10 - Embedded vanilla-JavaScript WUI (v1.3 release gate)
+
+Add the embedded same-origin responsive controller at `/ui/`, covering jobs,
+chat, agent/Guard, image, review/dired, editor, and safe settings. Complete
+browser security, reconnect, accessibility, responsive-layout, and end-to-end
+tests. Update `docs/web-mode.md` and release documentation.
+
+## Definition of done
+
+v1.3 is done when:
+
+- existing CLI, REPL, TUI, editor, agent, benchmark, grade, and image behavior
+  remains intact;
+- the stable `/ainiux/v1/` job/session API and MCP adapter share the same core
+  operations and cancellation semantics;
+- one workspace cannot acquire competing interactive-agent controllers;
+- authentication scopes, loopback/TLS policy, Guard correlation, replay,
+  backpressure, path containment, revision conflicts, and clean shutdown are
+  tested;
+- the embedded vanilla-JavaScript WUI is functional and responsive on desktop,
+  tablet, and mobile, and passes the security/accessibility matrix;
+- no secret, absolute local path, raw database, hidden project state, worker,
+  socket, subscriber, TLS handle, or temporary buffer leaks on success, error,
+  cancellation, disconnect, or shutdown.
 
 # Execution-plan template
 
