@@ -321,7 +321,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not currently implement a local OpenAI-compatible server, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot CLI image generation (`ainiux image`) uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not currently implement a local control-API server (`ainiux server`; specified as **v1.3** in [PLANS.md](PLANS.md)), OpenAI-compatible `/v1` proxy, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot CLI image generation (`ainiux image`) uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 
@@ -331,7 +331,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.19 history](docs/version-history.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.19 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
 
 For the complete current option list, run:
 

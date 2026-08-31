@@ -17,14 +17,14 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 - standalone editor (with optional AI assist)
 - benchmark runner
 - grade (judge) pass
-- future local OpenAI-compatible server mode
+- future local control-API server mode (`ainiux server`, v1.3; OpenAI `/v1` adapter later)
 - postponed browser web UI
 - local agent mode with session-scoped Act/Plan task modes
 - one-shot CLI image generation (`ainiux image`)
 
 ## Current product snapshot
 
-Status: **v1.19 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, mid-turn editor/dired review without cancelling the agent turn (`AgentController`, Ctrl+G / F4), project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals (answerable from the editor), and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. Compact native tool schemas use short industry-aligned names; removed long names and aliases are unknown tools. Agent/run/plan can also load explicitly installed MCP tools. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Apple Silicon macOS source builds are supported. The Windows target remains unreleased until its native parity gate passes. Local server mode is deferred behind v1.1. CLI `ainiux image` is the first v1.2 slice; REPL/TUI image generation remains later. Browser web UI remains postponed.
+Status: **v1.19 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, mid-turn editor/dired review without cancelling the agent turn (`AgentController`, Ctrl+G / F4), project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals (answerable from the editor), and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. Compact native tool schemas use short industry-aligned names; removed long names and aliases are unknown tools. Agent/run/plan can also load explicitly installed MCP tools. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Apple Silicon macOS source builds are supported. The Windows target remains unreleased until its native parity gate passes. Local server mode is **v1.3** in `PLANS.md` (specified, do not implement until asked). CLI `ainiux image` is the first v1.2 slice; REPL/TUI image generation remains later. Browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -64,7 +64,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 
 ### Not implemented yet (do not pretend they exist)
 
-- Local OpenAI-compatible **server** mode (`--server` in `PLANS.md` v0.90)
+- Local control-API **server** mode (`ainiux server` / `--server` in `PLANS.md` **v1.3**; OpenAI `/v1` proxy is a later adapter). Specified; do not implement until asked.
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is a postponed-design snapshot)
 - Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
 - `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)
@@ -105,7 +105,7 @@ Work in this order unless the user explicitly changes priorities:
 2. Finish remaining v0.9 polish: benchmark cutoff/grade calibration, TUI/CLI polish, refactor hygiene, leak and cancellation hardening (see `TODO.md` / `PLANS.md`).
 3. Tune v1.1 lightweight definition importance, lexical ranking, and mutation-aware persistent refresh.
 4. `/goal` is landed for interactive agent; add `/loop` and sub-agents only after the user supplies detailed specifications; reuse Guard, workspace-containment, cancellation, and logging.
-5. Local OpenAI-compatible **server** mode (v0.90), reusing provider/runtime/security layers.
+5. Local control-API **server** mode (**v1.3**), reusing provider/runtime/security layers. Do not start it until the user asks.
 6. Image generation (v1.2), then only later consider revived browser UI on the server/runtime foundation.
 
 Do not infer `/loop` or sub-agent semantics from their names. Do not rewrite or expand the built-in agent system prompt as part of v1.1 indexing work; the user plans a separate prompt-optimization pass for small local models. Do not treat postponed browser web UI as the next major surface.
@@ -439,16 +439,32 @@ The TUI is a shipped foundation, not a future milestone. Continue improving it w
 - `--benchmark` and `--grade` cannot be combined.
 - Keep runs cancellable; release per-run allocations; continue through individual case failures where the design already does so.
 
-### Future local server mode (v0.90)
+### Future local server mode (v1.3)
 
-When implemented, prefer a dedicated flag such as `--server` (see `PLANS.md`). Do not overload postponed browser `--web` for the API server without an explicit product decision.
+Specified in `PLANS.md` v1.3. **Do not implement until the user asks.**
+
+When implemented, use `ainiux server` / `--server`. Do not overload postponed
+browser `--web`. Put listen/auth/routing in `src/server/`, not reserved
+`src/web/`.
+
+This is an Ainiux **control API** (`/ainiux/v1/`) plus a later MCP adapter.
+Do not ship an OpenAI-only `/v1/chat/completions` proxy as a substitute for
+sessions, cancel, Guard, settings, or dired. Keep `/v1/` reserved for that
+later adapter.
 
 Expected constraints:
 
-- Bind loopback by default; require an explicit option for LAN bind.
-- Do not expose API keys, config secrets, chat DBs, or arbitrary local files.
-- Reuse provider, runtime, cancellation, and redaction layers.
-- Initial server mode is not agent mode: no shell execution, no unrestricted workspace reads.
+- Bind loopback (`127.0.0.1`) by default; `0.0.0.0` requires `--server-secret` /
+  `AINIUX_SERVER_SECRET` (never reuse `AINIUX_API_KEY`) and TLS unless
+  `--insecure-plain-bind`.
+- Do not expose provider API keys, config secrets, chat DBs, or arbitrary local files.
+- Reuse provider, runtime, `AgentController`, `ApprovalGate`, `DiredState`,
+  cancellation, and redaction.
+- One-shot HTTP may wrap `run`/`plan`/chat/`image`. Interactive agent over HTTP
+  proxies Guard Ask; MCP chaining stays headless Ask-deny.
+- Remote dired is JSON over existing `dired_*` operations, not a second browser
+  and not remoted TUI keys/paint.
+- Single server `--workspace` (default cwd). Do not accept remote filesystem roots.
 
 ### Agent safety baseline (v1.0+)
 
@@ -461,7 +477,7 @@ Agent mode is last and separate from ordinary chat/editor assist.
 
 ### Postponed browser web UI
 
-Do not implement browser web UI while v0.9 / server mode work remains the roadmap focus unless the user explicitly requests it. If revived, reuse server/runtime/session/security layers; keep CORS locked down; serve only local assets; never leak secrets. Detailed historical checklist lives in older notes and `docs/web-mode.md`.
+Do not implement browser web UI while v0.9 / v1.3 server work remains the roadmap focus unless the user explicitly requests it. If revived, reuse the v1.3 control API; keep CORS locked down; serve only local assets; never leak secrets. Detailed historical checklist lives in older notes and `docs/web-mode.md`.
 
 ## Testing requirements
 

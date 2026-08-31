@@ -9,6 +9,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Getting started](getting-started.md) | Dependencies, installation, providers, first commands, and platform expectations |
 | [Native Windows](windows.md) | UCRT64 build/package, Win32 terminal, PowerShell, clipboard, paths, and parity gate |
 | [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, image generation, attachments, fetch/search, output, and context |
+| [CLI skill for other agents](skills/ainiux-cli/SKILL.md) | How a foreign agent should invoke `ainiux` from bash (one-shot only; no TUI) |
 | [Chat TUI](chat.md) | Threads, persistence, commands, attachments, and mode switching |
 | [Editor help](editor_help.md) | Complete editor operation and embedded help content |
 | [Dired mode](dired-mode.md) | Full-screen directory browser: keys, listing, dirty markers, CLI `-d` / `--dired` |

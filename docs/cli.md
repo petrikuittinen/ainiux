@@ -2,6 +2,8 @@
 
 Ainiux reserves `stdout` for intentional model or conversion output. Status, warnings, progress, and errors use `stderr`. This makes the default one-shot mode suitable for pipes and command substitution.
 
+Other agents calling Ainiux from a shell should follow the [CLI skill](skills/ainiux-cli/SKILL.md).
+
 ## One-shot chat and REPL
 
 ```sh

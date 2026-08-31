@@ -23,7 +23,7 @@
 
 ## Deferred roadmap
 
-- Local OpenAI-compatible server mode remains planned but follows v1.1.
+- Local control-API server (`ainiux server`) is specified in `PLANS.md` **v1.3** and must not be implemented until asked. OpenAI `/v1` proxy, MCP adapter, thin editor, and remote dired are later PRs on that daemon. Foreign-agent bash usage is `docs/skills/ainiux-cli/SKILL.md`.
 - Image generation v1.2 CLI (`ainiux image`) is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Further provider image/video models should be `images.conf` records.
 - Browser web UI remains postponed behind the local server/runtime foundation.
 
@@ -96,4 +96,4 @@ These formats are intentionally deferred. Do not treat PDF or DOCX binary data a
 
 ## Postponed Browser Web UI
 
-- Browser local web UI is postponed. Prefer local OpenAI-compatible server mode first, with rudimentary authentication and local conversion pseudo-models such as `html-to-md` and `md-to-html`.
+- Browser local web UI is postponed. Prefer the control-API server (`PLANS.md` v1.3) first; a WUI should speak `/ainiux/v1` rather than embedding provider HTTP in the browser.

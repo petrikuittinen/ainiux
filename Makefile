@@ -73,6 +73,9 @@ BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
 EDITOR_HELP_SRC := docs/editor_help.md
 EDITOR_HELP_HEADER := $(GENERATED_DIR)/embedded_editor_help.hpp
 EDITOR_HELP_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor_help.md
+CLI_SKILL_SRC := docs/skills/ainiux-cli/SKILL.md
+CLI_SKILL_INSTALL_DIR := $(DESTDIR)$(PREFIX)/share/ainiux/skills/ainiux-cli
+CLI_SKILL_INSTALL := $(CLI_SKILL_INSTALL_DIR)/SKILL.md
 MASTER_PROMPT_SRC := resources/prompts/master_prompt.md
 SECURITY_PROMPT_SRC := resources/prompts/security_prompt.md
 AGENT_PROMPT_SRC := resources/prompts/agent_prompt.md
@@ -311,7 +314,7 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(IMAGES_CONFIG) $(EDITOR_HELP_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(IMAGES_CONFIG) $(EDITOR_HELP_SRC) $(CLI_SKILL_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
 	install -d "$(BENCHMARK_DATA_DIR)"
@@ -319,6 +322,8 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 	install -d "$(DESTDIR)$(PREFIX)/share/ainiux"
 	install -m 0644 "$(COMMON_CONFIG)" "$(COMMON_CONFIG_INSTALL)"
 	install -m 0644 "$(EDITOR_HELP_SRC)" "$(EDITOR_HELP_INSTALL)"
+	install -d "$(CLI_SKILL_INSTALL_DIR)"
+	install -m 0644 "$(CLI_SKILL_SRC)" "$(CLI_SKILL_INSTALL)"
 	install -m 0644 "$(EDITOR_COMMANDS_CONFIG)" "$(EDITOR_COMMANDS_INSTALL)"
 	install -m 0644 "$(THEMES_CONFIG)" "$(THEMES_INSTALL)"
 	install -m 0644 "$(BENCHMARKS_CONFIG)" "$(BENCHMARKS_INSTALL)"
