@@ -1,0 +1,53 @@
+#pragma once
+
+#include <memory>
+#include <string>
+
+#include "cli/args.hpp"
+#include "json/json.hpp"
+#include "server/job_registry.hpp"
+
+namespace ainiux::server {
+
+struct ServiceSubmitResult {
+    SubmitResult submission;
+    Error validation_error;
+};
+
+class JobService {
+   public:
+    JobService(cli::Options base_options, std::string workspace, std::size_t max_jobs);
+    JobService(const JobService&) = delete;
+    JobService& operator=(const JobService&) = delete;
+
+    ServiceSubmitResult submit(const std::string& operation,
+                               const std::string& body,
+                               const std::string& idempotency_key);
+    JobRegistry& registry() { return registry_; }
+    const JobRegistry& registry() const { return registry_; }
+    void shutdown() { registry_.shutdown(); }
+
+   private:
+    Error validate_common(const json::Value& root,
+                          const std::string& operation,
+                          cli::Options& options) const;
+    JobOutcome run_chat_job(cli::Options options,
+                            std::vector<provider::Message> messages,
+                            runtime::CancellationToken cancellation,
+                            JobEvents events) const;
+    JobOutcome run_agent_job(cli::Options options,
+                             std::string goal,
+                             bool plan,
+                             runtime::CancellationToken cancellation,
+                             JobEvents events) const;
+    JobOutcome run_image_job(cli::Options options,
+                             app::operation::ImageRequest request,
+                             runtime::CancellationToken cancellation,
+                             JobEvents events) const;
+
+    cli::Options base_options_;
+    std::string workspace_;
+    JobRegistry registry_;
+};
+
+}  // namespace ainiux::server

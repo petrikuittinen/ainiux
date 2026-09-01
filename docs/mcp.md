@@ -12,6 +12,10 @@ Ainiux can use tools from [Model Context Protocol](https://modelcontextprotocol.
 
 MCP does not replace native workspace tools (`read`, `edit`, `run`, …). It adds **external** tools from servers you install.
 
+The loopback control server also provides a separate MCP server endpoint at
+`/mcp` (v1.3 PR 4). This is an MCP-only surface for remote clients; it is not
+loaded into ordinary chat or editor mode.
+
 ---
 
 ## Quick start
@@ -193,6 +197,35 @@ Local mock: `tests/mock_server/mcp_mock.py`.
 
 There is no required live dependency on public MCP hosts in CI.
 
+## Ainiux as an MCP server
+
+Start the loopback control server with both dedicated credentials:
+
+```sh
+export AINIUX_SERVER_SECRET='controller-secret'
+export AINIUX_MCP_SECRET='mcp-secret'
+ainiux server --workspace . --port 8766
+```
+
+Clients connect to `http://127.0.0.1:8766/mcp` using the MCP-only bearer
+token. Ainiux implements stateless MCP `2026-07-28` Streamable HTTP with
+`server/discover`, `tools/list`, `tools/call`, `tasks/get`, `tasks/update`,
+and `tasks/cancel`. The available tools are `ainiux_chat`, `ainiux_run`,
+`ainiux_plan`, `ainiux_image`, `ainiux_job_get`, and `ainiux_job_cancel`.
+
+Long-running calls use the MCP Tasks extension when the client advertises
+`io.modelcontextprotocol/tasks`; the returned opaque task handle is polled
+with `tasks/get`. Calls from clients without that extension still return a
+valid tool result containing the asynchronous job snapshot. MCP tasks and
+jobs are bounded in-memory state and do not survive a server restart.
+
+The endpoint requires `Content-Type: application/json`, an `Accept` header
+listing both `application/json` and `text/event-stream`, and matching
+`MCP-Protocol-Version`, `Mcp-Method`, and applicable `Mcp-Name` headers. The
+legacy `initialize`/session and GET-SSE transports are intentionally not
+served. See [the control API guide](api.md) for the wire contract and
+[security](security.md) for scope and loopback boundaries.
+
 ---
 
 ## Public servers (manual)
@@ -355,4 +388,3 @@ ainiux deepseek -m deepseek-v4-flash -r "Use mcp__local-image__describe_image on
 Or in agent: `attach` / `/attach`, then call `mcp__local-image__describe_image` with `{"path":"…"}` or let HTTP rewrite supply `image_base64`.
 
 MCP **results** remain text-first (`content[].type == "text"`). Image content blocks from MCP are not injected as vision.
-

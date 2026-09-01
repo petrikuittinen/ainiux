@@ -7,7 +7,9 @@
 #include <string>
 
 #include "common.hpp"
+#include "cli/args.hpp"
 #include "server/auth.hpp"
+#include "server/limits.hpp"
 
 namespace ainiux::server {
 
@@ -16,6 +18,8 @@ struct ListenerConfig {
     std::size_t max_connections = Limits::default_max_connections;
     std::size_t max_jobs = Limits::default_max_jobs;
     AuthConfig auth;
+    cli::Options base_options;
+    std::string workspace = ".";
 };
 
 class Listener {

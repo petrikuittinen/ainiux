@@ -19,7 +19,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Configuration](configuration.md) | Layering, credentials, themes, models, image catalog, benchmark prompts, and editor commands |
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
-| [Control API](api.md) | Start the loopback v1.3 server, authenticate, query discovery routes, and review HTTP limits |
+| [Control API](api.md) | Start the loopback v1.3 server; use one-shot jobs and the MCP endpoint; review authentication and limits |
 | [Security](security.md) | Credential, persistence, fetch, attachment, image generation, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
 | [Version history](version-history.md) | Compact v0.0–v1.19 release timeline plus unreleased work |

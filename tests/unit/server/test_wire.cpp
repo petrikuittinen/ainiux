@@ -95,7 +95,9 @@ void test_initial_server_limits_are_bounded() {
               server::Limits::json_body_bytes == 1U * 1024U * 1024U,
           "initial parser limits are explicit and bounded");
     check(server::Limits::default_provider_concurrency == 4U &&
-              server::Limits::agent_lanes == 1U,
+              server::Limits::agent_lanes == 1U &&
+              server::Limits::events_per_job == 256U &&
+              server::Limits::event_bytes_per_job == 1024U * 1024U,
           "initial operation concurrency is explicit");
 }
 

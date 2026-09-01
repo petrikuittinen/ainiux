@@ -94,8 +94,10 @@ This is advisory coordination, not an operating-system write prohibition: unrela
 ## Loopback Control API
 
 `ainiux server` currently binds only IPv4 loopback (`127.0.0.1`) and exposes
-authenticated health, status, and capabilities routes. It does not yet expose
-provider operations, agents, files, chat databases, MCP tools, or a browser UI.
+authenticated discovery plus asynchronous one-shot chat, run, plan, and image
+jobs. It does not yet expose interactive agents, files, chat databases, or a
+browser UI. Its separate MCP endpoint exposes only the bounded job tools
+documented in [the control API guide](api.md).
 Every API route requires a dedicated full-control bearer secret; loopback location
 alone is not authority. The server never reuses `AINIUX_API_KEY` or a provider key.
 
@@ -103,7 +105,9 @@ Use `AINIUX_SERVER_SECRET` or a private `--server-secret-file` outside the serve
 workspace. On POSIX the file is rejected if group/other permission bits are set.
 An optional distinct `AINIUX_MCP_SECRET` / `--mcp-secret-file` is path-bound to
 `/mcp`; it cannot call controller routes, and the controller token is not accepted
-as the MCP token. `/mcp` remains unavailable until its later adapter slice. Tokens
+as the MCP token. The MCP adapter exposes only bounded job tools and opaque task
+handles; it does not expose provider credentials, project databases, or filesystem
+paths. Tokens
 are accepted only in the `Authorization: Bearer` header, compared without an
 early content-dependent exit, and never returned in errors or discovery data.
 
@@ -111,8 +115,13 @@ The parser rejects ambiguous framing, transfer encodings, duplicate headers,
 encoded paths, traversal, invalid Host values, and cross-origin requests. Request
 sizes, read timeouts, keep-alive requests, and active connections are bounded.
 Ctrl+C stops accepts, shuts down active client sockets, and joins every worker.
-Direct non-loopback binding, TLS, remote Yolo, WUI assets, jobs, and operational
-routes are not present in this slice.
+Jobs accept only bounded operation fields, never remote credentials, arbitrary
+provider URLs, attachment paths, or filesystem roots. Provider chat/image work
+has a global cap; run/plan reserve one fixed-workspace lane and remain headless
+under Guard. Job/event retention is bounded and in-memory only. Cancellation is
+job-scoped, SSE writers time out on disconnected/slow clients, and server-side
+credential paths are hidden from job errors. Direct non-loopback binding, TLS,
+remote Yolo, WUI assets, and later operational routes are not present.
 
 ## Configuration Files
 

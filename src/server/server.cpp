@@ -200,6 +200,10 @@ Error validate_server_options(const cli::Options& options) {
     if (options.max_jobs < 1 || options.max_jobs > 4096) {
         return {ErrorCode::BadArgs, "--max-jobs must be between 1 and 4096"};
     }
+    if (options.key_stdin) {
+        return {ErrorCode::BadArgs,
+                "--key-stdin cannot be used in server mode; use a provider environment variable or --key-file"};
+    }
     if (options.agent || options.agent_run || options.image || options.benchmark || options.grade ||
         options.editor || options.tui || options.repl || options.security_review || options.index_code ||
         options.print_index || options.clear_index || options.list_models || !options.prompt.empty() ||
@@ -273,6 +277,8 @@ int run_server(const cli::Options& options) {
     config.max_connections = static_cast<std::size_t>(options.max_connections);
     config.max_jobs = static_cast<std::size_t>(options.max_jobs);
     config.auth = std::move(auth);
+    config.base_options = options;
+    config.workspace = workspace.u8string();
     error = listener.start(std::move(config));
     if (!error.ok()) {
         app::print_error(error);

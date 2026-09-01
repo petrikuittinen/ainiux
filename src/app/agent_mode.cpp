@@ -35,7 +35,8 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
                                runtime::CancellationToken cancellation,
                                std::function<bool()> interrupted,
                                bool write_final_to_stdout,
-                               std::function<void(const std::string& status_line)> on_progress) {
+                               std::function<void(const std::string& status_line)> on_progress,
+                               std::string workspace) {
     const auto started = std::chrono::steady_clock::now();
     AgentGoalResult result;
     if (context.routing_session_id.empty())
@@ -50,11 +51,11 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
     }
 
     agent::SessionRuntimeOptions options;
-    options.workspace = ".";
+    options.workspace = std::move(workspace);
     options.task_mode = context.options.agent_plan ? agent::AgentTaskMode::Plan
                                                    : agent::AgentTaskMode::Act;
     options.allow_network = true;
-    options.interactive = !write_final_to_stdout;
+    options.interactive = false;
     options.enable_session_db = true;
     options.enable_agent_log = context.options.agent_log_enabled;
     options.security_review_log_keep_runs = context.options.security_review_log_keep_runs;

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test the v1.3 PR 2 loopback control server with curl.
+# Smoke-test the v1.3 PR 4 loopback control server with curl.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ MCP_SECRET="ainiux-control-smoke-${$}-mcp"
 
 usage() {
     cat <<'EOF'
-Smoke-test the Ainiux v1.3 PR 2 control server.
+Smoke-test the Ainiux v1.3 PR 4 control server.
 
 Usage: scripts/test-control-server.sh [options]
 
@@ -27,9 +27,10 @@ Options:
   --build         Build ./ainiux before testing
   -h, --help      Show this help
 
-The script starts a temporary loopback server, tests authentication, health,
-status, capabilities, Host/Origin policy, method/body rejection, and scoped MCP
-credentials, then stops the server. It never contacts a provider endpoint.
+The script starts a temporary loopback server, tests authentication, discovery,
+job submission/status/events/cancel/idempotency, Host/Origin policy, and scoped
+MCP credentials, then stops the server. It uses provider "none" and never
+contacts a provider endpoint.
 EOF
 }
 
@@ -184,13 +185,25 @@ expect_body '"auth_scope":"full_control"' "status authentication scope"
 
 request 200 "authenticated capabilities" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/capabilities"
-expect_body '"operations":["health","status","capabilities"]' "capability operations"
-expect_body '"mcp":false' "MCP adapter availability"
+expect_body '"operations":["health","status","capabilities","chat","run","plan","image"]' "capability operations"
+expect_body '"mcp":true' "MCP adapter availability"
 
 request 401 "MCP token cannot access control API" "${MCP_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/status"
 request 401 "full-control token is not an MCP token" "${FULL_AUTH[@]}" "${BASE_URL}/mcp"
-request 404 "MCP token reaches reserved unavailable route" "${MCP_AUTH[@]}" "${BASE_URL}/mcp"
+request 405 "MCP endpoint requires POST" "${MCP_AUTH[@]}" "${BASE_URL}/mcp"
+
+MCP_META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"curl-smoke","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}'
+MCP_HEADERS=(--header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' \
+    --header 'MCP-Protocol-Version: 2026-07-28')
+MCP_DISCOVER="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"server/discover\",\"params\":{${MCP_META}}}"
+request 200 "MCP server discovery" "${MCP_AUTH[@]}" "${MCP_HEADERS[@]}" \
+    --header 'Mcp-Method: server/discover' --data "${MCP_DISCOVER}" "${BASE_URL}/mcp"
+expect_body '"supportedVersions":["2026-07-28"]' "MCP protocol discovery"
+MCP_LIST="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{${MCP_META}}}"
+request 200 "MCP tools list" "${MCP_AUTH[@]}" "${MCP_HEADERS[@]}" \
+    --header 'Mcp-Method: tools/list' --data "${MCP_LIST}" "${BASE_URL}/mcp"
+expect_body 'ainiux_chat' "MCP chat tool"
 
 request 421 "non-loopback Host rejection" "${FULL_AUTH[@]}" --header 'Host: example.com' \
     "${BASE_URL}/ainiux/v1/health"
@@ -199,6 +212,35 @@ request 403 "cross-origin rejection" "${FULL_AUTH[@]}" \
 request 405 "unsupported method rejection" "${FULL_AUTH[@]}" --request POST \
     "${BASE_URL}/ainiux/v1/health"
 request 400 "unexpected body rejection" "${FULL_AUTH[@]}" \
-    --header 'Content-Type: application/json' --data '{}' "${BASE_URL}/ainiux/v1/health"
+    --request GET --header 'Content-Type: application/json' --data '{}' \
+    "${BASE_URL}/ainiux/v1/health"
+
+JOB_BODY='{"provider":"none","messages":[{"role":"user","content":"offline smoke"}]}'
+request 202 "chat job submission" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: application/json' --header 'Idempotency-Key: smoke-chat' \
+    --data "${JOB_BODY}" "${BASE_URL}/ainiux/v1/jobs/chat"
+expect_body '"existing":false' "new job marker"
+JOB_ID="$(sed -n 's/.*"id":"\([A-Za-z0-9_-]*\)".*/\1/p' "${RESPONSE_FILE}")"
+[ -n "${JOB_ID}" ] || die "job submission did not return a job ID"
+
+request 200 "idempotent chat job replay" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: application/json' --header 'Idempotency-Key: smoke-chat' \
+    --data "${JOB_BODY}" "${BASE_URL}/ainiux/v1/jobs/chat"
+expect_body '"existing":true' "existing job marker"
+request 409 "idempotency payload conflict" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: application/json' --header 'Idempotency-Key: smoke-chat' \
+    --data '{"provider":"none","messages":[{"role":"user","content":"changed"}]}' \
+    "${BASE_URL}/ainiux/v1/jobs/chat"
+expect_body '"code":"idempotency_conflict"' "idempotency conflict code"
+
+request 200 "job status snapshot" "${FULL_AUTH[@]}" \
+    "${BASE_URL}/ainiux/v1/jobs/${JOB_ID}"
+expect_body "\"id\":\"${JOB_ID}\"" "job status ID"
+request 200 "job SSE replay" "${FULL_AUTH[@]}" \
+    "${BASE_URL}/ainiux/v1/jobs/${JOB_ID}/events"
+expect_body 'event: queued' "SSE queued event"
+expect_body 'data: {"id":1' "SSE stable envelope"
+request 200 "idempotent terminal cancellation" "${FULL_AUTH[@]}" --request POST \
+    "${BASE_URL}/ainiux/v1/jobs/${JOB_ID}/cancel"
 
 echo "==> All control-server smoke tests passed"

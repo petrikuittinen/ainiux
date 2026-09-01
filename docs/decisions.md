@@ -435,3 +435,50 @@ OpenAI adapter unavailable. This preserves capability detection without
 prematurely exposing the PR 1 chat/image operations over the network.
 The initial default port is 8766, adjacent to but distinct from the documented
 8765 local MCP development examples; `--port` remains authoritative.
+
+## Bounded one-shot jobs and replay broker (v1.3 PR 3)
+
+HTTP requests validate a small operation-specific JSON schema and submit work to
+a surface-neutral registry. Provider chat/image jobs share four execution slots;
+run and plan atomically reserve the one workspace agent lane at submission and
+return a typed conflict instead of accumulating mutation work. Agent execution
+receives the server's canonical workspace as an explicit argument, avoiding a
+process-wide current-directory change.
+
+Each job owns a cancellation source and a bounded event broker. Producers never
+wait for subscribers. The broker retains at most 256 events and 1 MiB per job,
+assigns monotonic IDs, and detects cursors overtaken by eviction. SSE connections
+read by ID, emit periodic heartbeats, close after the terminal event, and abandon
+their socket on a bounded send timeout. Job workers are owned and joined by the
+registry—not by the job object—so terminal eviction cannot make a worker join
+itself. Retention is process-local, bounded by `--max-jobs`, and intentionally
+does not promise restart persistence.
+
+Idempotency keys are scoped across the registry: the same canonical JSON and
+operation return the retained job; any changed operation or payload conflicts.
+Remote schemas exclude key/header/base-URL/path fields. Provider credentials and
+endpoints come only from server startup configuration, and public job errors
+redact resolved keys and replace server-side file paths with generic messages.
+
+## Stateless MCP adapter and task handles (v1.3 PR 4)
+
+The server exposes MCP at `/mcp` with a separate, path-bound MCP-only bearer
+credential. The adapter implements the 2026-07-28 stateless Streamable HTTP
+shape: every request is a POST with per-request metadata and matching
+`MCP-Protocol-Version`, `Mcp-Method`, and applicable `Mcp-Name` headers. It
+does not mint protocol sessions, serve a GET SSE stream, or accept the full
+controller credential.
+
+MCP tools are a deterministic, deliberately small projection of the existing
+`JobService`: chat, run, plan, image, and opaque job inspection/cancellation.
+Tool calls never duplicate provider or agent execution. Clients that advertise
+`io.modelcontextprotocol/tasks` receive an opaque high-entropy task alias that
+maps to the bounded in-memory `JobRegistry`; `tasks/get`, `tasks/update`, and
+`tasks/cancel` operate on that alias. The alias map is bounded with the server
+job limit and is discarded on restart. Clients without task extension support
+receive a valid completed tool result containing a job snapshot, preserving a
+usable fallback without holding an HTTP request open.
+
+Only JSON responses are used in this slice. Existing control-API SSE replay
+remains the richer event surface; MCP task polling is intentionally separate so
+the stateless protocol does not inherit controller session or replay semantics.

@@ -1,8 +1,9 @@
 # Ainiux control API
 
-The v1.3 control API is versioned under `/ainiux/v1/`. PR 2 provides a
-loopback-only listener and authenticated discovery routes. Job submission,
-sessions, MCP serving, filesystem operations, and the WUI remain later slices.
+The v1.3 control API is versioned under `/ainiux/v1/`. PR 4 provides a
+loopback-only listener, authenticated discovery, asynchronous one-shot jobs,
+and a separate MCP 2026-07-28 endpoint at `/mcp`. Interactive sessions,
+filesystem operations, and the WUI remain later slices.
 Later routes must use the PR 1 operation/wire contracts rather than exposing
 provider, runtime, or terminal-internal structures directly.
 
@@ -18,12 +19,12 @@ curl -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
 The listener binds only `127.0.0.1`. A full-control credential is mandatory and
 comes from `AINIUX_SERVER_SECRET` or `--server-secret-file PATH`. An optional,
 different MCP-only credential comes from `AINIUX_MCP_SECRET` or
-`--mcp-secret-file PATH`; it is accepted only for `/mcp`, which still returns
-404 until the MCP adapter lands. Secret files must be outside the fixed served
+`--mcp-secret-file PATH`; it is accepted only for `/mcp`, which is a separate
+MCP-only scope. Secret files must be outside the fixed served
 workspace. On POSIX they must grant no group/other permissions. Secret values,
 query-string credentials, cookies, and `AINIUX_API_KEY` are not accepted.
 
-Every PR 2 endpoint requires `Authorization: Bearer TOKEN`, including health.
+Every endpoint requires `Authorization: Bearer TOKEN`, including health.
 This keeps all API requests free of ambient loopback authority. The three routes
 are:
 
@@ -37,12 +38,19 @@ GET /ainiux/v1/capabilities
 full-control scope, loopback/plain-HTTP bind state, and public connection/job
 limits. `capabilities` lists the currently routed discovery operations, built-in
 provider names without credentials, authentication configuration, and disabled
-optional adapters. It does not claim that jobs or MCP are available.
+optional adapters. It advertises MCP as enabled separately from the control
+API job operation list.
 
 From a source checkout, run `scripts/test-control-server.sh --build` for a
-self-contained curl smoke test of the listener, authentication scopes, discovery
-routes, and Host/Origin/method/body rejection. Use `--port PORT` when 18766 is
+self-contained curl smoke test of the listener, authentication scopes, discovery,
+jobs, SSE replay, and Host/Origin/method/body rejection. Use `--port PORT` when 18766 is
 already occupied.
+
+For the complete repeatable PR 4 check—including `make test`, optional fault
+tests, a live bundled mock provider, real chat completion, idempotency replay and
+conflict, SSE reconnect, and cancellation—run
+`scripts/test-control-server-pr3.sh`. Use `--no-build`, `--no-faults`, or
+`--binary PATH` to shorten or redirect the run.
 
 ## Operation boundary
 
@@ -52,9 +60,9 @@ output file, write to stdout or stderr, own terminal state, or install process
 signal handlers. CLI adapters retain their existing output behavior while HTTP,
 MCP, and later browser adapters translate the same operation results.
 
-The first extracted operations cover ordinary chat and one-shot image
-generation. Agent run/plan continue through the existing surface-neutral
-`run_agent_goal` boundary until the serialized agent lane lands with the job API.
+The extracted operations cover ordinary chat and one-shot image generation.
+Agent run/plan use the existing headless `run_agent_goal` boundary and the
+server's fixed canonical workspace.
 
 Internal operation event enums are not public protocol values. The server wire
 boundary explicitly converts them to lowercase event names and stable JSON DTOs.
@@ -98,9 +106,32 @@ Events use monotonically increasing integer IDs and this stable envelope:
 }
 ```
 
+Submit a JSON object to one of these routes:
+
+```text
+POST /ainiux/v1/jobs/chat   {provider?, model?, api?, messages:[{role,content}]}
+POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
+POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}
+POST /ainiux/v1/jobs/image  {provider?, model?, api?, prompt, size?, aspect?, quality?, format?}
+GET  /ainiux/v1/jobs/:job_id
+GET  /ainiux/v1/jobs/:job_id/events
+POST /ainiux/v1/jobs/:job_id/cancel
+```
+
+Submission normally returns `202`; `Idempotency-Key` reuse with identical input
+returns the retained job with `200`, while changed input returns the typed
+`idempotency_conflict` response. Run and plan reserve the single workspace agent
+lane at submission and return `agent_lane_busy` (409) instead of waiting.
+
+The events route uses `text/event-stream`. Each `data:` value is the full event
+DTO above. Reconnect with `Last-Event-ID`; ordered retained events are replayed.
+An evicted cursor returns `replay_expired` (410), requiring a fresh job snapshot.
+Event count and bytes are bounded per job, terminal jobs are bounded by
+`--max-jobs`, and none of this state survives a server restart.
+
 ## Initial bounded HTTP contract
 
-The PR 2 strict parser enforces these constants:
+The strict parser and PR 4 job broker enforce these constants:
 
 | Limit | Initial value |
 | --- | ---: |
@@ -114,6 +145,9 @@ The PR 2 strict parser enforces these constants:
 | Default retained/in-flight jobs | 128 |
 | Default provider-operation concurrency | 4 |
 | Workspace agent mutation lanes | 1 |
+| Retained events per job | 256 |
+| Retained event bytes per job | 1 MiB |
+| SSE heartbeat interval | 15 seconds |
 | Header read timeout | 10 seconds |
 | Body read timeout | 30 seconds |
 | Idle keep-alive timeout | 60 seconds |
@@ -136,3 +170,27 @@ one operation/job and cannot cancel unrelated session work.
 No other route listed in the v1.3 roadmap is callable until its implementation
 slice lands. Clients must use the authenticated capabilities endpoint rather
 than infer support from this contract document.
+
+## MCP 2026-07-28 endpoint
+
+`/mcp` uses stateless Streamable HTTP. Every request is a new authenticated POST
+using the MCP-only bearer token, `Content-Type: application/json`, and an
+`Accept` header containing both `application/json` and `text/event-stream`.
+Requests must carry matching `MCP-Protocol-Version`, `Mcp-Method`, and (for
+tool/task calls) `Mcp-Name` headers plus the per-request `_meta` protocol,
+client-info, and client-capabilities fields. The server does not implement the
+legacy initialize/session/GET-SSE transport.
+
+Supported RPCs are `server/discover`, `tools/list`, `tools/call`, `tasks/get`,
+`tasks/update`, and `tasks/cancel`. The deterministic tools are
+`ainiux_chat`, `ainiux_run`, `ainiux_plan`, `ainiux_image`,
+`ainiux_job_get`, and `ainiux_job_cancel`. Job execution reuses the control
+API's bounded `JobService`; no provider credentials or filesystem paths are
+exposed.
+
+Clients that advertise `io.modelcontextprotocol/tasks` may receive an opaque
+task handle from `tools/call` and poll it with `tasks/get`, or cancel it with
+`tasks/cancel`. Task handles are in-memory, bounded, and expire when retained
+server state is evicted or the server restarts. Clients without the extension
+receive a completed MCP tool result containing the asynchronous Ainiux job
+snapshot and can use `ainiux_job_get` with its opaque handle.

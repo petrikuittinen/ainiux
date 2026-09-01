@@ -84,7 +84,8 @@ AgentGoalResult run_agent_goal(
     runtime::CancellationToken cancellation = runtime::CancellationToken(),
     std::function<bool()> interrupted = {},
     bool write_final_to_stdout = false,
-    std::function<void(const std::string& status_line)> on_progress = {});
+    std::function<void(const std::string& status_line)> on_progress = {},
+    std::string workspace = ".");
 
 void refresh_session_metadata(chat::Session& session, const provider::RequestContext& context);
 void apply_system_prompt(chat::Session& session, const std::string& system);

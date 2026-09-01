@@ -46,12 +46,12 @@ error layers should serve:
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
-| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 2 loopback listener/auth/status landed; jobs are next |
+| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 4 MCP adapter landed; interactive sessions are next |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 The embedded browser controller is the final v1.3 PR, after the control API and
-remote operations are stable. Do not start v1.3 implementation until the user
-explicitly asks.
+remote operations are stable. Further v1.3 slices still require an explicit
+user request.
 
 ## Current baseline
 
@@ -261,8 +261,9 @@ Generated-image routes, if later added, may serve only controlled generated asse
 
 # v1.3 - Remote control API (`ainiux server`)
 
-Status: PR 2 loopback listener, strict HTTP parser, scoped authentication, and
-authenticated discovery routes landed. One-shot jobs begin in PR 3.
+Status: PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
+idempotency, cancellation, provider concurrency, and the serialized workspace
+agent lane landed. The MCP adapter is landed; interactive sessions begin in PR 5.
 
 ## Goal
 
@@ -761,15 +762,15 @@ Add lifecycle, bounded HTTP/1.1 parsing, full-control and MCP-only authenticatio
 `health`, `status`, `capabilities`, connection caps, and clean shutdown.
 Bind loopback only.
 
-### PR 3 - One-shot jobs and serialized agent lane
+### PR 3 - One-shot jobs and serialized agent lane — Landed
 
 Add job registry, idempotency, status, SSE replay, cancellation, and chat/run/
 plan/image operations. Enforce the one-workspace agent lane and typed conflicts.
 
-### PR 4 - MCP 2026-07-28 adapter
+### PR 4 - MCP 2026-07-28 adapter — Landed
 
-Add discovery, protocol headers, deterministic tools, task/job handles,
-MCP-only scope, conformance coverage, and documentation.
+Added discovery, protocol headers, deterministic tools, task/job handles,
+MCP-only scope, focused conformance coverage, and documentation.
 
 ### PR 5 - Interactive agent and Guard
 

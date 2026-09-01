@@ -25,6 +25,8 @@
 #include <vector>
 
 #include "server/http_parser.hpp"
+#include "server/job_service.hpp"
+#include "server/mcp_adapter.hpp"
 #include "server/router.hpp"
 #include "server/wire.hpp"
 
@@ -93,14 +95,17 @@ bool send_all(Socket socket, const std::string& data) {
     return true;
 }
 
-void set_receive_timeout(Socket socket) {
+void set_socket_timeouts(Socket socket) {
 #if defined(_WIN32)
     const DWORD timeout_ms = 1000;
     (void)setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO,
                      reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+    (void)setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO,
+                     reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
 #else
     timeval timeout{1, 0};
     (void)setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    (void)setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 #if defined(SO_NOSIGPIPE)
     int no_sigpipe = 1;
     (void)setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
@@ -150,6 +155,8 @@ struct Listener::Impl {
     unsigned short bound_port = 0;
     std::mutex workers_mutex;
     std::vector<std::shared_ptr<Worker>> workers;
+    std::unique_ptr<JobService> jobs;
+    std::unique_ptr<McpAdapter> mcp;
 
     void reap_workers() {
         std::lock_guard<std::mutex> lock(workers_mutex);
@@ -176,7 +183,7 @@ struct Listener::Impl {
         } guard{active, worker};
 
         const Socket socket = worker->socket.load(std::memory_order_acquire);
-        set_receive_timeout(socket);
+        set_socket_timeouts(socket);
         std::string pending;
         for (std::size_t count = 0; count < Limits::requests_per_connection && !stopping; ++count) {
             http::Parser parser;
@@ -232,10 +239,21 @@ struct Listener::Impl {
             public_status.max_connections = config.max_connections;
             public_status.max_jobs = config.max_jobs;
             public_status.active_connections = &active;
+            public_status.jobs = jobs.get();
+            public_status.mcp = mcp.get();
             const Response response = route_request(parser.request(), config.auth, public_status);
             const bool keep_alive = parser.request().keep_alive &&
                                     count + 1U < Limits::requests_per_connection && !response.close;
-            if (!send_all(socket, serialize_response(response, keep_alive)) || !keep_alive) return;
+            if (!send_all(socket, serialize_response(response, keep_alive))) return;
+            if (response.streaming) {
+                if (response.stream_body) {
+                    response.stream_body([socket](std::string_view data) {
+                        return send_all(socket, std::string(data));
+                    });
+                }
+                return;
+            }
+            if (!keep_alive) return;
         }
     }
 };
@@ -247,6 +265,10 @@ Error Listener::start(ListenerConfig config) {
     if (!impl_->network.ok()) return {ErrorCode::Connect, "could not initialize the socket runtime"};
     if (config.max_connections == 0) return {ErrorCode::BadArgs, "--max-connections must be positive"};
     impl_->config = std::move(config);
+    impl_->jobs = std::make_unique<JobService>(impl_->config.base_options,
+                                                impl_->config.workspace,
+                                                impl_->config.max_jobs);
+    impl_->mcp = std::make_unique<McpAdapter>(impl_->jobs.get(), impl_->config.max_jobs);
     impl_->stopping.store(false, std::memory_order_release);
     OwnedSocket socket(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (socket.get() == kInvalidSocket) return {ErrorCode::Connect, "could not create the loopback listener socket"};
@@ -345,6 +367,7 @@ void Listener::stop() {
         workers.swap(impl_->workers);
     }
     for (const auto& worker : workers) shutdown_socket(worker->socket.load(std::memory_order_acquire));
+    if (impl_->jobs) impl_->jobs->shutdown();
     for (const auto& worker : workers) if (worker->thread.joinable()) worker->thread.join();
 }
 
