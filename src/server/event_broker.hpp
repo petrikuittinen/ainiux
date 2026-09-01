@@ -30,7 +30,10 @@ class EventBroker {
     EventBroker(const EventBroker&) = delete;
     EventBroker& operator=(const EventBroker&) = delete;
 
-    wire::Event publish(std::string type, std::string data_json = "{}");
+    wire::Event publish(std::string type,
+                        std::string data_json = "{}",
+                        std::string session_id = {},
+                        std::string turn_id = {});
     ReplayBatch replay_after(std::uint64_t event_id) const;
     ReplayBatch wait_after(std::uint64_t event_id, std::chrono::milliseconds timeout) const;
     void close();

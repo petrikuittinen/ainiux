@@ -46,7 +46,7 @@ error layers should serve:
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
-| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 4 MCP adapter landed; interactive sessions are next |
+| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 6 read-only review/dired/file routes landed; PR 7 chat threads is next |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 The embedded browser controller is the final v1.3 PR, after the control API and
@@ -261,9 +261,9 @@ Generated-image routes, if later added, may serve only controlled generated asse
 
 # v1.3 - Remote control API (`ainiux server`)
 
-Status: PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
+Status: PR 6 read-only workspace review/dired/file access, PR 5 interactive agent sessions, PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
 idempotency, cancellation, provider concurrency, and the serialized workspace
-agent lane landed. The MCP adapter is landed; interactive sessions begin in PR 5.
+agent lane landed. The MCP adapter and read-only review/dired/file routes are landed; revision-safe chat threads begin in PR 7.
 
 ## Goal
 
@@ -374,6 +374,7 @@ ainiux --server
   --mcp-secret-file PATH
   --max-connections N
   --max-jobs N
+  --max-sessions N
 ```
 
 Credential environment variables:
@@ -772,7 +773,7 @@ plan/image operations. Enforce the one-workspace agent lane and typed conflicts.
 Added discovery, protocol headers, deterministic tools, task/job handles,
 MCP-only scope, focused conformance coverage, and documentation.
 
-### PR 5 - Interactive agent and Guard
+### PR 5 - Interactive agent and Guard — Landed
 
 Add the persistent session controller, correlated turns/approvals, session
 snapshots, replay, cancel, review-file, stale-response rejection, and shutdown
@@ -780,8 +781,10 @@ semantics.
 
 ### PR 6 - Read-only review and dired
 
-Expose workspace-relative review, directory listing, and bounded file reads over
-the existing contained filesystem logic. Do not add mutations yet.
+Landed. Expose workspace-relative review, directory listing, and bounded file
+reads over the existing contained filesystem logic. Project-private state,
+sensitive configuration names, special files, and symlink/reparse paths stay
+out of the response. Mutations remain deferred.
 
 ### PR 7 - Revision-safe chat threads
 

@@ -13,7 +13,7 @@ Ainiux can use tools from [Model Context Protocol](https://modelcontextprotocol.
 MCP does not replace native workspace tools (`read`, `edit`, `run`, …). It adds **external** tools from servers you install.
 
 The loopback control server also provides a separate MCP server endpoint at
-`/mcp` (v1.3 PR 4). This is an MCP-only surface for remote clients; it is not
+`/mcp` (v1.3 PR 4/5). This is an MCP-only surface for remote clients; it is not
 loaded into ordinary chat or editor mode.
 
 ---

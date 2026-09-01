@@ -13,6 +13,8 @@
 namespace ainiux::server {
 
 class McpAdapter;
+class SessionHub;
+class WorkspaceService;
 
 struct PublicStatus {
     unsigned short port = 0;
@@ -21,6 +23,9 @@ struct PublicStatus {
     const std::atomic<std::size_t>* active_connections = nullptr;
     JobService* jobs = nullptr;
     McpAdapter* mcp = nullptr;
+    SessionHub* sessions = nullptr;
+    std::size_t max_sessions = 0;
+    WorkspaceService* workspace = nullptr;
 };
 
 struct Response {

@@ -112,6 +112,7 @@ struct Options {
     int port = 8766;
     int max_connections = 64;
     int max_jobs = 128;
+    int max_sessions = 32;
 
     std::string positional_url;
     std::string prompt;

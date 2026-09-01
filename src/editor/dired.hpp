@@ -92,6 +92,10 @@ tui::StyleRole dired_entry_name_role(const DiredEntry& entry);
 // Open path or directory/glob (e.g. "src/", "src/*.cpp", ".").
 Error dired_open(DiredState& state, const std::string& path_or_glob);
 Error dired_refresh(DiredState& state);
+// Safe metadata-only listing for non-interactive callers. It does not hash or
+// open entries, and never follows a symlink/reparse point.
+Error dired_list_read_only(const std::string& directory,
+                           std::vector<DiredEntry>& entries);
 void dired_close(DiredState& state);
 
 void dired_set_sort(DiredState& state, DiredSortKey key, bool ascending);

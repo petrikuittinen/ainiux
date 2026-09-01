@@ -17,6 +17,7 @@ struct ListenerConfig {
     unsigned short port = 8766;
     std::size_t max_connections = Limits::default_max_connections;
     std::size_t max_jobs = Limits::default_max_jobs;
+    std::size_t max_sessions = Limits::default_max_sessions;
     AuthConfig auth;
     cli::Options base_options;
     std::string workspace = ".";

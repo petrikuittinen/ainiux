@@ -188,7 +188,7 @@ Error validate_server_options(const cli::Options& options) {
         return options.server_options_seen
                    ? Error{ErrorCode::BadArgs,
                            "--workspace, --port, --server-secret-file, --mcp-secret-file, "
-                           "--max-connections, and --max-jobs require server mode"}
+                           "--max-connections, --max-jobs, and --max-sessions require server mode"}
                    : ok_error();
     }
     if (options.port < 1 || options.port > 65535) {
@@ -199,6 +199,9 @@ Error validate_server_options(const cli::Options& options) {
     }
     if (options.max_jobs < 1 || options.max_jobs > 4096) {
         return {ErrorCode::BadArgs, "--max-jobs must be between 1 and 4096"};
+    }
+    if (options.max_sessions < 1 || options.max_sessions > 1024) {
+        return {ErrorCode::BadArgs, "--max-sessions must be between 1 and 1024"};
     }
     if (options.key_stdin) {
         return {ErrorCode::BadArgs,
@@ -276,6 +279,7 @@ int run_server(const cli::Options& options) {
     config.port = static_cast<unsigned short>(options.port);
     config.max_connections = static_cast<std::size_t>(options.max_connections);
     config.max_jobs = static_cast<std::size_t>(options.max_jobs);
+    config.max_sessions = static_cast<std::size_t>(options.max_sessions);
     config.auth = std::move(auth);
     config.base_options = options;
     config.workspace = workspace.u8string();

@@ -16,6 +16,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -31,7 +33,9 @@
 #include "server/listener.hpp"
 #include "server/mcp_adapter.hpp"
 #include "server/router.hpp"
+#include "server/session_hub.hpp"
 #include "server/server.hpp"
+#include "server/workspace_service.hpp"
 #include "support/test_support.hpp"
 
 namespace ainiux::test::server_control {
@@ -384,6 +388,162 @@ void test_mcp_stateless_adapter_and_tasks() {
     jobs.shutdown();
 }
 
+http::Request session_request(const std::string& method,
+                              const std::string& path,
+                              const std::string& body = "{}") {
+    std::string request = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                          "Authorization: Bearer controller\r\n";
+    if (method == "POST") request += "Content-Type: application/json\r\n";
+    request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    return parsed_request(request);
+}
+
+void test_interactive_sessions_are_bounded_and_replayable() {
+    namespace fs = std::filesystem;
+    const fs::path workspace = fs::temp_directory_path() / "ainiux-session-hub-test";
+    std::error_code cleanup_error;
+    fs::remove_all(workspace, cleanup_error);
+    fs::create_directories(workspace, cleanup_error);
+    check(!cleanup_error, "session test creates an isolated workspace");
+
+    cli::Options options;
+    options.provider = "none";
+    SessionHub hub(options, workspace.u8string(), 1);
+    AuthConfig auth{"controller", {}};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 8, &active, nullptr};
+    status.sessions = &hub;
+    status.max_sessions = 1;
+
+    const std::string create_body =
+        "{\"kind\":\"agent\",\"provider\":\"none\",\"permission_mode\":\"confirm\",\"task_mode\":\"act\"}";
+    Response created = route_request(session_request("POST", "/ainiux/v1/sessions/agent", create_body),
+                                     auth, status);
+    const json::ParseResult created_json = json::parse(created.body);
+    const json::Value* session_value = created_json.value.get("session");
+    const json::Value* id_value = session_value == nullptr ? nullptr : session_value->get("id");
+    check(created.status == 202 && id_value != nullptr && id_value->is_string(),
+          "interactive agent session creation returns an opaque session ID");
+    if (id_value == nullptr || !id_value->is_string()) {
+        hub.shutdown();
+        fs::remove_all(workspace, cleanup_error);
+        return;
+    }
+    const std::string id = id_value->string;
+    std::shared_ptr<InteractiveSession> session = hub.find(id);
+    for (int i = 0; i < 200 && session->snapshot_json().find("\"status\":\"ready\"") == std::string::npos; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    check(session->snapshot_json().find("\"status\":\"ready\"") != std::string::npos,
+          "session preparation completes asynchronously without blocking creation");
+
+    Response listed = route_request(session_request("GET", "/ainiux/v1/sessions", ""), auth, status);
+    check(listed.status == 200 && listed.body.find(id) != std::string::npos,
+          "session listing exposes state without workspace paths");
+    const ReplayBatch replay = session->events().replay_after(0);
+    check(!replay.events.empty() && replay.events.front().session_id == id &&
+              replay.events.back().type == "ready",
+          "session events retain ordered creation and readiness state");
+
+    Response turn = route_request(session_request(
+        "POST", "/ainiux/v1/sessions/" + id + "/turns", "{\"text\":\"hello\"}"), auth, status);
+    const json::ParseResult turn_json = json::parse(turn.body);
+    const json::Value* turn_id_value = turn_json.value.get("turn_id");
+    check(turn.status == 202 && turn_id_value != nullptr && turn_id_value->is_string(),
+          "ready interactive sessions accept asynchronous turns");
+    if (turn_id_value != nullptr && turn_id_value->is_string()) {
+        const std::string turn_id = turn_id_value->string;
+        Response conflict = route_request(session_request(
+            "POST", "/ainiux/v1/sessions/" + id + "/turns", "{\"text\":\"second\"}"), auth, status);
+        check(conflict.status == 409, "a session rejects a concurrent turn instead of racing controllers");
+        Response cancelled = route_request(session_request(
+            "POST", "/ainiux/v1/sessions/" + id + "/turns/" + turn_id + "/cancel", ""), auth, status);
+        check(cancelled.status == 200, "interactive turn cancellation is explicit and idempotent at the session boundary");
+    }
+    for (int i = 0; i < 200 && session->snapshot_json().find("\"turn_id\":null") == std::string::npos; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    Response over_capacity = route_request(session_request("POST", "/ainiux/v1/sessions", create_body),
+                                            auth, status);
+    check(over_capacity.status == 429, "interactive sessions obey the configured bounded capacity");
+    Response deleted = route_request(session_request("DELETE", "/ainiux/v1/sessions/" + id, ""), auth, status);
+    check(deleted.status == 200 && hub.size() == 0, "deleting a session cancels work and releases its retained state");
+    hub.shutdown();
+    fs::remove_all(workspace, cleanup_error);
+}
+
+void test_read_only_workspace_routes_are_contained_and_bounded() {
+    namespace fs = std::filesystem;
+    const fs::path workspace = fs::temp_directory_path() / "ainiux-workspace-service-test";
+    const fs::path outside = fs::temp_directory_path() / "ainiux-workspace-service-outside";
+    std::error_code cleanup_error;
+    fs::remove_all(workspace, cleanup_error);
+    fs::remove_all(outside, cleanup_error);
+    fs::create_directories(workspace / "nested", cleanup_error);
+    fs::create_directories(workspace / ".ainiux-pr", cleanup_error);
+    fs::create_directories(outside, cleanup_error);
+    check(!cleanup_error, "workspace service creates isolated test directories");
+    {
+        std::ofstream(workspace / "visible.txt", std::ios::binary) << "visible text\n";
+        std::ofstream(workspace / "nested" / "inside.md", std::ios::binary) << "nested text\n";
+        std::ofstream(workspace / ".ainiux-pr" / "private.json", std::ios::binary) << "private";
+        std::ofstream(workspace / "config.conf", std::ios::binary) << "provider_secret = hidden\n";
+        std::ofstream(workspace / "secret.txt", std::ios::binary) << "do not expose\n";
+        std::ofstream(outside / "outside.txt", std::ios::binary) << "outside\n";
+    }
+#if !defined(_WIN32)
+    fs::create_symlink(outside / "outside.txt", workspace / "escape", cleanup_error);
+#endif
+    std::ofstream large(workspace / "large.txt", std::ios::binary);
+    large << std::string(1024U * 1024U + 1U, 'x');
+    large.close();
+
+    WorkspaceService service(workspace.u8string());
+    std::string body;
+    check(service.list("", body).ok() && body.find("visible.txt") != std::string::npos &&
+              body.find("nested") != std::string::npos &&
+              body.find("private.json") == std::string::npos &&
+              body.find("config.conf") == std::string::npos &&
+              body.find("secret.txt") == std::string::npos &&
+              body.find(workspace.u8string()) == std::string::npos,
+          "dired route lists safe relative entries without private state or absolute paths");
+    check(service.read("visible.txt", body).ok() && body.find("visible text") != std::string::npos &&
+              body.find(workspace.u8string()) == std::string::npos,
+          "file route returns bounded content using a workspace-relative path");
+    check(!service.read("../outside.txt", body).ok() &&
+              !service.read("nested/../visible.txt", body).ok() &&
+              !service.read("large.txt", body).ok(),
+          "file route rejects traversal and oversized reads");
+#if !defined(_WIN32)
+    check(!service.read("escape", body).ok(),
+          "file route rejects symlink targets even when they point outside the workspace");
+#endif
+
+    AuthConfig auth{"controller", {}};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 8, &active};
+    status.workspace = &service;
+    Response listed = route_request(
+        parsed_request(request_text("/ainiux/v1/dired?path=nested")), auth, status);
+    check(listed.status == 200 && listed.body.find("inside.md") != std::string::npos,
+          "authenticated dired endpoint accepts one relative path query");
+    Response file = route_request(
+        parsed_request(request_text("/ainiux/v1/files?path=visible.txt")), auth, status);
+    check(file.status == 200 && file.body.find("visible text") != std::string::npos,
+          "authenticated files endpoint returns a selected workspace file");
+    Response bad_query = route_request(
+        parsed_request(request_text("/ainiux/v1/files?path=visible.txt&other=x")), auth, status);
+    check(bad_query.status == 400, "workspace routes reject unrecognized query parameters");
+    Response review = route_request(
+        parsed_request(request_text("/ainiux/v1/workspace/review")), auth, status);
+    check(review.status == 200 && review.body.find("nested/inside.md") != std::string::npos &&
+              review.body.find("private.json") == std::string::npos &&
+              review.body.find(workspace.u8string()) == std::string::npos,
+          "workspace review is recursive, bounded, and excludes private paths");
+
+    fs::remove_all(workspace, cleanup_error);
+    fs::remove_all(outside, cleanup_error);
+}
+
 void test_job_errors_hide_server_side_paths() {
     cli::Options options;
     options.provider = "none";
@@ -404,10 +564,11 @@ void test_job_errors_hide_server_side_paths() {
 
 void test_server_cli_contract() {
     const char* argv[] = {"ainiux", "server", "--workspace", ".", "--port", "9001",
-                          "--max-connections", "7", "--max-jobs", "9"};
-    cli::ParseResult parsed = cli::parse_args(10, const_cast<char**>(argv));
+                          "--max-connections", "7", "--max-jobs", "9", "--max-sessions", "5"};
+    cli::ParseResult parsed = cli::parse_args(12, const_cast<char**>(argv));
     check(parsed.error.ok() && parsed.options.server && parsed.options.port == 9001 &&
-              parsed.options.max_connections == 7 && parsed.options.max_jobs == 9,
+              parsed.options.max_connections == 7 && parsed.options.max_jobs == 9 &&
+              parsed.options.max_sessions == 5,
           "server subcommand and bounded options parse");
     check(validate_server_options(parsed.options).ok(), "standalone server options validate");
     const char* combined[] = {"ainiux", "server", "-p", "hello"};
@@ -524,6 +685,8 @@ void run_all() {
     test_terminal_retention_eviction_releases_workers_safely();
     test_job_routes_and_sse();
     test_mcp_stateless_adapter_and_tasks();
+    test_interactive_sessions_are_bounded_and_replayable();
+    test_read_only_workspace_routes_are_contained_and_bounded();
     test_job_errors_hide_server_side_paths();
     test_server_cli_contract();
     test_loopback_listener_lifecycle();

@@ -16,6 +16,7 @@ struct Limits {
     static constexpr std::size_t requests_per_connection = 100U;
     static constexpr std::size_t default_max_connections = 64U;
     static constexpr std::size_t default_max_jobs = 128U;
+    static constexpr std::size_t default_max_sessions = 32U;
     static constexpr std::size_t default_provider_concurrency = 4U;
     static constexpr std::size_t events_per_job = 256U;
     static constexpr std::size_t event_bytes_per_job = 1U * 1024U * 1024U;

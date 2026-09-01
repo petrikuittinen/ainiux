@@ -25,13 +25,18 @@ EventBroker::EventBroker(std::string job_id, std::size_t max_events, std::size_t
       max_events_(max_events == 0 ? 1U : max_events),
       max_bytes_(max_bytes == 0 ? 1U : max_bytes) {}
 
-wire::Event EventBroker::publish(std::string type, std::string data_json) {
+wire::Event EventBroker::publish(std::string type,
+                                 std::string data_json,
+                                 std::string session_id,
+                                 std::string turn_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     wire::Event event;
     event.id = next_id_++;
     event.type = std::move(type);
     event.created_at = server_timestamp();
     event.job_id = job_id_;
+    event.session_id = std::move(session_id);
+    event.turn_id = std::move(turn_id);
     event.data_json = std::move(data_json);
     const std::size_t bytes = wire::event_json(event).size();
     if (bytes <= max_bytes_) {

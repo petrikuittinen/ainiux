@@ -435,7 +435,10 @@ Error fill_directory(DiredState& state) {
         entry.is_symlink = is_symlink_entry(dent);
         entry.size = entry_size(dent, is_dir);
         entry.mtime_sec = file_mtime_sec(dent.path());
-        if (!is_dir) {
+        // Do not dereference a symlink merely to decorate a listing. Callers
+        // such as the read-only control API may deliberately filter links
+        // before exposing directory entries.
+        if (!is_dir && !entry.is_symlink) {
             entry.content_hash = dired_hash_file(entry.path, kDefaultHashCap);
         }
         fill_unix_identity(entry, dent.path());
@@ -496,7 +499,7 @@ Error fill_glob(DiredState& state, const fs::path& base_dir, const std::string& 
         entry.is_symlink = is_symlink_entry(dent);
         entry.size = entry_size(dent, is_dir);
         entry.mtime_sec = file_mtime_sec(dent.path());
-        if (!is_dir) {
+        if (!is_dir && !entry.is_symlink) {
             entry.content_hash = dired_hash_file(entry.path, kDefaultHashCap);
         }
         fill_unix_identity(entry, dent.path());
@@ -940,6 +943,46 @@ Error dired_open(DiredState& state, const std::string& path_or_glob) {
     } else {
         dired_update_dirty_flags(state);
     }
+    return ok_error();
+}
+
+Error dired_list_read_only(const std::string& directory,
+                           std::vector<DiredEntry>& entries) {
+    entries.clear();
+    std::error_code ec;
+    const fs::path dir = fs::absolute(fs::u8path(directory), ec).lexically_normal();
+    if (ec || !fs::is_directory(dir, ec) || ec) {
+        return {ErrorCode::FileRead, "could not list directory"};
+    }
+#if defined(_WIN32)
+    constexpr fs::directory_options listing_options = fs::directory_options::none;
+#else
+    constexpr fs::directory_options listing_options =
+        fs::directory_options::skip_permission_denied;
+#endif
+    fs::directory_iterator iterator(dir, listing_options, ec);
+    if (ec) return {ErrorCode::FileRead, "could not list directory"};
+    for (const fs::directory_iterator end; !ec && iterator != end; iterator.increment(ec)) {
+        const fs::directory_entry& dent = *iterator;
+        const std::string name = dent.path().filename().u8string();
+        if (name.empty() || name == "." || name == "..") continue;
+        std::error_code status_error;
+        const fs::file_status status = dent.symlink_status(status_error);
+        if (status_error || fs::is_symlink(status)) continue;
+        const bool is_dir = fs::is_directory(status);
+        if (!is_dir && !fs::is_regular_file(status)) continue;
+        DiredEntry entry;
+        entry.name = name;
+        entry.path = dent.path().lexically_normal().u8string();
+        entry.is_directory = is_dir;
+        entry.size = entry_size(dent, is_dir);
+        entry.mtime_sec = file_mtime_sec(dent.path());
+        fill_unix_identity(entry, dent.path());
+        fill_platform_attributes(entry, dent.path());
+        entries.push_back(std::move(entry));
+    }
+    if (ec) return {ErrorCode::FileRead, "could not continue listing directory"};
+    sort_entries(entries, DiredSortKey::Name, true);
     return ok_error();
 }
 

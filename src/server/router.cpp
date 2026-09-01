@@ -5,13 +5,16 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "ainiux/version.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "server/limits.hpp"
 #include "server/mcp_adapter.hpp"
+#include "server/session_hub.hpp"
 #include "server/wire.hpp"
+#include "server/workspace_service.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -103,6 +106,64 @@ bool json_content_type(const http::Request& request) {
 
 Response job_not_found() {
     return error_response(404, "job_not_found", "no retained job has this identifier");
+}
+
+Response session_error(const Error& error) {
+    int status = 500;
+    std::string code = "internal";
+    switch (error.code) {
+        case ErrorCode::BadArgs:
+        case ErrorCode::JsonParse: status = 400; code = "invalid_request"; break;
+        case ErrorCode::UnsupportedFeature: status = 422; code = "unsupported_feature"; break;
+        case ErrorCode::RateLimit: status = 429; code = "session_limit"; break;
+        case ErrorCode::FileRead: status = 404; code = "not_found"; break;
+        case ErrorCode::FileLock: status = 409; code = "session_conflict"; break;
+        case ErrorCode::Cancelled: status = 409; code = "cancelled"; break;
+        default: break;
+    }
+    return error_response(status, code, error.message);
+}
+
+Response session_not_found() {
+    return error_response(404, "session_not_found", "no retained interactive session has this identifier");
+}
+
+Response workspace_error(const Error& error) {
+    int status = 500;
+    std::string code = "internal";
+    switch (error.code) {
+        case ErrorCode::BadArgs: status = 400; code = "invalid_request"; break;
+        case ErrorCode::FileRead: status = 404; code = "not_found"; break;
+        default: break;
+    }
+    return error_response(status, code, error.message);
+}
+
+Error query_path(const http::Request& request, bool required, std::string& path) {
+    path.clear();
+    if (request.query.empty()) {
+        if (required) return {ErrorCode::BadArgs, "query parameter path is required"};
+        return ok_error();
+    }
+    std::size_t start = 0;
+    bool found = false;
+    while (start <= request.query.size()) {
+        const std::size_t ampersand = request.query.find('&', start);
+        const std::string item = request.query.substr(
+            start, ampersand == std::string::npos ? std::string::npos : ampersand - start);
+        const std::size_t equals = item.find('=');
+        if (equals == std::string::npos || item.substr(0, equals) != "path" || found) {
+            return {ErrorCode::BadArgs, "query accepts only one path parameter"};
+        }
+        path = item.substr(equals + 1U);
+        found = true;
+        if (ampersand == std::string::npos) break;
+        start = ampersand + 1U;
+    }
+    if (!found || (required && path.empty())) {
+        return {ErrorCode::BadArgs, "query parameter path is required"};
+    }
+    return ok_error();
 }
 
 Response job_submission_response(const ServiceSubmitResult& submitted) {
@@ -216,6 +277,12 @@ Response route_request(const http::Request& request,
                         ",\"retained\":" +
                         std::to_string(status.jobs == nullptr ? 0U : status.jobs->registry().size()) +
                         ",\"maximum\":" + std::to_string(status.max_jobs) + "}}";
+        if (status.sessions != nullptr) {
+            response.body.resize(response.body.size() - 1U);
+            response.body += ",\"sessions\":{\"active\":" +
+                             std::to_string(status.sessions->size()) +
+                             ",\"maximum\":" + std::to_string(status.max_sessions) + "}}";
+        }
         return response;
     }
     if (request.path == "/ainiux/v1/capabilities") {
@@ -234,12 +301,205 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\",\"sessions\",\"review\",\"dired\",\"files\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false}" +
-                        ",\"providers\":" + providers + "}";
+                        ",\"providers\":" + providers +
+                        ",\"sessions\":{\"maximum\":" + std::to_string(status.max_sessions) +
+                        ",\"active\":" + std::to_string(status.sessions == nullptr ? 0U : status.sessions->size()) + "}}";
         return response;
+    }
+
+    if (request.path == "/ainiux/v1/workspace/review" ||
+        request.path == "/ainiux/v1/dired" || request.path == "/ainiux/v1/files") {
+        if (status.workspace == nullptr) {
+            return error_response(503, "workspace_unavailable", "the workspace service is unavailable");
+        }
+        if (request.method != "GET") {
+            response = error_response(405, "method_not_allowed", "workspace routes accept GET only");
+            response.allow = "GET";
+            return response;
+        }
+        if (!request.body.empty()) {
+            return error_response(400, "invalid_request", "workspace routes do not accept a body");
+        }
+        std::string body;
+        Error error;
+        if (request.path == "/ainiux/v1/workspace/review") {
+            if (!request.query.empty()) {
+                return error_response(400, "invalid_request", "workspace review does not accept query parameters");
+            }
+            error = status.workspace->review(body);
+        } else {
+            std::string path;
+            error = query_path(request, request.path == "/ainiux/v1/files", path);
+            if (error.ok()) {
+                if (request.path == "/ainiux/v1/dired") {
+                    error = status.workspace->list(path, body);
+                } else {
+                    error = status.workspace->read(path, body);
+                }
+            }
+        }
+        if (!error.ok()) return workspace_error(error);
+        response.body = std::move(body);
+        return response;
+    }
+
+    const std::string sessions_prefix = "/ainiux/v1/sessions";
+    if (request.path == sessions_prefix || request.path == sessions_prefix + "/agent") {
+        if (status.sessions == nullptr) return error_response(503, "sessions_unavailable", "session hub is unavailable");
+        const bool agent_path = request.path == sessions_prefix + "/agent";
+        if (request.method == "GET" && !agent_path) {
+            if (!request.body.empty()) return error_response(400, "invalid_request", "session listing does not accept a body");
+            response.body = status.sessions->list_json();
+            return response;
+        }
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed",
+                                       agent_path ? "agent session creation accepts POST only"
+                                                  : "session collection accepts GET and POST only");
+            response.allow = agent_path ? "POST" : "GET, POST";
+            return response;
+        }
+        if (!json_content_type(request))
+            return error_response(415, "unsupported_media_type", "session creation requires Content-Type: application/json");
+        const SessionCreateResult created = status.sessions->create(request.body);
+        if (!created.error.ok()) return session_error(created.error);
+        response.status = 202;
+        response.body = "{\"session\":" + created.session->snapshot_json() + "}";
+        return response;
+    }
+    if (request.path.rfind(sessions_prefix + "/", 0) == 0) {
+        if (status.sessions == nullptr) return error_response(503, "sessions_unavailable", "session hub is unavailable");
+        std::string suffix = request.path.substr(sessions_prefix.size() + 1U);
+        const std::size_t slash = suffix.find('/');
+        const std::string session_id = slash == std::string::npos ? suffix : suffix.substr(0, slash);
+        const std::string action = slash == std::string::npos ? std::string() : suffix.substr(slash + 1U);
+        const std::shared_ptr<InteractiveSession> session = status.sessions->find(session_id);
+        if (!session) return session_not_found();
+        if (action.empty()) {
+            if (request.method == "GET") {
+                if (!request.body.empty()) return error_response(400, "invalid_request", "session status does not accept a body");
+                response.body = session->snapshot_json();
+                return response;
+            }
+            if (request.method != "DELETE") {
+                response = error_response(405, "method_not_allowed", "session status accepts GET or DELETE only");
+                response.allow = "GET, DELETE";
+                return response;
+            }
+            if (!request.body.empty()) return error_response(400, "invalid_request", "session close does not accept a body");
+            if (!status.sessions->erase(session_id)) return session_not_found();
+            response.body = "{\"deleted\":true,\"id\":" + json::quote(session_id) + "}";
+            return response;
+        }
+        if (action == "events") {
+            if (request.method != "GET") {
+                response = error_response(405, "method_not_allowed", "session events accept GET only");
+                response.allow = "GET";
+                return response;
+            }
+            if (!request.body.empty()) return error_response(400, "invalid_request", "session events do not accept a body");
+            std::uint64_t after = 0;
+            const auto last = request.headers.find("last-event-id");
+            if (last != request.headers.end() && !parse_event_id(last->second, after))
+                return error_response(400, "invalid_last_event_id", "Last-Event-ID must be an unsigned decimal integer");
+            const ReplayBatch initial = session->events().replay_after(after);
+            if (initial.expired)
+                return error_response(410, "replay_expired", "the requested events are no longer retained; fetch the session snapshot");
+            response.content_type = "text/event-stream; charset=utf-8";
+            response.close = true;
+            response.streaming = true;
+            response.stream_body = [session, after](const std::function<bool(std::string_view)>& write) {
+                std::uint64_t cursor = after;
+                auto last_write = std::chrono::steady_clock::now();
+                for (;;) {
+                    const ReplayBatch batch = session->events().wait_after(cursor, std::chrono::seconds(1));
+                    if (batch.expired) {
+                        (void)write("event: replay_expired\ndata: {\"code\":\"replay_expired\"}\n\n");
+                        return;
+                    }
+                    for (const wire::Event& event : batch.events) {
+                        if (!write(sse_record(event))) return;
+                        cursor = event.id;
+                        last_write = std::chrono::steady_clock::now();
+                    }
+                    if (batch.closed && batch.events.empty()) return;
+                    if (std::chrono::steady_clock::now() - last_write >=
+                        std::chrono::seconds(Limits::sse_heartbeat_seconds)) {
+                        if (!write(": heartbeat\n\n")) return;
+                        last_write = std::chrono::steady_clock::now();
+                    }
+                }
+            };
+            return response;
+        }
+        if (action == "turns") {
+            if (request.method != "POST") {
+                response = error_response(405, "method_not_allowed", "turn submission accepts POST only");
+                response.allow = "POST";
+                return response;
+            }
+            if (!json_content_type(request))
+                return error_response(415, "unsupported_media_type", "turn submission requires Content-Type: application/json");
+            std::string turn_id;
+            const Error error = session->start_turn(request.body, turn_id);
+            if (!error.ok()) return session_error(error);
+            response.status = 202;
+            response.body = "{\"session_id\":" + json::quote(session_id) +
+                            ",\"turn_id\":" + json::quote(turn_id) + "}";
+            return response;
+        }
+        if (action.rfind("turns/", 0) == 0 && action.size() > 13U &&
+            action.substr(action.size() - 7U) == "/cancel") {
+            if (request.method != "POST") {
+                response = error_response(405, "method_not_allowed", "turn cancellation accepts POST only");
+                response.allow = "POST";
+                return response;
+            }
+            if (!request.body.empty()) return error_response(400, "invalid_request", "turn cancellation does not accept a body");
+            const std::string turn_id = action.substr(6U, action.size() - 13U);
+            const Error error = session->cancel_turn(turn_id);
+            if (!error.ok()) return session_error(error);
+            response.body = session->snapshot_json();
+            return response;
+        }
+        if (action.rfind("approvals/", 0) == 0) {
+            const std::string approval_tail = action.substr(10U);
+            if (approval_tail.size() > 12U && approval_tail.substr(approval_tail.size() - 12U) == "/review-file") {
+                if (request.method != "GET") {
+                    response = error_response(405, "method_not_allowed", "approval review accepts GET only");
+                    response.allow = "GET";
+                    return response;
+                }
+                if (!request.body.empty()) return error_response(400, "invalid_request", "approval review does not accept a body");
+                std::string review;
+                const Error error = session->review_file(approval_tail.substr(0, approval_tail.size() - 12U), review);
+                if (!error.ok()) return session_error(error);
+                response.body = std::move(review);
+                return response;
+            }
+            if (request.method != "POST") {
+                response = error_response(405, "method_not_allowed", "approval resolution accepts POST only");
+                response.allow = "POST";
+                return response;
+            }
+            if (!json_content_type(request))
+                return error_response(415, "unsupported_media_type", "approval resolution requires Content-Type: application/json");
+            const json::ParseResult parsed = json::parse(request.body);
+            if (!parsed.error.ok() || !parsed.value.is_object())
+                return error_response(400, "invalid_request", "approval body must be a JSON object");
+            const json::Value* decision = parsed.value.get("decision");
+            if (decision == nullptr || !decision->is_string())
+                return error_response(400, "invalid_request", "approval decision must be a string");
+            const Error error = session->resolve_approval(approval_tail, decision->string);
+            if (!error.ok()) return session_error(error);
+            response.body = session->snapshot_json();
+            return response;
+        }
+        return session_not_found();
     }
 
     const std::string jobs_prefix = "/ainiux/v1/jobs/";

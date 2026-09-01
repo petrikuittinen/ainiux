@@ -308,13 +308,15 @@ Fault, integration, SQLite/TUI, sanitizer, and Valgrind suites are available but
 
 The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). Design rationale is in [docs/decisions.md](docs/decisions.md); short active work is in [TODO.md](TODO.md).
 
-## Loopback control API (v1.3 PR 4)
+## Loopback control API (v1.3 PR 6)
 
 The control server exposes authenticated discovery and asynchronous one-shot
 chat, run, plan, and image jobs, plus a stateless MCP 2026-07-28 endpoint for
-MCP-only clients. Interactive sessions, filesystem routes, and the browser UI
-land in later v1.3 slices. Set a dedicated
-full-control secret and start the fixed-workspace loopback listener:
+MCP-only clients. It also exposes bounded interactive agent sessions with
+replayable events, cancellation, remote Guard approvals, workspace review,
+read-only dired, and bounded file reads. The browser UI and filesystem
+mutations land in later v1.3 slices. Set a dedicated full-control secret and
+start the fixed-workspace loopback listener:
 
 ```sh
 export AINIUX_SERVER_SECRET='use-a-long-random-value'
@@ -331,7 +333,7 @@ curl -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
 `--server-secret-file` accepts a permission-restricted file outside the served
 workspace. `AINIUX_MCP_SECRET` / `--mcp-secret-file` supplies a distinct MCP-only
 credential for `/mcp`; it cannot call the control API. The listener binds only
-`127.0.0.1`; direct non-loopback binding and TLS are not part of PR 4. See
+`127.0.0.1`; direct non-loopback binding and TLS are not part of PR 6. See
 [the control API guide](docs/api.md) for routes, limits, and authentication rules.
 Run `scripts/test-control-server-pr3.sh` for a repeatable build, unit/integration,
 live mock-provider, idempotency, SSE, and cancellation check.
@@ -349,7 +351,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not yet implement control-API interactive sessions or filesystem operations, an OpenAI-compatible `/v1` proxy, MCP server adapter, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot control-API jobs and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not yet implement control-API filesystem mutations, chat threads, an OpenAI-compatible `/v1` proxy, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot control-API jobs, interactive agent sessions, read-only workspace review/dired/file routes, the MCP server adapter, and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

@@ -1,9 +1,10 @@
 # Ainiux control API
 
-The v1.3 control API is versioned under `/ainiux/v1/`. PR 4 provides a
+The v1.3 control API is versioned under `/ainiux/v1/`. PR 6 provides a
 loopback-only listener, authenticated discovery, asynchronous one-shot jobs,
-and a separate MCP 2026-07-28 endpoint at `/mcp`. Interactive sessions,
-filesystem operations, and the WUI remain later slices.
+interactive agent sessions, read-only workspace review/dired/file routes, and
+a separate MCP 2026-07-28 endpoint at `/mcp`. Filesystem mutations and the WUI
+remain later slices.
 Later routes must use the PR 1 operation/wire contracts rather than exposing
 provider, runtime, or terminal-internal structures directly.
 
@@ -40,6 +41,27 @@ limits. `capabilities` lists the currently routed discovery operations, built-in
 provider names without credentials, authentication configuration, and disabled
 optional adapters. It advertises MCP as enabled separately from the control
 API job operation list.
+
+## Read-only workspace
+
+The server owns the single canonical workspace selected at startup. These
+routes accept only GET and never return native absolute paths:
+
+```text
+GET /ainiux/v1/workspace/review
+GET /ainiux/v1/dired?path=RELATIVE_PATH
+GET /ainiux/v1/files?path=RELATIVE_PATH
+```
+
+Paths use slash-separated workspace-relative components. The dired response
+contains `path`, bounded `entries` (`name`, `path`, `type`, `size`, and
+`modified_at`), and `truncated`. Review recursively returns the same entry
+shape plus a file/directory/byte summary. File reads return `path`, JSON-safe
+`content`, byte `size`, and `truncated:false`; individual reads are capped at
+1 MiB. Missing, non-regular, oversized, traversing, or symlink/reparse paths
+are rejected. `.ainiux-pr`, `.ainiux`, `.git`, environment/credential names,
+and bundled sensitive configuration files are excluded. There are no mutation
+routes in PR 6.
 
 From a source checkout, run `scripts/test-control-server.sh --build` for a
 self-contained curl smoke test of the listener, authentication scopes, discovery,
@@ -143,6 +165,7 @@ The strict parser and PR 4 job broker enforce these constants:
 | Requests per keep-alive connection | 100 |
 | Default simultaneous connections | 64 |
 | Default retained/in-flight jobs | 128 |
+| Default interactive sessions | 32 |
 | Default provider-operation concurrency | 4 |
 | Workspace agent mutation lanes | 1 |
 | Retained events per job | 256 |
@@ -170,6 +193,40 @@ one operation/job and cannot cancel unrelated session work.
 No other route listed in the v1.3 roadmap is callable until its implementation
 slice lands. Clients must use the authenticated capabilities endpoint rather
 than infer support from this contract document.
+
+## Interactive agent sessions
+
+Create and inspect a persistent project-local agent session:
+
+```text
+POST   /ainiux/v1/sessions/agent
+GET    /ainiux/v1/sessions
+GET    /ainiux/v1/sessions/:session_id
+GET    /ainiux/v1/sessions/:session_id/events
+POST   /ainiux/v1/sessions/:session_id/turns
+POST   /ainiux/v1/sessions/:session_id/turns/:turn_id/cancel
+POST   /ainiux/v1/sessions/:session_id/approvals/:approval_id
+GET    /ainiux/v1/sessions/:session_id/approvals/:approval_id/review-file
+DELETE /ainiux/v1/sessions/:session_id
+```
+
+Session creation accepts `kind` (`agent`), `provider`, `model`, `api`,
+`permission_mode` (`confirm`, `smart`, or `yolo`), and `task_mode`
+(`act` or `plan`). Preparation is asynchronous and returns `202` with an
+opaque session ID. A turn body is `{"text":"..."}` and returns `202`
+with a server-generated turn ID. Only one turn may be active per session; a
+concurrent turn returns `409`.
+
+Session SSE events use the same bounded ordered replay contract as jobs and
+include the session and turn IDs. Guard Ask produces an `approval_required`
+event with a server-generated approval ID. Resolve it with
+`{"decision":"allow"}`, `{"decision":"deny"}`, or
+`{"decision":"cancelled"}`. Approval IDs are single-use and tied to the
+active turn. Review-file returns only the bounded workspace-relative file
+requested by the pending Guard approval; absolute and out-of-root paths are
+rejected. Closing a session cancels active work, finishes its project session,
+closes its event stream, and releases retained state. Sessions are bounded by
+`--max-sessions` (default 32) and are not restored after a server restart.
 
 ## MCP 2026-07-28 endpoint
 

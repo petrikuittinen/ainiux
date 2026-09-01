@@ -32,7 +32,7 @@ bool needs_value(const std::string& opt) {
         "--max-agent-response-bytes",
         "--max-source-code-file-size", "--trusted-prompt-dir",
         "--workspace", "--port", "--server-secret-file", "--mcp-secret-file",
-        "--max-connections", "--max-jobs",
+        "--max-connections", "--max-jobs", "--max-sessions",
         "--context", "--context-policy", "--image-capability", "--theme", "--color-mode",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
@@ -733,6 +733,10 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.server_options_seen = true;
                 Error err = parse_int(opt, value, opts.max_jobs);
                 if (!err.ok()) return {opts, err};
+            } else if (opt == "--max-sessions") {
+                opts.server_options_seen = true;
+                Error err = parse_int(opt, value, opts.max_sessions);
+                if (!err.ok()) return {opts, err};
             } else if (opt == "--workspace") {
                 opts.server_options_seen = true;
                 opts.workspace = value;
@@ -1403,6 +1407,7 @@ Options:
       --mcp-secret-file PATH    MCP-only bearer secret file (or AINIUX_MCP_SECRET).
       --max-connections N       Simultaneous server connections; default 64.
       --max-jobs N              Retained/in-flight server job cap; default 128.
+      --max-sessions N          Interactive agent session cap; default 32.
       --size 1k|2k|4k|WIDTHxHEIGHT|auto
                                 Image output size. With --ar 16:9, 2k is 2048x1152 and
                                 4k is 3840x2160. Default: provider auto.

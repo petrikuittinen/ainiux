@@ -1,5 +1,16 @@
 # Security
 
+## Control-API workspace boundary
+
+The authenticated PR 6 workspace routes are read-only and use the one canonical
+workspace selected when `ainiux server` starts. `workspace/review`, `dired`, and
+`files` accept only slash-separated relative paths; the server never returns its
+native root or accepts a remote root. Traversal, drive paths, symlink/reparse
+components, special files, missing files, and files larger than 1 MiB are
+rejected. Directory listings and recursive review are bounded. `.ainiux-pr`,
+`.ainiux`, `.git`, environment/credential names, and bundled sensitive config
+files are omitted. No remote mutation exists until a later revision-safe PR.
+
 - API keys are read from environment variables, key files, stdin, or explicit headers. Copied keys are unwrapped before use: surrounding whitespace, interior CR/LF/TAB, and POSIX `\`-newline line continuations are removed. HTTP/2 (including OpenAI via Cloudflare) rejects a line break in `Authorization` and otherwise fails the POST with libcurl error 43 / `Failed sending HTTP POST request`. `--header` values that contain a line break are rejected.
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
@@ -95,8 +106,9 @@ This is advisory coordination, not an operating-system write prohibition: unrela
 
 `ainiux server` currently binds only IPv4 loopback (`127.0.0.1`) and exposes
 authenticated discovery plus asynchronous one-shot chat, run, plan, and image
-jobs. It does not yet expose interactive agents, files, chat databases, or a
-browser UI. Its separate MCP endpoint exposes only the bounded job tools
+jobs, and bounded interactive agent sessions. It does not yet expose files,
+chat databases, or a browser UI. Its separate MCP endpoint exposes only the
+bounded job tools
 documented in [the control API guide](api.md).
 Every API route requires a dedicated full-control bearer secret; loopback location
 alone is not authority. The server never reuses `AINIUX_API_KEY` or a provider key.

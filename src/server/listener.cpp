@@ -28,7 +28,9 @@
 #include "server/job_service.hpp"
 #include "server/mcp_adapter.hpp"
 #include "server/router.hpp"
+#include "server/session_hub.hpp"
 #include "server/wire.hpp"
+#include "server/workspace_service.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -157,6 +159,8 @@ struct Listener::Impl {
     std::vector<std::shared_ptr<Worker>> workers;
     std::unique_ptr<JobService> jobs;
     std::unique_ptr<McpAdapter> mcp;
+    std::unique_ptr<SessionHub> sessions;
+    std::unique_ptr<WorkspaceService> workspace;
 
     void reap_workers() {
         std::lock_guard<std::mutex> lock(workers_mutex);
@@ -238,9 +242,12 @@ struct Listener::Impl {
             public_status.port = bound_port;
             public_status.max_connections = config.max_connections;
             public_status.max_jobs = config.max_jobs;
+            public_status.max_sessions = config.max_sessions;
             public_status.active_connections = &active;
             public_status.jobs = jobs.get();
             public_status.mcp = mcp.get();
+            public_status.sessions = sessions.get();
+            public_status.workspace = workspace.get();
             const Response response = route_request(parser.request(), config.auth, public_status);
             const bool keep_alive = parser.request().keep_alive &&
                                     count + 1U < Limits::requests_per_connection && !response.close;
@@ -269,6 +276,10 @@ Error Listener::start(ListenerConfig config) {
                                                 impl_->config.workspace,
                                                 impl_->config.max_jobs);
     impl_->mcp = std::make_unique<McpAdapter>(impl_->jobs.get(), impl_->config.max_jobs);
+    impl_->sessions = std::make_unique<SessionHub>(impl_->config.base_options,
+                                                   impl_->config.workspace,
+                                                   impl_->config.max_sessions);
+    impl_->workspace = std::make_unique<WorkspaceService>(impl_->config.workspace);
     impl_->stopping.store(false, std::memory_order_release);
     OwnedSocket socket(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (socket.get() == kInvalidSocket) return {ErrorCode::Connect, "could not create the loopback listener socket"};
@@ -367,6 +378,7 @@ void Listener::stop() {
         workers.swap(impl_->workers);
     }
     for (const auto& worker : workers) shutdown_socket(worker->socket.load(std::memory_order_acquire));
+    if (impl_->sessions) impl_->sessions->shutdown();
     if (impl_->jobs) impl_->jobs->shutdown();
     for (const auto& worker : workers) if (worker->thread.joinable()) worker->thread.join();
 }

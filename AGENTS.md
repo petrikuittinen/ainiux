@@ -44,7 +44,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 | Security review | `--security-review` | headless read-only whole-project review |
 | Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux-pr/index.sqlite` |
 | One-shot image generation | `image` / `--image` | CLI-only; `images.conf` selects protocol/model (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); `--attach` PNG/JPEG references; one output image |
-| Loopback control server | `server` / `--server` | v1.3 PR 3 authenticated discovery plus one-shot chat/run/plan/image jobs, status, SSE replay, and cancellation; MCP and interactive routes are later slices |
+| Loopback control server | `server` / `--server` | v1.3 PR 6 authenticated discovery, one-shot jobs, stateless MCP, interactive agent sessions, and read-only workspace review/dired/file routes; mutations/chat threads/TLS/WUI are later slices |
 
 ### Implemented capabilities agents must respect
 
@@ -65,7 +65,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 
 ### Not implemented yet (do not pretend they exist)
 
-- Control-API MCP, interactive session, filesystem, chat-thread, TLS/non-loopback, and browser routes beyond the landed PR 3 one-shot job surface. OpenAI `/v1` proxy is a later adapter. Do not implement later server slices until asked.
+- Control-API filesystem mutations, chat-thread, TLS/non-loopback, and browser routes beyond the landed PR 6 read-only review/dired/file surface. OpenAI `/v1` proxy is a later adapter. Do not implement later server slices until asked.
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is a postponed-design snapshot)
 - Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
 - `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)

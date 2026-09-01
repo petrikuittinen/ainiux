@@ -23,7 +23,7 @@
 
 ## Deferred roadmap
 
-- Local control-API server (`ainiux server`) has its v1.3 PR 4 bounded asynchronous chat/run/plan/image jobs, MCP-only stateless MCP 2026-07-28 tools, task handles, idempotency, cancellation, ordered SSE replay, provider cap, and serialized workspace agent lane. Interactive sessions, remote review/editor/dired, and embedded WUI remain. OpenAI `/v1` proxy is a later adapter, not a substitute. Foreign-agent bash usage is `docs/skills/ainiux-cli/SKILL.md`.
+- Local control-API server (`ainiux server`) has its v1.3 PR 6 bounded interactive agent sessions, replay, correlated Guard approvals, cancellation, review-file, and read-only workspace review/dired/file routes, plus PR 4 MCP and PR 3 job surfaces. Remote editor mutations, chat threads, TLS, and embedded WUI remain. OpenAI `/v1` proxy is a later adapter, not a substitute. Foreign-agent bash usage is `docs/skills/ainiux-cli/SKILL.md`.
 - Image generation v1.2 CLI (`ainiux image`) is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Further provider image/video models should be `images.conf` records.
 - Browser web UI remains postponed behind the local server/runtime foundation.
 
