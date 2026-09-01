@@ -908,6 +908,7 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         }
         chat::Session cloned = ctx.session;
         cloned.thread_id = 0;
+        cloned.revision = 0;
         cloned.created_at = chat::current_timestamp_utc();
         cloned.updated_at = cloned.created_at;
         if (cloned.name.empty()) {

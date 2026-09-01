@@ -11,6 +11,22 @@ rejected. Directory listings and recursive review are bounded. `.ainiux-pr`,
 `.ainiux`, `.git`, environment/credential names, and bundled sensitive config
 files are omitted. No remote mutation exists until a later revision-safe PR.
 
+## Control-API chat boundary
+
+PR 7 accesses the existing user-private chat library through authenticated,
+revision-safe operations. It never serves the SQLite path, raw tables, provider
+base URLs, usage internals, managed-media identifiers, source references, or
+attachment bodies. Attachment output is metadata-only and capped at 64 entries
+per message without reading payload/source columns; remote attachment input is
+rejected. Thread loads retain only the newest 512 messages within a 4 MiB
+content cap and report truncation.
+
+Thread creation starts at revision 1. Every ordinary TUI save and remote append
+advances the same persisted revision. An API append must provide its last
+observed revision; an atomic mismatch returns 409 without writing. Reads do not
+change the TUI's last-selected thread. Database/open errors are translated to
+path-free public failures.
+
 - API keys are read from environment variables, key files, stdin, or explicit headers. Copied keys are unwrapped before use: surrounding whitespace, interior CR/LF/TAB, and POSIX `\`-newline line continuations are removed. HTTP/2 (including OpenAI via Cloudflare) rejects a line break in `Authorization` and otherwise fails the POST with libcurl error 43 / `Failed sending HTTP POST request`. `--header` values that contain a line break are rejected.
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
@@ -106,8 +122,9 @@ This is advisory coordination, not an operating-system write prohibition: unrela
 
 `ainiux server` currently binds only IPv4 loopback (`127.0.0.1`) and exposes
 authenticated discovery plus asynchronous one-shot chat, run, plan, and image
-jobs, and bounded interactive agent sessions. It does not yet expose files,
-chat databases, or a browser UI. Its separate MCP endpoint exposes only the
+jobs, bounded interactive agent sessions, contained read-only workspace files,
+and revision-safe chat-thread operations. It does not expose raw chat databases
+or a browser UI. Its separate MCP endpoint exposes only the
 bounded job tools
 documented in [the control API guide](api.md).
 Every API route requires a dedicated full-control bearer secret; loopback location
@@ -133,7 +150,7 @@ has a global cap; run/plan reserve one fixed-workspace lane and remain headless
 under Guard. Job/event retention is bounded and in-memory only. Cancellation is
 job-scoped, SSE writers time out on disconnected/slow clients, and server-side
 credential paths are hidden from job errors. Direct non-loopback binding, TLS,
-remote Yolo, WUI assets, and later operational routes are not present.
+remote Yolo, WUI assets, and later mutation routes are not present.
 
 ## Configuration Files
 

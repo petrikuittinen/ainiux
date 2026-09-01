@@ -10,6 +10,7 @@
 #include "ainiux/version.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
+#include "server/chat_service.hpp"
 #include "server/limits.hpp"
 #include "server/mcp_adapter.hpp"
 #include "server/session_hub.hpp"
@@ -59,6 +60,7 @@ Response error_response(int status,
 const char* reason_phrase(int status) {
     switch (status) {
         case 200: return "OK";
+        case 201: return "Created";
         case 202: return "Accepted";
         case 400: return "Bad Request";
         case 401: return "Unauthorized";
@@ -137,6 +139,38 @@ Response workspace_error(const Error& error) {
         default: break;
     }
     return error_response(status, code, error.message);
+}
+
+Response chat_thread_error(const Error& error, long long current_revision = 0) {
+    switch (error.code) {
+        case ErrorCode::BadArgs:
+        case ErrorCode::JsonParse:
+            return error_response(400, "invalid_request", error.message);
+        case ErrorCode::FileRead:
+            return error_response(404, "thread_not_found", error.message);
+        case ErrorCode::FileLock:
+            return error_response(409, "revision_conflict", error.message,
+                                  "{\"current_revision\":" +
+                                      std::to_string(current_revision) + "}");
+        case ErrorCode::FileWrite:
+            return error_response(409, "thread_read_only", error.message);
+        default:
+            return error_response(500, "chat_store_error", error.message);
+    }
+}
+
+bool positive_decimal_id(const std::string& text, long long& value) {
+    if (text.empty()) return false;
+    long long parsed = 0;
+    for (unsigned char c : text) {
+        if (c < '0' || c > '9') return false;
+        const int digit = c - '0';
+        if (parsed > (std::numeric_limits<long long>::max() - digit) / 10LL) return false;
+        parsed = parsed * 10LL + digit;
+    }
+    if (parsed <= 0) return false;
+    value = parsed;
+    return true;
 }
 
 Error query_path(const http::Request& request, bool required, std::string& path) {
@@ -301,7 +335,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\",\"sessions\",\"review\",\"dired\",\"files\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\",\"sessions\",\"review\",\"dired\",\"files\",\"chat_threads\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false}" +
@@ -343,6 +377,91 @@ Response route_request(const http::Request& request,
             }
         }
         if (!error.ok()) return workspace_error(error);
+        response.body = std::move(body);
+        return response;
+    }
+
+    const std::string chat_threads_prefix = "/ainiux/v1/chat/threads";
+    if (request.path == chat_threads_prefix) {
+        if (status.chat_threads == nullptr) {
+            return error_response(503, "chat_unavailable", "the chat thread service is unavailable");
+        }
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "chat thread routes do not accept query parameters");
+        }
+        if (request.method == "GET") {
+            if (!request.body.empty()) {
+                return error_response(400, "invalid_request", "thread listing does not accept a body");
+            }
+            std::string body;
+            const Error error = status.chat_threads->list(body);
+            if (!error.ok()) return chat_thread_error(error);
+            response.body = std::move(body);
+            return response;
+        }
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed",
+                                      "chat thread collection accepts GET and POST only");
+            response.allow = "GET, POST";
+            return response;
+        }
+        if (!json_content_type(request)) {
+            return error_response(415, "unsupported_media_type",
+                                  "thread creation requires Content-Type: application/json");
+        }
+        std::string body;
+        const Error error = status.chat_threads->create(request.body, body);
+        if (!error.ok()) return chat_thread_error(error);
+        response.status = 201;
+        response.body = std::move(body);
+        return response;
+    }
+    if (request.path.rfind(chat_threads_prefix + "/", 0) == 0) {
+        if (status.chat_threads == nullptr) {
+            return error_response(503, "chat_unavailable", "the chat thread service is unavailable");
+        }
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "chat thread routes do not accept query parameters");
+        }
+        const std::string suffix = request.path.substr(chat_threads_prefix.size() + 1U);
+        const std::size_t slash = suffix.find('/');
+        const std::string id_text = slash == std::string::npos ? suffix : suffix.substr(0, slash);
+        const std::string action = slash == std::string::npos ? std::string() : suffix.substr(slash + 1U);
+        long long thread_id = 0;
+        if (!positive_decimal_id(id_text, thread_id) ||
+            (slash != std::string::npos && action.empty()) ||
+            (!action.empty() && action != "messages")) {
+            return error_response(404, "thread_route_not_found", "no chat thread route matches this path");
+        }
+        if (action.empty()) {
+            if (request.method != "GET") {
+                response = error_response(405, "method_not_allowed", "chat thread loading accepts GET only");
+                response.allow = "GET";
+                return response;
+            }
+            if (!request.body.empty()) {
+                return error_response(400, "invalid_request", "chat thread loading does not accept a body");
+            }
+            std::string body;
+            const Error error = status.chat_threads->load(thread_id, body);
+            if (!error.ok()) return chat_thread_error(error);
+            response.body = std::move(body);
+            return response;
+        }
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed", "message append accepts POST only");
+            response.allow = "POST";
+            return response;
+        }
+        if (!json_content_type(request)) {
+            return error_response(415, "unsupported_media_type",
+                                  "message append requires Content-Type: application/json");
+        }
+        std::string body;
+        long long current_revision = 0;
+        const Error error = status.chat_threads->append(thread_id, request.body, body,
+                                                        current_revision);
+        if (!error.ok()) return chat_thread_error(error, current_revision);
         response.body = std::move(body);
         return response;
     }

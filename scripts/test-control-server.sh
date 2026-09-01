@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test the v1.3 PR 4 loopback control server with curl.
+# Smoke-test the v1.3 PR 7 loopback control server with curl.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ MCP_SECRET="ainiux-control-smoke-${$}-mcp"
 
 usage() {
     cat <<'EOF'
-Smoke-test the Ainiux v1.3 PR 4 control server.
+Smoke-test the Ainiux v1.3 PR 7 control server.
 
 Usage: scripts/test-control-server.sh [options]
 
@@ -28,9 +28,9 @@ Options:
   -h, --help      Show this help
 
 The script starts a temporary loopback server, tests authentication, discovery,
-job submission/status/events/cancel/idempotency, Host/Origin policy, and scoped
-MCP credentials, then stops the server. It uses provider "none" and never
-contacts a provider endpoint.
+job submission/status/events/cancel/idempotency, revision-safe chat threads,
+Host/Origin policy, and scoped MCP credentials, then stops the server. It uses
+provider "none" and never contacts a provider endpoint.
 EOF
 }
 
@@ -113,8 +113,10 @@ fi
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ainiux-control-test.XXXXXX")"
 RESPONSE_FILE="${TEMP_DIR}/response.json"
+mkdir -p "${TEMP_DIR}/home"
 
 echo "==> Starting ${BINARY} on 127.0.0.1:${PORT}"
+HOME="${TEMP_DIR}/home" \
 AINIUX_SERVER_SECRET="${FULL_SECRET}" \
 AINIUX_MCP_SECRET="${MCP_SECRET}" \
     "${BINARY}" server --workspace "${REPO_ROOT}" --port "${PORT}" \
@@ -185,7 +187,7 @@ expect_body '"auth_scope":"full_control"' "status authentication scope"
 
 request 200 "authenticated capabilities" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/capabilities"
-expect_body '"operations":["health","status","capabilities","chat","run","plan","image"]' "capability operations"
+expect_body '"operations":["health","status","capabilities","chat","run","plan","image","sessions","review","dired","files","chat_threads"]' "capability operations"
 expect_body '"mcp":true' "MCP adapter availability"
 
 request 401 "MCP token cannot access control API" "${MCP_AUTH[@]}" \
@@ -214,6 +216,31 @@ request 405 "unsupported method rejection" "${FULL_AUTH[@]}" --request POST \
 request 400 "unexpected body rejection" "${FULL_AUTH[@]}" \
     --request GET --header 'Content-Type: application/json' --data '{}' \
     "${BASE_URL}/ainiux/v1/health"
+
+request 201 "chat thread creation" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: application/json' \
+    --data '{"revision":0,"name":"Smoke thread","provider":"none","model":"offline"}' \
+    "${BASE_URL}/ainiux/v1/chat/threads"
+expect_body '"revision":1' "initial chat revision"
+THREAD_ID="$(sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p' "${RESPONSE_FILE}")"
+[ -n "${THREAD_ID}" ] || die "chat thread creation did not return a numeric ID"
+request 200 "chat thread listing" "${FULL_AUTH[@]}" \
+    "${BASE_URL}/ainiux/v1/chat/threads"
+expect_body '"name":"Smoke thread"' "chat thread summary"
+request 200 "revision-safe message append" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: application/json' \
+    --data '{"revision":1,"messages":[{"role":"user","content":"hello from curl"}]}' \
+    "${BASE_URL}/ainiux/v1/chat/threads/${THREAD_ID}/messages"
+expect_body '"revision":2' "advanced chat revision"
+request 409 "stale chat revision conflict" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: application/json' \
+    --data '{"revision":1,"messages":[{"role":"user","content":"stale"}]}' \
+    "${BASE_URL}/ainiux/v1/chat/threads/${THREAD_ID}/messages"
+expect_body '"code":"revision_conflict"' "chat revision conflict code"
+expect_body '"current_revision":2' "chat conflict reload metadata"
+request 200 "chat thread load" "${FULL_AUTH[@]}" \
+    "${BASE_URL}/ainiux/v1/chat/threads/${THREAD_ID}"
+expect_body '"content":"hello from curl"' "persisted chat message"
 
 JOB_BODY='{"provider":"none","messages":[{"role":"user","content":"offline smoke"}]}'
 request 202 "chat job submission" "${FULL_AUTH[@]}" \

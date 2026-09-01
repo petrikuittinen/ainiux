@@ -15,6 +15,7 @@ namespace ainiux::server {
 class McpAdapter;
 class SessionHub;
 class WorkspaceService;
+class ChatService;
 
 struct PublicStatus {
     unsigned short port = 0;
@@ -26,6 +27,7 @@ struct PublicStatus {
     SessionHub* sessions = nullptr;
     std::size_t max_sessions = 0;
     WorkspaceService* workspace = nullptr;
+    ChatService* chat_threads = nullptr;
 };
 
 struct Response {

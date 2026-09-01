@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "server/http_parser.hpp"
+#include "server/chat_service.hpp"
 #include "server/job_service.hpp"
 #include "server/mcp_adapter.hpp"
 #include "server/router.hpp"
@@ -161,6 +162,7 @@ struct Listener::Impl {
     std::unique_ptr<McpAdapter> mcp;
     std::unique_ptr<SessionHub> sessions;
     std::unique_ptr<WorkspaceService> workspace;
+    std::unique_ptr<ChatService> chat_threads;
 
     void reap_workers() {
         std::lock_guard<std::mutex> lock(workers_mutex);
@@ -248,6 +250,7 @@ struct Listener::Impl {
             public_status.mcp = mcp.get();
             public_status.sessions = sessions.get();
             public_status.workspace = workspace.get();
+            public_status.chat_threads = chat_threads.get();
             const Response response = route_request(parser.request(), config.auth, public_status);
             const bool keep_alive = parser.request().keep_alive &&
                                     count + 1U < Limits::requests_per_connection && !response.close;
@@ -280,6 +283,7 @@ Error Listener::start(ListenerConfig config) {
                                                    impl_->config.workspace,
                                                    impl_->config.max_sessions);
     impl_->workspace = std::make_unique<WorkspaceService>(impl_->config.workspace);
+    impl_->chat_threads = std::make_unique<ChatService>();
     impl_->stopping.store(false, std::memory_order_release);
     OwnedSocket socket(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (socket.get() == kInvalidSocket) return {ErrorCode::Connect, "could not create the loopback listener socket"};

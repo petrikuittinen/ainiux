@@ -120,7 +120,8 @@ void test_chat_sqlite_store_round_trip_and_listing() {
 
     err = store.save_session(session);
     check(err.ok(), "SQLite chat session saves");
-    check(session.thread_id > 0, "SQLite save assigns a thread id");
+    check(session.thread_id > 0 && session.revision == 1,
+          "SQLite save assigns a thread id and initial revision");
     check(session.name == "first prompt", "SQLite save derives a thread name from the first user message");
 
     long long last_id = 0;
@@ -131,8 +132,9 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     ainiux::chat::Session loaded;
     err = store.load_session(session.thread_id, loaded);
     check(err.ok(), "SQLite chat session loads");
-    check(loaded.thread_id == session.thread_id && loaded.name == session.name,
-          "SQLite load preserves thread identity and name");
+    check(loaded.thread_id == session.thread_id && loaded.revision == 1 &&
+              loaded.name == session.name,
+          "SQLite load preserves thread identity, revision, and name");
     check(loaded.provider == "lm_studio" && loaded.base_url == "http://localhost:1234/v1" &&
               loaded.model == "local-model",
           "SQLite load preserves provider, base URL, and model metadata");
@@ -155,7 +157,8 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     session.messages.pop_back();
     session.usage_json = "{\"prompt_tokens\":2,\"completion_tokens\":3,\"total_tokens\":5}";
     err = store.save_session(session);
-    check(err.ok(), "SQLite chat session saves after assistant response is popped");
+    check(err.ok() && session.revision == 2,
+          "SQLite chat save advances the thread revision");
     loaded = {};
     err = store.load_session(session.thread_id, loaded);
     check(err.ok() && loaded.messages.size() == 2 && loaded.messages.back().role == "user",
@@ -185,7 +188,8 @@ void test_chat_sqlite_store_round_trip_and_listing() {
     check(threads.size() == 2, "SQLite thread list returns saved threads");
     check(!threads.empty() && threads[0].id == second.thread_id,
           "SQLite thread list is newest thread first");
-    check(!threads.empty() && threads[0].last_provider == "lm_studio" &&
+    check(!threads.empty() && threads[0].revision == 1 &&
+              threads[0].last_provider == "lm_studio" &&
               threads[0].last_model == "local-model" && threads[0].message_count == 2,
           "SQLite thread summary includes provider, model, and message count");
 
@@ -443,7 +447,7 @@ CREATE TABLE attachments (
     byte_size INTEGER NOT NULL DEFAULT 0
 );
 DROP TABLE attachments_v4;
-DELETE FROM schema_migrations WHERE version = 4;
+DELETE FROM schema_migrations WHERE version >= 4;
 )SQL", nullptr, nullptr, &message);
         check(rc == SQLITE_OK,
               message == nullptr ? "v3 attachment schema fixture is created" : message);

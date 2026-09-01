@@ -46,7 +46,7 @@ error layers should serve:
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
-| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 6 read-only review/dired/file routes landed; PR 7 chat threads is next |
+| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 7 revision-safe chat threads landed; PR 8 TLS/non-loopback is next |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 The embedded browser controller is the final v1.3 PR, after the control API and
@@ -261,9 +261,10 @@ Generated-image routes, if later added, may serve only controlled generated asse
 
 # v1.3 - Remote control API (`ainiux server`)
 
-Status: PR 6 read-only workspace review/dired/file access, PR 5 interactive agent sessions, PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
+Status: PR 7 revision-safe chat threads, PR 6 read-only workspace review/dired/file access, PR 5 interactive agent sessions, PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
 idempotency, cancellation, provider concurrency, and the serialized workspace
-agent lane landed. The MCP adapter and read-only review/dired/file routes are landed; revision-safe chat threads begin in PR 7.
+agent lane landed. The MCP adapter, read-only review/dired/file routes, and
+revision-safe chat persistence are landed; TLS/non-loopback policy begins in PR 8.
 
 ## Goal
 
@@ -788,8 +789,10 @@ out of the response. Mutations remain deferred.
 
 ### PR 7 - Revision-safe chat threads
 
-Add thread listing/loading/creation/messages with optimistic revision checks and
-no raw database exposure.
+Landed. Add thread listing/loading/creation/messages with optimistic revision
+checks and no raw database exposure. Local TUI saves and remote appends advance
+one SQLite revision; bounded remote loads return the newest 512 messages and
+attachment metadata without managed-media or source references.
 
 ### PR 8 - TLS and direct non-loopback access
 

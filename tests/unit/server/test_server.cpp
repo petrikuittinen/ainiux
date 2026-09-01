@@ -26,6 +26,7 @@
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include "server/auth.hpp"
+#include "server/chat_service.hpp"
 #include "server/http_parser.hpp"
 #include "server/event_broker.hpp"
 #include "server/job_registry.hpp"
@@ -544,6 +545,178 @@ void test_read_only_workspace_routes_are_contained_and_bounded() {
     fs::remove_all(outside, cleanup_error);
 }
 
+void test_revision_safe_chat_thread_routes() {
+    namespace fs = std::filesystem;
+    const fs::path directory = fs::temp_directory_path() / "ainiux-chat-service-test";
+    const fs::path database = directory / "ainiux.db";
+    std::error_code cleanup_error;
+    fs::remove_all(directory, cleanup_error);
+    fs::create_directories(directory, cleanup_error);
+    check(!cleanup_error, "chat service creates an isolated database directory");
+
+    ChatService service(database.u8string());
+    AuthConfig auth{"controller", {}};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 8, &active};
+    status.chat_threads = &service;
+
+    Response created = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads",
+        "{\"revision\":0,\"name\":\"Remote chat\",\"provider\":\"openai\",\"model\":\"model-a\"}"),
+        auth, status);
+    const json::ParseResult created_json = json::parse(created.body);
+    const json::Value* created_thread = created_json.value.get("thread");
+    const json::Value* id_value = created_thread == nullptr ? nullptr : created_thread->get("id");
+    const json::Value* revision_value =
+        created_thread == nullptr ? nullptr : created_thread->get("revision");
+    check(created.status == 201 && id_value != nullptr &&
+              id_value->type == json::Value::Type::Number && revision_value != nullptr &&
+              revision_value->number == 1,
+          "chat thread creation requires revision zero and returns revision one");
+    if (id_value == nullptr || id_value->type != json::Value::Type::Number) {
+        fs::remove_all(directory, cleanup_error);
+        return;
+    }
+    const long long thread_id = static_cast<long long>(id_value->number);
+    const std::string thread_path = "/ainiux/v1/chat/threads/" + std::to_string(thread_id);
+
+    Response listed = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
+                                    auth, status);
+    check(listed.status == 200 && listed.body.find("Remote chat") != std::string::npos &&
+              listed.body.find(database.u8string()) == std::string::npos,
+          "chat thread listing exposes bounded summaries without the database path");
+
+    Response appended = route_request(session_request(
+        "POST", thread_path + "/messages",
+        "{\"revision\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"},"
+        "{\"role\":\"assistant\",\"content\":\"hi\"}]}"), auth, status);
+    check(appended.status == 200 && appended.body.find("\"revision\":2") != std::string::npos &&
+              appended.body.find("\"message_count\":2") != std::string::npos,
+          "message append atomically advances the observed thread revision");
+
+    Response stale = route_request(session_request(
+        "POST", thread_path + "/messages",
+        "{\"revision\":1,\"messages\":[{\"role\":\"user\",\"content\":\"stale write\"}]}"),
+        auth, status);
+    check(stale.status == 409 && stale.body.find("revision_conflict") != std::string::npos &&
+              stale.body.find("\"current_revision\":2") != std::string::npos,
+          "stale chat clients receive a conflict with the current revision");
+
+    Response loaded = route_request(session_request("GET", thread_path, ""), auth, status);
+    check(loaded.status == 200 && loaded.body.find("hello") != std::string::npos &&
+              loaded.body.find("stale write") == std::string::npos &&
+              loaded.body.find("\"revision\":2") != std::string::npos,
+          "thread loading returns the committed transcript and rejects stale content");
+
+    {
+        chat::SqliteStore tui_store;
+        Error error = tui_store.open(database.u8string());
+        chat::Session session;
+        if (error.ok()) error = tui_store.load_session(thread_id, session);
+        if (error.ok()) {
+            std::vector<provider::TextAttachment> attachments;
+            for (int index = 0; index < 65; ++index) {
+                provider::TextAttachment attachment;
+                attachment.markdown_content =
+                    "private attachment body " + std::to_string(index);
+                attachment.display_name = "notes-" + std::to_string(index) + ".md";
+                attachment.source_ref =
+                    "/private/source/notes-" + std::to_string(index) + ".md";
+                attachment.byte_size =
+                    static_cast<long long>(attachment.markdown_content.size());
+                attachments.push_back(std::move(attachment));
+            }
+            session.messages.push_back({"user", "from TUI", {}, std::move(attachments)});
+            error = tui_store.save_session(session);
+        }
+        check(error.ok() && session.revision == 3,
+              "ordinary TUI persistence advances the same optimistic revision");
+    }
+    loaded = route_request(session_request("GET", thread_path, ""), auth, status);
+    check(loaded.status == 200 && loaded.body.find("\"revision\":3") != std::string::npos &&
+              loaded.body.find("notes-0.md") != std::string::npos &&
+              loaded.body.find("notes-64.md") == std::string::npos &&
+              loaded.body.find("\"attachments_truncated\":true") != std::string::npos &&
+              loaded.body.find("/private/source") == std::string::npos &&
+              loaded.body.find("private attachment body") == std::string::npos,
+          "remote loads bound attachment metadata without reading source paths or payloads");
+    Response stale_after_tui = route_request(session_request(
+        "POST", thread_path + "/messages",
+        "{\"revision\":2,\"messages\":[{\"role\":\"user\",\"content\":\"raced\"}]}"),
+        auth, status);
+    check(stale_after_tui.status == 409 &&
+              stale_after_tui.body.find("\"current_revision\":3") != std::string::npos,
+          "API revisions detect saves made by another chat-store connection");
+
+    chat::Session stale_tui_snapshot;
+    {
+        chat::SqliteStore store;
+        Error error = store.open(database.u8string());
+        if (error.ok()) error = store.load_session(thread_id, stale_tui_snapshot);
+        check(error.ok() && stale_tui_snapshot.revision == 3,
+              "stale full-save fixture observes the current thread revision");
+    }
+    Response remote_wins = route_request(session_request(
+        "POST", thread_path + "/messages",
+        "{\"revision\":3,\"messages\":[{\"role\":\"assistant\",\"content\":\"remote wins\"}]}"),
+        auth, status);
+    Error stale_save_error;
+    {
+        chat::SqliteStore store;
+        stale_save_error = store.open(database.u8string());
+        stale_tui_snapshot.messages.push_back({"user", "stale TUI overwrite"});
+        if (stale_save_error.ok()) stale_save_error = store.save_session(stale_tui_snapshot);
+    }
+    loaded = route_request(session_request("GET", thread_path, ""), auth, status);
+    check(remote_wins.status == 200 && stale_save_error.code == ErrorCode::FileLock &&
+              loaded.body.find("remote wins") != std::string::npos &&
+              loaded.body.find("stale TUI overwrite") == std::string::npos &&
+              loaded.body.find("\"revision\":4") != std::string::npos,
+          "a stale full TUI save cannot overwrite a newer API append");
+
+    Response invalid_attachment = route_request(session_request(
+        "POST", thread_path + "/messages",
+        "{\"revision\":3,\"messages\":[{\"role\":\"user\",\"content\":\"x\","
+        "\"attachments\":[{\"path\":\"/private/file\"}]}]}"), auth, status);
+    check(invalid_attachment.status == 400,
+          "remote message input rejects unrestricted attachment fields");
+
+    long long large_thread_id = 0;
+    {
+        chat::SqliteStore store;
+        Error error = store.open(database.u8string());
+        chat::Session large_session;
+        large_session.name = "Large remote thread";
+        for (int index = 0; index < 520; ++index) {
+            large_session.messages.push_back(
+                {"user", "bounded-message-" + std::to_string(index)});
+        }
+        if (error.ok()) error = store.save_session(large_session);
+        large_thread_id = large_session.thread_id;
+        check(error.ok(), "large chat fixture persists through the ordinary store");
+    }
+    Response bounded = route_request(session_request(
+        "GET", "/ainiux/v1/chat/threads/" + std::to_string(large_thread_id), ""), auth, status);
+    check(bounded.status == 200 &&
+              bounded.body.find("\"message_count\":520") != std::string::npos &&
+              bounded.body.find("\"messages_truncated\":true") != std::string::npos &&
+              bounded.body.find("bounded-message-519") != std::string::npos &&
+              bounded.body.find("bounded-message-0\"") == std::string::npos,
+          "remote thread loads retain the newest 512 messages and report truncation");
+
+    const fs::path blocked_parent = directory / "not-a-directory";
+    std::ofstream(blocked_parent, std::ios::binary) << "file";
+    ChatService failed((blocked_parent / "ainiux.db").u8string());
+    status.chat_threads = &failed;
+    Response failure = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
+                                     auth, status);
+    check(failure.status == 500 &&
+              failure.body.find(blocked_parent.u8string()) == std::string::npos,
+          "chat database failures do not expose server-side paths");
+
+    fs::remove_all(directory, cleanup_error);
+}
+
 void test_job_errors_hide_server_side_paths() {
     cli::Options options;
     options.provider = "none";
@@ -687,6 +860,7 @@ void run_all() {
     test_mcp_stateless_adapter_and_tasks();
     test_interactive_sessions_are_bounded_and_replayable();
     test_read_only_workspace_routes_are_contained_and_bounded();
+    test_revision_safe_chat_thread_routes();
     test_job_errors_hide_server_side_paths();
     test_server_cli_contract();
     test_loopback_listener_lifecycle();

@@ -19,6 +19,7 @@ struct DatabasePathResult {
 
 struct ThreadSummary {
     long long id = 0;
+    long long revision = 0;
     std::string name;
     std::string created_at;
     std::string modified_at;
@@ -37,6 +38,16 @@ struct MediaCleanupResult {
     long long threads_locked = 0;
 };
 
+struct LoadSessionOptions {
+    // Zero retains the existing unbounded local-TUI load behavior.
+    std::size_t max_messages = 0;
+    std::size_t max_content_bytes = 0;
+    std::size_t max_attachments_per_message = 0;
+    bool metadata_only_attachments = false;
+    bool load_compactions = true;
+    bool update_last_thread = true;
+};
+
 class SqliteStore {
    public:
     SqliteStore() = default;
@@ -53,7 +64,14 @@ class SqliteStore {
     const std::string& path() const { return path_; }
 
     Error save_session(Session& session);
-    Error load_session(long long thread_id, Session& session);
+    Error append_messages(long long thread_id,
+                          long long expected_revision,
+                          const std::vector<provider::Message>& messages,
+                          long long& revision,
+                          long long& message_count);
+    Error load_session(long long thread_id,
+                       Session& session,
+                       const LoadSessionOptions& options = LoadSessionOptions());
     Error list_threads(std::vector<ThreadSummary>& threads, int limit = 200);
     Error last_thread_id(long long& thread_id, bool& found);
     Error set_last_thread_id(long long thread_id);

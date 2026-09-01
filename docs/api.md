@@ -1,10 +1,11 @@
 # Ainiux control API
 
-The v1.3 control API is versioned under `/ainiux/v1/`. PR 6 provides a
+The v1.3 control API is versioned under `/ainiux/v1/`. PR 7 provides a
 loopback-only listener, authenticated discovery, asynchronous one-shot jobs,
 interactive agent sessions, read-only workspace review/dired/file routes, and
-a separate MCP 2026-07-28 endpoint at `/mcp`. Filesystem mutations and the WUI
-remain later slices.
+a separate MCP 2026-07-28 endpoint at `/mcp`, plus revision-safe access to the
+existing personal chat library. Filesystem mutations, TLS/non-loopback mode,
+and the WUI remain later slices.
 Later routes must use the PR 1 operation/wire contracts rather than exposing
 provider, runtime, or terminal-internal structures directly.
 
@@ -63,9 +64,63 @@ are rejected. `.ainiux-pr`, `.ainiux`, `.git`, environment/credential names,
 and bundled sensitive configuration files are excluded. There are no mutation
 routes in PR 6.
 
+## Revision-safe chat threads
+
+PR 7 exposes the existing user-private SQLite chat library through domain
+operations rather than database files or tables:
+
+```text
+GET  /ainiux/v1/chat/threads
+POST /ainiux/v1/chat/threads
+GET  /ainiux/v1/chat/threads/:thread_id
+POST /ainiux/v1/chat/threads/:thread_id/messages
+```
+
+Listing returns at most 200 newest summaries with `id`, `revision`, `name`,
+timestamps, provider/model labels, message count, and read-only state. Loading
+a thread returns its transcript. Loads are bounded to the newest 512 messages
+and 4 MiB of message content; `message_count`, per-message `ordinal`, and
+`messages_truncated` tell a client whether older content was omitted. Remote
+loads do not change the TUI's last-active-thread selection.
+
+Create a thread with revision zero:
+
+```json
+{"revision":0,"name":"Remote chat","provider":"openai","model":"MODEL"}
+```
+
+`name`, `provider`, and `model` are optional bounded metadata strings. Creation
+returns `201` and revision `1`. Append one through 64 transcript messages with
+the last revision observed by the client:
+
+```json
+{
+  "revision": 1,
+  "messages": [
+    {"role":"user","content":"Hello"},
+    {"role":"assistant","content":"Hi"}
+  ]
+}
+```
+
+Roles are `system`, `user`, or `assistant`. This persistence operation does not
+start a model request; use the asynchronous chat job route for provider work.
+Successful appends return the new revision and message count. Existing TUI
+saves advance the same SQLite revision, so a stale API append returns
+`revision_conflict` (409) with `details.current_revision`; no stale messages are
+written. Read-only threads return `thread_read_only` (409).
+
+Thread responses expose at most 64 attachments per message, with kind, MIME
+type, display name, and byte size only; `attachments_truncated` reports an
+omission. Managed-media identifiers, inline attachment bodies, original
+source references, database paths, base URLs, usage internals, and provider
+credentials are omitted. PR 7 does not accept remote attachment input or
+delete/rename threads.
+
 From a source checkout, run `scripts/test-control-server.sh --build` for a
 self-contained curl smoke test of the listener, authentication scopes, discovery,
-jobs, SSE replay, and Host/Origin/method/body rejection. Use `--port PORT` when 18766 is
+revision-safe chat persistence, jobs, SSE replay, and Host/Origin/method/body
+rejection. Use `--port PORT` when 18766 is
 already occupied.
 
 For the complete repeatable PR 4 check—including `make test`, optional fault

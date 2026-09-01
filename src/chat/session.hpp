@@ -11,6 +11,12 @@ namespace ainiux::chat {
 
 struct Session {
     long long thread_id = 0;
+    // Monotonic persistence revision used by non-TUI surfaces for optimistic
+    // concurrency. A new persisted thread starts at revision 1.
+    long long revision = 0;
+    long long persisted_message_count = 0;
+    bool messages_truncated = false;
+    bool attachments_truncated = false;
     int schema_version = 1;
     std::string name;
     std::string created_at;

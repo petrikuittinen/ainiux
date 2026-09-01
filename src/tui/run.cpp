@@ -1051,12 +1051,18 @@ app::TuiRunResult run(provider::RequestContext context,
             return;
         }
         session.thread_id = saved.thread_id;
+        session.revision = saved.revision;
         session.name = saved.name;
         session.created_at = saved.created_at;
         session.updated_at = saved.updated_at;
-        if (deferred_store_save.has_value() && deferred_store_save->thread_id == 0) {
+        if (deferred_store_save.has_value() &&
+            (deferred_store_save->thread_id == 0 ||
+             deferred_store_save->thread_id == saved.thread_id)) {
             deferred_store_save->thread_id = saved.thread_id;
-            deferred_store_save->created_at = saved.created_at;
+            deferred_store_save->revision = saved.revision;
+            if (deferred_store_save->created_at.empty()) {
+                deferred_store_save->created_at = saved.created_at;
+            }
         }
     };
 
@@ -1247,6 +1253,7 @@ app::TuiRunResult run(provider::RequestContext context,
             if (event.type == TuiEventType::StoreSaveDone && event.error.ok() &&
                 (session.thread_id == 0 || session.thread_id == event.session.thread_id)) {
                 session.thread_id = event.session.thread_id;
+                session.revision = event.session.revision;
             }
         }
         if (session.thread_id <= 0) {
@@ -4559,6 +4566,7 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         if (save_error.ok()) {
             session.thread_id = snapshot.thread_id;
+            session.revision = snapshot.revision;
             session.name = snapshot.name;
             session.created_at = snapshot.created_at;
             session.updated_at = snapshot.updated_at;

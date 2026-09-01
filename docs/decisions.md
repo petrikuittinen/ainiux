@@ -482,3 +482,30 @@ usable fallback without holding an HTTP request open.
 Only JSON responses are used in this slice. Existing control-API SSE replay
 remains the richer event surface; MCP task polling is intentionally separate so
 the stateless protocol does not inherit controller session or replay semantics.
+
+## Revision-safe remote chat persistence (v1.3 PR 7)
+
+Remote chat threads reuse `chat::SqliteStore`; the control API never opens raw
+tables for clients or creates a second persistence model. Schema version 5 adds
+a monotonic revision to each thread. New threads start at one; full saves from
+the existing TUI and API message appends both compare the observed revision and
+increment it under `BEGIN IMMEDIATE`. This makes a stale client or TUI snapshot
+conflict with changes from either surface across separate SQLite connections,
+while rollback preserves the previous transcript on every validation, write,
+or commit failure.
+
+The server owns one lazily opened `ChatService` and serializes calls over its
+full-mutex SQLite connection. Laziness avoids touching the personal chat library
+unless a chat-thread route is used. Remote creation and append schemas are
+strict and intentionally persistence-only: appending messages does not start a
+provider request, and attachment input is deferred until a contained upload
+contract exists.
+
+Remote reads expose only stable thread/message DTOs. They omit database paths,
+provider base URLs, usage records, compaction internals, attachment bodies,
+managed-media digests, and original source references. A separate metadata-only
+query avoids materializing legacy inline payload/source columns and caps output
+at 64 attachments per message. Loads keep the newest 512 messages under a 4 MiB
+content cap and report the total count, original ordinals, and truncation;
+listing keeps the newest 200 summaries. A remote GET does not update the TUI's last-thread app
+state. Store failures cross the wire only as path-free typed errors.

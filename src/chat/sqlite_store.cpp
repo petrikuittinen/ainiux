@@ -6,15 +6,17 @@
 
 #include <sqlite3.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <sstream>
 #include <utility>
 
 namespace ainiux::chat {
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 constexpr const char kDefaultThreadName[] = "New chat";
 constexpr size_t kMaxThreadNameLength = 40;
 
@@ -372,6 +374,7 @@ CREATE TABLE IF NOT EXISTS app_state (
 );
 CREATE TABLE IF NOT EXISTS threads (
     id INTEGER PRIMARY KEY,
+    revision INTEGER NOT NULL DEFAULT 1,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL,
     modified_at TEXT NOT NULL,
@@ -571,6 +574,37 @@ INSERT OR IGNORE INTO schema_migrations(version, applied_at)
             return err;
         }
         version = 4;
+    }
+    if (version < 5) {
+        Transaction migration(db, path);
+        err = migration.begin();
+        if (!err.ok()) {
+            return err;
+        }
+        Error inspect_error;
+        if (!table_has_column(db, path, "threads", "revision", inspect_error)) {
+            if (!inspect_error.ok()) {
+                return inspect_error;
+            }
+            err = exec_sql(db, path,
+                           "ALTER TABLE threads ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;",
+                           "could not add SQLite chat revision");
+            if (!err.ok()) {
+                return err;
+            }
+        }
+        err = exec_sql(db, path,
+                       "INSERT OR IGNORE INTO schema_migrations(version, applied_at) "
+                       "VALUES(5, strftime('%Y-%m-%dT%H:%M:%SZ','now'));",
+                       "could not record SQLite schema migration 5");
+        if (!err.ok()) {
+            return err;
+        }
+        err = migration.commit();
+        if (!err.ok()) {
+            return err;
+        }
+        version = 5;
     }
     return ok_error();
 }
@@ -800,6 +834,58 @@ Error load_text_attachments_for_message(
     }
 }
 
+Error load_attachment_metadata_for_message(
+    sqlite3* db,
+    const std::string& path,
+    long long message_id,
+    std::size_t maximum,
+    std::vector<provider::ImageInput>& images,
+    std::vector<provider::TextAttachment>& text_attachments,
+    bool& truncated) {
+    truncated = false;
+    Statement stmt(db, path);
+    Error err = stmt.prepare(
+        "SELECT kind, mime_type, display_name, byte_size FROM attachments "
+        "WHERE message_id = ?1 ORDER BY ordinal, id LIMIT ?2;");
+    if (!err.ok()) return err;
+    const std::size_t row_limit = maximum >= static_cast<std::size_t>(
+                                                  std::numeric_limits<long long>::max())
+                                      ? static_cast<std::size_t>(
+                                            std::numeric_limits<long long>::max())
+                                      : maximum + 1U;
+    err = BindChain(stmt)
+              .int64(1, message_id)
+              .int64(2, static_cast<long long>(row_limit))
+              .error();
+    if (!err.ok()) return err;
+    std::size_t count = 0;
+    while (true) {
+        const int rc = stmt.step();
+        if (rc == SQLITE_DONE) return ok_error();
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db, path, "could not load SQLite attachment metadata", rc);
+        }
+        if (count >= maximum) {
+            truncated = true;
+            return ok_error();
+        }
+        ++count;
+        const std::string kind = stmt.column_text(0);
+        if (kind == "image") {
+            provider::ImageInput image;
+            image.mime_type = stmt.column_text(1);
+            image.display_name = stmt.column_text(2);
+            image.byte_size = stmt.column_int64(3);
+            images.push_back(std::move(image));
+        } else if (kind == "markdown") {
+            provider::TextAttachment attachment;
+            attachment.display_name = stmt.column_text(2);
+            attachment.byte_size = stmt.column_int64(3);
+            text_attachments.push_back(std::move(attachment));
+        }
+    }
+}
+
 }  // namespace
 
 DatabasePathResult default_sqlite_database_path() {
@@ -961,6 +1047,10 @@ Error SqliteStore::save_session(Session& session) {
             return {ErrorCode::ProviderSchema, "cannot save message with unsupported role: " + message.role};
         }
     }
+    if (session.thread_id > 0 && session.revision <= 0) {
+        return {ErrorCode::BadArgs,
+                "cannot save an existing chat thread without its observed revision"};
+    }
     if (session.thread_id > 0) {
         Statement locked(db_, path_);
         Error lock_error = locked.prepare(
@@ -996,12 +1086,13 @@ Error SqliteStore::save_session(Session& session) {
     }
     session.updated_at = now;
     session.name = derive_thread_name(session);
+    long long saved_revision = 0;
 
     if (session.thread_id <= 0) {
         Statement insert_thread(db_, path_);
         err = insert_thread.prepare(
-            "INSERT INTO threads(name, created_at, modified_at, last_provider, last_base_url, last_model, "
-            "settings_json, usage_json, message_count) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);");
+            "INSERT INTO threads(revision, name, created_at, modified_at, last_provider, last_base_url, last_model, "
+            "settings_json, usage_json, message_count) VALUES(1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);");
         if (!err.ok()) {
             return err;
         }
@@ -1020,12 +1111,14 @@ Error SqliteStore::save_session(Session& session) {
             return err;
         }
         session.thread_id = static_cast<long long>(sqlite3_last_insert_rowid(db_));
+        saved_revision = 1;
     } else {
         Statement update_thread(db_, path_);
         err = update_thread.prepare(
             "UPDATE threads SET name = ?1, modified_at = ?2, last_provider = ?3, last_base_url = ?4, "
-            "last_model = ?5, settings_json = ?6, usage_json = ?7, message_count = ?8, deleted_at = NULL "
-            "WHERE id = ?9;");
+            "last_model = ?5, settings_json = ?6, usage_json = ?7, message_count = ?8, "
+            "revision = revision + 1, deleted_at = NULL "
+            "WHERE id = ?9 AND revision = ?10 AND deleted_at IS NULL AND read_only = 0;");
         if (!err.ok()) {
             return err;
         }
@@ -1039,15 +1132,51 @@ Error SqliteStore::save_session(Session& session) {
                   .text(7, session.usage_json.empty() ? "{}" : session.usage_json)
                   .int64(8, static_cast<long long>(session.messages.size()))
                   .int64(9, session.thread_id)
+                  .int64(10, session.revision)
                   .step_done("could not update SQLite thread");
         if (!err.ok()) {
             return err;
         }
         if (sqlite3_changes(db_) == 0) {
-            session.thread_id = 0;
+            Statement current(db_, path_);
+            err = current.prepare(
+                "SELECT revision, read_only, read_only_reason FROM threads "
+                "WHERE id = ?1 AND deleted_at IS NULL;");
+            if (!err.ok()) return err;
+            err = BindChain(current).int64(1, session.thread_id).error();
+            if (!err.ok()) return err;
+            const int current_rc = current.step();
+            if (current_rc == SQLITE_ROW) {
+                if (current.column_int64(1) != 0) {
+                    const std::string reason = current.column_text(2);
+                    return {ErrorCode::FileWrite,
+                            "chat thread is read-only" +
+                                (reason.empty() ? std::string() : ": " + reason)};
+                }
+                return {ErrorCode::FileLock,
+                        "chat thread revision is stale; current revision is " +
+                            std::to_string(current.column_int64(0))};
+            }
+            if (current_rc != SQLITE_DONE) {
+                return sqlite_error(db_, path_, "could not inspect stale SQLite thread",
+                                    current_rc);
+            }
             return {ErrorCode::FileWrite, "could not update SQLite thread: thread does not exist"};
         }
+        Statement updated_revision(db_, path_);
+        err = updated_revision.prepare("SELECT revision FROM threads WHERE id = ?1;");
+        if (!err.ok()) return err;
+        err = BindChain(updated_revision).int64(1, session.thread_id).error();
+        if (!err.ok()) return err;
+        const int revision_rc = updated_revision.step();
+        if (revision_rc != SQLITE_ROW) {
+            return sqlite_error(db_, path_, "could not read updated SQLite thread revision",
+                                revision_rc);
+        }
+        saved_revision = updated_revision.column_int64(0);
     }
+    session.persisted_message_count = static_cast<long long>(session.messages.size());
+    session.messages_truncated = false;
 
     for (const char* sql : {
              "DELETE FROM usage_records WHERE thread_id = ?1;",
@@ -1153,10 +1282,134 @@ Error SqliteStore::save_session(Session& session) {
     if (!(err = tx.commit()).ok()) {
         return err;
     }
+    session.revision = saved_revision;
     return set_last_thread_id(session.thread_id);
 }
 
-Error SqliteStore::load_session(long long thread_id, Session& session) {
+Error SqliteStore::append_messages(long long thread_id,
+                                   long long expected_revision,
+                                   const std::vector<provider::Message>& messages,
+                                   long long& revision,
+                                   long long& message_count) {
+    revision = 0;
+    message_count = 0;
+    if (db_ == nullptr) {
+        return {ErrorCode::Internal, "SQLite database is not open"};
+    }
+    if (thread_id <= 0 || expected_revision <= 0 || messages.empty()) {
+        return {ErrorCode::BadArgs,
+                "thread id, expected revision, and at least one message are required"};
+    }
+    for (const provider::Message& message : messages) {
+        if (!valid_role(message.role)) {
+            return {ErrorCode::BadArgs, "cannot append message with unsupported role: " + message.role};
+        }
+    }
+
+    Transaction tx(db_, path_);
+    Error err = tx.begin();
+    if (!err.ok()) return err;
+
+    std::string name;
+    {
+        Statement current(db_, path_);
+        err = current.prepare(
+            "SELECT revision, name, message_count, read_only, read_only_reason "
+            "FROM threads WHERE id = ?1 AND deleted_at IS NULL;");
+        if (!err.ok()) return err;
+        err = BindChain(current).int64(1, thread_id).error();
+        if (!err.ok()) return err;
+        const int current_rc = current.step();
+        if (current_rc == SQLITE_DONE) {
+            return {ErrorCode::FileRead, "SQLite chat thread not found: " + std::to_string(thread_id)};
+        }
+        if (current_rc != SQLITE_ROW) {
+            return sqlite_error(db_, path_, "could not inspect SQLite chat revision", current_rc);
+        }
+        revision = current.column_int64(0);
+        name = current.column_text(1);
+        message_count = current.column_int64(2);
+        if (current.column_int64(3) != 0) {
+            const std::string reason = current.column_text(4);
+            return {ErrorCode::FileWrite,
+                    "chat thread is read-only" +
+                        (reason.empty() ? std::string() : ": " + reason)};
+        }
+    }
+    if (revision != expected_revision) {
+        return {ErrorCode::FileLock, "chat thread revision is stale"};
+    }
+
+    if (is_auto_thread_name(name)) {
+        for (const provider::Message& message : messages) {
+            if (message.role != "user") continue;
+            std::string candidate = first_line(message.content);
+            if (candidate.empty()) continue;
+            if (candidate.size() > kMaxThreadNameLength) candidate.resize(kMaxThreadNameLength);
+            name = std::move(candidate);
+            break;
+        }
+    }
+
+    const std::string now = current_timestamp_utc();
+    Statement update(db_, path_);
+    err = update.prepare(
+        "UPDATE threads SET revision = revision + 1, name = ?1, modified_at = ?2, "
+        "message_count = message_count + ?3 WHERE id = ?4 AND revision = ?5 "
+        "AND deleted_at IS NULL;");
+    if (!err.ok()) return err;
+    err = BindChain(update)
+              .text(1, name)
+              .text(2, now)
+              .int64(3, static_cast<long long>(messages.size()))
+              .int64(4, thread_id)
+              .int64(5, expected_revision)
+              .step_done("could not advance SQLite chat revision");
+    if (!err.ok()) return err;
+    if (sqlite3_changes(db_) != 1) {
+        return {ErrorCode::FileLock, "chat thread revision changed while appending messages"};
+    }
+
+    for (size_t i = 0; i < messages.size(); ++i) {
+        const provider::Message& message = messages[i];
+        Statement insert(db_, path_);
+        err = insert.prepare(
+            "INSERT INTO messages(thread_id, ordinal, created_at, role, content, metadata_json) "
+            "VALUES(?1, ?2, ?3, ?4, ?5, '{}');");
+        if (!err.ok()) return err;
+        err = BindChain(insert)
+                  .int64(1, thread_id)
+                  .int64(2, message_count + static_cast<long long>(i))
+                  .text(3, now)
+                  .text(4, message.role)
+                  .text(5, message.content)
+                  .step_done("could not append SQLite chat message");
+        if (!err.ok()) return err;
+        const long long message_id = static_cast<long long>(sqlite3_last_insert_rowid(db_));
+        for (size_t image_index = 0; image_index < message.images.size(); ++image_index) {
+            err = insert_attachment(db_, path_, thread_id, message_id,
+                                    static_cast<long long>(image_index),
+                                    message.images[image_index], now);
+            if (!err.ok()) return err;
+        }
+        for (size_t text_index = 0; text_index < message.text_attachments.size(); ++text_index) {
+            err = insert_text_attachment(db_, path_, thread_id, message_id,
+                                         static_cast<long long>(text_index),
+                                         message.text_attachments[text_index], now);
+            if (!err.ok()) return err;
+        }
+    }
+
+    err = tx.commit();
+    if (!err.ok()) return err;
+    ++revision;
+    message_count += static_cast<long long>(messages.size());
+    return ok_error();
+}
+
+Error SqliteStore::load_session(long long thread_id,
+                                Session& session,
+                                const LoadSessionOptions& options) {
     if (db_ == nullptr) {
         return {ErrorCode::Internal, "SQLite database is not open"};
     }
@@ -1166,7 +1419,7 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
 
     Statement thread(db_, path_);
     Error err = thread.prepare(
-        "SELECT id, name, created_at, modified_at, last_provider, last_base_url, last_model, "
+        "SELECT id, revision, name, created_at, modified_at, last_provider, last_base_url, last_model, "
         "settings_json, usage_json, message_count, read_only, read_only_reason "
         "FROM threads WHERE id = ?1 AND deleted_at IS NULL;");
     if (!err.ok()) {
@@ -1186,20 +1439,26 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
 
     Session loaded;
     loaded.thread_id = thread.column_int64(0);
-    loaded.name = thread.column_text(1);
-    loaded.created_at = thread.column_text(2);
-    loaded.updated_at = thread.column_text(3);
-    loaded.provider = thread.column_text(4);
-    loaded.base_url = thread.column_text(5);
-    loaded.model = thread.column_text(6);
-    loaded.settings_json = thread.column_text(7);
-    loaded.usage_json = thread.column_text(8);
-    loaded.read_only = thread.column_int64(10) != 0;
-    loaded.read_only_reason = thread.column_text(11);
+    loaded.revision = thread.column_int64(1);
+    loaded.name = thread.column_text(2);
+    loaded.created_at = thread.column_text(3);
+    loaded.updated_at = thread.column_text(4);
+    loaded.provider = thread.column_text(5);
+    loaded.base_url = thread.column_text(6);
+    loaded.model = thread.column_text(7);
+    loaded.settings_json = thread.column_text(8);
+    loaded.usage_json = thread.column_text(9);
+    loaded.persisted_message_count = thread.column_int64(10);
+    loaded.read_only = thread.column_int64(11) != 0;
+    loaded.read_only_reason = thread.column_text(12);
 
     Statement messages(db_, path_);
+    const bool bounded = options.max_messages != 0 || options.max_content_bytes != 0;
     err = messages.prepare(
-        "SELECT id, role, content FROM messages WHERE thread_id = ?1 ORDER BY ordinal, id;");
+        bounded
+            ? "SELECT id, role, content FROM messages WHERE thread_id = ?1 "
+              "ORDER BY ordinal DESC, id DESC LIMIT ?2;"
+            : "SELECT id, role, content FROM messages WHERE thread_id = ?1 ORDER BY ordinal, id;");
     if (!err.ok()) {
         return err;
     }
@@ -1207,6 +1466,14 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
     if (!err.ok()) {
         return err;
     }
+    if (bounded) {
+        const std::size_t row_limit = options.max_messages == 0
+                                          ? static_cast<std::size_t>(1000U)
+                                          : options.max_messages;
+        err = BindChain(messages).int64(2, static_cast<long long>(row_limit)).error();
+        if (!err.ok()) return err;
+    }
+    std::size_t content_bytes = 0;
     while (true) {
         rc = messages.step();
         if (rc == SQLITE_DONE) {
@@ -1215,15 +1482,38 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
         if (rc != SQLITE_ROW) {
             return sqlite_error(db_, path_, "could not load SQLite messages", rc);
         }
+        const std::string content = messages.column_text(2);
+        if (options.max_content_bytes != 0 &&
+            content.size() > options.max_content_bytes -
+                                 std::min(content_bytes, options.max_content_bytes)) {
+            loaded.messages_truncated = true;
+            break;
+        }
+        content_bytes += content.size();
         std::vector<provider::ImageInput> images;
-        err = load_images_for_message(db_, path_, messages.column_int64(0), images);
-        if (!err.ok()) return err;
         std::vector<provider::TextAttachment> text_attachments;
-        err = load_text_attachments_for_message(db_, path_, messages.column_int64(0),
-                                                text_attachments);
+        if (options.metadata_only_attachments) {
+            bool attachments_truncated = false;
+            err = load_attachment_metadata_for_message(
+                db_, path_, messages.column_int64(0),
+                options.max_attachments_per_message, images, text_attachments,
+                attachments_truncated);
+            loaded.attachments_truncated = loaded.attachments_truncated || attachments_truncated;
+        } else {
+            err = load_images_for_message(db_, path_, messages.column_int64(0), images);
+            if (!err.ok()) return err;
+            err = load_text_attachments_for_message(db_, path_, messages.column_int64(0),
+                                                    text_attachments);
+        }
         if (!err.ok()) return err;
-        loaded.messages.push_back({messages.column_text(1), messages.column_text(2),
+        loaded.messages.push_back({messages.column_text(1), content,
                                    std::move(images), std::move(text_attachments)});
+    }
+    if (bounded) {
+        std::reverse(loaded.messages.begin(), loaded.messages.end());
+        loaded.messages_truncated = loaded.messages_truncated ||
+                                    static_cast<long long>(loaded.messages.size()) <
+                                        loaded.persisted_message_count;
     }
 
     if (!loaded.read_only) {
@@ -1324,37 +1614,39 @@ Error SqliteStore::load_session(long long thread_id, Session& session) {
         }
     }
 
-    Statement compactions(db_, path_);
-    err = compactions.prepare(
-        "SELECT created_at, policy, messages_compacted, original_bytes, request_bytes, notice "
-        "FROM compaction_events WHERE thread_id = ?1 ORDER BY created_at, id;");
-    if (!err.ok()) {
-        return err;
-    }
-    err = BindChain(compactions).int64(1, thread_id).error();
-    if (!err.ok()) {
-        return err;
-    }
-    while (true) {
-        rc = compactions.step();
-        if (rc == SQLITE_DONE) {
-            break;
+    if (options.load_compactions) {
+        Statement compactions(db_, path_);
+        err = compactions.prepare(
+            "SELECT created_at, policy, messages_compacted, original_bytes, request_bytes, notice "
+            "FROM compaction_events WHERE thread_id = ?1 ORDER BY created_at, id;");
+        if (!err.ok()) {
+            return err;
         }
-        if (rc != SQLITE_ROW) {
-            return sqlite_error(db_, path_, "could not load SQLite compaction events", rc);
+        err = BindChain(compactions).int64(1, thread_id).error();
+        if (!err.ok()) {
+            return err;
         }
-        context::CompactionEvent event;
-        event.timestamp = compactions.column_text(0);
-        event.policy = compactions.column_text(1);
-        event.messages_compacted = static_cast<size_t>(compactions.column_int64(2));
-        event.original_bytes = static_cast<size_t>(compactions.column_int64(3));
-        event.request_bytes = static_cast<size_t>(compactions.column_int64(4));
-        event.notice = compactions.column_text(5);
-        loaded.compaction_events.push_back(std::move(event));
+        while (true) {
+            rc = compactions.step();
+            if (rc == SQLITE_DONE) {
+                break;
+            }
+            if (rc != SQLITE_ROW) {
+                return sqlite_error(db_, path_, "could not load SQLite compaction events", rc);
+            }
+            context::CompactionEvent event;
+            event.timestamp = compactions.column_text(0);
+            event.policy = compactions.column_text(1);
+            event.messages_compacted = static_cast<size_t>(compactions.column_int64(2));
+            event.original_bytes = static_cast<size_t>(compactions.column_int64(3));
+            event.request_bytes = static_cast<size_t>(compactions.column_int64(4));
+            event.notice = compactions.column_text(5);
+            loaded.compaction_events.push_back(std::move(event));
+        }
     }
 
     session = std::move(loaded);
-    return set_last_thread_id(thread_id);
+    return options.update_last_thread ? set_last_thread_id(thread_id) : ok_error();
 }
 
 Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) {
@@ -1370,7 +1662,7 @@ Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) 
     }
     Statement stmt(db_, path_);
     Error err = stmt.prepare(
-        "SELECT id, name, created_at, modified_at, last_provider, last_base_url, last_model, message_count, "
+        "SELECT id, revision, name, created_at, modified_at, last_provider, last_base_url, last_model, message_count, "
         "read_only, read_only_reason "
         "FROM threads WHERE deleted_at IS NULL ORDER BY modified_at DESC, id DESC LIMIT ?1;");
     if (!err.ok()) {
@@ -1390,15 +1682,16 @@ Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) 
         }
         ThreadSummary summary;
         summary.id = stmt.column_int64(0);
-        summary.name = stmt.column_text(1);
-        summary.created_at = stmt.column_text(2);
-        summary.modified_at = stmt.column_text(3);
-        summary.last_provider = stmt.column_text(4);
-        summary.last_base_url = stmt.column_text(5);
-        summary.last_model = stmt.column_text(6);
-        summary.message_count = stmt.column_int64(7);
-        summary.read_only = stmt.column_int64(8) != 0;
-        summary.read_only_reason = stmt.column_text(9);
+        summary.revision = stmt.column_int64(1);
+        summary.name = stmt.column_text(2);
+        summary.created_at = stmt.column_text(3);
+        summary.modified_at = stmt.column_text(4);
+        summary.last_provider = stmt.column_text(5);
+        summary.last_base_url = stmt.column_text(6);
+        summary.last_model = stmt.column_text(7);
+        summary.message_count = stmt.column_int64(8);
+        summary.read_only = stmt.column_int64(9) != 0;
+        summary.read_only_reason = stmt.column_text(10);
         threads.push_back(std::move(summary));
     }
 }
