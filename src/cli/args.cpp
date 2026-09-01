@@ -31,6 +31,8 @@ bool needs_value(const std::string& opt) {
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--max-agent-response-bytes",
         "--max-source-code-file-size", "--trusted-prompt-dir",
+        "--workspace", "--port", "--server-secret-file", "--mcp-secret-file",
+        "--max-connections", "--max-jobs",
         "--context", "--context-policy", "--image-capability", "--theme", "--color-mode",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
@@ -327,6 +329,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.agent_plan = true;
         } else if ((arg == "image" && verb_after_globals()) || arg == "--image") {
             opts.image = true;
+        } else if ((arg == "server" && verb_after_globals()) || arg == "--server") {
+            opts.server = true;
         } else if (arg == "--force") {
             opts.image_force = true;
         } else if ((arg == "grade" && verb_after_globals()) || arg == "--grade") {
@@ -717,6 +721,27 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.max_source_code_file_size = static_cast<size_t>(parsed_size);
             } else if (opt == "--trusted-prompt-dir") {
                 opts.trusted_prompt_dir = value;
+            } else if (opt == "--port") {
+                opts.server_options_seen = true;
+                Error err = parse_int(opt, value, opts.port);
+                if (!err.ok()) return {opts, err};
+            } else if (opt == "--max-connections") {
+                opts.server_options_seen = true;
+                Error err = parse_int(opt, value, opts.max_connections);
+                if (!err.ok()) return {opts, err};
+            } else if (opt == "--max-jobs") {
+                opts.server_options_seen = true;
+                Error err = parse_int(opt, value, opts.max_jobs);
+                if (!err.ok()) return {opts, err};
+            } else if (opt == "--workspace") {
+                opts.server_options_seen = true;
+                opts.workspace = value;
+            } else if (opt == "--server-secret-file") {
+                opts.server_options_seen = true;
+                opts.server_secret_file = value;
+            } else if (opt == "--mcp-secret-file") {
+                opts.server_options_seen = true;
+                opts.mcp_secret_file = value;
             } else if (opt == "--max-image-bytes") {
                 Error err = parse_long(opt, value, opts.max_image_bytes);
                 if (!err.ok()) {
@@ -1285,6 +1310,7 @@ Usage:
   ainiux image --provider replicate -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider fal -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider gemini -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
+  ainiux server [--workspace PATH] [--port PORT] [--server-secret-file PATH]
 
 Examples:
   ainiux lmstudio -p "Hello"
@@ -1370,6 +1396,13 @@ Options:
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --image                   Generate one image (OpenAI, Replicate, fal, or
                                 Gemini models from images.conf; also: ainiux image ...).
+      --server                  Start the loopback Ainiux control API (also: ainiux server).
+      --workspace PATH          Fixed server workspace; default current directory.
+      --port PORT               Loopback server port; default 8766.
+      --server-secret-file PATH Full-control bearer secret file (or AINIUX_SERVER_SECRET).
+      --mcp-secret-file PATH    MCP-only bearer secret file (or AINIUX_MCP_SECRET).
+      --max-connections N       Simultaneous server connections; default 64.
+      --max-jobs N              Retained/in-flight server job cap; default 128.
       --size 1k|2k|4k|WIDTHxHEIGHT|auto
                                 Image output size. With --ar 16:9, 2k is 2048x1152 and
                                 4k is 3840x2160. Default: provider auto.

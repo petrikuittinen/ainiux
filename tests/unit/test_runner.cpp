@@ -2,6 +2,7 @@
 
 #include "benchmark/test_benchmark.hpp"
 #include "app/test_user_shell.hpp"
+#include "app/test_operations.hpp"
 #include "agent/test_agent_adversarial.hpp"
 #include "agent/test_agent_controller.hpp"
 #include "agent/test_agent_loop.hpp"
@@ -33,12 +34,15 @@
 #include "runtime/test_runtime.hpp"
 #include "search/test_search.hpp"
 #include "security/test_security.hpp"
+#include "server/test_wire.hpp"
+#include "server/test_server.hpp"
 #include "support/test_support.hpp"
 #include "tui/test_tui.hpp"
 #include "ui/test_settings_widget.hpp"
 #include "ui/test_text_selector.hpp"
 
 int main() {
+    ainiux::test::app_operations::run_all();
     ainiux::test::app_user_shell::run_all();
     ainiux::test::agent_index::run_all();
     ainiux::test::agent_loop::run_all();
@@ -71,6 +75,8 @@ int main() {
     ainiux::test::chat::run_all();
     ainiux::test::runtime::run_all();
     ainiux::test::security::run_all();
+    ainiux::test::server_wire::run_all();
+    ainiux::test::server_control::run_all();
     ainiux::test::ui::run_all();
     ainiux::test::ui_settings::run_all();
     ainiux::test::editor::run_all();

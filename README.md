@@ -308,6 +308,26 @@ Fault, integration, SQLite/TUI, sanitizer, and Valgrind suites are available but
 
 The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). Design rationale is in [docs/decisions.md](docs/decisions.md); short active work is in [TODO.md](TODO.md).
 
+## Loopback control API (v1.3 PR 2)
+
+The initial control server exposes authenticated discovery only; job submission,
+MCP serving, interactive sessions, filesystem routes, and the browser UI land in
+later v1.3 slices. Set a dedicated full-control secret and start the fixed-workspace
+loopback listener:
+
+```sh
+export AINIUX_SERVER_SECRET='use-a-long-random-value'
+ainiux server --workspace . --port 8766
+curl -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
+  http://127.0.0.1:8766/ainiux/v1/capabilities
+```
+
+`--server-secret-file` accepts a permission-restricted file outside the served
+workspace. `AINIUX_MCP_SECRET` / `--mcp-secret-file` reserves a distinct MCP-only
+credential, although `/mcp` is not routed until the MCP slice. The listener binds
+only `127.0.0.1`; direct non-loopback binding and TLS are not part of PR 2. See
+[the control API guide](docs/api.md) for routes, limits, and authentication rules.
+
 ## Security and data
 
 - Ordinary chat never enables workspace tools. Agent mode is explicit.
@@ -321,7 +341,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not currently implement a local control-API server (`ainiux server`; specified as **v1.3** in [PLANS.md](PLANS.md)), OpenAI-compatible `/v1` proxy, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot CLI image generation (`ainiux image`) uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not yet implement control-API jobs or remote operations beyond the PR 2 discovery routes, an OpenAI-compatible `/v1` proxy, MCP server adapter, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot CLI image generation (`ainiux image`) uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

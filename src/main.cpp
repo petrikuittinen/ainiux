@@ -23,6 +23,7 @@
 #include "platform/windows_utf.hpp"
 #endif
 #include "search/search.hpp"
+#include "server/server.hpp"
 #include "tui/tui.hpp"
 
 namespace {
@@ -156,6 +157,14 @@ int ainiux_main(int argc, char** argv) {
     if (!disable_indexing_arguments.ok()) {
         ainiux::app::print_error(disable_indexing_arguments);
         return ainiux::app::exit_code_for(disable_indexing_arguments.code);
+    }
+    const ainiux::Error server_arguments = ainiux::server::validate_server_options(options);
+    if (!server_arguments.ok()) {
+        ainiux::app::print_error(server_arguments);
+        return ainiux::app::exit_code_for(server_arguments.code);
+    }
+    if (options.server) {
+        return ainiux::server::run_server(options);
     }
     if (options.index_code || options.print_index || options.clear_index) {
         const ainiux::Error index_arguments =

@@ -1,5 +1,6 @@
 #include "app/app.hpp"
 #include "app/detail.hpp"
+#include "app/operations.hpp"
 
 #include <iomanip>
 #include <iostream>
@@ -202,7 +203,8 @@ Error send_session_turn(provider::RequestContext& context,
                         std::ostream& out,
                         provider::ChatResult& chat,
                         std::vector<provider::ImageInput> images,
-                        bool separate_thinking_traces) {
+                        bool separate_thinking_traces,
+                        runtime::CancellationToken cancellation) {
     if (session.read_only) {
         return {ErrorCode::FileLock,
                 "chat thread is read-only" +
@@ -260,7 +262,16 @@ Error send_session_turn(provider::RequestContext& context,
         return ok_error();
     };
 
-    Error err = provider::send_chat_messages(context, prepared.messages, on_delta, chat);
+    operation::ChatRequest request;
+    request.messages = std::move(prepared.messages);
+    operation::ChatResult operation_result = operation::run_chat(
+        context, request, cancellation,
+        [&](const operation::Event& event) -> Error {
+            if (event.type == operation::EventType::Delta) return on_delta(event.text);
+            return ok_error();
+        });
+    Error err = operation_result.error;
+    chat = std::move(operation_result.response);
     if (!err.ok()) {
         session.messages.pop_back();
         return err;

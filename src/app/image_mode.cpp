@@ -7,8 +7,7 @@
 #include <thread>
 #include <utility>
 
-#include "config/image_catalog.hpp"
-#include "input/input.hpp"
+#include "app/operations.hpp"
 #include "platform/filesystem.hpp"
 #include "provider/image.hpp"
 #include "provider/provider.hpp"
@@ -20,59 +19,6 @@ namespace {
 bool path_exists(const std::string& path) {
     std::error_code error;
     return std::filesystem::exists(std::filesystem::u8path(path), error) && !error;
-}
-
-Error load_image_attachments(const provider::RequestContext& context,
-                             const ImageCapability& capability,
-                             runtime::CancellationToken cancellation,
-                             std::vector<provider::ImageInput>& images) {
-    images.clear();
-    for (const std::string& path : context.options.attachment_paths) {
-        input::FileType type;
-        Error type_error = input::classify_file_type(path, type);
-        if (!type_error.ok()) {
-            return type_error;
-        }
-        if (type.kind != input::Kind::Image) {
-            return {ErrorCode::BadArgs,
-                    "image mode --attach supports PNG and JPEG only: " + path};
-        }
-        if (type.mime_type != "image/png" && type.mime_type != "image/jpeg") {
-            return {ErrorCode::BadArgs,
-                    "image mode --attach supports PNG and JPEG only; GIF and other types "
-                    "are not used as image references: " +
-                        path};
-        }
-        if (!capability.edits) {
-            return {ErrorCode::BadArgs,
-                    "image model " + context.options.model +
-                        " does not support --attach reference images"};
-        }
-        const size_t limit = context.options.max_image_bytes > 0
-                                 ? static_cast<size_t>(context.options.max_image_bytes)
-                                 : 20U * 1024U * 1024U;
-        input::ImageData loaded;
-        Error load_error = input::load_image_file(path, type, limit, loaded, cancellation);
-        if (!load_error.ok()) return load_error;
-        provider::ImageInput image{loaded.mime_type, std::move(loaded.base64_data)};
-        image.display_name = path;
-        image.source_ref = path;
-        image.byte_size = static_cast<long long>(loaded.byte_size);
-        images.push_back(std::move(image));
-        const int max_inputs = capability.max_input_images > 0
-                                   ? capability.max_input_images
-                                   : provider::kMaxImageEditInputs;
-        if (static_cast<int>(images.size()) > max_inputs) {
-            return {ErrorCode::BadArgs,
-                    "this image model accepts at most " + std::to_string(max_inputs) +
-                        " --attach images"};
-        }
-        if (!context.options.quiet) {
-            std::cerr << "Attached image: " << path << " (" << loaded.mime_type << ", "
-                      << loaded.byte_size << " bytes)\n";
-        }
-    }
-    return ok_error();
 }
 
 Error resolve_output_path(const cli::Options& options,
@@ -120,124 +66,35 @@ int run_image_mode(provider::RequestContext context) {
         }
     } monitor_join{finished, interrupt_monitor};
 
-    const std::string provider_name =
-        provider::canonical_profile_name(context.options.provider);
-    if (context.options.model.empty()) {
-        context.options.model =
-            config::default_image_model(context.options.image_catalog, provider_name);
+    operation::ImageRequest operation_request;
+    operation_request.model = context.options.model;
+    operation_request.prompt = context.options.prompt;
+    operation_request.attachment_paths = context.options.attachment_paths;
+    operation_request.size = context.options.image_size;
+    operation_request.aspect = context.options.image_ar;
+    operation_request.quality = context.options.image_quality;
+    operation_request.format = context.options.image_format;
+    operation_request.format_explicit = context.options.image_format_explicit;
+    operation_request.max_image_bytes = context.options.max_image_bytes > 0
+                                            ? static_cast<std::size_t>(context.options.max_image_bytes)
+                                            : 20U * 1024U * 1024U;
+    const bool quiet = context.options.quiet;
+    operation::ImageResult operation_result = operation::run_image(
+        context, operation_request, cancellation.token(),
+        [quiet](const operation::Event& event) {
+            if (!quiet && !event.text.empty()) {
+                std::cerr << event.text;
+                if (event.type == operation::EventType::Started) std::cerr << "...";
+                std::cerr << "\n";
+            }
+            return ok_error();
+        });
+    if (!operation_result.error.ok()) {
+        print_error(operation_result.error);
+        return exit_code_for(operation_result.error.code);
     }
-    if (context.options.model.empty()) {
-        const Error error{ErrorCode::BadArgs,
-                          "image mode requires -m/--model or an images.conf default for provider " +
-                              provider_name};
-        print_error(error);
-        return exit_code_for(error.code);
-    }
-
-    const ImageCapability* capability = config::resolve_image_capability(
-        context.options.image_catalog, provider_name, context.options.model);
-    if (capability == nullptr) {
-        const Error error{
-            ErrorCode::BadArgs,
-            "images.conf has no record for provider " + provider_name + " model " +
-                context.options.model + "; known models: " +
-                config::known_image_models_description(context.options.image_catalog,
-                                                       provider_name)};
-        print_error(error);
-        return exit_code_for(error.code);
-    }
-    if (!config::image_protocol_implemented(capability->protocol)) {
-        const Error error{
-            ErrorCode::UnsupportedFeature,
-            std::string("image protocol ") + config::image_protocol_name(capability->protocol) +
-                " is not built into this ainiux"};
-        print_error(error);
-        return exit_code_for(error.code);
-    }
-
-    std::string size;
-    std::string aspect;
-    Error size_error = provider::resolve_image_size(
-        *capability, context.options.image_size, context.options.image_ar, size, aspect);
-    if (!size_error.ok()) {
-        print_error(size_error);
-        return exit_code_for(size_error.code);
-    }
-    std::string quality;
-    Error quality_error =
-        provider::normalize_image_quality(*capability, context.options.image_quality, quality);
-    if (!quality_error.ok()) {
-        print_error(quality_error);
-        return exit_code_for(quality_error.code);
-    }
-    std::string format;
-    Error format_error = provider::normalize_image_format(
-        *capability,
-        context.options.image_format_explicit ? context.options.image_format
-                                              : capability->format_default,
-        format);
-    if (!format_error.ok()) {
-        print_error(format_error);
-        return exit_code_for(format_error.code);
-    }
-
-    const std::string prompt = ascii_trim(context.options.prompt);
-    if (prompt.empty()) {
-        const Error error{ErrorCode::BadArgs, "image mode requires a non-empty prompt"};
-        print_error(error);
-        return exit_code_for(error.code);
-    }
-
-    std::vector<provider::ImageInput> images;
-    Error attach_error =
-        load_image_attachments(context, *capability, cancellation.token(), images);
-    if (!attach_error.ok()) {
-        print_error(attach_error);
-        return exit_code_for(attach_error.code);
-    }
-
-    provider::ImageGenerateRequest request;
-    request.capability = *capability;
-    request.protocol = capability->protocol;
-    request.model = ((capability->protocol == ImageProtocol::ReplicatePredictions ||
-                      capability->protocol == ImageProtocol::FalQueue ||
-                      capability->protocol == ImageProtocol::GeminiInteractions) &&
-                     !capability->api_model.empty())
-                        ? capability->api_model
-                        : context.options.model;
-    request.prompt = prompt;
-    request.size = size;
-    request.aspect = aspect;
-    request.quality = quality;
-    request.output_format = format;
-    request.images = std::move(images);
-
-    if (!context.options.quiet) {
-        std::cerr << "Generating image with " << request.model;
-        if (!request.size.empty()) std::cerr << " (" << request.size;
-        else std::cerr << " (size auto";
-        if (!request.aspect.empty()) std::cerr << ", ar " << request.aspect;
-        std::cerr << ", quality " << (request.quality.empty() ? "auto" : request.quality)
-                  << ", "
-                  << (request.output_format.empty() ? "auto" : request.output_format) << ")";
-        if (provider::image_size_is_experimental(request.size)) {
-            std::cerr << " [experimental size]";
-        }
-        std::cerr << "...\n";
-    }
-
-    provider::ImageGenerateResult generated;
-    Error generate_error =
-        provider::generate_or_edit_image(context, request, generated, cancellation.token());
-    if (!generate_error.ok()) {
-        print_error(generate_error);
-        return exit_code_for(generate_error.code);
-    }
-    if (generated.bytes.empty()) {
-        const Error error{ErrorCode::ProviderSchema, "image response decoded to an empty file"};
-        print_error(error);
-        return exit_code_for(error.code);
-    }
+    const provider::ImageGenerateRequest& request = operation_result.request;
+    const provider::ImageGenerateResult& generated = operation_result.response;
 
     std::string ext = provider::image_extension_for_format(
         request.output_format.empty() ? generated.output_format : request.output_format);

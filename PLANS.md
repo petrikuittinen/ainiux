@@ -46,7 +46,7 @@ error layers should serve:
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
-| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | Specified; **do not implement yet** |
+| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 2 loopback listener/auth/status landed; jobs are next |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 The embedded browser controller is the final v1.3 PR, after the control API and
@@ -261,7 +261,8 @@ Generated-image routes, if later added, may serve only controlled generated asse
 
 # v1.3 - Remote control API (`ainiux server`)
 
-Status: specified; do not implement until explicitly requested.
+Status: PR 2 loopback listener, strict HTTP parser, scoped authentication, and
+authenticated discovery routes landed. One-shot jobs begin in PR 3.
 
 ## Goal
 
@@ -748,13 +749,13 @@ No behavior change. Record current CLI chat, run, plan, image, agent, Guard,
 dired, editor, persistence, cancellation, and error behavior as the compatibility
 baseline.
 
-### PR 1 - Surface-neutral operations and wire contract
+### PR 1 - Surface-neutral operations and wire contract — Landed
 
 Extract reusable operation boundaries, define public DTOs/error mappings,
 document concurrency and HTTP limits, and add tests proving CLI output and
 cancellation remain unchanged. No listener yet.
 
-### PR 2 - Loopback listener, strict parser, auth, and status
+### PR 2 - Loopback listener, strict parser, auth, and status — Landed
 
 Add lifecycle, bounded HTTP/1.1 parsing, full-control and MCP-only authentication,
 `health`, `status`, `capabilities`, connection caps, and clean shutdown.

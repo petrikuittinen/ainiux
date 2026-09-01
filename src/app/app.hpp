@@ -102,7 +102,8 @@ Error send_session_turn(provider::RequestContext& context,
                         std::ostream& out,
                         provider::ChatResult& chat,
                         std::vector<provider::ImageInput> images = {},
-                        bool separate_thinking_traces = false);
+                        bool separate_thinking_traces = false,
+                        runtime::CancellationToken cancellation = runtime::CancellationToken());
 
 int run_repl(provider::RequestContext context, chat::Session session, std::ostream& out);
 

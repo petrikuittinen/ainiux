@@ -389,3 +389,49 @@ exceeding ~4k tokens for a full Act session. The registry was slimmed by:
    and `run` (shell-free argv).
 4. **Removing execute-time aliases.** Old names are not advertised or accepted;
    compaction alone can still recognize them in transcripts created by older releases.
+
+## Surface-neutral control operations and wire DTOs (v1.3 PR 1)
+
+The control API begins with an application boundary rather than a socket. Reusable
+chat and image operations accept explicit requests, shared cancellation tokens, and
+typed event sinks; they return structured provider results without choosing files,
+writing terminal streams, installing signal handlers, or owning UI state. Existing
+CLI adapters keep signal monitoring and stdout/stderr formatting, which makes their
+current behavior the compatibility baseline. The existing `run_agent_goal` remains
+the headless agent boundary until the single serialized agent lane is introduced
+with the job registry.
+
+Public wire types live under `src/server/` even before the listener exists. They are
+versioned independently from internal runtime and operation enums: conversion maps
+internal events to stable lowercase strings and maps every `ErrorCode` to a public
+HTTP status/code pair. Arbitrary detail/data fragments are admitted only when they
+parse as JSON objects. This prevents future refactors of internal enums from silently
+breaking API clients and prevents invalid fragments from corrupting envelopes.
+
+The initial parser and concurrency constants are frozen in `src/server/limits.hpp`
+and documented in `docs/api.md`. Long work will be submitted as jobs, so request
+timeouts remain bounded. Chat/image provider work shares a small global pool while
+run, plan, and interactive-agent mutations share one workspace lane. A competing
+agent operation is a typed conflict, not a hidden queue. PR 1 intentionally adds no
+listener, authentication surface, `--server` option, or network-reachable route.
+
+## Loopback control listener and strict HTTP subset (v1.3 PR 2)
+
+The first network slice is intentionally IPv4 loopback-only and uses a small
+in-tree HTTP/1.1 parser instead of adding a server framework. It accepts
+origin-form ASCII targets, CRLF framing, one Host header, at most one exact
+Content-Length, bounded headers/body, and bounded keep-alive requests. It rejects
+transfer encodings, duplicate headers, folded headers, encoded/relative traversal,
+non-loopback Host values, and cross-origin requests before dispatch. Per-connection
+workers own their sockets; the listener tracks a hard active cap, reaps completed
+workers, shuts active sockets down on cancellation, and joins every worker.
+
+The full-control secret is separate from provider credentials and from the
+path-bound MCP-only secret. Both are compared without content-dependent early
+exit. All API routes, including minimal health, require a bearer credential so a
+local webpage cannot rely on ambient loopback access. PR 2 routes only health,
+status, and capabilities; capabilities explicitly marks jobs, MCP, and the
+OpenAI adapter unavailable. This preserves capability detection without
+prematurely exposing the PR 1 chat/image operations over the network.
+The initial default port is 8766, adjacent to but distinct from the documented
+8765 local MCP development examples; `--port` remains authoritative.
