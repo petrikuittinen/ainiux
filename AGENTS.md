@@ -453,9 +453,10 @@ later adapter.
 
 Constraints:
 
-- Bind loopback (`127.0.0.1`) by default; `0.0.0.0` requires `--server-secret` /
-  `AINIUX_SERVER_SECRET` (never reuse `AINIUX_API_KEY`) and TLS unless
-  `--insecure-plain-bind`.
+- Plain `ainiux server` binds loopback (`127.0.0.1`) by default. Browser-oriented
+  `ainiux webserver` / `ainiux server --webui` defaults to `0.0.0.0`, prints a
+  prominent plaintext warning, and may be constrained with `--bind 127.0.0.1`.
+  Never reuse `AINIUX_API_KEY`; prefer TLS for non-loopback access.
 - Do not expose provider API keys, config secrets, chat DBs, or arbitrary local files.
 - Reuse provider, runtime, `AgentController`, `ApprovalGate`, `DiredState`,
   cancellation, and redaction.
@@ -478,8 +479,9 @@ Agent mode is last and separate from ordinary chat/editor assist.
 
 The `/ui/` controller is same-origin, dependency-free vanilla HTML/CSS/JavaScript
 embedded from `src/web/`. Keep CORS disabled, assets exact-path-only, CSP strict,
-tokens memory-only or explicit tab-scoped `sessionStorage`, and all dynamic
-content rendered as text. Never expose provider/controller credentials, native
+persist a controller token only after valid authentication in origin-scoped
+`localStorage`, clear it on 401 or explicit sign-out, and render all dynamic
+content as text. Never expose provider credentials, native
 absolute paths, raw databases, TLS material, environment variables, or hidden
 project state. Keep desktop, tablet, narrow-mobile, keyboard, touch, light/dark,
 and reduced-motion behavior covered.

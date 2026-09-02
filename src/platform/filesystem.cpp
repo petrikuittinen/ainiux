@@ -591,11 +591,27 @@ Error ensure_private_directory(const std::string& path,
                         "path exists but is not a directory: " + current.string()};
             continue;
         }
-        if (errno != ENOENT || ::mkdir(current.c_str(), 0700) != 0)
+        if (errno != ENOENT)
             return {ErrorCode::FileWrite,
                     path_error("could not create private directory", current.string(),
                                std::strerror(errno))};
-        if (current == absolute) final_created = true;
+        if (::mkdir(current.c_str(), 0700) == 0) {
+            if (current == absolute) final_created = true;
+            continue;
+        }
+        if (errno != EEXIST)
+            return {ErrorCode::FileWrite,
+                    path_error("could not create private directory", current.string(),
+                               std::strerror(errno))};
+        struct stat raced{};
+        const int raced_status = reject_reparse_points
+                                      ? ::lstat(current.c_str(), &raced)
+                                      : ::stat(current.c_str(), &raced);
+        if (raced_status != 0 || !S_ISDIR(raced.st_mode) ||
+            (reject_reparse_points && S_ISLNK(raced.st_mode)))
+            return {ErrorCode::BadArgs,
+                    "private directory path raced with a non-directory or symlink: " +
+                        current.string()};
     }
     if (!final_created && !protect_existing) return ok_error();
     if (::chmod(path.c_str(), 0700) != 0)
@@ -1071,6 +1087,13 @@ Error atomic_write_private(const std::string& path,
                            const std::string& data,
                            bool reject_reparse_points) {
     return atomic_write_impl(path, data, reject_reparse_points, AtomicWritePrivacy::Private);
+}
+
+Error atomic_write_private_create(const std::string& path,
+                                  const std::string& data,
+                                  bool reject_reparse_points) {
+    return atomic_write_impl(path, data, reject_reparse_points,
+                             AtomicWritePrivacy::Private, false);
 }
 
 Error atomic_write_shared(const std::string& path,

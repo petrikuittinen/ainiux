@@ -332,6 +332,12 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.image = true;
         } else if ((arg == "server" && verb_after_globals()) || arg == "--server") {
             opts.server = true;
+        } else if (arg == "webserver" && verb_after_globals()) {
+            opts.server = true;
+            opts.webui = true;
+        } else if (arg == "--webui") {
+            opts.webui = true;
+            opts.server_options_seen = true;
         } else if (arg == "--insecure-plain-bind") {
             opts.server_options_seen = true;
             opts.insecure_plain_bind = true;
@@ -750,6 +756,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             } else if (opt == "--bind") {
                 opts.server_options_seen = true;
                 opts.bind_address = value;
+                opts.server_bind_explicit = true;
             } else if (opt == "--server-secret-file") {
                 opts.server_options_seen = true;
                 opts.server_secret_file = value;
@@ -1332,6 +1339,8 @@ Usage:
   ainiux image --provider gemini -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux server [--workspace PATH] [--bind ADDRESS] [--port PORT]
                 [--tls-cert PATH --tls-key PATH] [--server-secret-file PATH]
+  ainiux server --webui [--workspace PATH] [--bind ADDRESS] [--port PORT]
+  ainiux webserver [--workspace PATH] [--bind ADDRESS] [--port PORT]
 
 Examples:
   ainiux lmstudio -p "Hello"
@@ -1367,6 +1376,7 @@ Examples:
   ainiux image --provider replicate -m p-image -p "a cute chubby cat"
   ainiux image --provider gemini -p "a cute chubby cat" --size 1k --ar 1:1
   ainiux image --provider gemini -m gemini-3.1-flash-lite-image -p "a ramen shop at night"
+  ainiux webserver --workspace .
 
 Options:
   Mode:
@@ -1418,10 +1428,14 @@ Options:
       --image                   Generate one image (OpenAI, Replicate, fal, or
                                 Gemini models from images.conf; also: ainiux image ...).
       --server                  Start the Ainiux control API (also: ainiux server).
+      --webui                   Browser-oriented server startup; use with server.
+                                The equivalent subcommand is ainiux webserver.
       --workspace PATH          Fixed server workspace; default current directory.
-      --bind ADDRESS            IPv4 listen address; default 127.0.0.1.
+      --bind ADDRESS            IPv4 listen address; server defaults to 127.0.0.1,
+                                webserver/--webui defaults to 0.0.0.0.
       --port PORT               Server port; default 8766.
-      --server-secret-file PATH Full-control bearer secret file (or AINIUX_SERVER_SECRET).
+      --server-secret-file PATH Full-control bearer secret file. Precedence: this file,
+                                AINIUX_SERVER_SECRET, then ~/.ainiux/server-secret.
       --mcp-secret-file PATH    MCP-only bearer secret file (or AINIUX_MCP_SECRET).
       --tls-cert PATH           PEM certificate chain for HTTPS.
       --tls-key PATH            Private PEM key outside the served workspace.

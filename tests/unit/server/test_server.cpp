@@ -40,6 +40,7 @@
 #include "server/session_hub.hpp"
 #include "server/server.hpp"
 #include "server/tls.hpp"
+#include "server/web_ui_launch.hpp"
 #include "server/workspace_service.hpp"
 #include "support/test_support.hpp"
 
@@ -141,6 +142,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
               index.body.find("/ui/assets/app-v1.css") != std::string::npos &&
               index.body.find("/ui/assets/app-v1.js") != std::string::npos &&
+              index.body.find("Sign out / Forget authentication") != std::string::npos &&
+              index.body.find("remember-token") == std::string::npos &&
               index.body.find("https://") == std::string::npos &&
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
@@ -163,10 +166,15 @@ void test_embedded_web_ui_assets_and_browser_security() {
     Response javascript = route_request(public_get("/ui/assets/app-v1.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
-              javascript.body.find("sessionStorage") != std::string::npos &&
+              javascript.body.find("localStorage") != std::string::npos &&
+              javascript.body.find("Invalid authentication") != std::string::npos &&
+              javascript.body.find("Reconnecting") != std::string::npos &&
+              javascript.body.find("window.addEventListener(\"online\"") != std::string::npos &&
               javascript.body.find("Last-Event-ID") != std::string::npos &&
               javascript.body.find("textContent") != std::string::npos &&
-              javascript.body.find("localStorage") == std::string::npos &&
+              javascript.body.find("sessionStorage") == std::string::npos &&
+              javascript.body.find("document.cookie") == std::string::npos &&
+              javascript.body.find("URLSearchParams") == std::string::npos &&
               javascript.body.find("innerHTML") == std::string::npos &&
               javascript.body.find("https://") == std::string::npos &&
               javascript.body.find("http://") == std::string::npos &&
@@ -1044,6 +1052,27 @@ void test_server_cli_contract() {
               parsed.options.max_sessions == 5,
           "server subcommand and bounded options parse");
     check(validate_server_options(parsed.options).ok(), "standalone server options validate");
+    const char* webserver[] = {"ainiux", "webserver"};
+    parsed = cli::parse_args(2, const_cast<char**>(webserver));
+    check(parsed.error.ok() && parsed.options.server && parsed.options.webui &&
+              !parsed.options.server_bind_explicit &&
+              validate_server_options(parsed.options).ok(),
+          "webserver alias selects browser mode with its safe parser defaults");
+    const char* server_webui[] = {"ainiux", "server", "--webui"};
+    parsed = cli::parse_args(3, const_cast<char**>(server_webui));
+    check(parsed.error.ok() && parsed.options.server && parsed.options.webui &&
+              validate_server_options(parsed.options).ok(),
+          "server --webui selects the browser-oriented server mode");
+    const char* stray_webui[] = {"ainiux", "--webui"};
+    parsed = cli::parse_args(2, const_cast<char**>(stray_webui));
+    check(parsed.error.ok() && !validate_server_options(parsed.options).ok(),
+          "standalone --webui is rejected without server mode");
+    const char* loopback_webui[] = {"ainiux", "webserver", "--bind", "127.0.0.1"};
+    parsed = cli::parse_args(4, const_cast<char**>(loopback_webui));
+    check(parsed.error.ok() && parsed.options.server_bind_explicit &&
+              parsed.options.bind_address == "127.0.0.1" &&
+              validate_server_options(parsed.options).ok(),
+          "an explicit webserver bind overrides the wildcard browser default");
     const char* combined[] = {"ainiux", "server", "-p", "hello"};
     parsed = cli::parse_args(4, const_cast<char**>(combined));
     check(parsed.error.ok() && !validate_server_options(parsed.options).ok(),
@@ -1080,6 +1109,91 @@ void test_server_cli_contract() {
     check(!denied_yolo.error.ok() && denied_yolo.error.code == ErrorCode::UnsupportedFeature,
           "remote session policy denies an explicit Yolo request without startup opt-in");
     remote_sessions.shutdown();
+}
+
+void test_managed_server_secret_and_web_urls() {
+    namespace fs = std::filesystem;
+    std::string suffix;
+    check(platform::secure_random_hex(8U, suffix).ok(),
+          "managed-secret test creates a random temporary suffix");
+    const fs::path directory = fs::temp_directory_path() /
+                               ("ainiux-managed-server-secret-" + suffix);
+    const fs::path path = directory / "server-secret";
+    constexpr std::size_t workers = 8U;
+    std::vector<std::string> concurrent_secrets(workers);
+    std::vector<Error> concurrent_errors(workers);
+    std::vector<int> concurrent_created(workers, 0);
+    std::vector<std::thread> creators;
+    for (std::size_t index = 0; index < workers; ++index) {
+        creators.emplace_back([&, index] {
+            bool item_created = false;
+            concurrent_errors[index] = load_or_create_managed_server_secret(
+                path.u8string(), concurrent_secrets[index], item_created);
+            concurrent_created[index] = item_created ? 1 : 0;
+        });
+    }
+    for (std::thread& creator : creators) creator.join();
+    const std::string first = concurrent_secrets.front();
+    std::size_t create_count = 0;
+    bool concurrent_ok = first.size() == 64U;
+    for (std::size_t index = 0; index < workers; ++index) {
+        concurrent_ok = concurrent_ok && concurrent_errors[index].ok() &&
+                        concurrent_secrets[index] == first;
+        create_count += static_cast<std::size_t>(concurrent_created[index]);
+    }
+    check(concurrent_ok && create_count == 1U,
+          "concurrent managed-secret startup atomically selects one stable 256-bit token");
+    std::string second;
+    bool created = true;
+    Error error = load_or_create_managed_server_secret(path.u8string(), second, created);
+    check(error.ok() && !created && second == first,
+          "managed server secret remains stable across launches and concurrent-create logic");
+    std::error_code filesystem_error;
+    const fs::perms permissions = fs::status(path, filesystem_error).permissions();
+    check(!filesystem_error &&
+              (permissions & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none,
+          "managed server secret is not accessible to group or other users");
+
+    check(platform::atomic_write_private(path.u8string(), "broken", true).ok(),
+          "managed-secret test can install corrupt private data");
+    created = false;
+    error = load_or_create_managed_server_secret(path.u8string(), second, created);
+    check(!error.ok() && error.code == ErrorCode::Auth,
+          "corrupt managed server secret fails closed instead of being silently replaced");
+
+#if !defined(_WIN32)
+    check(platform::atomic_write_private(path.u8string(), first, true).ok(),
+          "managed-secret test restores valid data");
+    fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write |
+                              fs::perms::group_read,
+                    fs::perm_options::replace, filesystem_error);
+    created = false;
+    error = load_or_create_managed_server_secret(path.u8string(), second, created);
+    check(!error.ok() && error.code == ErrorCode::Auth,
+          "permissive managed server secret permissions fail closed");
+    const fs::path linked_target = directory / "linked-secret-target";
+    check(platform::atomic_write_private(linked_target.u8string(), first, true).ok(),
+          "managed-secret test creates a private symlink target");
+    fs::remove(path, filesystem_error);
+    fs::create_symlink(linked_target.filename(), path, filesystem_error);
+    created = false;
+    error = load_or_create_managed_server_secret(path.u8string(), second, created);
+    check(!filesystem_error && !error.ok() && error.code == ErrorCode::Auth,
+          "managed server secret rejects symlink paths");
+#endif
+
+    const std::vector<std::string> urls = web_ui_urls(
+        "0.0.0.0", 8766, false, {"192.168.1.20", "127.0.0.1", "10.0.0.5"});
+    check(urls.size() == 3U && urls.front() == "http://127.0.0.1:8766/ui/" &&
+              urls[1] == "http://10.0.0.5:8766/ui/" &&
+              urls[2] == "http://192.168.1.20:8766/ui/",
+          "wildcard webserver URL reporting includes loopback and sorted interface links");
+    const std::vector<std::string> explicit_url = web_ui_urls(
+        "192.0.2.8", 9443, true, {"10.0.0.5"});
+    check(explicit_url.size() == 1U && explicit_url.front() == "https://192.0.2.8:9443/ui/",
+          "explicit TLS webserver binding reports only its selected browser URL");
+
+    fs::remove_all(directory, filesystem_error);
 }
 
 #if !defined(_WIN32)
@@ -1246,6 +1360,7 @@ void run_all() {
     test_revision_safe_chat_thread_routes();
     test_job_errors_hide_server_side_paths();
     test_server_cli_contract();
+    test_managed_server_secret_and_web_urls();
     test_loopback_listener_lifecycle();
     test_tls_listener_lifecycle();
 }

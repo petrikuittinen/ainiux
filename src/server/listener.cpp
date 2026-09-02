@@ -9,6 +9,7 @@
 #else
 #include <arpa/inet.h>
 #include <cerrno>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -337,6 +338,13 @@ Error Listener::start(ListenerConfig config) {
     impl_->stopping.store(false, std::memory_order_release);
     OwnedSocket socket(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (socket.get() == kInvalidSocket) return {ErrorCode::Connect, "could not create the control listener socket"};
+#if !defined(_WIN32)
+    const int descriptor_flags = ::fcntl(socket.get(), F_GETFD);
+    if (descriptor_flags < 0 ||
+        ::fcntl(socket.get(), F_SETFD, descriptor_flags | FD_CLOEXEC) != 0)
+        return {ErrorCode::Connect,
+                "could not protect the control listener from child-process inheritance"};
+#endif
     int reuse = 1;
 #if defined(_WIN32)
     (void)setsockopt(socket.get(), SOL_SOCKET, SO_REUSEADDR,

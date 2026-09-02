@@ -1,7 +1,7 @@
 #include "server/server.hpp"
 
+#include <algorithm>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -24,6 +24,7 @@
 #endif
 #include "runtime/interrupt.hpp"
 #include "server/listener.hpp"
+#include "server/web_ui_launch.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -124,6 +125,7 @@ Error verify_windows_private_acl(const std::filesystem::path& path, const char* 
 Error load_secret_file(const std::string& path,
                        const std::filesystem::path& workspace,
                        const char* option,
+                       bool require_outside_workspace,
                        std::string& secret) {
     if (path.empty()) return ok_error();
     bool crosses_link = false;
@@ -139,7 +141,7 @@ Error load_secret_file(const std::string& path,
     if (filesystem_error) {
         return {ErrorCode::FileRead, std::string("could not resolve ") + option + " " + path};
     }
-    if (path_within(workspace, canonical)) {
+    if (require_outside_workspace && path_within(workspace, canonical)) {
         return {ErrorCode::BadArgs,
                 std::string(option) + " must be outside the served workspace"};
     }
@@ -156,12 +158,10 @@ Error load_secret_file(const std::string& path,
     Error acl_error = verify_windows_private_acl(canonical, option);
     if (!acl_error.ok()) return acl_error;
 #endif
-    std::ifstream input(canonical, std::ios::binary);
-    if (!input) return {ErrorCode::FileRead, std::string("could not open ") + option};
-    secret.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-    if (!input.eof() || secret.size() > 4096U) {
+    Error read_error = platform::read_file_bounded(canonical.u8string(), 4096U, secret);
+    if (!read_error.ok()) {
         secret.clear();
-        return {ErrorCode::FileRead, std::string(option) + " must be a file of at most 4096 bytes"};
+        return {read_error.code, std::string("could not read ") + option + ": " + read_error.message};
     }
     while (!secret.empty() && (secret.back() == '\n' || secret.back() == '\r')) secret.pop_back();
     if (secret.empty() || secret.find('\n') != std::string::npos || secret.find('\r') != std::string::npos) {
@@ -210,6 +210,11 @@ bool ipv4_address(const std::string& text, bool& loopback) {
     return components == 4;
 }
 
+std::string effective_bind_address(const cli::Options& options) {
+    return options.webui && !options.server_bind_explicit ? "0.0.0.0"
+                                                         : options.bind_address;
+}
+
 Error validate_tls_file(const std::string& path,
                         const std::filesystem::path& workspace,
                         const char* option,
@@ -251,12 +256,77 @@ Error validate_tls_file(const std::string& path,
 
 }  // namespace
 
+Error managed_server_secret_path(std::string& path) {
+    const std::string home = platform::home_directory();
+    if (home.empty()) {
+        path.clear();
+        return {ErrorCode::Config,
+                "cannot locate the user home directory for ~/.ainiux/server-secret"};
+    }
+    path = (std::filesystem::u8path(home) / ".ainiux" / "server-secret").u8string();
+    return ok_error();
+}
+
+Error load_or_create_managed_server_secret(const std::string& path,
+                                           std::string& secret,
+                                           bool& created) {
+    secret.clear();
+    created = false;
+    const std::filesystem::path secret_path = std::filesystem::u8path(path);
+    const std::filesystem::path parent = secret_path.parent_path();
+    if (path.empty() || parent.empty()) {
+        return {ErrorCode::BadArgs, "managed server secret path must include a parent directory"};
+    }
+    Error error = platform::ensure_private_directory(parent.u8string(), true, true);
+    if (!error.ok()) return error;
+
+    std::error_code exists_error;
+    const bool already_exists = std::filesystem::exists(secret_path, exists_error);
+    if (exists_error) {
+        return {ErrorCode::FileRead,
+                "could not inspect managed server secret: " + exists_error.message()};
+    }
+    std::string generated;
+    if (!already_exists) {
+        error = platform::secure_random_hex(32U, generated);
+        if (!error.ok()) return error;
+        const Error create_error = platform::atomic_write_private_create(path, generated, true);
+        if (create_error.ok()) {
+            created = true;
+        } else {
+            exists_error.clear();
+            if (!std::filesystem::exists(secret_path, exists_error) || exists_error) {
+                return create_error;
+            }
+        }
+    }
+
+    const std::filesystem::path unused_workspace;
+    error = load_secret_file(path, unused_workspace, "managed server secret", false, secret);
+    std::fill(generated.begin(), generated.end(), '\0');
+    generated.clear();
+    if (!error.ok()) return error;
+    if (secret.size() != 64U) {
+        secret.clear();
+        return {ErrorCode::Auth,
+                "managed server secret must contain exactly 64 lowercase hexadecimal characters"};
+    }
+    for (const unsigned char c : secret) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            secret.clear();
+            return {ErrorCode::Auth,
+                    "managed server secret must contain exactly 64 lowercase hexadecimal characters"};
+        }
+    }
+    return ok_error();
+}
+
 Error validate_server_options(const cli::Options& options) {
     if (!options.server) {
         return options.server_options_seen
                    ? Error{ErrorCode::BadArgs,
-                           "--workspace, --bind, --port, server credentials, TLS/bind policy, "
-                           "and server limits require server mode"}
+                           "--webui, --workspace, --bind, --port, server credentials, "
+                           "TLS/bind policy, and server limits require server mode"}
                    : ok_error();
     }
     if (options.port < 1 || options.port > 65535) {
@@ -272,13 +342,15 @@ Error validate_server_options(const cli::Options& options) {
         return {ErrorCode::BadArgs, "--max-sessions must be between 1 and 1024"};
     }
     bool loopback = false;
-    if (!ipv4_address(options.bind_address, loopback)) {
+    const std::string bind_address = effective_bind_address(options);
+    if (!ipv4_address(bind_address, loopback)) {
         return {ErrorCode::BadArgs, "--bind must be an IPv4 address or localhost"};
     }
     if (options.tls_cert_file.empty() != options.tls_key_file.empty()) {
         return {ErrorCode::BadArgs, "--tls-cert and --tls-key must be supplied together"};
     }
-    if (!loopback && options.tls_cert_file.empty() && !options.insecure_plain_bind) {
+    if (!loopback && options.tls_cert_file.empty() && !options.insecure_plain_bind &&
+        !options.webui) {
         return {ErrorCode::BadArgs,
                 "non-loopback --bind requires TLS or explicit --insecure-plain-bind"};
     }
@@ -324,13 +396,25 @@ int run_server(const cli::Options& options) {
         return app::exit_code_for(error.code);
     }
 
+    const std::string bind_address = effective_bind_address(options);
     AuthConfig auth;
+    bool managed_secret = false;
+    bool managed_secret_created = false;
+    std::string managed_secret_file;
     if (!options.server_secret_file.empty()) {
         error = load_secret_file(options.server_secret_file, workspace,
-                                 "--server-secret-file", auth.full_control_secret);
+                                 "--server-secret-file", true, auth.full_control_secret);
     } else {
         auth.full_control_secret = platform::environment_value("AINIUX_SERVER_SECRET");
         error = validate_environment_secret("AINIUX_SERVER_SECRET", auth.full_control_secret);
+        if (error.ok() && auth.full_control_secret.empty()) {
+            error = managed_server_secret_path(managed_secret_file);
+            if (error.ok()) {
+                error = load_or_create_managed_server_secret(
+                    managed_secret_file, auth.full_control_secret, managed_secret_created);
+                managed_secret = error.ok();
+            }
+        }
     }
     if (!error.ok()) {
         app::print_error(error);
@@ -338,7 +422,7 @@ int run_server(const cli::Options& options) {
     }
     if (!options.mcp_secret_file.empty()) {
         error = load_secret_file(options.mcp_secret_file, workspace,
-                                 "--mcp-secret-file", auth.mcp_secret);
+                                 "--mcp-secret-file", true, auth.mcp_secret);
     } else {
         auth.mcp_secret = platform::environment_value("AINIUX_MCP_SECRET");
         error = validate_environment_secret("AINIUX_MCP_SECRET", auth.mcp_secret);
@@ -347,14 +431,8 @@ int run_server(const cli::Options& options) {
         app::print_error(error);
         return app::exit_code_for(error.code);
     }
-    if (auth.full_control_secret.empty()) {
-        error = {ErrorCode::Auth,
-                 "server mode requires AINIUX_SERVER_SECRET or --server-secret-file"};
-        app::print_error(error);
-        return app::exit_code_for(error.code);
-    }
     bool loopback = false;
-    (void)ipv4_address(options.bind_address, loopback);
+    (void)ipv4_address(bind_address, loopback);
     if (!auth.mcp_secret.empty() && constant_time_equal(auth.full_control_secret, auth.mcp_secret)) {
         error = {ErrorCode::Auth, "full-control and MCP-only secrets must be different"};
         app::print_error(error);
@@ -369,23 +447,62 @@ int run_server(const cli::Options& options) {
     }
     Listener listener;
     ListenerConfig config;
-    config.bind_address = options.bind_address;
+    config.bind_address = bind_address;
     config.port = static_cast<unsigned short>(options.port);
     config.max_connections = static_cast<std::size_t>(options.max_connections);
     config.max_jobs = static_cast<std::size_t>(options.max_jobs);
     config.max_sessions = static_cast<std::size_t>(options.max_sessions);
+    std::string managed_secret_for_display =
+        managed_secret && !options.quiet ? auth.full_control_secret : std::string{};
     config.auth = std::move(auth);
     config.base_options = options;
+    config.base_options.bind_address = bind_address;
     config.workspace = workspace.u8string();
     config.tls_cert_file = options.tls_cert_file;
     config.tls_key_file = options.tls_key_file;
     config.allow_remote_yolo = loopback || options.allow_remote_yolo;
     error = listener.start(std::move(config));
     if (!error.ok()) {
+        std::fill(managed_secret_for_display.begin(), managed_secret_for_display.end(), '\0');
+        managed_secret_for_display.clear();
         app::print_error(error);
         return app::exit_code_for(error.code);
     }
-    if (!options.quiet) {
+    if (options.webui) {
+        const std::vector<std::string> urls = web_ui_urls(
+            listener.bind_address(), listener.port(), listener.tls_enabled(),
+            local_ipv4_addresses());
+        if (!loopback) {
+            std::cerr << "WARNING: the Ainiux browser controller is reachable from other "
+                         "machines on this network using "
+                      << (listener.tls_enabled() ? "TLS" : "PLAINTEXT HTTP") << ".\n";
+            if (!listener.tls_enabled()) {
+                std::cerr << "WARNING: bearer tokens and workspace data can be observed on "
+                             "an untrusted network; use --tls-cert/--tls-key when possible.\n";
+            }
+        }
+        std::cerr << "Ainiux web UI:\n";
+        for (const std::string& url : urls) std::cerr << "  " << url << '\n';
+        if (listener.bind_address() == "0.0.0.0") {
+            std::cerr << "Interface addresses are local hints; router NAT, firewalls, VPNs, "
+                         "and DNS may require a different reachable address.\n";
+        }
+        if (managed_secret && !options.quiet) {
+            std::cerr << "Controller token: " << managed_secret_for_display << '\n'
+                      << "Managed token file: " << managed_secret_file
+                      << (managed_secret_created ? " (created)" : "") << '\n';
+            std::fill(managed_secret_for_display.begin(), managed_secret_for_display.end(), '\0');
+            managed_secret_for_display.clear();
+        } else if (!managed_secret && !options.quiet) {
+            std::cerr << "Enter the controller token configured by --server-secret-file or "
+                         "AINIUX_SERVER_SECRET.\n";
+        }
+        if (!urls.empty()) {
+            const BrowserLaunchResult launch = launch_browser_best_effort(urls.front());
+            if (!launch.started && !options.quiet && !launch.detail.empty())
+                std::cerr << launch.detail << "; open one of the URLs above manually.\n";
+        }
+    } else if (!options.quiet) {
         const char* scheme = listener.tls_enabled() ? "https" : "http";
         std::cerr << "Ainiux control API listening on " << scheme << "://"
                   << listener.bind_address() << ':' << listener.port()

@@ -103,7 +103,9 @@ transport, filesystem, or PTY boundary is involved.
 - Control-server WUI exact asset routing, API-auth separation, immutable/no-store
   caching, CSP and browser hardening headers, TUI-derived light/dark palettes,
   responsive/reduced-motion markers, strict browser query-path decoding, and
-  static rejection of external URLs, raw-HTML sinks, and `localStorage`
+  managed-secret stability/private permissions, browser-server CLI aliases and
+  URL reporting, persistent `localStorage` authentication, reconnect markers,
+  and static rejection of external URLs, raw-HTML sinks, cookies, and URL tokens
 
 **Integration coverage**
 

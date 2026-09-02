@@ -2,9 +2,13 @@
 
 ## Control-API bind and TLS boundary
 
-`ainiux server` is loopback-only unless `--bind` selects another IPv4 address.
-Direct non-loopback startup fails closed without a full-control secret and TLS;
+Plain `ainiux server` is loopback-only unless `--bind` selects another IPv4
+address. Its direct non-loopback startup fails closed without TLS;
 `--insecure-plain-bind` is the explicit operator acknowledgement for plaintext.
+Browser-oriented `ainiux webserver` / `ainiux server --webui` is a separate
+explicit choice: it defaults to wildcard IPv4, prints plaintext exposure
+warnings and concrete interface links, and can be constrained to loopback with
+`--bind 127.0.0.1`.
 TLS uses an optional OpenSSL-backed RAII context, requires TLS 1.2 or newer, and
 loads a matching PEM chain/key without an interactive passphrase prompt. The
 private key must be outside the served workspace, must not cross a symlink or
@@ -156,8 +160,13 @@ alone is not authority. Static embedded WUI assets are public boot content, but
 they contain no credential or workspace data and every WUI API/SSE request is
 authenticated. The server never reuses `AINIUX_API_KEY` or a provider key.
 
-Use `AINIUX_SERVER_SECRET` or a private `--server-secret-file` outside the served
-workspace. On POSIX the file is rejected if group/other permission bits are set.
+Secret precedence is a private `--server-secret-file` outside the served
+workspace, then `AINIUX_SERVER_SECRET`, then the managed 256-bit
+`~/.ainiux/server-secret`. The managed file is atomically created with POSIX
+mode 0600 or a protected current-user/SYSTEM Windows DACL; links, permissive
+files, corrupt contents, and unsafe creation races fail closed. Plain server
+mode never prints its value. On POSIX an explicit secret file is rejected if
+group/other permission bits are set.
 An optional distinct `AINIUX_MCP_SECRET` / `--mcp-secret-file` is path-bound to
 `/mcp`; it cannot call controller routes, and the controller token is not accepted
 as the MCP token. The MCP adapter exposes only bounded job tools and opaque task
@@ -177,9 +186,14 @@ under Guard. Job/event retention is bounded and in-memory only. Cancellation is
 job-scoped, SSE writers time out on disconnected/slow clients, and server-side
 credential paths are hidden from job errors.
 
-The browser token is memory-only by default. An explicit “Keep in this tab”
-choice uses `sessionStorage`, which is cleared on disconnect; the WUI never uses
-`localStorage`, cookies, URLs, logs, or rendered DOM as token storage. Assets are
+After a successful browser login, the WUI deliberately persists the controller
+token in origin-scoped `localStorage` so a normal browser can reconnect after a
+restart. This trades tab-only lifetime for ease of use: scripts executing in that
+origin could read the token, so the CSP, exact embedded assets, text-only dynamic
+rendering, strict Host/Origin policy, and absence of third-party JavaScript remain
+security boundaries. A 401 or “Sign out / Forget authentication” clears the
+token; network/timeout/5xx failures retain it. The WUI never uses cookies, URLs,
+logs, or rendered DOM as token storage. Assets are
 embedded and served only at exact versioned paths, so the WUI cannot become a
 workspace file server. The HTML shell is no-store, versioned CSS/JavaScript is
 immutable-cacheable, CORS stays disabled, and strict Host/Origin validation

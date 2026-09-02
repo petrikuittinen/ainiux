@@ -244,6 +244,7 @@ label {
 .status-badge::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: currentColor; }
 .status-badge.online::before { background: var(--success); }
 .status-badge.offline::before { background: var(--danger); }
+.status-badge.reconnecting::before { background: var(--highlight); }
 
 .primary-nav {
   position: sticky;
@@ -466,6 +467,7 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); backdrop-filter: blur(2px); }
   .app-shell { padding-inline: max(0.65rem, env(safe-area-inset-left)); }
   .app-header, .header-actions, .section-heading, .vertical-mobile { align-items: stretch; flex-direction: column; }
   .header-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .header-actions #disconnect-button { grid-column: 1 / -1; }
   .status-badge { justify-content: center; }
   .compact-field { display: grid; }
   .compact-field select { width: 100%; }

@@ -7,19 +7,39 @@ framework, npm bundle, CDN, hosted font, or external script.
 
 ## Start and connect
 
-Use a dedicated full-control secret and the loopback listener unless you have
-explicitly configured the server's TLS/direct-access policy:
+Start the browser-oriented server from the workspace you want to control:
 
 ```sh
-export AINIUX_SERVER_SECRET='use-a-long-random-value'
-ainiux server --workspace . --port 8766
+ainiux webserver --workspace .
+# equivalent: ainiux server --webui --workspace .
 ```
 
-Open `http://127.0.0.1:8766/ui/` and enter that controller token. Static boot
-assets do not require authentication, but every JSON and event-stream request
-does. The token is held in JavaScript memory by default. “Keep in this tab
-only” uses `sessionStorage`; disconnecting removes it. The WUI never puts the
-token in `localStorage`, cookies, URLs, logs, or rendered output.
+The command creates or reuses a private 256-bit token in
+`~/.ainiux/server-secret`, prints the managed token and all detected `/ui/`
+links, and tries to open the loopback link with the default graphical browser.
+On SSH or a text-only system, copy one of the printed links into a browser.
+Interface links are local hints; NAT, DNS, VPNs, and firewalls can change which
+address another machine can reach.
+
+Open a printed link and enter the controller token. Static boot assets do not
+require authentication, but every JSON and event-stream request does. After the
+server validates the token, the WUI stores it in origin-scoped HTML5
+`localStorage`. A later visit reuses it automatically. “Sign out / Forget
+authentication” removes it. HTTP 401 means the secret is no longer valid, so
+the WUI removes it and shows “Invalid authentication”; network failures,
+timeouts, and server-side 5xx failures do not erase it. The controller retries
+transient disconnects with bounded exponential backoff and restores known jobs,
+threads, sessions, workspace state, and event streams after reconnecting. The
+token never appears in cookies, URLs, logs, or rendered output.
+
+`webserver` defaults to `0.0.0.0` for browser access from another device and
+warns prominently when that means plaintext HTTP. Prefer TLS for an untrusted
+network, or add `--bind 127.0.0.1` for local-only use. Plain `ainiux server`
+keeps its loopback default, does not launch a browser, and never prints a token.
+An explicit `--server-secret-file` takes precedence over
+`AINIUX_SERVER_SECRET`, which takes precedence over the managed file; explicit
+secrets are never echoed. `--quiet` suppresses the managed token but not the
+browser URLs.
 
 The controller capability-detects the server before enabling features. It
 provides:
@@ -51,8 +71,9 @@ assistive and keyboard-only use. Reduced-motion and forced-color preferences are
 respected.
 
 The default theme follows `prefers-color-scheme`. The explicit System, Dark,
-and Light selector is tab-scoped. Its palettes use the same color codes as the
-built-in Ainiux TUI themes, including dark `#0B0F14`/`#E6EDF3` and light
+and Light selector is stored for the browser origin. Its palettes use the same
+color codes as the built-in Ainiux TUI themes, including dark
+`#0B0F14`/`#E6EDF3` and light
 `#FFFFFF`/`#000000` foundations.
 
 ## Security model
@@ -66,17 +87,19 @@ Versioned CSS/JavaScript assets are immutable-cacheable; the HTML shell is
 or directory-backed static serving.
 
 All model, tool, file, and error text is inserted through DOM nodes and
-`textContent`; it is never interpreted as HTML. Provider credentials, stored
-controller secrets, environment variables, database paths, TLS material,
+`textContent`; it is never interpreted as HTML. Provider credentials, the
+server's secret source/file, environment variables, database paths, TLS material,
 absolute workspace paths, and hidden project state remain server-side. See
 [Security](security.md) and the [control API](api.md) for the complete trust and
 network boundary.
 
 ## Testing
 
-`make test-unit` checks asset routing, authentication separation, CSP/cache and
-browser hardening headers, theme/responsive markers, strict query decoding, and
-the absence of external resource URLs, raw-HTML sinks, and `localStorage`.
+`make test-unit` checks asset routing, authentication separation, managed-secret
+permissions and stability, CLI forms, URL reporting, CSP/cache and browser
+hardening headers, theme/responsive markers, strict query decoding, and the
+absence of external resource URLs, raw-HTML sinks, cookie/query-string token
+handling, and third-party JavaScript.
 `scripts/test-control-server.sh --build` exercises the embedded assets and API
 through the real loopback listener with `curl`. JavaScript syntax can also be
 checked with `node --check src/web/js/app-v1.js` when Node.js happens to be

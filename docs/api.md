@@ -18,12 +18,16 @@ curl -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
   http://127.0.0.1:8766/ainiux/v1/status
 ```
 
-The listener binds `127.0.0.1` by default. A full-control credential is mandatory and
-comes from `AINIUX_SERVER_SECRET` or `--server-secret-file PATH`. An optional,
+The listener binds `127.0.0.1` by default. Full-control credential precedence is
+`--server-secret-file PATH`, then `AINIUX_SERVER_SECRET`, then the stable
+per-user managed secret at `~/.ainiux/server-secret`. The managed secret is
+atomically created with private platform permissions when absent. Plain server
+mode never prints it. An optional,
 different MCP-only credential comes from `AINIUX_MCP_SECRET` or
 `--mcp-secret-file PATH`; it is accepted only for `/mcp`, which is a separate
-MCP-only scope. Secret files must be outside the fixed served
-workspace. On POSIX they must grant no group/other permissions. Secret values,
+MCP-only scope. Operator-supplied secret files must be outside the fixed served
+workspace. The managed file remains protected under the excluded user-profile
+directory. On POSIX secret files grant no group/other permissions. Secret values,
 query-string credentials, cookies, and `AINIUX_API_KEY` are not accepted.
 
 Every API and MCP endpoint requires `Authorization: Bearer TOKEN`, including
@@ -59,11 +63,20 @@ camera, microphone, geolocation, payment, and USB. The CSP permits only
 same-origin scripts/styles/connections and `data:` images returned by image
 jobs. CORS remains disabled.
 
-The controller token stays in memory unless the user explicitly selects
-tab-scoped `sessionStorage`. It is never accepted through a query string,
-cookie, or ambient browser credential. See [the browser guide](web-mode.md).
+The browser saves a successfully validated controller token in origin-scoped
+`localStorage`, clears it on a 401 or explicit sign-out, and retains it through
+network/server outages while reconnecting. It is never accepted through a query
+string, cookie, or ambient browser credential. See [the browser guide](web-mode.md).
 
 ## TLS and direct non-loopback access
+
+`ainiux webserver` and `ainiux server --webui` are browser-oriented entry points.
+Without an explicit `--bind`, they listen on `0.0.0.0`, print loopback and active
+IPv4 interface `/ui/` links, warn about plaintext exposure, and make a best-effort
+local browser launch. This web-mode choice is the explicit acknowledgement for
+plaintext wildcard access. Add `--bind 127.0.0.1` for local-only use or configure
+TLS for access across an untrusted network. Plain `ainiux server` retains the
+stricter policy below.
 
 Direct access uses an IPv4 `--bind ADDRESS`. Any non-loopback address requires
 both `--tls-cert` and `--tls-key`; only an explicit `--insecure-plain-bind`

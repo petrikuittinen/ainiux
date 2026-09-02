@@ -5,7 +5,10 @@ const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
 
 const state = {
   token: "",
+  authenticated: false,
   connected: false,
+  reconnectAttempt: 0,
+  reconnectTimer: null,
   capabilities: null,
   status: null,
   jobs: new Map(),
@@ -63,7 +66,7 @@ function closeDialog(dialog) {
 
 function storageGet(key) {
   try {
-    return sessionStorage.getItem(key) || "";
+    return localStorage.getItem(key) || "";
   } catch (_) {
     return "";
   }
@@ -71,10 +74,10 @@ function storageGet(key) {
 
 function storageSet(key, value) {
   try {
-    if (value) sessionStorage.setItem(key, value);
-    else sessionStorage.removeItem(key);
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
   } catch (_) {
-    // Private browsing policies may disable tab storage; memory mode still works.
+    // Private browsing policies may disable local storage; memory mode still works.
   }
 }
 
@@ -134,15 +137,21 @@ async function api(path, options = {}) {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
   }
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers,
-    body,
-    signal: options.signal,
-    credentials: "omit",
-    cache: "no-store",
-    referrerPolicy: "no-referrer",
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method: options.method || "GET",
+      headers,
+      body,
+      signal: options.signal,
+      credentials: "omit",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+    });
+  } catch (error) {
+    if (state.authenticated) markConnectionLost();
+    throw error;
+  }
   const text = await response.text();
   let payload = null;
   if (text) {
@@ -154,7 +163,9 @@ async function api(path, options = {}) {
   }
   if (!response.ok) {
     const failure = payload && payload.error ? payload.error : {};
-    throw new ApiError(response.status, failure.code, failure.message, failure.details);
+    const error = new ApiError(response.status, failure.code, failure.message, failure.details);
+    if (response.status === 401) invalidateAuthentication();
+    throw error;
   }
   return payload;
 }
@@ -241,7 +252,6 @@ function startStream(key, path, onMessage, onExpired, isDone) {
   state.streams.set(key, controller);
   void (async () => {
     let cursor = 0;
-    let failures = 0;
     while (state.connected && !controller.signal.aborted && !isDone()) {
       try {
         const headers = new Headers({
@@ -259,7 +269,6 @@ function startStream(key, path, onMessage, onExpired, isDone) {
         if (response.status === 410) {
           await onExpired();
           cursor = 0;
-          failures = 0;
           if (isDone()) return;
           continue;
         }
@@ -268,7 +277,6 @@ function startStream(key, path, onMessage, onExpired, isDone) {
           try { failure = (await response.json()).error || {}; } catch (_) { /* handled below */ }
           throw new ApiError(response.status, failure.code, failure.message, failure.details);
         }
-        failures = 0;
         await readSse(response, (message) => {
           const eventId = Number(message.id || (message.data && message.data.id));
           if (Number.isSafeInteger(eventId) && eventId > cursor) cursor = eventId;
@@ -277,18 +285,17 @@ function startStream(key, path, onMessage, onExpired, isDone) {
         if (isDone()) return;
       } catch (error) {
         if (controller.signal.aborted) return;
-        failures += 1;
         if (error instanceof ApiError && error.status === 401) {
-          disconnect("Controller authentication expired");
+          invalidateAuthentication();
           return;
         }
-        if (failures >= 6) {
-          toast(`Event stream paused: ${errorMessage(error)}`, "error");
-          return;
-        }
+        markConnectionLost();
+        return;
       }
-      const delay = Math.min(5000, 300 * (2 ** failures));
-      await new Promise((resolve) => window.setTimeout(resolve, delay));
+      if (!isDone()) {
+        markConnectionLost();
+        return;
+      }
     }
   })().finally(() => {
     if (state.streams.get(key) === controller) state.streams.delete(key);
@@ -296,7 +303,7 @@ function startStream(key, path, onMessage, onExpired, isDone) {
 }
 
 function supports(operation) {
-  return Boolean(state.capabilities && Array.isArray(state.capabilities.operations) &&
+  return Boolean(state.connected && state.capabilities && Array.isArray(state.capabilities.operations) &&
     state.capabilities.operations.includes(operation));
 }
 
@@ -365,37 +372,126 @@ async function refreshSettings() {
   applyCapabilities();
 }
 
-async function connect(token, remember) {
+function setConnectionStatus(label, className) {
+  byId("connection-badge").textContent = label;
+  byId("connection-badge").className = `status-badge ${className}`;
+}
+
+function cancelReconnect() {
+  if (state.reconnectTimer !== null) window.clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = null;
+}
+
+function scheduleReconnect(immediate = false) {
+  if (!state.authenticated || state.connected) return;
+  cancelReconnect();
+  const exponent = Math.min(state.reconnectAttempt, 5);
+  const delay = immediate ? 0 : Math.min(10000, 500 * (2 ** exponent));
+  state.reconnectAttempt += 1;
+  state.reconnectTimer = window.setTimeout(() => void attemptReconnect(), delay);
+}
+
+function markConnectionLost() {
+  if (!state.authenticated) return;
+  const wasConnected = state.connected;
+  state.connected = false;
+  if (wasConnected) stopAllStreams();
+  setConnectionStatus("Reconnecting…", "reconnecting");
+  byId("disconnect-button").hidden = false;
+  applyCapabilities();
+  if (wasConnected) toast("Connection lost. Ainiux will reconnect automatically.", "error");
+  if (state.reconnectTimer === null) scheduleReconnect();
+}
+
+async function restoreBrowserState() {
+  const threadId = state.thread && state.thread.id;
+  const sessionId = state.session && state.session.id;
+  const directoryPath = state.directory.path || ".";
+  const tasks = [];
+  if (supports("chat_threads")) {
+    tasks.push((async () => {
+      await loadThreads();
+      if (threadId) await loadThread(threadId);
+    })());
+  }
+  if (supports("sessions")) {
+    tasks.push((async () => {
+      await loadSessions();
+      if (sessionId && state.sessions.some((item) => item.id === sessionId)) {
+        await selectSession(sessionId);
+      }
+    })());
+  }
+  if (supports("dired")) tasks.push(loadDirectory(directoryPath));
+  if (supports("review")) tasks.push(loadWorkspaceReview());
+  tasks.push((async () => {
+    await refreshKnownJobs();
+    for (const job of state.jobs.values()) {
+      if (!TERMINAL_STATES.has(job.state)) watchJob(job.id);
+    }
+  })());
+  await Promise.allSettled(tasks);
+}
+
+async function markConnected(reconnected) {
+  cancelReconnect();
+  state.authenticated = true;
+  state.connected = true;
+  state.reconnectAttempt = 0;
+  storageSet(TOKEN_STORAGE_KEY, state.token);
+  byId("token-input").value = "";
+  setConnectionStatus("Connected", "online");
+  byId("disconnect-button").hidden = false;
+  closeDialog(byId("auth-dialog"));
+  applyCapabilities();
+  await restoreBrowserState();
+  toast(reconnected ? "Reconnected to the Ainiux control server" :
+    "Connected to the Ainiux control server");
+}
+
+async function attemptReconnect() {
+  state.reconnectTimer = null;
+  if (!state.authenticated || state.connected || !state.token) return;
+  setConnectionStatus("Reconnecting…", "reconnecting");
+  try {
+    await refreshSettings();
+    await markConnected(true);
+  } catch (error) {
+    if (!state.authenticated || (error instanceof ApiError && error.status === 401)) return;
+    if (state.reconnectTimer === null) scheduleReconnect();
+  }
+}
+
+async function connect(token, previouslyValidated = false) {
   const cleaned = token.trim();
   if (!cleaned) throw new ApiError(401, "missing_token", "Enter a controller token");
   state.token = cleaned;
+  state.authenticated = previouslyValidated;
   try {
     await refreshSettings();
   } catch (error) {
+    if (previouslyValidated && !(error instanceof ApiError && error.status === 401)) {
+      state.authenticated = true;
+      byId("disconnect-button").hidden = false;
+      closeDialog(byId("auth-dialog"));
+      markConnectionLost();
+      return false;
+    }
     state.token = "";
+    state.authenticated = false;
     throw error;
   }
-  state.connected = true;
-  if (remember) storageSet(TOKEN_STORAGE_KEY, cleaned);
-  else storageSet(TOKEN_STORAGE_KEY, "");
-  byId("token-input").value = "";
-  byId("connection-badge").textContent = "Connected";
-  byId("connection-badge").className = "status-badge online";
-  byId("disconnect-button").hidden = false;
-  closeDialog(byId("auth-dialog"));
-  const tasks = [];
-  if (supports("chat_threads")) tasks.push(loadThreads());
-  if (supports("sessions")) tasks.push(loadSessions());
-  if (supports("dired")) tasks.push(loadDirectory("."));
-  if (supports("review")) tasks.push(loadWorkspaceReview());
-  await Promise.allSettled(tasks);
-  toast("Connected to the Ainiux control server");
+  await markConnected(false);
+  return true;
 }
 
-function disconnect(message = "Disconnected") {
+function forgetAuthentication(message = "") {
+  cancelReconnect();
   stopAllStreams();
   state.token = "";
+  state.authenticated = false;
   state.connected = false;
+  state.reconnectAttempt = 0;
   state.capabilities = null;
   state.status = null;
   state.thread = null;
@@ -404,8 +500,7 @@ function disconnect(message = "Disconnected") {
   state.guard = null;
   storageSet(TOKEN_STORAGE_KEY, "");
   byId("token-input").value = "";
-  byId("connection-badge").textContent = "Offline";
-  byId("connection-badge").className = "status-badge offline";
+  setConnectionStatus("Offline", "offline");
   byId("disconnect-button").hidden = true;
   setEmpty(byId("thread-list"), "Connect to load threads.");
   setEmpty(byId("chat-messages"), "Choose or create a thread.");
@@ -419,6 +514,10 @@ function disconnect(message = "Disconnected") {
   closeDialog(byId("guard-dialog"));
   byId("auth-error").textContent = message;
   openDialog(byId("auth-dialog"));
+}
+
+function invalidateAuthentication() {
+  forgetAuthentication("Invalid authentication");
 }
 
 function switchPanel(panelId) {
@@ -1217,7 +1316,7 @@ function bindEvents() {
     document.documentElement.dataset.theme = event.target.value;
     storageSet(THEME_STORAGE_KEY, event.target.value);
   });
-  byId("disconnect-button").addEventListener("click", () => disconnect());
+  byId("disconnect-button").addEventListener("click", () => forgetAuthentication());
   byId("auth-dialog").addEventListener("cancel", (event) => {
     if (!state.connected) event.preventDefault();
   });
@@ -1226,12 +1325,19 @@ function bindEvents() {
     event.preventDefault();
     byId("auth-error").textContent = "";
     try {
-      await connect(byId("token-input").value, byId("remember-token").checked);
+      await connect(byId("token-input").value);
     } catch (error) {
-      byId("token-input").value = "";
-      byId("auth-error").textContent = errorMessage(error);
+      if (error instanceof ApiError && error.status === 401) {
+        byId("token-input").value = "";
+        byId("auth-error").textContent = "Invalid authentication";
+      } else {
+        byId("auth-error").textContent = `Could not reach the server: ${errorMessage(error)}`;
+      }
       byId("token-input").focus();
     }
+  });
+  window.addEventListener("online", () => {
+    if (state.authenticated && !state.connected) scheduleReconnect(true);
   });
 
   byId("refresh-settings-button").addEventListener("click", () => void refreshSettings().catch((error) => toast(errorMessage(error), "error")));
@@ -1406,13 +1512,15 @@ async function boot() {
   renderAgent();
   const remembered = storageGet(TOKEN_STORAGE_KEY);
   if (remembered) {
-    byId("remember-token").checked = true;
     try {
       await connect(remembered, true);
       return;
     } catch (error) {
-      storageSet(TOKEN_STORAGE_KEY, "");
-      byId("auth-error").textContent = errorMessage(error);
+      if (error instanceof ApiError && error.status === 401) {
+        byId("auth-error").textContent = "Invalid authentication";
+      } else {
+        byId("auth-error").textContent = errorMessage(error);
+      }
     }
   }
   openDialog(byId("auth-dialog"));

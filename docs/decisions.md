@@ -577,9 +577,10 @@ bundler, CDN, font, or JavaScript library.
 
 Static boot assets are intentionally readable without a token; they contain no
 runtime configuration. Host and Origin checks still run first, and every
-`/ainiux/v1` JSON/SSE call remains bearer-authenticated. The controller keeps
-the token in module memory by default and offers only explicit tab-scoped
-`sessionStorage`. Fetch-based SSE parsing is used instead of `EventSource` so
+`/ainiux/v1` JSON/SSE call remains bearer-authenticated. The corrected browser
+startup flow stores a token only after validation in origin-scoped
+`localStorage`, clears it on a 401 or explicit sign-out, and preserves it across
+ordinary disconnects. Fetch-based SSE parsing is used instead of `EventSource` so
 Authorization and `Last-Event-ID` remain controllable.
 
 The UI capability-detects the existing domain routes and never performs
@@ -591,3 +592,13 @@ explicit revision-safe save. Dynamic output uses constructed DOM nodes and
 same-origin boundary. Responsive grid/flex breakpoints, semantic controls,
 visible focus, live regions, reduced motion, and TUI-derived light/dark colors
 are part of the shipped source rather than runtime dependencies.
+
+Browser-oriented startup is explicit through `ainiux webserver` or
+`ainiux server --webui`. It reuses the same listener/router, selects wildcard
+IPv4 only when no bind was supplied, prints concrete local interface links, and
+uses the platform URL opener without a shell. Plain `ainiux server` keeps its
+loopback-first scripting behavior. Authentication precedence is explicit secret
+file, environment, then an atomically created private 256-bit per-user secret;
+only browser mode may print the managed value. The Windows interface enumerator
+uses the existing operating-system API (`iphlpapi`) rather than adding a runtime
+library.

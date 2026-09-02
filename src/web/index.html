@@ -29,7 +29,7 @@
             <option value="light">Light</option>
           </select>
         </label>
-        <button id="disconnect-button" class="ghost" type="button" hidden>Disconnect</button>
+        <button id="disconnect-button" class="ghost" type="button" hidden>Sign out / Forget authentication</button>
       </div>
     </header>
 
@@ -192,11 +192,11 @@
   <dialog id="auth-dialog" aria-labelledby="auth-title">
     <form id="auth-form" class="dialog-card">
       <div><p class="eyebrow">Same-origin controller</p><h2 id="auth-title">Connect to Ainiux</h2></div>
-      <p>Enter the full-control server token. It stays in memory unless you explicitly keep it for this browser tab.</p>
+      <p>Enter the full-control server token once. After Ainiux validates it, this browser saves it locally for this origin.</p>
       <label>Controller token
-        <input id="token-input" type="password" autocomplete="off" required autofocus>
+        <input id="token-input" type="password" autocomplete="current-password" required autofocus>
       </label>
-      <label class="checkbox-row"><input id="remember-token" type="checkbox"> Keep in this tab only</label>
+      <p class="muted">Use “Sign out / Forget authentication” to remove the saved token from this browser.</p>
       <p id="auth-error" class="error-text" role="alert"></p>
       <button type="submit">Connect</button>
     </form>

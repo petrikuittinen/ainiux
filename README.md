@@ -316,21 +316,33 @@ MCP-only clients. It also exposes bounded interactive agent sessions with
 replayable events, cancellation, remote Guard approvals, workspace review,
 revision-safe dired/file mutations and editor assist, and revision-safe access
 to the existing personal chat-thread library. Its embedded responsive browser
-controller uses only vanilla HTML, CSS, and JavaScript. Set a dedicated full-control secret and
-start the fixed-workspace loopback listener:
+controller uses only vanilla HTML, CSS, and JavaScript. The easiest browser-first
+startup is:
+
+```sh
+ainiux webserver --workspace .
+# equivalent: ainiux server --webui --workspace .
+```
+
+Web UI mode creates or reuses a 256-bit token at `~/.ainiux/server-secret`,
+prints the reachable `/ui/` links and managed token, and makes a best-effort
+attempt to open the local default browser. Enter the token once. After a valid
+login, origin-scoped browser `localStorage` retains it until you select “Sign
+out / Forget authentication.” A 401 clears it and returns to the login form;
+ordinary network outages retain it and trigger automatic reconnect. The token
+is never put in a cookie, URL, log, or rendered page content. The same-origin WUI covers
+chat threads, jobs and images, interactive agent/Guard flows, workspace review
+and mutations, revision-safe file editing/assist, and non-secret server status.
+It follows the system light/dark preference and also has an explicit theme
+selector.
+
+For script-oriented API use, configure a known token and use plain server mode
+in one terminal:
 
 ```sh
 export AINIUX_SERVER_SECRET='use-a-long-random-value'
 ainiux server --workspace . --port 8766
 ```
-
-Open `http://127.0.0.1:8766/ui/`, enter the controller secret, and choose
-whether to retain it for this tab. The token is otherwise memory-only and is
-never stored in a cookie, URL, or `localStorage`. The same-origin WUI covers
-chat threads, jobs and images, interactive agent/Guard flows, workspace review
-and mutations, revision-safe file editing/assist, and non-secret server status.
-It follows the system light/dark preference and also has an explicit theme
-selector.
 
 API clients continue to authenticate every request explicitly:
 
@@ -344,10 +356,17 @@ curl -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
   http://127.0.0.1:8766/ainiux/v1/jobs/chat
 ```
 
-`--server-secret-file` accepts a permission-restricted file outside the served
-workspace. `AINIUX_MCP_SECRET` / `--mcp-secret-file` supplies a distinct MCP-only
+Full-control secret precedence is `--server-secret-file`, then
+`AINIUX_SERVER_SECRET`, then the managed per-user file. Explicit file/environment
+tokens are never echoed. Plain `ainiux server` remains loopback-first, does not
+open a browser, and never prints the token. `--server-secret-file` accepts a
+permission-restricted file outside the served workspace.
+`AINIUX_MCP_SECRET` / `--mcp-secret-file` supplies a distinct MCP-only
 credential for `/mcp`; it cannot call the control API. The listener binds only
-`127.0.0.1` by default. A direct non-loopback bind requires TLS and a private
+`127.0.0.1` by default in plain server mode. Browser mode defaults to `0.0.0.0`,
+lists active IPv4 interface links, and prints a prominent warning when they use
+plain HTTP; use `--bind 127.0.0.1` for local-only browser access. A direct
+non-loopback bind in plain server mode requires TLS and a private
 key outside the workspace, unless `--insecure-plain-bind` explicitly accepts
 plaintext risk. For example:
 

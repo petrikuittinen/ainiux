@@ -30,7 +30,7 @@ endif
 WINDOWS_NATIVE := $(if $(filter Windows_NT,$(OS)),1,0)
 ifeq ($(WINDOWS_NATIVE),1)
 CXXFLAGS += -D_WIN32_WINNT=0x0A00 -DUNICODE -D_UNICODE
-LDFLAGS += -lws2_32 -ladvapi32 -luser32 -lshell32 -lole32 -lbcrypt
+LDFLAGS += -lws2_32 -liphlpapi -ladvapi32 -luser32 -lshell32 -lole32 -lbcrypt
 EXEEXT := .exe
 else
 EXEEXT :=

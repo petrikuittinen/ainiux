@@ -98,7 +98,11 @@ struct Options {
     bool image = false;
     // v1.30 control API server. Loopback remains the safe default.
     bool server = false;
+    // Browser-oriented server startup. Enables managed authentication, URL
+    // reporting, and a best-effort local browser launch.
+    bool webui = false;
     bool server_options_seen = false;
+    bool server_bind_explicit = false;
     bool insecure_plain_bind = false;
     bool allow_remote_yolo = false;
     bool image_force = false;

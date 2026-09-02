@@ -175,7 +175,8 @@ expect_body '/ui/assets/app-v1.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
     "${BASE_URL}/ui/assets/app-v1.js"
-expect_body 'sessionStorage' "tab-scoped token option"
+expect_body 'localStorage' "persistent browser token storage"
+expect_body 'Invalid authentication' "invalid browser authentication state"
 expect_body 'Last-Event-ID' "authenticated SSE replay"
 grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
     die "versioned WUI asset did not receive immutable caching"

@@ -377,6 +377,12 @@ ainiux --server
   --max-sessions N
 ```
 
+The browser-startup amendment adds `ainiux webserver` and
+`ainiux server --webui`. Plain server mode retains loopback defaults and no
+browser side effects. Browser mode defaults to wildcard IPv4 only when no bind
+was supplied, prints concrete `/ui/` interface links, and makes a best-effort
+platform browser launch.
+
 Credential environment variables:
 
 ```text
@@ -405,7 +411,9 @@ Loopback is the safe default and the only supported bind during the first
 server slices. Remote users may put an authenticated tunnel or reverse proxy in
 front of that listener.
 
-Direct non-loopback binding requires all of the following:
+Plain-server direct non-loopback binding requires all of the following. The
+explicit browser-startup mode described above instead permits its wildcard
+plaintext default with prominent warnings:
 
 - a full-control server secret;
 - TLS, unless `--insecure-plain-bind` is explicitly supplied;
@@ -645,9 +653,10 @@ Technical constraints:
   policy, CSP, and no directory serving;
 - `fetch` for JSON operations and a fetch-based SSE parser so the
   `Authorization` header and `Last-Event-ID` can be controlled;
-- controller token kept in memory by default, with an explicit optional
-  tab-scoped `sessionStorage` choice; never store it in `localStorage`,
-  cookies, URLs, logs, or rendered DOM;
+- controller token persisted after successful validation in origin-scoped
+  `localStorage`, removed on HTTP 401 or explicit sign-out, and retained across
+  network/timeout/5xx failures; never store it in cookies, URLs, logs, or
+  rendered DOM;
 - safe rendering with DOM construction and `textContent`; model/tool output is
   never assigned as raw HTML;
 - responsive CSS Grid/Flex layouts for desktop, tablet, and narrow mobile

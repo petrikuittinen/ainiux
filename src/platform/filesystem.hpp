@@ -57,6 +57,11 @@ Error read_file_bounded(const std::string& utf8_path,
 Error atomic_write_private(const std::string& utf8_path,
                            const std::string& data,
                            bool reject_reparse_points = false);
+// Atomically publishes a new private file and fails if the target already
+// exists, including when another process wins a concurrent create.
+Error atomic_write_private_create(const std::string& utf8_path,
+                                  const std::string& data,
+                                  bool reject_reparse_points = false);
 // Ordinary project/workspace content: preserve existing mode when overwriting;
 // new files use 0666 so the process umask applies (typically 0644 or 0664).
 // On Windows uses default inheritance (not the private user-only DACL).
