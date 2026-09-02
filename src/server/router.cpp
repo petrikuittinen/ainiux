@@ -163,15 +163,22 @@ Response session_not_found() {
     return error_response(404, "session_not_found", "no retained interactive session has this identifier");
 }
 
-Response workspace_error(const Error& error) {
+Response workspace_error(const Error& error, const std::string& current_revision = {}) {
     int status = 500;
     std::string code = "internal";
     switch (error.code) {
-        case ErrorCode::BadArgs: status = 400; code = "invalid_request"; break;
+        case ErrorCode::BadArgs:
+        case ErrorCode::JsonParse: status = 400; code = "invalid_request"; break;
         case ErrorCode::FileRead: status = 404; code = "not_found"; break;
+        case ErrorCode::FileLock: status = 409; code = "revision_conflict"; break;
+        case ErrorCode::FileWrite: status = 409; code = "mutation_failed"; break;
         default: break;
     }
-    return error_response(status, code, error.message);
+    return error_response(status, code, error.message,
+                          error.code != ErrorCode::FileLock || current_revision.empty()
+                              ? std::string()
+                              : "{\"current_revision\":" +
+                                    json::quote(current_revision) + "}");
 }
 
 Response chat_thread_error(const Error& error, long long current_revision = 0) {
@@ -373,7 +380,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\",\"sessions\",\"review\",\"dired\",\"files\",\"chat_threads\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false}" +
@@ -384,35 +391,67 @@ Response route_request(const http::Request& request,
     }
 
     if (request.path == "/ainiux/v1/workspace/review" ||
-        request.path == "/ainiux/v1/dired" || request.path == "/ainiux/v1/files") {
+        request.path == "/ainiux/v1/dired" ||
+        request.path == "/ainiux/v1/dired/mutations" ||
+        request.path == "/ainiux/v1/files") {
         if (status.workspace == nullptr) {
             return error_response(503, "workspace_unavailable", "the workspace service is unavailable");
-        }
-        if (request.method != "GET") {
-            response = error_response(405, "method_not_allowed", "workspace routes accept GET only");
-            response.allow = "GET";
-            return response;
-        }
-        if (!request.body.empty()) {
-            return error_response(400, "invalid_request", "workspace routes do not accept a body");
         }
         std::string body;
         Error error;
         if (request.path == "/ainiux/v1/workspace/review") {
+            if (request.method != "GET") {
+                response = error_response(405, "method_not_allowed", "workspace review accepts GET only");
+                response.allow = "GET";
+                return response;
+            }
+            if (!request.body.empty()) return error_response(400, "invalid_request", "workspace review does not accept a body");
             if (!request.query.empty()) {
                 return error_response(400, "invalid_request", "workspace review does not accept query parameters");
             }
             error = status.workspace->review(body);
-        } else {
-            std::string path;
-            error = query_path(request, request.path == "/ainiux/v1/files", path);
-            if (error.ok()) {
-                if (request.path == "/ainiux/v1/dired") {
-                    error = status.workspace->list(path, body);
-                } else {
-                    error = status.workspace->read(path, body);
-                }
+        } else if (request.path == "/ainiux/v1/dired") {
+            if (request.method != "GET") {
+                response = error_response(405, "method_not_allowed", "dired listing accepts GET only");
+                response.allow = "GET";
+                return response;
             }
+            if (!request.body.empty()) return error_response(400, "invalid_request", "dired listing does not accept a body");
+            std::string path;
+            error = query_path(request, false, path);
+            if (error.ok()) error = status.workspace->list(path, body);
+        } else if (request.path == "/ainiux/v1/dired/mutations") {
+            if (request.method != "POST") {
+                response = error_response(405, "method_not_allowed", "workspace mutations accept POST only");
+                response.allow = "POST";
+                return response;
+            }
+            if (!request.query.empty()) return error_response(400, "invalid_request", "workspace mutations do not accept query parameters");
+            if (!json_content_type(request)) return error_response(415, "unsupported_media_type", "workspace mutations require Content-Type: application/json");
+            error = status.workspace->mutate(request.body, body);
+        } else if (request.method == "GET" || request.method == "PUT") {
+            std::string path;
+            error = query_path(request, true, path);
+            if (request.method == "GET") {
+                if (!request.body.empty()) return error_response(400, "invalid_request", "file reads do not accept a body");
+                if (error.ok()) error = status.workspace->read(path, body);
+            } else {
+                if (!json_content_type(request)) return error_response(415, "unsupported_media_type", "file saves require Content-Type: application/json");
+                std::string current_revision;
+                if (error.ok()) error = status.workspace->save(path, request.body, body, current_revision);
+                if (!error.ok()) return workspace_error(error, current_revision);
+            }
+        } else if (request.method == "POST") {
+            if (!request.query.empty()) return error_response(400, "invalid_request", "file creation does not accept query parameters");
+            if (!json_content_type(request)) return error_response(415, "unsupported_media_type", "file creation requires Content-Type: application/json");
+            std::string current_revision;
+            error = status.workspace->create_file(request.body, body, current_revision);
+            if (!error.ok()) return workspace_error(error, current_revision);
+            response.status = 201;
+        } else {
+            response = error_response(405, "method_not_allowed", "files accept GET, PUT, and POST only");
+            response.allow = "GET, PUT, POST";
+            return response;
         }
         if (!error.ok()) return workspace_error(error);
         response.body = std::move(body);
@@ -665,7 +704,8 @@ Response route_request(const http::Request& request,
     }
     if (status.jobs == nullptr) return error_response(503, "jobs_unavailable", "job service is unavailable");
     std::string suffix = request.path.substr(jobs_prefix.size());
-    if (suffix == "chat" || suffix == "run" || suffix == "plan" || suffix == "image") {
+    if (suffix == "chat" || suffix == "run" || suffix == "plan" || suffix == "image" ||
+        suffix == "editor-assist") {
         if (request.method != "POST") {
             response = error_response(405, "method_not_allowed", "job submission accepts POST only");
             response.allow = "POST";

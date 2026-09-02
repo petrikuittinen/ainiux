@@ -837,7 +837,8 @@ enum class AtomicWritePrivacy {
 Error atomic_write_impl(const std::string& path,
                         const std::string& data,
                         bool reject_reparse_points,
-                        AtomicWritePrivacy privacy) {
+                        AtomicWritePrivacy privacy,
+                        bool replace_existing = true) {
     const fs::path parent = fs::u8path(path).parent_path();
     if (!parent.empty()) {
         Error error = require_directory_access(parent.u8string(), true, true);
@@ -926,7 +927,10 @@ Error atomic_write_impl(const std::string& path,
     file.reset();
     const DWORD destination_attributes = GetFileAttributesW(native_path_value.c_str());
     bool replaced = false;
-    if (destination_attributes != INVALID_FILE_ATTRIBUTES) {
+    if (!replace_existing) {
+        replaced = MoveFileExW(native_temp.c_str(), native_path_value.c_str(),
+                               MOVEFILE_WRITE_THROUGH) != FALSE;
+    } else if (destination_attributes != INVALID_FILE_ATTRIBUTES) {
         replaced = ReplaceFileW(native_path_value.c_str(), native_temp.c_str(), nullptr,
                                 REPLACEFILE_WRITE_THROUGH, nullptr, nullptr) != FALSE;
     } else {
@@ -982,7 +986,7 @@ Error atomic_write_impl(const std::string& path,
     if (privacy == AtomicWritePrivacy::Shared) {
         create_mode = 0666;  // umask applied by the kernel on create
         struct stat existing {};
-        if (::lstat(path.c_str(), &existing) == 0 && S_ISREG(existing.st_mode)) {
+        if (replace_existing && ::lstat(path.c_str(), &existing) == 0 && S_ISREG(existing.st_mode)) {
             preserve_mode = existing.st_mode & 0777;
             have_preserve = true;
         }
@@ -1029,11 +1033,29 @@ Error atomic_write_impl(const std::string& path,
                            std::strerror(code))};
     }
     file.reset();
-    if (::rename(temporary.c_str(), path.c_str()) != 0) {
-        const int code = errno;
-        (void)::unlink(temporary.c_str());
-        return {ErrorCode::FileWrite,
-                path_error("could not atomically replace file", path, std::strerror(code))};
+    if (replace_existing) {
+        if (::rename(temporary.c_str(), path.c_str()) != 0) {
+            const int code = errno;
+            (void)::unlink(temporary.c_str());
+            return {ErrorCode::FileWrite,
+                    path_error("could not atomically replace file", path, std::strerror(code))};
+        }
+    } else {
+        if (::link(temporary.c_str(), path.c_str()) != 0) {
+            const int code = errno;
+            (void)::unlink(temporary.c_str());
+            return {ErrorCode::FileWrite,
+                    path_error("could not atomically create file", path, std::strerror(code))};
+        }
+        int unlink_result = 0;
+        do {
+            unlink_result = ::unlink(temporary.c_str());
+        } while (unlink_result != 0 && errno == EINTR);
+        if (unlink_result != 0) {
+            return {ErrorCode::FileWrite,
+                    path_error("could not remove atomic-create temporary link", temporary,
+                               std::strerror(errno))};
+        }
     }
     if (!parent.empty()) {
         Fd directory(::open(parent.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY));
@@ -1057,11 +1079,16 @@ Error atomic_write_shared(const std::string& path,
     return atomic_write_impl(path, data, reject_reparse_points, AtomicWritePrivacy::Shared);
 }
 
+Error atomic_write_shared_create(const std::string& path,
+                                 const std::string& data,
+                                 bool reject_reparse_points) {
+    return atomic_write_impl(path, data, reject_reparse_points,
+                             AtomicWritePrivacy::Shared, false);
+}
+
 Error atomic_move(const std::string& from, const std::string& to, bool replace_existing) {
     const fs::path from_parent = fs::u8path(from).parent_path();
     const fs::path to_parent = fs::u8path(to).parent_path();
-    if (from_parent.lexically_normal() != to_parent.lexically_normal())
-        return {ErrorCode::BadArgs, "atomic move requires paths in the same directory"};
 #if defined(_WIN32)
     std::wstring native_from;
     std::wstring native_to;
@@ -1089,12 +1116,20 @@ Error atomic_move(const std::string& from, const std::string& to, bool replace_e
         return {ErrorCode::FileWrite,
                 path_error("could not atomically move file", from + " -> " + to,
                            std::strerror(errno))};
-    if (!to_parent.empty()) {
-        Fd directory(::open(to_parent.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY));
+    auto flush_parent = [](const fs::path& parent) -> Error {
+        if (parent.empty()) return ok_error();
+        Fd directory(::open(parent.c_str(), O_RDONLY | O_CLOEXEC | O_DIRECTORY));
         if (directory.get() >= 0 && ::fsync(directory.get()) != 0)
             return {ErrorCode::FileWrite,
-                    path_error("could not flush atomic move directory", to_parent.string(),
+                    path_error("could not flush atomic move directory", parent.string(),
                                std::strerror(errno))};
+        return ok_error();
+    };
+    Error flush_error = flush_parent(to_parent);
+    if (!flush_error.ok()) return flush_error;
+    if (from_parent.lexically_normal() != to_parent.lexically_normal()) {
+        flush_error = flush_parent(from_parent);
+        if (!flush_error.ok()) return flush_error;
     }
 #endif
     return ok_error();

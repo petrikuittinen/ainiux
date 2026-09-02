@@ -1,11 +1,11 @@
 # Ainiux control API
 
-The v1.3 control API is versioned under `/ainiux/v1/`. PR 8 provides an
+The v1.3 control API is versioned under `/ainiux/v1/`. PR 9 provides an
 authenticated loopback-by-default listener, optional TLS/direct non-loopback access,
 asynchronous one-shot jobs,
-interactive agent sessions, read-only workspace review/dired/file routes, and
+interactive agent sessions, revision-safe workspace review/edit routes, and
 a separate MCP 2026-07-28 endpoint at `/mcp`, plus revision-safe access to the
-existing personal chat library. Filesystem mutations and the WUI remain later slices.
+existing personal chat library. The embedded WUI remains a later slice.
 Later routes must use the PR 1 operation/wire contracts rather than exposing
 provider, runtime, or terminal-internal structures directly.
 
@@ -78,10 +78,11 @@ explicit or project-restored Yolo mode is denied/downgraded unless startup also
 includes `--allow-remote-yolo`. This option is deliberately separate from the
 persisted project setting.
 
-## Read-only workspace
+## Revision-safe workspace editing
 
-The server owns the single canonical workspace selected at startup. These
-routes accept only GET and never return native absolute paths:
+The server owns the single canonical workspace selected at startup. No route
+accepts a filesystem root, native absolute path, symlink/reparse traversal, or
+overwrite-by-default destination. Reads never return native absolute paths:
 
 ```text
 GET /ainiux/v1/workspace/review
@@ -90,14 +91,50 @@ GET /ainiux/v1/files?path=RELATIVE_PATH
 ```
 
 Paths use slash-separated workspace-relative components. The dired response
-contains `path`, bounded `entries` (`name`, `path`, `type`, `size`, and
-`modified_at`), and `truncated`. Review recursively returns the same entry
-shape plus a file/directory/byte summary. File reads return `path`, JSON-safe
-`content`, byte `size`, and `truncated:false`; individual reads are capped at
-1 MiB. Missing, non-regular, oversized, traversing, or symlink/reparse paths
+contains `path`, an opaque directory `revision`, bounded `entries` (`name`,
+`path`, `type`, opaque `revision`, `size`, `modified_at`, and `mutable`), and
+`truncated`. Review recursively returns the same entry shape plus a
+file/directory/byte summary. File reads return `path`, opaque `revision`,
+JSON-safe `content`, byte `size`, and `truncated:false`; individual remote
+editing reads are capped at 1 MiB. Missing, non-regular, oversized, traversing,
+or symlink/reparse paths
 are rejected. `.ainiux-pr`, `.ainiux`, `.git`, environment/credential names,
-and bundled sensitive configuration files are excluded. There are no mutation
-routes in PR 6.
+and bundled sensitive configuration files are excluded.
+
+PR 9 adds explicit-target mutations and atomic text saves:
+
+```text
+POST /ainiux/v1/dired/mutations
+POST /ainiux/v1/files
+PUT  /ainiux/v1/files?path=RELATIVE_PATH
+POST /ainiux/v1/jobs/editor-assist
+```
+
+`dired/mutations` accepts `{"operations":[...]}` with 1–32 entries and
+returns one result per target. Operations are `mkdir`, `move` (or `rename`),
+`copy`, and `delete`. Every existing source requires the opaque `revision`
+last returned for that exact path. Creation destinations require
+`parent_revision` or `destination_parent_revision`; destinations must not
+already exist. Delete additionally requires `confirmation` to exactly equal
+`delete RELATIVE_PATH`, and non-empty directories require `recursive:true`.
+Directory copy/delete walks are capped at 512 entries and 8 MiB, with each file
+capped at 1 MiB. A failed item does not suppress results for other items.
+
+`POST /files` creates bounded UTF-8 text from `path`, `content`, and
+`parent_revision`. `PUT /files?path=...` replaces an existing file from
+`content` and its reviewed `revision`. Saves use the shared atomic
+temp-write/flush/replace primitive and preserve the old file on write failure.
+A stale save returns HTTP 409 `revision_conflict` with `current_revision` for
+conflict UI. Reads and mutations serialize inside the service; identity-bearing
+revisions also detect same-content file replacement between review and action.
+
+Editor assist is an asynchronous job with `path`, `revision`, `instruction`,
+the ordinary optional `provider`/`model`/`api` fields, and optional paired byte
+offsets `selection_start`/`selection_end`. Without a selection it operates on
+the whole reviewed file. It reuses the standalone editor's assist prompt and
+provider path, verifies the file revision before provider work, and returns a
+proposed `{start,length,replacement}` plus the source revision. It never saves
+automatically; clients apply the proposal through the revision-checked PUT.
 
 ## Revision-safe chat threads
 
@@ -225,6 +262,7 @@ POST /ainiux/v1/jobs/chat   {provider?, model?, api?, messages:[{role,content}]}
 POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/image  {provider?, model?, api?, prompt, size?, aspect?, quality?, format?}
+POST /ainiux/v1/jobs/editor-assist {provider?, model?, api?, path, revision, instruction, selection_start?, selection_end?}
 GET  /ainiux/v1/jobs/:job_id
 GET  /ainiux/v1/jobs/:job_id/events
 POST /ainiux/v1/jobs/:job_id/cancel

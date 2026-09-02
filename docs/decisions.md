@@ -538,3 +538,28 @@ Remote interactive Yolo has a separate startup gate. Session creation rejects an
 explicit request and the runtime caps restored project Yolo state at Smart when the
 gate is absent, preventing local persisted convenience from becoming remote
 authority. Loopback sessions retain their existing behavior.
+
+## Revision-safe remote workspace mutations (v1.3 PR 9)
+
+Remote workspace writes extend `WorkspaceService` instead of calling the
+selection-oriented terminal dired commands. Public targets remain explicit
+slash-separated paths beneath the listener's one canonical workspace. Opaque
+SHA-256 revisions combine platform file identity, type, size, high-resolution
+modification state, and bounded file content. Existing targets and destination
+parents must match a revision returned by review, listing, or file read; stale
+requests return conflict data rather than overwriting newer work.
+
+Mutation batches are bounded and report each target independently. Destinations
+never overwrite, deletes require an exact path confirmation, and recursive
+copy/delete validate a bounded link-free tree before acting. File creation and
+replacement accept only bounded UTF-8 text and reuse
+`platform::atomic_write_shared`, preserving normal workspace permissions and the
+old file on flush/replace failure. Cross-directory rename extends the shared
+atomic move primitive and flushes both parents where POSIX durability permits.
+
+Editor assist remains a provider job, not a filesystem mutation. It loads a
+revision-checked snapshot, reuses `build_assist_execution` and the ordinary
+provider/cancellation path, and returns a byte-range replacement proposal. A
+controller must submit that proposal through the revision-checked file-save
+route, preventing a delayed model response from silently replacing intervening
+edits.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test the v1.3 PR 8 control server on its default loopback bind with curl.
+# Smoke-test the v1.3 PR 9 control server on its default loopback bind with curl.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ MCP_SECRET="ainiux-control-smoke-${$}-mcp"
 
 usage() {
     cat <<'EOF'
-Smoke-test the Ainiux v1.3 PR 8 control server.
+Smoke-test the Ainiux v1.3 PR 9 control server.
 
 Usage: scripts/test-control-server.sh [options]
 
@@ -28,7 +28,7 @@ Options:
   -h, --help      Show this help
 
 The script starts a temporary loopback server, tests authentication, discovery,
-job submission/status/events/cancel/idempotency, revision-safe chat threads,
+job submission/status/events/cancel/idempotency, revision-safe chat/workspace discovery,
 Host/Origin policy, and scoped MCP credentials, then stops the server. It uses
 provider "none" and never contacts a provider endpoint.
 EOF
@@ -187,7 +187,7 @@ expect_body '"auth_scope":"full_control"' "status authentication scope"
 
 request 200 "authenticated capabilities" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/capabilities"
-expect_body '"operations":["health","status","capabilities","chat","run","plan","image","sessions","review","dired","files","chat_threads"]' "capability operations"
+expect_body '"operations":["health","status","capabilities","chat","run","plan","image","editor_assist","sessions","review","dired","workspace_mutations","files","chat_threads"]' "capability operations"
 expect_body '"mcp":true' "MCP adapter availability"
 
 request 401 "MCP token cannot access control API" "${MCP_AUTH[@]}" \

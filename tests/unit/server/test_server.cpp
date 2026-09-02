@@ -27,6 +27,7 @@
 
 #include "cli/args.hpp"
 #include "json/json.hpp"
+#include "platform/filesystem.hpp"
 #include "server/auth.hpp"
 #include "server/chat_service.hpp"
 #include "server/http_parser.hpp"
@@ -414,7 +415,8 @@ http::Request session_request(const std::string& method,
                               const std::string& body = "{}") {
     std::string request = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                           "Authorization: Bearer controller\r\n";
-    if (method == "POST") request += "Content-Type: application/json\r\n";
+    if (method == "POST" || method == "PUT" || method == "PATCH")
+        request += "Content-Type: application/json\r\n";
     request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
     return parsed_request(request);
 }
@@ -560,6 +562,200 @@ void test_read_only_workspace_routes_are_contained_and_bounded() {
               review.body.find("private.json") == std::string::npos &&
               review.body.find(workspace.u8string()) == std::string::npos,
           "workspace review is recursive, bounded, and excludes private paths");
+
+    fs::remove_all(workspace, cleanup_error);
+    fs::remove_all(outside, cleanup_error);
+}
+
+void test_revision_safe_workspace_mutations_and_editor_assist() {
+    namespace fs = std::filesystem;
+    const fs::path workspace = fs::temp_directory_path() / "ainiux-workspace-mutation-test";
+    const fs::path outside = fs::temp_directory_path() / "ainiux-workspace-mutation-outside";
+    std::error_code cleanup_error;
+    fs::remove_all(workspace, cleanup_error);
+    fs::remove_all(outside, cleanup_error);
+    fs::create_directories(workspace / "nested", cleanup_error);
+    fs::create_directories(workspace / "readonly", cleanup_error);
+    fs::create_directories(outside, cleanup_error);
+    {
+        std::ofstream(workspace / "note.txt", std::ios::binary) << "one\n";
+        std::ofstream(workspace / "race.txt", std::ios::binary) << "before\n";
+        std::ofstream(workspace / "readonly" / "kept.txt", std::ios::binary) << "keep\n";
+        std::ofstream(outside / "outside.txt", std::ios::binary) << "outside\n";
+    }
+    check(!cleanup_error, "workspace mutation test creates isolated directories");
+
+    auto string_member = [](const std::string& encoded, const std::string& name) {
+        const json::ParseResult parsed = json::parse(encoded);
+        const json::Value* value = parsed.error.ok() ? parsed.value.get(name) : nullptr;
+        return value != nullptr && value->is_string() ? value->string : std::string();
+    };
+    auto file_revision = [&](WorkspaceService& service, const std::string& path) {
+        std::string encoded;
+        return service.read(path, encoded).ok() ? string_member(encoded, "revision")
+                                                : std::string();
+    };
+
+    WorkspaceService service(workspace.u8string());
+    std::string listing;
+    check(service.list("", listing).ok(), "revision-safe dired listing succeeds");
+    const std::string root_revision = string_member(listing, "revision");
+    const std::string first_revision = file_revision(service, "note.txt");
+    check(!root_revision.empty() && !first_revision.empty() &&
+              listing.find("\"revision\"") != std::string::npos,
+          "workspace listings and file reads expose opaque revisions");
+
+    std::string response;
+    std::string current;
+    Error saved = service.save("note.txt",
+                               "{\"revision\":" + json::quote(first_revision) +
+                                   ",\"content\":\"two\\n\"}",
+                               response, current);
+    check(saved.ok() && current != first_revision &&
+              file_revision(service, "note.txt") == current,
+          "file save atomically replaces reviewed content and advances its revision");
+
+    {
+        std::ofstream(workspace / "note.txt", std::ios::binary | std::ios::trunc) << "external\n";
+    }
+    const Error stale = service.save("note.txt",
+                                     "{\"revision\":" + json::quote(current) +
+                                         ",\"content\":\"lost\\n\"}",
+                                     response, current);
+    std::string disk_text;
+    platform::read_file_bounded((workspace / "note.txt").u8string(), 1024U, disk_text);
+    check(stale.code == ErrorCode::FileLock && !current.empty() && disk_text == "external\n",
+          "stale file saves return the current revision without overwriting external edits");
+
+    service.list("", listing);
+    const std::string create_parent_revision = string_member(listing, "revision");
+    const Error created = service.create_file(
+        "{\"path\":\"created.txt\",\"parent_revision\":" +
+            json::quote(create_parent_revision) + ",\"content\":\"created\\n\"}",
+        response, current);
+    check(created.ok() && fs::exists(workspace / "created.txt"),
+          "new files require a reviewed parent revision and use the atomic save primitive");
+    const Error create_race = platform::atomic_write_shared_create(
+        (workspace / "created.txt").u8string(), "overwrite\n", true);
+    disk_text.clear();
+    platform::read_file_bounded((workspace / "created.txt").u8string(), 1024U, disk_text);
+    check(create_race.code == ErrorCode::FileWrite && disk_text == "created\n",
+          "exclusive atomic publication preserves a destination that appears during create/copy");
+
+    service.list("", listing);
+    const std::string mutation_parent_revision = string_member(listing, "revision");
+    const std::string created_revision = file_revision(service, "created.txt");
+    const std::string mutation_body =
+        "{\"operations\":["
+        "{\"operation\":\"mkdir\",\"path\":\"made\",\"parent_revision\":" +
+        json::quote(mutation_parent_revision) + "},"
+        "{\"operation\":\"delete\",\"path\":\"created.txt\",\"revision\":" +
+        json::quote(created_revision) +
+        ",\"confirmation\":\"delete wrong.txt\"},"
+        "{\"operation\":\"mkdir\",\"path\":\"../escape\",\"parent_revision\":" +
+        json::quote(mutation_parent_revision) + "}]}";
+    check(service.mutate(mutation_body, response).ok() &&
+              response.find("\"ok\":true") != std::string::npos &&
+              response.find("revision_conflict") == std::string::npos &&
+              response.find("invalid_target") != std::string::npos &&
+              fs::is_directory(workspace / "made") && fs::exists(workspace / "created.txt") &&
+              !fs::exists(outside / "escape"),
+          "bounded mutation batches report per-target results and reject bad confirmation and traversal");
+
+    std::string nested_listing;
+    service.list("nested", nested_listing);
+    const std::string nested_revision = string_member(nested_listing, "revision");
+    const std::string move_revision = file_revision(service, "created.txt");
+    check(service.mutate(
+              "{\"operations\":[{\"operation\":\"move\",\"path\":\"created.txt\","
+              "\"revision\":" + json::quote(move_revision) +
+              ",\"destination\":\"nested/moved.txt\",\"destination_parent_revision\":" +
+              json::quote(nested_revision) + "}]}", response).ok() &&
+              response.find("\"ok\":true") != std::string::npos &&
+              fs::exists(workspace / "nested" / "moved.txt") &&
+              !fs::exists(workspace / "created.txt"),
+          "move uses exact reviewed source and destination-parent identities across directories");
+
+    service.list("", listing);
+    const std::string copy_parent_revision = string_member(listing, "revision");
+    const std::string move_target_revision = file_revision(service, "nested/moved.txt");
+    check(service.mutate(
+              "{\"operations\":[{\"operation\":\"copy\",\"path\":\"nested/moved.txt\","
+              "\"revision\":" + json::quote(move_target_revision) +
+              ",\"destination\":\"copied.txt\",\"destination_parent_revision\":" +
+              json::quote(copy_parent_revision) + "}]}", response).ok() &&
+              response.find("\"ok\":true") != std::string::npos &&
+              fs::exists(workspace / "copied.txt"),
+          "copy is bounded and returns a fresh destination revision");
+
+    const std::string race_revision = file_revision(service, "race.txt");
+    check(platform::atomic_write_shared((workspace / "race.txt").u8string(), "before\n", true).ok(),
+          "race test replaces the target with a new identity while retaining content");
+    const Error replaced = service.save(
+        "race.txt", "{\"revision\":" + json::quote(race_revision) +
+                        ",\"content\":\"after\\n\"}", response, current);
+    check(replaced.code == ErrorCode::FileLock,
+          "identity-bearing revisions reject a same-content replacement race");
+
+#if !defined(_WIN32)
+    const std::string readonly_revision = file_revision(service, "readonly/kept.txt");
+    fs::permissions(workspace / "readonly", fs::perms::owner_read | fs::perms::owner_exec,
+                    fs::perm_options::replace, cleanup_error);
+    const Error failed_save = service.save(
+        "readonly/kept.txt", "{\"revision\":" + json::quote(readonly_revision) +
+                                ",\"content\":\"replace\\n\"}", response, current);
+    fs::permissions(workspace / "readonly", fs::perms::owner_all,
+                    fs::perm_options::replace, cleanup_error);
+    disk_text.clear();
+    platform::read_file_bounded((workspace / "readonly" / "kept.txt").u8string(), 1024U, disk_text);
+    check(failed_save.code == ErrorCode::FileWrite && disk_text == "keep\n",
+          "atomic save failure preserves the previously reviewed file");
+
+    const std::string link_revision = file_revision(service, "note.txt");
+    fs::remove(workspace / "note.txt", cleanup_error);
+    fs::create_symlink(outside / "outside.txt", workspace / "note.txt", cleanup_error);
+    const Error link_swap = service.save(
+        "note.txt", "{\"revision\":" + json::quote(link_revision) +
+                       ",\"content\":\"escaped\\n\"}", response, current);
+    disk_text.clear();
+    platform::read_file_bounded((outside / "outside.txt").u8string(), 1024U, disk_text);
+    check(!link_swap.ok() && disk_text == "outside\n",
+          "a symlink swap cannot redirect a revision-checked save outside the workspace");
+#endif
+
+    AuthConfig auth{"controller", {}};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 8, &active};
+    status.workspace = &service;
+    const std::string live_revision = file_revision(service, "copied.txt");
+    Response stale_route = route_request(session_request(
+        "PUT", "/ainiux/v1/files?path=copied.txt",
+        "{\"revision\":\"stale\",\"content\":\"no\\n\"}"), auth, status);
+    check(stale_route.status == 409 && stale_route.body.find("current_revision") != std::string::npos,
+          "file-save route returns HTTP 409 with conflict UI revision data");
+    Response mutation_route = route_request(session_request(
+        "POST", "/ainiux/v1/dired/mutations",
+        "{\"operations\":[{\"operation\":\"delete\",\"path\":\"copied.txt\","
+        "\"revision\":" + json::quote(live_revision) +
+        ",\"confirmation\":\"delete copied.txt\"}]}"), auth, status);
+    check(mutation_route.status == 200 && mutation_route.body.find("\"ok\":true") != std::string::npos &&
+              !fs::exists(workspace / "copied.txt"),
+          "authenticated mutation route applies an explicitly confirmed reviewed target");
+
+    cli::Options options;
+    options.provider = "none";
+    JobService jobs(options, workspace.u8string(), 2);
+    status.jobs = &jobs;
+    ServiceSubmitResult assist = jobs.submit(
+        "editor-assist",
+        "{\"provider\":\"none\",\"path\":\"race.txt\",\"revision\":" +
+            json::quote(race_revision) +
+            ",\"instruction\":\"Improve this text\"}", "assist-stale");
+    check(assist.validation_error.ok() && assist.submission.job != nullptr &&
+              wait_terminal(assist.submission.job) &&
+              assist.submission.job->snapshot_json().find("\"code\":\"conflict\"") != std::string::npos,
+          "editor-assist jobs verify the reviewed file revision before contacting a provider");
+    jobs.shutdown();
 
     fs::remove_all(workspace, cleanup_error);
     fs::remove_all(outside, cleanup_error);
@@ -964,6 +1160,7 @@ void run_all() {
     test_mcp_stateless_adapter_and_tasks();
     test_interactive_sessions_are_bounded_and_replayable();
     test_read_only_workspace_routes_are_contained_and_bounded();
+    test_revision_safe_workspace_mutations_and_editor_assist();
     test_revision_safe_chat_thread_routes();
     test_job_errors_hide_server_side_paths();
     test_server_cli_contract();

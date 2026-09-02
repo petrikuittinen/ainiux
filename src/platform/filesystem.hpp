@@ -63,6 +63,11 @@ Error atomic_write_private(const std::string& utf8_path,
 Error atomic_write_shared(const std::string& utf8_path,
                           const std::string& data,
                           bool reject_reparse_points = false);
+// Atomically publishes a new ordinary workspace file and fails if the target
+// already exists, including when it appears during the operation.
+Error atomic_write_shared_create(const std::string& utf8_path,
+                                 const std::string& data,
+                                 bool reject_reparse_points = false);
 Error atomic_move(const std::string& from_utf8_path,
                   const std::string& to_utf8_path,
                   bool replace_existing = false);

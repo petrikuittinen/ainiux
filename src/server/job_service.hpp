@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "cli/args.hpp"
@@ -44,6 +45,14 @@ class JobService {
                              app::operation::ImageRequest request,
                              runtime::CancellationToken cancellation,
                              JobEvents events) const;
+    JobOutcome run_editor_assist_job(cli::Options options,
+                                     std::string path,
+                                     std::string revision,
+                                     std::string instruction,
+                                     std::optional<std::size_t> selection_start,
+                                     std::optional<std::size_t> selection_end,
+                                     runtime::CancellationToken cancellation,
+                                     JobEvents events) const;
 
     cli::Options base_options_;
     std::string workspace_;

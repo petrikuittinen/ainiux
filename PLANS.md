@@ -46,7 +46,7 @@ error layers should serve:
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
-| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 8 TLS/non-loopback landed; PR 9 revision-safe mutations is next |
+| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 9 revision-safe mutations landed; PR 10 embedded WUI is next |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 The embedded browser controller is the final v1.3 PR, after the control API and
@@ -261,10 +261,10 @@ Generated-image routes, if later added, may serve only controlled generated asse
 
 # v1.3 - Remote control API (`ainiux server`)
 
-Status: PR 8 TLS/direct non-loopback policy, PR 7 revision-safe chat threads, PR 6 read-only workspace review/dired/file access, PR 5 interactive agent sessions, PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
+Status: PR 9 revision-safe dired/editor mutations and assist, PR 8 TLS/direct non-loopback policy, PR 7 revision-safe chat threads, PR 6 read-only workspace review/dired/file access, PR 5 interactive agent sessions, PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
 idempotency, cancellation, provider concurrency, and the serialized workspace
-agent lane landed. The MCP adapter, read-only review/dired/file routes, and
-revision-safe chat persistence are landed; revision-safe editor/dired mutations begin in PR 9.
+agent lane landed. The MCP adapter, workspace review/edit routes, and
+revision-safe chat persistence are landed; the embedded WUI begins in PR 10.
 
 ## Goal
 
@@ -801,7 +801,7 @@ remote startup gates, remote-Yolo opt-in, certificate tests, and security docs.
 
 ### PR 9 - Revision-safe dired/editor mutations
 
-Add root-aware explicit-target mutations, file editing and assist, optimistic
+Landed. Add root-aware explicit-target mutations, file editing and assist, optimistic
 concurrency, atomic saves, conflict UI data, and focused race/failure tests.
 
 ### PR 10 - Embedded vanilla-JavaScript WUI (v1.3 release gate)

@@ -146,8 +146,8 @@ This is advisory coordination, not an operating-system write prohibition: unrela
 
 `ainiux server` binds IPv4 loopback (`127.0.0.1`) by default and exposes
 authenticated discovery plus asynchronous one-shot chat, run, plan, and image
-jobs, bounded interactive agent sessions, contained read-only workspace files,
-and revision-safe chat-thread operations. It does not expose raw chat databases
+jobs, bounded interactive agent sessions, contained revision-safe workspace
+reads/mutations/editor assist, and revision-safe chat-thread operations. It does not expose raw chat databases
 or a browser UI. Its separate MCP endpoint exposes only the
 bounded job tools
 documented in [the control API guide](api.md).
@@ -173,8 +173,19 @@ provider URLs, attachment paths, or filesystem roots. Provider chat/image work
 has a global cap; run/plan reserve one fixed-workspace lane and remain headless
 under Guard. Job/event retention is bounded and in-memory only. Cancellation is
 job-scoped, SSE writers time out on disconnected/slow clients, and server-side
-credential paths are hidden from job errors. WUI assets and later mutation
-routes are not present.
+credential paths are hidden from job errors. WUI assets are not present.
+
+Workspace mutation authority is limited to the server's one fixed canonical
+root. Wire paths are slash-separated relative targets and are checked with the
+POSIX and Windows lexical rules on every platform. Protected state, sensitive
+configuration names, symlinks/reparse points, existing destinations, and
+out-of-root paths are rejected. Opaque revisions bind target identity,
+high-resolution modification state, size/type, and bounded file content; every
+existing target and creation parent must match the revision the controller
+reviewed. Deletes require an exact path confirmation. Recursive copy/delete and
+batch sizes are bounded. Text saves use the shared atomic replacement primitive,
+so failure retains the old file. Editor assist is proposal-only and must pass
+through a later revision-checked save.
 
 ## Configuration Files
 

@@ -308,15 +308,15 @@ Fault, integration, SQLite/TUI, sanitizer, and Valgrind suites are available but
 
 The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). Design rationale is in [docs/decisions.md](docs/decisions.md); short active work is in [TODO.md](TODO.md).
 
-## Control API (v1.3 PR 8)
+## Control API (v1.3 PR 9)
 
 The control server exposes authenticated discovery and asynchronous one-shot
 chat, run, plan, and image jobs, plus a stateless MCP 2026-07-28 endpoint for
 MCP-only clients. It also exposes bounded interactive agent sessions with
 replayable events, cancellation, remote Guard approvals, workspace review,
-read-only dired, bounded file reads, and revision-safe access to the existing
-personal chat-thread library. The browser UI and filesystem
-mutations land in later v1.3 slices. Set a dedicated full-control secret and
+revision-safe dired/file mutations and editor assist, and revision-safe access
+to the existing personal chat-thread library. The browser UI lands in a later
+v1.3 slice. Set a dedicated full-control secret and
 start the fixed-workspace loopback listener:
 
 ```sh
@@ -346,8 +346,9 @@ ainiux server --bind 192.0.2.10 --tls-cert /secure/server.crt \
 Remote sessions cannot request or inherit Yolo unless the server also starts
 with `--allow-remote-yolo`. See [the control API guide](docs/api.md) for routes,
 limits, authentication, certificate, Host, and Origin rules.
-Run `scripts/test-control-server-pr3.sh` for a repeatable build, unit/integration,
-live mock-provider, idempotency, SSE, and cancellation check.
+Run `scripts/test-control-server.sh --build` for the current authenticated
+control-server smoke check. `scripts/test-control-server-pr3.sh` retains the
+broader live mock-provider, idempotency, SSE, and cancellation check.
 
 ## Security and data
 
@@ -362,7 +363,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not yet implement control-API filesystem mutations, an OpenAI-compatible `/v1` proxy, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot control-API jobs, interactive agent sessions, revision-safe chat threads, read-only workspace review/dired/file routes, TLS/direct non-loopback policy, the MCP server adapter, and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not yet implement an OpenAI-compatible `/v1` proxy, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot control-API jobs, interactive agent sessions, revision-safe chat threads, revision-safe workspace review/dired/file mutations and editor assist, TLS/direct non-loopback policy, the MCP server adapter, and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

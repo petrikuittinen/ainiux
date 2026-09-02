@@ -1,12 +1,17 @@
 #include "server/job_service.hpp"
 
 #include <set>
+#include <cmath>
+#include <optional>
 #include <utility>
 
 #include "app/app.hpp"
 #include "app/operations.hpp"
+#include "editor/ai_continue.hpp"
+#include "editor/editor_assist.hpp"
 #include "provider/provider.hpp"
 #include "security/redact.hpp"
+#include "server/workspace_service.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -44,6 +49,20 @@ Error required_string(const json::Value& root,
     if (!error.ok()) return error;
     output = ascii_trim(output);
     if (output.empty()) return field_error(field, "must be a non-empty string");
+    return ok_error();
+}
+
+Error optional_index(const json::Value& root,
+                     const std::string& field,
+                     std::optional<std::size_t>& output) {
+    const json::Value* value = root.get(field);
+    if (value == nullptr) return ok_error();
+    if (value->type != json::Value::Type::Number || value->number < 0.0 ||
+        std::floor(value->number) != value->number ||
+        value->number > static_cast<double>(Limits::json_body_bytes)) {
+        return field_error(field, "must be a non-negative integer within the editing limit");
+    }
+    output = static_cast<std::size_t>(value->number);
     return ok_error();
 }
 
@@ -214,6 +233,77 @@ JobOutcome JobService::run_image_job(cli::Options options,
                 ",\"total_ms\":" + std::to_string(result.response.total_ms) + "}"};
 }
 
+JobOutcome JobService::run_editor_assist_job(
+    cli::Options options,
+    std::string path,
+    std::string revision,
+    std::string instruction,
+    std::optional<std::size_t> selection_start,
+    std::optional<std::size_t> selection_end,
+    runtime::CancellationToken cancellation,
+    JobEvents events) const {
+    WorkspaceService workspace(workspace_);
+    WorkspaceFileSnapshot snapshot;
+    std::string current_revision;
+    Error error = workspace.load_file(path, revision, snapshot, &current_revision);
+    if (!error.ok()) return {error, {}};
+    if (selection_start.has_value() != selection_end.has_value()) {
+        return {field_error("selection_start", "and selection_end must be supplied together"), {}};
+    }
+    if (selection_start.has_value() &&
+        (*selection_start >= *selection_end || *selection_end > snapshot.content.size())) {
+        return {field_error("selection_end", "must follow selection_start within the reviewed file"), {}};
+    }
+
+    options.editor = true;
+    provider::ContextResult built = provider::build_context(options);
+    if (!built.error.ok()) return {public_operation_error(built.error, {options.key}), {}};
+    Error model_error = app::choose_default_model(built.context);
+    if (!model_error.ok()) {
+        return {public_operation_error(model_error, {built.context.api_key}), {}};
+    }
+    const std::string api_key = built.context.api_key;
+    editor::AiContinueContext assist;
+    assist.request = std::move(built.context);
+    assist.settings = editor::ai_continue_settings(assist.request.options);
+    assist.assist_config = assist.request.options.editor_assist_config;
+    editor::EditorState state = editor::EditorState::from_text(snapshot.content);
+    state.set_path(path);
+    std::optional<editor::AssistPromptMode> mode = editor::AssistPromptMode::All;
+    if (selection_start.has_value()) {
+        state.selection.anchor = *selection_start;
+        state.selection.active = *selection_end;
+        state.cursor = *selection_end;
+        mode = editor::AssistPromptMode::Selection;
+    }
+    const editor::AssistExecution execution = editor::build_assist_execution(
+        state, assist, editor::AssistCommandKind::Prompt, 0, std::nullopt,
+        instruction, mode);
+    if (!execution.ok) return {{ErrorCode::BadArgs, execution.error_message}, {}};
+
+    if (events) (void)events({app::operation::EventType::Progress, "editor assist thinking", 0, 0});
+    provider::ChatResult chat;
+    auto on_delta = [&cancellation](const std::string&) -> Error {
+        return cancellation.cancelled()
+                   ? Error{ErrorCode::Cancelled, "editor assist cancelled"}
+                   : ok_error();
+    };
+    provider::RequestContext request = editor::assist_request_context(assist, false);
+    error = provider::send_chat_messages(request, execution.messages, on_delta, chat, cancellation);
+    if (!error.ok()) return {public_operation_error(error, {api_key}), {}};
+    const std::string replacement = editor::trim_assist_inplace_response(chat.content);
+    return {ok_error(),
+            "{\"path\":" + json::quote(snapshot.path) +
+                ",\"revision\":" + json::quote(snapshot.revision) +
+                ",\"edit\":{\"start\":" + std::to_string(execution.replace_start) +
+                ",\"length\":" + std::to_string(execution.replace_count) +
+                ",\"replacement\":" + json::quote(replacement) + "}" +
+                ",\"model\":" + json::quote(chat.model) +
+                ",\"usage\":" + valid_json_or_null(chat.usage_json) +
+                ",\"timing\":{\"ttft_ms\":" + std::to_string(chat.ttft_ms) +
+                ",\"total_ms\":" + std::to_string(chat.total_ms) + "}}"};
+}
+
 ServiceSubmitResult JobService::submit(const std::string& operation,
                                        const std::string& body,
                                        const std::string& idempotency_key) {
@@ -294,6 +384,44 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
         JobWork work = [this, options, request = std::move(request)](
                            runtime::CancellationToken token, JobEvents events) mutable {
             return run_image_job(options, std::move(request), token, std::move(events));
+        };
+        return {registry_.submit(operation, canonical, idempotency_key,
+                                 JobClass::Provider, std::move(work)), ok_error()};
+    }
+
+    if (operation == "editor-assist") {
+        error = reject_unknown(parsed.value,
+                               {"provider", "model", "api", "path", "revision",
+                                "instruction", "selection_start", "selection_end"});
+        if (!error.ok()) return {{}, error};
+        std::string path;
+        std::string revision;
+        std::string instruction;
+        error = required_string(parsed.value, "path", path, Limits::request_line_bytes);
+        if (!error.ok()) return {{}, error};
+        const json::Value* path_value = parsed.value.get("path");
+        if (path_value == nullptr || path_value->string != path) {
+            return {{}, field_error("path", "must not have leading or trailing whitespace")};
+        }
+        error = required_string(parsed.value, "revision", revision, 128U);
+        if (!error.ok()) return {{}, error};
+        error = required_string(parsed.value, "instruction", instruction);
+        if (!error.ok()) return {{}, error};
+        std::optional<std::size_t> selection_start;
+        std::optional<std::size_t> selection_end;
+        error = optional_index(parsed.value, "selection_start", selection_start);
+        if (!error.ok()) return {{}, error};
+        error = optional_index(parsed.value, "selection_end", selection_end);
+        if (!error.ok()) return {{}, error};
+        if (selection_start.has_value() != selection_end.has_value()) {
+            return {{}, field_error("selection_start", "and selection_end must be supplied together")};
+        }
+        JobWork work = [this, options, path = std::move(path), revision = std::move(revision),
+                        instruction = std::move(instruction), selection_start, selection_end](
+                           runtime::CancellationToken token, JobEvents events) mutable {
+            return run_editor_assist_job(options, std::move(path), std::move(revision),
+                                         std::move(instruction), selection_start, selection_end,
+                                         token, std::move(events));
         };
         return {registry_.submit(operation, canonical, idempotency_key,
                                  JobClass::Provider, std::move(work)), ok_error()};
