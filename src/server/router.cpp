@@ -8,9 +8,11 @@
 #include <utility>
 
 #include "ainiux/version.hpp"
+#include "encoding/encoding.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "server/chat_service.hpp"
+#include "server/embedded_assets.hpp"
 #include "server/limits.hpp"
 #include "server/mcp_adapter.hpp"
 #include "server/session_hub.hpp"
@@ -213,6 +215,43 @@ bool positive_decimal_id(const std::string& text, long long& value) {
     return true;
 }
 
+int hex_digit(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+Error decode_query_component(const std::string& encoded, std::string& decoded) {
+    decoded.clear();
+    decoded.reserve(encoded.size());
+    for (std::size_t index = 0; index < encoded.size(); ++index) {
+        const unsigned char c = static_cast<unsigned char>(encoded[index]);
+        if (c != '%') {
+            decoded.push_back(static_cast<char>(c));
+            continue;
+        }
+        if (index + 2U >= encoded.size()) {
+            return {ErrorCode::BadArgs, "query path contains an incomplete percent escape"};
+        }
+        const int high = hex_digit(static_cast<unsigned char>(encoded[index + 1U]));
+        const int low = hex_digit(static_cast<unsigned char>(encoded[index + 2U]));
+        if (high < 0 || low < 0) {
+            return {ErrorCode::BadArgs, "query path contains an invalid percent escape"};
+        }
+        const unsigned char value = static_cast<unsigned char>((high << 4) | low);
+        if (value == 0 || value == '\r' || value == '\n') {
+            return {ErrorCode::BadArgs, "query path contains an invalid encoded byte"};
+        }
+        decoded.push_back(static_cast<char>(value));
+        index += 2U;
+    }
+    if (!encoding::is_valid_utf8(decoded)) {
+        return {ErrorCode::BadArgs, "query path must decode to valid UTF-8"};
+    }
+    return ok_error();
+}
+
 Error query_path(const http::Request& request, bool required, std::string& path) {
     path.clear();
     if (request.query.empty()) {
@@ -229,7 +268,8 @@ Error query_path(const http::Request& request, bool required, std::string& path)
         if (equals == std::string::npos || item.substr(0, equals) != "path" || found) {
             return {ErrorCode::BadArgs, "query accepts only one path parameter"};
         }
-        path = item.substr(equals + 1U);
+        Error decoded = decode_query_component(item.substr(equals + 1U), path);
+        if (!decoded.ok()) return decoded;
         found = true;
         if (ampersand == std::string::npos) break;
         start = ampersand + 1U;
@@ -295,6 +335,32 @@ Response route_request(const http::Request& request,
         if (ascii_lower(origin->second) != expected) {
             return error_response(403, "origin_rejected", "cross-origin requests are disabled");
         }
+    }
+    if (is_web_ui_path(request.path)) {
+        if (request.method != "GET") {
+            Response denied = error_response(405, "method_not_allowed", "web UI assets accept GET only");
+            denied.allow = "GET";
+            return denied;
+        }
+        if (!request.query.empty() || !request.body.empty()) {
+            return error_response(400, "invalid_request", "web UI assets do not accept a query or body");
+        }
+        EmbeddedAsset asset;
+        if (!find_embedded_asset(request.path, asset)) {
+            return error_response(404, "asset_not_found", "no embedded web UI asset matches this path");
+        }
+        Response web;
+        web.content_type = std::string(asset.content_type);
+        web.body.assign(asset.content.data(), asset.content.size());
+        web.cache_control = asset.immutable
+                                ? "public, max-age=31536000, immutable"
+                                : "no-store";
+        web.content_security_policy =
+            "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+            "form-action 'self'; frame-ancestors 'none'";
+        web.browser_asset = true;
+        return web;
     }
     const AuthScope scope = authenticate(request, auth);
     if (scope == AuthScope::None) {
@@ -383,7 +449,7 @@ Response route_request(const http::Request& request,
                         ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
-                        ",\"adapters\":{\"mcp\":true,\"openai_v1\":false}" +
+                        ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
                         ",\"providers\":" + providers +
                         ",\"sessions\":{\"maximum\":" + std::to_string(status.max_sessions) +
                         ",\"active\":" + std::to_string(status.sessions == nullptr ? 0U : status.sessions->size()) + "}}";
@@ -815,9 +881,16 @@ std::string serialize_response(const Response& response, bool keep_alive) {
                           reason_phrase(response.status) + "\r\nContent-Type: " +
                           response.content_type;
     if (!response.streaming) headers += "\r\nContent-Length: " + std::to_string(response.body.size());
-    headers +=
-           "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff" +
-           std::string("\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'");
+    headers += "\r\nCache-Control: " + response.cache_control +
+               "\r\nX-Content-Type-Options: nosniff" +
+               "\r\nContent-Security-Policy: " + response.content_security_policy;
+    if (response.browser_asset) {
+        headers += "\r\nReferrer-Policy: no-referrer"
+                   "\r\nPermissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+                   "\r\nCross-Origin-Opener-Policy: same-origin"
+                   "\r\nCross-Origin-Resource-Policy: same-origin"
+                   "\r\nX-Frame-Options: DENY";
+    }
     if (response.status == 401) headers += "\r\nWWW-Authenticate: Bearer realm=\"ainiux-control\"";
     if (response.status == 405 && !response.allow.empty()) headers += "\r\nAllow: " + response.allow;
     headers += std::string("\r\nConnection: ") + (persistent ? "keep-alive" : "close") +

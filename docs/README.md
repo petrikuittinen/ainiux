@@ -19,10 +19,11 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Configuration](configuration.md) | Layering, credentials, themes, models, image catalog, benchmark prompts, and editor commands |
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
-| [Control API](api.md) | Start the loopback-by-default v1.3 server; configure TLS/direct access; use jobs, sessions, revision-safe chat threads, workspace editing/assist, and MCP |
+| [Control API](api.md) | Start the loopback-by-default v1.30 server; configure TLS/direct access; use jobs, sessions, revision-safe chat threads, workspace editing/assist, and MCP |
+| [Browser controller](web-mode.md) | Use the embedded responsive vanilla-JavaScript WUI for chat, jobs, agent/Guard, images, and revision-safe workspace work |
 | [Security](security.md) | Credential, persistence, fetch, attachment, image generation, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
-| [Version history](version-history.md) | Compact v0.0–v1.19 release timeline plus unreleased work |
+| [Version history](version-history.md) | Compact v0.0–v1.30 release timeline plus unreleased work |
 
 ## Architecture and implementation references
 
@@ -32,7 +33,6 @@ This index separates current usage guides from design records, roadmaps, and poi
 - [Agent compaction strategies](compact_strategies.md) documents the current `fast`, `smart`, and `summary` implementation in detail.
 - [Unicode license](unicode-license.txt) covers generated Unicode data.
 - [Project roadmap](../PLANS.md), [open work](../TODO.md), and [agent constraints](../AGENTS.md) govern future work.
-- [Postponed web mode](web-mode.md) is a historical planning note, not a current usage guide.
 
 ## Point-in-time snapshots
 

@@ -6,7 +6,7 @@ Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compati
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.19**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.30**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -17,7 +17,7 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 - **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, configurable AI commands, and a full-screen **dired** directory browser (`ainiux -d`, `F4`, or `Ctrl+X d`).
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
 - **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
-- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, optional OpenSSL for control-server TLS, native POSIX/Win32 platform backends, and ANSI/VT rendering. It does not require Electron, a browser, or ncurses. And it won't eat all of your RAM.
+- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, optional OpenSSL for control-server TLS, native POSIX/Win32 platform backends, and ANSI/VT rendering. Its core CLI and terminal modes do not require Electron, a browser, or ncurses, and the optional browser controller is dependency-free vanilla JavaScript. And it won't eat all of your RAM.
 
 ## Platform support
 
@@ -99,7 +99,7 @@ families used most heavily while developing and testing the current agent,
 reasoning, tool-calling, and local OpenAI-compatible server paths. Exact model
 availability and identifiers still depend on the selected provider or local server.
 
-## Current v1.19 capabilities
+## Current v1.30 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -308,20 +308,33 @@ Fault, integration, SQLite/TUI, sanitizer, and Valgrind suites are available but
 
 The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). Design rationale is in [docs/decisions.md](docs/decisions.md); short active work is in [TODO.md](TODO.md).
 
-## Control API (v1.3 PR 9)
+## Control API and web UI (v1.30)
 
 The control server exposes authenticated discovery and asynchronous one-shot
 chat, run, plan, and image jobs, plus a stateless MCP 2026-07-28 endpoint for
 MCP-only clients. It also exposes bounded interactive agent sessions with
 replayable events, cancellation, remote Guard approvals, workspace review,
 revision-safe dired/file mutations and editor assist, and revision-safe access
-to the existing personal chat-thread library. The browser UI lands in a later
-v1.3 slice. Set a dedicated full-control secret and
+to the existing personal chat-thread library. Its embedded responsive browser
+controller uses only vanilla HTML, CSS, and JavaScript. Set a dedicated full-control secret and
 start the fixed-workspace loopback listener:
 
 ```sh
 export AINIUX_SERVER_SECRET='use-a-long-random-value'
 ainiux server --workspace . --port 8766
+```
+
+Open `http://127.0.0.1:8766/ui/`, enter the controller secret, and choose
+whether to retain it for this tab. The token is otherwise memory-only and is
+never stored in a cookie, URL, or `localStorage`. The same-origin WUI covers
+chat threads, jobs and images, interactive agent/Guard flows, workspace review
+and mutations, revision-safe file editing/assist, and non-secret server status.
+It follows the system light/dark preference and also has an explicit theme
+selector.
+
+API clients continue to authenticate every request explicitly:
+
+```sh
 curl -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
   http://127.0.0.1:8766/ainiux/v1/capabilities
 
@@ -363,7 +376,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not yet implement an OpenAI-compatible `/v1` proxy, browser UI, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. One-shot control-API jobs, interactive agent sessions, revision-safe chat threads, revision-safe workspace review/dired/file mutations and editor assist, TLS/direct non-loopback policy, the MCP server adapter, and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions` for Replicate, `fal_queue` for fal, `gemini_interactions` for Gemini Nano Banana; keys `REPLICATE_API_KEY`/`REPLICATE_API_TOKEN`, `FAL_API_KEY`/`FAL_KEY`, or `GEMINI_API_KEY`). The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not yet implement an OpenAI-compatible `/v1` proxy, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The embedded browser controller, one-shot control-API jobs, interactive agent sessions, revision-safe chat threads, revision-safe workspace review/dired/file mutations and editor assist, TLS/direct non-loopback policy, the MCP server adapter, and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); keys remain server-side. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 
@@ -373,7 +386,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.19 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.30 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
 
 For the complete current option list, run:
 

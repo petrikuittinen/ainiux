@@ -96,7 +96,7 @@ struct Options {
     bool disable_indexing = false;
     // One-shot image generation: ainiux image / --image
     bool image = false;
-    // v1.3 control API server. Loopback remains the safe default.
+    // v1.30 control API server. Loopback remains the safe default.
     bool server = false;
     bool server_options_seen = false;
     bool insecure_plain_bind = false;

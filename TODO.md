@@ -23,9 +23,8 @@
 
 ## Deferred roadmap
 
-- Local control-API server (`ainiux server`) has its v1.3 PR 9 revision-safe editor/dired mutations and assist, PR 8 TLS/direct non-loopback policy, PR 7 revision-safe chat-thread persistence, PR 6 bounded interactive agent sessions/workspace reads, PR 4 MCP, and PR 3 job surfaces. The embedded WUI remains. OpenAI `/v1` proxy is a later adapter, not a substitute. Foreign-agent bash usage is `docs/skills/ainiux-cli/SKILL.md`.
+- Local control-API server (`ainiux server`) is complete through v1.30 PR 10, including the embedded dependency-free WUI. The OpenAI `/v1` proxy remains a later adapter, not a substitute. Foreign-agent bash usage is `docs/skills/ainiux-cli/SKILL.md`.
 - Image generation v1.2 CLI (`ainiux image`) is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Further provider image/video models should be `images.conf` records.
-- Browser web UI remains postponed behind the local server/runtime foundation.
 
 ## Web search / fetch
 
@@ -93,7 +92,3 @@
 2. MS Word input (`.docx`-to-Markdown) and MS Word output (Markdown-to-`.docx`).
 
 These formats are intentionally deferred. Do not treat PDF or DOCX binary data as prompt text.
-
-## Postponed Browser Web UI
-
-- Browser local web UI is postponed. Prefer the control-API server (`PLANS.md` v1.3) first; a WUI should speak `/ainiux/v1` rather than embedding provider HTTP in the browser.

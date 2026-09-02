@@ -40,6 +40,9 @@ struct Response {
     bool close = false;
     bool streaming = false;
     std::string allow;
+    std::string cache_control = "no-store";
+    std::string content_security_policy = "default-src 'none'; frame-ancestors 'none'";
+    bool browser_asset = false;
     std::function<void(const std::function<bool(std::string_view)>&)> stream_body;
 };
 

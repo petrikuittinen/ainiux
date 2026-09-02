@@ -22,7 +22,7 @@ bool token_char(unsigned char c) {
 
 bool valid_target(const std::string& target, std::string& path, std::string& query) {
     if (target.empty() || target.front() != '/' || target.find('#') != std::string::npos ||
-        target.find('%') != std::string::npos || target.find('\\') != std::string::npos) {
+        target.find('\\') != std::string::npos) {
         return false;
     }
     for (unsigned char c : target) {
@@ -31,6 +31,9 @@ bool valid_target(const std::string& target, std::string& path, std::string& que
     const std::size_t question = target.find('?');
     path = target.substr(0, question);
     query = question == std::string::npos ? std::string() : target.substr(question + 1);
+    // Route paths stay literal and unambiguous. A route may strictly decode
+    // percent escapes inside its own query schema for browser-generated URLs.
+    if (path.find('%') != std::string::npos) return false;
     std::size_t start = 0;
     while (start <= path.size()) {
         const std::size_t slash = path.find('/', start);

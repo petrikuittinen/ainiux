@@ -563,3 +563,31 @@ provider/cancellation path, and returns a byte-range replacement proposal. A
 controller must submit that proposal through the revision-checked file-save
 route, preventing a delayed model response from silently replacing intervening
 edits.
+
+## Embedded dependency-free browser controller (v1.30 PR 10)
+
+The final control-server slice serves a same-origin application from `/ui/`.
+Source HTML, CSS, and one JavaScript ES module live under `src/web/`; the
+Makefile converts them into a generated C++ string table consumed by
+`server/embedded_assets`. Versioned asset URLs receive immutable caching while
+the HTML shell remains no-store. Exact lookup replaces filesystem-backed static
+serving, so neither the configured workspace nor install tree becomes web
+content. This adds no browser framework, package manager, Node.js runtime,
+bundler, CDN, font, or JavaScript library.
+
+Static boot assets are intentionally readable without a token; they contain no
+runtime configuration. Host and Origin checks still run first, and every
+`/ainiux/v1` JSON/SSE call remains bearer-authenticated. The controller keeps
+the token in module memory by default and offers only explicit tab-scoped
+`sessionStorage`. Fetch-based SSE parsing is used instead of `EventSource` so
+Authorization and `Last-Event-ID` remain controllable.
+
+The UI capability-detects the existing domain routes and never performs
+provider or filesystem work directly. Chat and file mutations retain their
+optimistic revisions; Guard approvals retain session/turn/approval identity;
+editor-assist byte ranges are applied to a browser draft and still require an
+explicit revision-safe save. Dynamic output uses constructed DOM nodes and
+`textContent`. A restrictive CSP and browser hardening headers preserve the
+same-origin boundary. Responsive grid/flex breakpoints, semantic controls,
+visible focus, live regions, reduced motion, and TUI-derived light/dark colors
+are part of the shipped source rather than runtime dependencies.

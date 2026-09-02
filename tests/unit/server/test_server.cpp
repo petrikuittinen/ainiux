@@ -101,6 +101,10 @@ void test_strict_framing_and_limits() {
                          "bare-LF HTTP is rejected");
     expect_parse_failure("GET /ainiux/v1/%2e%2e/x HTTP/1.1\r\nHost: localhost\r\n\r\n", 400,
                          "encoded ambiguous path is rejected");
+    http::Parser encoded_query;
+    check(encoded_query.feed("GET /ainiux/v1/dired?path=hello%20world HTTP/1.1\r\n"
+                             "Host: localhost\r\n\r\n") == http::ParseState::Complete,
+          "strict parser leaves percent-encoded query values to the owning route schema");
     expect_parse_failure("GET /../x HTTP/1.1\r\nHost: localhost\r\n\r\n", 400,
                          "path traversal is rejected");
     expect_parse_failure("POST /ainiux/v1/x HTTP/1.1\r\nHost: localhost\r\n"
@@ -123,6 +127,68 @@ void test_strict_framing_and_limits() {
     for (int i = 0; i < 100; ++i) headers += "X-" + std::to_string(i) + ": y\r\n";
     headers += "\r\n";
     expect_parse_failure(headers, 431, "header count includes Host and is bounded at 100");
+}
+
+void test_embedded_web_ui_assets_and_browser_security() {
+    AuthConfig config{"controller", "mcp-token"};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 128, &active};
+    auto public_get = [](const std::string& path) {
+        return parsed_request("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    };
+
+    Response index = route_request(public_get("/ui/"), config, status);
+    check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
+              index.body.find("/ui/assets/app-v1.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v1.js") != std::string::npos &&
+              index.body.find("https://") == std::string::npos &&
+              index.body.find("http://") == std::string::npos,
+          "embedded WUI index is public boot content with versioned same-origin assets only");
+
+    Response stylesheet = route_request(public_get("/ui/assets/app-v1.css"), config, status);
+    const std::string stylesheet_headers = serialize_response(stylesheet, true);
+    check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
+              stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
+              stylesheet.body.find("prefers-reduced-motion: reduce") != std::string::npos &&
+              stylesheet.body.find("html[data-theme=\"light\"]") != std::string::npos &&
+              stylesheet.body.find("html[data-theme=\"dark\"]") != std::string::npos &&
+              stylesheet.body.find("@media (max-width: 38rem)") != std::string::npos &&
+              stylesheet.body.find("grid-template-columns: repeat(6") != std::string::npos &&
+              stylesheet.body.find("@import") == std::string::npos &&
+              stylesheet.body.find("https://") == std::string::npos &&
+              stylesheet.body.find("http://") == std::string::npos &&
+              stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
+          "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
+
+    Response javascript = route_request(public_get("/ui/assets/app-v1.js"), config, status);
+    const std::string javascript_headers = serialize_response(javascript, true);
+    check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
+              javascript.body.find("sessionStorage") != std::string::npos &&
+              javascript.body.find("Last-Event-ID") != std::string::npos &&
+              javascript.body.find("textContent") != std::string::npos &&
+              javascript.body.find("localStorage") == std::string::npos &&
+              javascript.body.find("innerHTML") == std::string::npos &&
+              javascript.body.find("https://") == std::string::npos &&
+              javascript.body.find("http://") == std::string::npos &&
+              javascript_headers.find("script-src 'self'") != std::string::npos &&
+              javascript_headers.find("connect-src 'self'") != std::string::npos &&
+              javascript_headers.find("Referrer-Policy: no-referrer") != std::string::npos &&
+              javascript_headers.find("Permissions-Policy:") != std::string::npos &&
+              javascript_headers.find("X-Frame-Options: DENY") != std::string::npos,
+          "embedded WUI JavaScript uses authenticated fetch/replay and hardened same-origin headers");
+
+    check(route_request(public_get("/ui/assets/"), config, status).status == 404,
+          "WUI route serves only exact embedded assets and never a directory");
+    http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                                        "Content-Length: 0\r\n\r\n");
+    check(route_request(post, config, status).status == 405,
+          "WUI static routes reject non-GET methods");
+    http::Request cross_origin = public_get("/ui/");
+    cross_origin.headers["origin"] = "https://example.test";
+    check(route_request(cross_origin, config, status).status == 403,
+          "WUI boot assets retain the same strict Origin policy as the control API");
+    check(route_request(public_get("/ainiux/v1/status"), config, status).status == 401,
+          "making boot assets public does not weaken API authentication");
 }
 
 void test_auth_and_routes() {
@@ -161,8 +227,9 @@ void test_auth_and_routes() {
     Response capability_response = route_request(capabilities, config, status);
     check(capability_response.status == 200 &&
               capability_response.body.find("\"mcp\":true") != std::string::npos &&
+              capability_response.body.find("\"web_ui\":true") != std::string::npos &&
               capability_response.body.find("controller") == std::string::npos,
-          "capabilities advertise the MCP adapter without exposing a secret");
+          "capabilities advertise MCP and the WUI without exposing a secret");
 
     http::Request bad_host = full;
     bad_host.headers["host"] = "example.com";
@@ -507,6 +574,7 @@ void test_read_only_workspace_routes_are_contained_and_bounded() {
     check(!cleanup_error, "workspace service creates isolated test directories");
     {
         std::ofstream(workspace / "visible.txt", std::ios::binary) << "visible text\n";
+        std::ofstream(workspace / fs::u8path("space λ.txt"), std::ios::binary) << "encoded path\n";
         std::ofstream(workspace / "nested" / "inside.md", std::ios::binary) << "nested text\n";
         std::ofstream(workspace / ".ainiux-pr" / "private.json", std::ios::binary) << "private";
         std::ofstream(workspace / "config.conf", std::ios::binary) << "provider_secret = hidden\n";
@@ -553,6 +621,19 @@ void test_read_only_workspace_routes_are_contained_and_bounded() {
         parsed_request(request_text("/ainiux/v1/files?path=visible.txt")), auth, status);
     check(file.status == 200 && file.body.find("visible text") != std::string::npos,
           "authenticated files endpoint returns a selected workspace file");
+    Response encoded_file = route_request(
+        parsed_request(request_text("/ainiux/v1/files?path=space%20%CE%BB.txt")), auth, status);
+    check(encoded_file.status == 200 && encoded_file.body.find("encoded path") != std::string::npos &&
+              encoded_file.body.find("space λ.txt") != std::string::npos,
+          "workspace file query strictly decodes browser-compatible UTF-8 and space escapes");
+    Response malformed_escape = route_request(
+        parsed_request(request_text("/ainiux/v1/files?path=bad%2")), auth, status);
+    check(malformed_escape.status == 400,
+          "workspace file query rejects incomplete percent escapes");
+    Response invalid_utf8 = route_request(
+        parsed_request(request_text("/ainiux/v1/files?path=bad%FFname")), auth, status);
+    check(invalid_utf8.status == 400,
+          "workspace file query rejects percent escapes that are not valid UTF-8");
     Response bad_query = route_request(
         parsed_request(request_text("/ainiux/v1/files?path=visible.txt&other=x")), auth, status);
     check(bad_query.status == 400, "workspace routes reject unrecognized query parameters");
@@ -1151,6 +1232,7 @@ void test_loopback_listener_lifecycle() {
 void run_all() {
     test_fragmented_parser_and_pipeline();
     test_strict_framing_and_limits();
+    test_embedded_web_ui_assets_and_browser_security();
     test_auth_and_routes();
     test_event_replay_is_ordered_and_bounded();
     test_job_registry_idempotency_lane_and_cancellation();

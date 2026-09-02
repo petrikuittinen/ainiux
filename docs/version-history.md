@@ -5,7 +5,7 @@ This compact timeline moves release material out of the landing page. It describ
 | Version | Main result |
 | --- | --- |
 | v0.0 | Repository, C++17/Makefile build, tests, sanitizer, and leak-check foundation |
-| v0.1 | Script-friendly OpenAI-compatible CLI, streaming, and LM Studio profile; an early browser-mode note was planning only and is superseded by the postponed [web-mode snapshot](web-mode.md) |
+| v0.1 | Script-friendly OpenAI-compatible CLI, streaming, and LM Studio profile; its early browser-mode note was planning only and is superseded by the shipped [browser controller](web-mode.md) |
 | v0.2 | Line-oriented REPL and JSON chat persistence foundations |
 | v0.3 | Cancellable runtime jobs and the first full-screen terminal chat |
 | v0.4 | Data-driven provider registry, compatibility profiles, model listing, and text Responses API |
@@ -48,12 +48,13 @@ This compact timeline moves release material out of the landing page. It describ
 | v1.17 | Mid-turn agent→editor/dired review (Ctrl+G / F4 without cancelling the turn), dired history line-diff and n/p block nav, agent thinking/token chrome polish, compact native tool schemas, GPT-5-friendly edit/apply_patch behavior, shared picker search/sort, and Apple Silicon macOS source builds |
 | v1.18 | Native tools finalized under short names (`read`, `ls`, `run`, `edit`, `write`, `rm`, `mkdir`, `mv`, `fetch`, `attach`, `index`, `outline`, `symbol`, and related tools) with old aliases removed; `read.items` batching; combined grep `path` + `glob` filters; HTTP/stdio MCP client for agent/run/plan; bundled local vision MCP bridge with optional Pillow/ffmpeg downscale |
 | v1.19 | Agent TUI context chrome, `/compact all`, mode-separated prompt recall, raised tool budgets, and tool pagination; prose wrap, tokens/s after first stream token, thinking head/tail previews, and persisted `/permissions`; project helpers moved to `scripts/ainiux` with Confirm Guard identity panel and script Review; hosted catalog `web_search` (Gemini Chat Completions stays on client search); Qwen 3.8 reasoning `none\|low\|medium\|xhigh`; interactive `/setting` widget (catalog `temperature_max`; purpose not user-facing); `goal_met` only while `/goal` is Active; UTF-16 / Windows-1250/1251/1252 / ISO-8859-1/2 / KOI8 conversion, `--encoding`, editor encoding picker, and allowlisted `iconv` for CJK |
-| Unreleased | Native Windows 10 1903+/Windows 11 x64 UCRT64 target remains gated on native parity. CLI image generation is landed. v1.3 PR 9 adds revision-safe workspace mutations and editor assist after PR 8 TLS/direct-access hardening. |
+| v1.30 | Complete control server: authenticated asynchronous jobs and SSE replay, MCP 2026-07-28 adapter, interactive agent/Guard sessions, revision-safe chat/workspace/editor operations, optional TLS/direct access, and an embedded responsive vanilla-JavaScript light/dark browser controller |
+| Unreleased | Native Windows 10 1903+/Windows 11 x64 UCRT64 target remains gated on native parity. Interactive/TUI image generation remains later work. |
 
-## Current status after v1.19
+## Current status after v1.30
 
 The current product includes CLI chat, conversion with common legacy charsets, REPL, saved-thread TUI chat, standalone editor with dired, benchmarks, judge grading, security review, one-shot and interactive agents, session Act/Plan policy, Guard approvals, `/goal`, transcript-preserving compaction, a lightweight definitions index, mid-turn editor/dired review while an agent turn continues, and an MCP client for agent/run/plan (HTTP + stdio). Apple Silicon macOS source builds are supported. Native Windows implementation is present but remains unreleased until the UCRT64 parity gate in [Native Windows](windows.md) passes.
 
-The control-API server, one-shot jobs through PR 3, the MCP adapter in PR 4, interactive sessions in PR 5, workspace review/dired/file reads in PR 6, revision-safe chat threads in PR 7, TLS/direct non-loopback policy in PR 8, and revision-safe workspace mutations/editor assist in PR 9 are implemented. The OpenAI-compatible `/v1` proxy and browser UI remain later slices. Interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, and the native Anthropic Messages adapter are also not implemented. See [PLANS.md](../PLANS.md) for the ordered server work.
+The control-API server is complete through PR 10: one-shot jobs, MCP, interactive sessions, workspace review and revision-safe mutations/editor assist, revision-safe chat threads, TLS/direct non-loopback policy, and the embedded responsive browser controller are implemented. The OpenAI-compatible `/v1` proxy remains a later adapter. Interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, and the native Anthropic Messages adapter are also not implemented. See [PLANS.md](../PLANS.md) for the remaining roadmap.
 
 Related documentation: [documentation index](README.md), [project README](../README.md), [decisions](decisions.md).

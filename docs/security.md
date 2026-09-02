@@ -55,7 +55,7 @@ path-free public failures.
 - `-k`/`--key` is supported for testing but warns because command-line arguments may be visible to other local users.
 - Authorization-like headers and configured key values are redacted from transport errors.
 - LM Studio authentication is optional by default.
-- Local web mode is not implemented. Two headless tool-using workflows exist: read-only `--security-review`, and one-shot `run` / `--run` (interactive `agent` / `--agent`) with ordinary workspace mutation tools. Agent **tools** are shell-free direct argv execution. Security-review `run` stays on a strict read-only allowlist; agent `run` applies structural checks and denylists shells, elevation, package installs, disk destroyers, and destructive Windows/PowerShell forms. Unrestricted shell is only available as an explicit **user** UI command (below).
+- The embedded `/ui/` controller uses only authenticated control-API operations; it never executes provider calls or local commands in the browser. Two terminal tool-using workflows also exist: read-only `--security-review`, and one-shot `run` / `--run` (interactive `agent` / `--agent`) with ordinary workspace mutation tools. Agent **tools** are shell-free direct argv execution. Security-review `run` stays on a strict read-only allowlist; agent `run` applies structural checks and denylists shells, elevation, package installs, disk destroyers, and destructive Windows/PowerShell forms. Unrestricted shell is only available as an explicit **user** terminal UI command (below).
 
 ## User-initiated interactive shell (`/shell` and `!`)
 
@@ -148,11 +148,13 @@ This is advisory coordination, not an operating-system write prohibition: unrela
 authenticated discovery plus asynchronous one-shot chat, run, plan, and image
 jobs, bounded interactive agent sessions, contained revision-safe workspace
 reads/mutations/editor assist, and revision-safe chat-thread operations. It does not expose raw chat databases
-or a browser UI. Its separate MCP endpoint exposes only the
+and serves an embedded same-origin browser controller from `/ui/`. Its separate MCP endpoint exposes only the
 bounded job tools
 documented in [the control API guide](api.md).
 Every API route requires a dedicated full-control bearer secret; loopback location
-alone is not authority. The server never reuses `AINIUX_API_KEY` or a provider key.
+alone is not authority. Static embedded WUI assets are public boot content, but
+they contain no credential or workspace data and every WUI API/SSE request is
+authenticated. The server never reuses `AINIUX_API_KEY` or a provider key.
 
 Use `AINIUX_SERVER_SECRET` or a private `--server-secret-file` outside the served
 workspace. On POSIX the file is rejected if group/other permission bits are set.
@@ -173,7 +175,22 @@ provider URLs, attachment paths, or filesystem roots. Provider chat/image work
 has a global cap; run/plan reserve one fixed-workspace lane and remain headless
 under Guard. Job/event retention is bounded and in-memory only. Cancellation is
 job-scoped, SSE writers time out on disconnected/slow clients, and server-side
-credential paths are hidden from job errors. WUI assets are not present.
+credential paths are hidden from job errors.
+
+The browser token is memory-only by default. An explicit “Keep in this tab”
+choice uses `sessionStorage`, which is cleared on disconnect; the WUI never uses
+`localStorage`, cookies, URLs, logs, or rendered DOM as token storage. Assets are
+embedded and served only at exact versioned paths, so the WUI cannot become a
+workspace file server. The HTML shell is no-store, versioned CSS/JavaScript is
+immutable-cacheable, CORS stays disabled, and strict Host/Origin validation
+precedes even public asset routing.
+
+Browser CSP limits scripts, styles, and API/event connections to the same
+origin, permits `data:` only for image results, and denies framing, base URLs,
+and form submission. Additional headers disable referrer disclosure and
+sensitive browser features. Dynamic model, tool, error, and file content is
+created with DOM APIs and `textContent`, never raw HTML. The safe settings view
+shows only the existing public status/capability DTOs.
 
 Workspace mutation authority is limited to the server's one fixed canonical
 root. Wire paths are slash-separated relative targets and are checked with the

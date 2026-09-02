@@ -68,6 +68,10 @@ IMAGES_CONFIG := config/images.conf
 COMMON_CONFIG_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/config.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
+WEB_INDEX := src/web/index.html
+WEB_STYLESHEET := src/web/css/app-v1.css
+WEB_JAVASCRIPT := src/web/js/app-v1.js
+WEB_ASSET_HEADER := $(GENERATED_DIR)/embedded_web_assets.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
 THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/themes.conf
@@ -205,6 +209,26 @@ $(IMAGES_CONFIG_HEADER): $(IMAGES_CONFIG)
 	@mv $@.tmp $@
 
 $(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(IMAGES_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
+
+$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
+			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v1.css";' \
+			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v1.js";' \
+			'inline constexpr char kIndexHtml[] = R"AINIUX_WEB_HTML('; \
+		cat $(WEB_INDEX); \
+		printf '%s\n' ')AINIUX_WEB_HTML";' \
+			'inline constexpr char kStylesheet[] = R"AINIUX_WEB_CSS('; \
+		cat $(WEB_STYLESHEET); \
+		printf '%s\n' ')AINIUX_WEB_CSS";' \
+			'inline constexpr char kJavascript[] = R"AINIUX_WEB_JS('; \
+		cat $(WEB_JAVASCRIPT); \
+		printf '%s\n' ')AINIUX_WEB_JS";' '}  // namespace ainiux::server::web'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/server/embedded_assets.o: $(WEB_ASSET_HEADER)
 
 $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 	@mkdir -p $(dir $@)

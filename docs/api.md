@@ -1,12 +1,12 @@
 # Ainiux control API
 
-The v1.3 control API is versioned under `/ainiux/v1/`. PR 9 provides an
+The v1.30 control API is versioned under `/ainiux/v1/`. PR 10 provides an
 authenticated loopback-by-default listener, optional TLS/direct non-loopback access,
 asynchronous one-shot jobs,
 interactive agent sessions, revision-safe workspace review/edit routes, and
 a separate MCP 2026-07-28 endpoint at `/mcp`, plus revision-safe access to the
-existing personal chat library. The embedded WUI remains a later slice.
-Later routes must use the PR 1 operation/wire contracts rather than exposing
+existing personal chat library. It also serves the embedded same-origin browser
+controller from `/ui/`. Later routes must use the PR 1 operation/wire contracts rather than exposing
 provider, runtime, or terminal-internal structures directly.
 
 ## Start and authenticate
@@ -26,9 +26,10 @@ MCP-only scope. Secret files must be outside the fixed served
 workspace. On POSIX they must grant no group/other permissions. Secret values,
 query-string credentials, cookies, and `AINIUX_API_KEY` are not accepted.
 
-Every endpoint requires `Authorization: Bearer TOKEN`, including health.
-This keeps all API requests free of ambient loopback authority. The three routes
-are:
+Every API and MCP endpoint requires `Authorization: Bearer TOKEN`, including
+health. This keeps control requests free of ambient loopback authority. Static,
+non-secret WUI boot assets are the only exception; the browser supplies the
+token on every API request and event stream. The three discovery routes are:
 
 ```text
 GET /ainiux/v1/health
@@ -42,6 +43,25 @@ limits. `capabilities` lists the currently routed discovery operations, built-in
 provider names without credentials, authentication configuration, and disabled
 optional adapters. It advertises MCP as enabled separately from the control
 API job operation list.
+
+## Embedded browser controller
+
+`GET /ui/` loads the controller without a bearer token so a browser can show
+the connection form. `/ui` and `/ui/index.html` return the same no-store HTML
+shell. Its exact versioned stylesheet and ES-module paths live below
+`/ui/assets/` and use immutable caching; unknown asset paths, query strings,
+bodies, directory requests, and non-GET methods are rejected. Assets are
+compiled into the executable rather than read from the served workspace.
+
+Browser responses set `nosniff`, a same-origin CSP, no-referrer, frame denial,
+same-origin resource/opener policy, and a permissions policy that disables
+camera, microphone, geolocation, payment, and USB. The CSP permits only
+same-origin scripts/styles/connections and `data:` images returned by image
+jobs. CORS remains disabled.
+
+The controller token stays in memory unless the user explicitly selects
+tab-scoped `sessionStorage`. It is never accepted through a query string,
+cookie, or ambient browser credential. See [the browser guide](web-mode.md).
 
 ## TLS and direct non-loopback access
 
@@ -100,6 +120,12 @@ editing reads are capped at 1 MiB. Missing, non-regular, oversized, traversing,
 or symlink/reparse paths
 are rejected. `.ainiux-pr`, `.ainiux`, `.git`, environment/credential names,
 and bundled sensitive configuration files are excluded.
+
+Browser clients percent-encode individual query path components. The server
+strictly decodes those values so spaces and UTF-8 filenames work, while route
+paths themselves still reject percent encoding and workspace validation still
+rejects traversal, backslashes, invalid components, links, and out-of-root
+targets.
 
 PR 9 adds explicit-target mutations and atomic text saves:
 
@@ -318,9 +344,9 @@ instead of queueing behind another agent. The owning session loop alone mutates
 agent, approval, dired, editor, or chat session state. Cancellation belongs to
 one operation/job and cannot cancel unrelated session work.
 
-No other route listed in the v1.3 roadmap is callable until its implementation
-slice lands. Clients must use the authenticated capabilities endpoint rather
-than infer support from this contract document.
+Clients must use the authenticated capabilities endpoint rather than infer
+support from this contract document. The WUI follows that rule and disables
+controls for operations absent from an older or reduced server.
 
 ## Interactive agent sessions
 

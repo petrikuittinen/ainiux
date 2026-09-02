@@ -100,6 +100,10 @@ transport, filesystem, or PTY boundary is involved.
 - Native Chat/Responses tool definition, call, streamed-fragment/index validation, multi-item text, continuation, and result serialization
 - Security-review read tools, shared tool-argument pipeline (empty/`{}`, fenced JSON, single-object extraction, one-pass repair including unquoted path-like globs, schema coercion, case/snake-camel name repair, XML channel parse), exact-path, directory-root, and wildcard text-search filtering (combinable), conservative omitted-regex alternation inference, `pattern`/`query` compatibility, Agent-mode `read` batch `items` preference/order, 1–100 item validation, per-item/default and aggregate byte limits, line-numbered hashes/ranges, partial results, native serialization, compact display, and prompt guidance, agent loop history hygiene / transport-retry classification / identical-call and consecutive-failure limits / native→XML downgrade, trusted prompt layering (master foundation + security task layer; agent master+coding + native/XML static appendices; seed_agent_conversation), CLI/dispatch for headless `run`/`--run` and interactive `agent`/`--agent` (goal required, no system override, separate agent log dir), explicit exact batch coverage, native final submission, conservative normalization of omitted/empty optional finding metadata, bounded finalization of over-exploring workers, safe single-object extraction from JSON preambles/fences, ambiguous/malformed response rejection, index fingerprint checks, ignored/traversal/symlink rejection, secret redaction, command/helper allowlisting, Markdown-field escaping, deterministic report rendering, and concurrent secure JSONL diagnostic logging with mid-run flush of the live `.partial` path plus finalization/retention
 - Unicode, numeric, and malformed-input edge cases
+- Control-server WUI exact asset routing, API-auth separation, immutable/no-store
+  caching, CSP and browser hardening headers, TUI-derived light/dark palettes,
+  responsive/reduced-motion markers, strict browser query-path decoding, and
+  static rejection of external URLs, raw-HTML sinks, and `localStorage`
 
 **Integration coverage**
 
@@ -115,6 +119,9 @@ transport, filesystem, or PTY boundary is involved.
 - OpenRouter routing-session serialization/stability boundaries, OpenRouter and DeepSeek credit-response schema parsing, currency formatting, provider endpoint registration, and Agent border placement
 - TUI insert/attach/fetch driver
 - SQLite TUI workflows: `/new`, autosave/reload, `/list`, `/provider`, `/remove`, stale `last_thread_id`, corrupt database, image persistence across restart, `/cleanup`, and read-only expired-media threads
+- Real loopback control-server smoke through `scripts/test-control-server.sh`,
+  including public embedded WUI boot assets, versioned caching/CSP, API scope,
+  jobs/SSE, MCP, revision-safe chat/workspace routes, and Host/Origin rejection
 
 **Fault injection**
 
@@ -170,9 +177,12 @@ PTY driver for startup selection policy. It verifies that bare chat opens withou
 
 - No automated tests against real OpenAI, LM Studio, or other production providers (mock-only CI).
 - Valgrind does not cover the ENOSPC `LD_PRELOAD` path or the full integration shell scripts.
-- Long-running terminal stress and browser/web mode are not implemented and are
-  not covered. Resize and terminal restoration have Windows ConPTY smoke coverage,
-  but real Windows Terminal/conhost acceptance remains a release checklist item.
+- Automated real-browser interaction and pixel/layout comparison are not part of
+  the dependency-free default suite. The WUI has static security/responsive
+  coverage plus real-listener curl coverage; hands-on browser/assistive-technology
+  checks remain release acceptance. Resize and terminal restoration have Windows
+  ConPTY smoke coverage, but real Windows Terminal/conhost acceptance remains a
+  release checklist item.
 - Native Windows clipboard save/restore integration is opt-in/manual so tests do
   not overwrite a developer's clipboard. A mocked Win32 boundary unit-covers
   busy retries/cancellation, UTF-16 and line-ending conversion, malformed data,

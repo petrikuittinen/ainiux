@@ -28,8 +28,8 @@ error layers should serve:
 - the standalone editor and editor AI assist
 - benchmark and judge grading
 - local agent Act/Plan workflows
-- a future local control-API server (`ainiux server`, **v1.3**), with a later OpenAI-compatible `/v1` adapter
-- postponed browser UI and later media capabilities
+- the local control-API server (`ainiux server`, **v1.30**), with a later OpenAI-compatible `/v1` adapter
+- the embedded browser controller and later media capabilities
 
 ## Roadmap order
 
@@ -37,7 +37,7 @@ error layers should serve:
 | --- | --- | --- |
 | v0.0–v0.8 | CLI, persistence, runtime/TUI, providers, context, config, benchmarks, editor | Landed |
 | v0.9 | Benchmark calibration, refactor hygiene, TUI/CLI/editor polish | Remaining work continues |
-| v0.90 | Unified terminal bindings; this number did not ship a local server | Landed (bindings). Server work is **v1.3** |
+| v0.90 | Unified terminal bindings; this number did not ship a local server | Landed (bindings). Server work shipped in **v1.30** |
 | v1.0–v1.15 | Local agent foundation, hardening, and documentation overhaul | Landed through v1.15 |
 | v1.16 | Editor dired directory browser (`--dired`, F4, Ctrl+X d) | Landed |
 | v1.17 | Mid-turn agent↔editor/dired review, dired history line-diff, agent chrome/tool polish, Apple Silicon builds | Landed |
@@ -46,16 +46,14 @@ error layers should serve:
 | Native Windows x64 | UCRT64 native target and portable ZIP; all-mode parity gate | Implementation landed; native acceptance pending |
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
-| **v1.3** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | PR 9 revision-safe mutations landed; PR 10 embedded WUI is next |
+| **v1.30** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | **Landed through PR 10** |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
-The embedded browser controller is the final v1.3 PR, after the control API and
-remote operations are stable. Further v1.3 slices still require an explicit
-user request.
+The embedded browser controller completes the v1.30 control-server milestone.
 
 ## Current baseline
 
-Implementation status (2026-08-18): **v1.19**.
+Implementation status (2026-09-02): **v1.30**.
 
 The shipped product includes:
 
@@ -82,6 +80,8 @@ The shipped product includes:
 - OpenRouter, OpenAI, and DeepSeek credit display when the selected key can query it
 - a fast project-local symbol index with incremental discovery and lightweight scanners
 - Apple Silicon macOS 15+ source builds
+- the authenticated loopback-by-default control API, MCP adapter, TLS/direct-access gates,
+  revision-safe remote chat/workspace/editor operations, and embedded responsive vanilla-JS WUI
 
 The current v1.1 index stores files and definitions for every supported scanner
 language, plus static declaration importance. It intentionally has no reference
@@ -96,7 +96,7 @@ older Windows, and mintty full-screen operation are explicit non-goals.
 
 ## Release history
 
-The compact v0.0–v1.19 timeline lives in `docs/version-history.md`. Historical
+The compact v0.0–v1.30 timeline lives in `docs/version-history.md`. Historical
 implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing
@@ -160,7 +160,7 @@ Do not implement full JPEG/PNG/GIF/WebP codecs inside the ainiux binary for this
 
 The v0.90 release shipped unified terminal bindings. It did **not** ship a local
 server. The old sketch of an OpenAI-only `/v1/chat/completions` proxy is
-superseded: remote control is **v1.3** below. An OpenAI `/v1` adapter remains a
+superseded: remote control is **v1.30** below. An OpenAI `/v1` adapter remains a
 later optional layer on that daemon, not a substitute for the control API.
 
 # v1.2 - Image generation
@@ -178,7 +178,7 @@ Remaining surfaces:
 
 - REPL `/image` commands
 - cancellable TUI image-generation job
-- server/browser exposure only after v1.3 listen/auth exists (one-shot `POST /ainiux/v1/image`)
+- server/browser exposure through the landed v1.30 listener (one-shot `POST /ainiux/v1/image`)
 
 Text chat must never generate images merely because an ordinary prompt asks for one.
 
@@ -259,12 +259,12 @@ Generated-image routes, if later added, may serve only controlled generated asse
 - cleanup/leak coverage for success, provider error, write error, and cancellation
 - existing text chat behavior unchanged without explicit image generation
 
-# v1.3 - Remote control API (`ainiux server`)
+# v1.30 - Remote control API (`ainiux server`)
 
-Status: PR 9 revision-safe dired/editor mutations and assist, PR 8 TLS/direct non-loopback policy, PR 7 revision-safe chat threads, PR 6 read-only workspace review/dired/file access, PR 5 interactive agent sessions, PR 4 one-shot chat/run/plan/image jobs, bounded status/SSE replay,
-idempotency, cancellation, provider concurrency, and the serialized workspace
-agent lane landed. The MCP adapter, workspace review/edit routes, and
-revision-safe chat persistence are landed; the embedded WUI begins in PR 10.
+Status: **Landed through PR 10.** The authenticated control API, bounded jobs
+and replay, MCP adapter, interactive agent/Guard sessions, revision-safe chat
+and workspace/editor operations, TLS/direct-access policy, and embedded WUI are
+implemented.
 
 ## Goal
 
@@ -278,9 +278,8 @@ separate OpenAI adapter. The control API must preserve Ainiux concepts that an
 OpenAI-only endpoint cannot represent: jobs, sessions, cancellation, Guard
 approvals, task modes, settings, review, dired, and editor operations.
 
-The v1.3 release is complete only when the embedded WUI ships as the final PR
-over the stable control API. No server or WUI implementation begins merely
-because this specification exists.
+The v1.30 release is complete with the embedded WUI shipped as the final PR over
+the stable control API.
 
 ## Product decisions
 
@@ -631,7 +630,7 @@ workspace root or arbitrary host path.
 
 ## Embedded vanilla-JavaScript WUI
 
-The final v1.3 PR adds a same-origin browser application at `/ui/`. It is a
+The final v1.30 PR adds a same-origin browser application at `/ui/`. It is a
 full remote controller for the stable API, not an alternate implementation of
 Ainiux logic.
 
@@ -678,7 +677,7 @@ paths, environment variables, TLS material, or hidden project state.
 ## Testing and validation
 
 Add focused unit and integration coverage with each implementation PR. The
-v1.3 release matrix includes:
+v1.30 release matrix includes:
 
 - fragmented request lines/headers/bodies, malformed framing, conflicting
   lengths, unsupported transfer encodings, timeouts, keep-alive limits, and
@@ -727,7 +726,7 @@ Update, as the corresponding slices land:
 - `docs/decisions.md` with service boundaries, HTTP subset, concurrency,
   event DTOs, asset embedding, and any approved new dependency.
 
-## Non-goals for v1.3
+## Non-goals for v1.30
 
 - OpenAI-compatible `/v1/chat/completions` or Responses proxy.
 - Multi-workspace routing in one server.
@@ -804,16 +803,16 @@ remote startup gates, remote-Yolo opt-in, certificate tests, and security docs.
 Landed. Add root-aware explicit-target mutations, file editing and assist, optimistic
 concurrency, atomic saves, conflict UI data, and focused race/failure tests.
 
-### PR 10 - Embedded vanilla-JavaScript WUI (v1.3 release gate)
+### PR 10 - Embedded vanilla-JavaScript WUI (v1.30 release gate) — Landed
 
-Add the embedded same-origin responsive controller at `/ui/`, covering jobs,
+Added the embedded same-origin responsive controller at `/ui/`, covering jobs,
 chat, agent/Guard, image, review/dired, editor, and safe settings. Complete
 browser security, reconnect, accessibility, responsive-layout, and end-to-end
 tests. Update `docs/web-mode.md` and release documentation.
 
 ## Definition of done
 
-v1.3 is done when:
+v1.30 is done when:
 
 - existing CLI, REPL, TUI, editor, agent, benchmark, grade, and image behavior
   remains intact;

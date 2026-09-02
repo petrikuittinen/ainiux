@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test the v1.3 PR 9 control server on its default loopback bind with curl.
+# Smoke-test the v1.30 PR 10 control server and embedded WUI with curl.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ MCP_SECRET="ainiux-control-smoke-${$}-mcp"
 
 usage() {
     cat <<'EOF'
-Smoke-test the Ainiux v1.3 PR 9 control server.
+Smoke-test the Ainiux v1.30 PR 10 control server and embedded WUI.
 
 Usage: scripts/test-control-server.sh [options]
 
@@ -28,8 +28,8 @@ Options:
   -h, --help      Show this help
 
 The script starts a temporary loopback server, tests authentication, discovery,
-job submission/status/events/cancel/idempotency, revision-safe chat/workspace discovery,
-Host/Origin policy, and scoped MCP credentials, then stops the server. It uses
+embedded WUI assets and browser headers, job submission/status/events/cancel/idempotency,
+revision-safe chat/workspace discovery, Host/Origin policy, and scoped MCP credentials, then stops the server. It uses
 provider "none" and never contacts a provider endpoint.
 EOF
 }
@@ -169,6 +169,22 @@ BASE_URL="http://127.0.0.1:${PORT}"
 FULL_AUTH=(--header "Authorization: Bearer ${FULL_SECRET}")
 MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
+request 200 "public embedded WUI index" "${BASE_URL}/ui/"
+expect_body '/ui/assets/app-v1.css' "WUI stylesheet reference"
+expect_body '/ui/assets/app-v1.js' "WUI JavaScript reference"
+WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
+request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
+    "${BASE_URL}/ui/assets/app-v1.js"
+expect_body 'sessionStorage' "tab-scoped token option"
+expect_body 'Last-Event-ID' "authenticated SSE replay"
+grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
+    die "versioned WUI asset did not receive immutable caching"
+grep -Fq "Content-Security-Policy: default-src 'none'; script-src 'self'" "${WUI_HEADERS}" || \
+    die "WUI response did not receive the strict same-origin CSP"
+grep -Fq 'Referrer-Policy: no-referrer' "${WUI_HEADERS}" || \
+    die "WUI response did not disable referrer disclosure"
+request 404 "WUI directory serving rejection" "${BASE_URL}/ui/assets/"
+
 request 200 "authenticated health" "${FULL_AUTH[@]}" "${BASE_URL}/ainiux/v1/health"
 if [ "$(cat "${RESPONSE_FILE}")" != '{"status":"ok"}' ]; then
     die "health response exposed more than the minimal status object"
@@ -189,6 +205,7 @@ request 200 "authenticated capabilities" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/capabilities"
 expect_body '"operations":["health","status","capabilities","chat","run","plan","image","editor_assist","sessions","review","dired","workspace_mutations","files","chat_threads"]' "capability operations"
 expect_body '"mcp":true' "MCP adapter availability"
+expect_body '"web_ui":true' "embedded WUI availability"
 
 request 401 "MCP token cannot access control API" "${MCP_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/status"
