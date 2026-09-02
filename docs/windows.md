@@ -24,6 +24,7 @@ pacman -S --needed \
   mingw-w64-ucrt-x86_64-toolchain \
   mingw-w64-ucrt-x86_64-curl \
   mingw-w64-ucrt-x86_64-sqlite3 \
+  mingw-w64-ucrt-x86_64-openssl \
   mingw-w64-ucrt-x86_64-python
 
 git clone https://github.com/petrikuittinen/ainiux.git

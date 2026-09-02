@@ -1,6 +1,6 @@
 # Getting started
 
-Ainiux builds as a C++17 terminal application with libcurl and SQLite. Ubuntu x86-64 and ARM64 are the primary tested baseline. Native Windows 10 1903+/Windows 11 x64 builds use GNU Make in MSYS2 UCRT64. Apple Silicon source builds support macOS 15 or newer; other POSIX-like systems are targeted where practical but are not guaranteed.
+Ainiux builds as a C++17 terminal application with libcurl and SQLite, plus optional OpenSSL for control-server TLS. Ubuntu x86-64 and ARM64 are the primary tested baseline. Native Windows 10 1903+/Windows 11 x64 builds use GNU Make in MSYS2 UCRT64. Apple Silicon source builds support macOS 15 or newer; other POSIX-like systems are targeted where practical but are not guaranteed.
 
 ## Install on Ubuntu or Debian
 
@@ -28,18 +28,18 @@ installation; user configuration under `~/.config/ainiux/` is left untouched.
 
 ## Build manually
 
-Install a C++17 compiler, Make, `pkg-config`, Git, SQLite, and libcurl development files:
+Install a C++17 compiler, Make, `pkg-config`, Git, SQLite, libcurl, and OpenSSL development files:
 
 ```sh
 sudo apt update
-sudo apt install -y build-essential pkg-config git libsqlite3-dev libcurl4-openssl-dev
+sudo apt install -y build-essential pkg-config git libsqlite3-dev libcurl4-openssl-dev libssl-dev
 make
 ./ainiux --version
 ```
 
 Some Ubuntu releases call the curl runtime package `libcurl4t64`; `scripts/install-deps.sh` detects the available name. `make optimized` uses release-oriented compiler settings. `sudo make install PREFIX=/usr/local` installs the binary and refreshable bundled configuration documents below `/usr/local/share/ainiux/`.
 
-On another POSIX-like system, provide a C++17 compiler plus development headers and link libraries for libcurl and SQLite. Terminal behavior can differ across emulators.
+On another POSIX-like system, provide a C++17 compiler plus development headers and link libraries for libcurl and SQLite. OpenSSL is optional: without it the default loopback control server works over plain HTTP, while `--tls-cert` startup is unavailable. Terminal behavior can differ across emulators.
 
 ## Build on Apple Silicon macOS 15+
 
@@ -48,8 +48,8 @@ Homebrew's `pkg-config` metadata for curl and SQLite:
 
 ```sh
 xcode-select --install
-brew install make pkg-config curl sqlite
-export PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix sqlite)/lib/pkgconfig"
+brew install make pkg-config curl sqlite openssl@3
+export PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix sqlite)/lib/pkgconfig:$(brew --prefix openssl@3)/lib/pkgconfig"
 gmake CXX=clang++ -j2
 ./ainiux --version
 gmake CXX=clang++ test-unit
@@ -71,6 +71,7 @@ pacman -S --needed base-devel git zip \
   mingw-w64-ucrt-x86_64-toolchain \
   mingw-w64-ucrt-x86_64-curl \
   mingw-w64-ucrt-x86_64-sqlite3 \
+  mingw-w64-ucrt-x86_64-openssl \
   mingw-w64-ucrt-x86_64-python
 make
 ./ainiux.exe --version

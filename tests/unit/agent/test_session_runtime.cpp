@@ -1154,6 +1154,13 @@ void test_switch_permission_mode_persists_and_reloads() {
           "prepare reloads persisted yolo permission mode");
 
     runtime.reset();
+    options.allow_yolo = false;
+    options.permission_mode = agent::PermissionMode::Confirm;
+    error = runtime.prepare(context, {}, {}, options);
+    check(error.ok() && runtime.permission_mode() == agent::PermissionMode::Confirm,
+          "remote permission cap replaces persisted yolo with the requested safer mode");
+
+    runtime.reset();
     std::error_code ec;
     fs::remove_all(workspace, ec);
 }

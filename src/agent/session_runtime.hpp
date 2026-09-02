@@ -152,6 +152,8 @@ struct SessionRuntimeOptions {
     // Headless callers always use Smart and retain Ask→Deny through an empty
     // approval callback. Interactive projects restore their persisted value.
     PermissionMode permission_mode = PermissionMode::Smart;
+    // A remote controller can cap restored project state below Yolo.
+    bool allow_yolo = true;
     fetch::Options fetch_options;
     search::Options search_options;
     std::function<void(const std::string& status_line)> on_progress;

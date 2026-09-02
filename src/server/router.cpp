@@ -26,18 +26,51 @@ std::string request_id() {
     return "req_" + std::to_string(request_counter.fetch_add(1, std::memory_order_relaxed) + 1U);
 }
 
-bool decimal_port(const std::string& value) {
-    if (value.empty()) return false;
-    for (unsigned char c : value) if (c < '0' || c > '9') return false;
-    return true;
+bool decimal_port(const std::string& value, unsigned short expected) {
+    if (value.empty() || (value.size() > 1U && value.front() == '0')) return false;
+    unsigned long port = 0;
+    for (unsigned char c : value) {
+        if (c < '0' || c > '9') return false;
+        port = port * 10U + static_cast<unsigned long>(c - '0');
+        if (port > 65535U) return false;
+    }
+    return port == expected;
 }
 
-bool loopback_host(const std::string& host) {
-    if (host == "localhost" || host == "127.0.0.1" || host == "[::1]") return true;
-    if (host.rfind("localhost:", 0) == 0) return decimal_port(host.substr(10));
-    if (host.rfind("127.0.0.1:", 0) == 0) return decimal_port(host.substr(10));
-    if (host.rfind("[::1]:", 0) == 0) return decimal_port(host.substr(6));
-    return false;
+bool ipv4_literal(const std::string& value) {
+    int components = 0;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        const std::size_t dot = value.find('.', start);
+        const std::string part = value.substr(
+            start, dot == std::string::npos ? std::string::npos : dot - start);
+        if (part.empty() || part.size() > 3U || (part.size() > 1U && part.front() == '0')) return false;
+        unsigned int number = 0;
+        for (unsigned char c : part) {
+            if (c < '0' || c > '9') return false;
+            number = number * 10U + static_cast<unsigned int>(c - '0');
+        }
+        if (number > 255U) return false;
+        ++components;
+        if (dot == std::string::npos) break;
+        start = dot + 1U;
+    }
+    return components == 4;
+}
+
+bool allowed_host(const std::string& host, const PublicStatus& status) {
+    const std::size_t colon = host.rfind(':');
+    std::string name = host;
+    if (colon != std::string::npos) {
+        if (host.find(':') != colon || !decimal_port(host.substr(colon + 1U), status.port)) return false;
+        name = host.substr(0, colon);
+    }
+    const std::string bind = status.bind_address.empty() ? "127.0.0.1"
+                                                         : ascii_lower(status.bind_address);
+    if (!status.remote) return name == "localhost" || name == bind || name == "127.0.0.1";
+    if (colon == std::string::npos && status.port != (status.tls ? 443U : 80U)) return false;
+    if (bind == "0.0.0.0") return ipv4_literal(name) && name != "0.0.0.0";
+    return name == bind;
 }
 
 Response error_response(int status,
@@ -246,12 +279,12 @@ Response route_request(const http::Request& request,
     const std::string normalized_host = host == request.headers.end()
                                             ? std::string()
                                             : ascii_lower(host->second);
-    if (host == request.headers.end() || !loopback_host(normalized_host)) {
-        return error_response(421, "invalid_host", "Host must name the loopback listener");
+    if (host == request.headers.end() || !allowed_host(normalized_host, status)) {
+        return error_response(421, "invalid_host", "Host is not allowed for this listener");
     }
     const auto origin = request.headers.find("origin");
     if (origin != request.headers.end()) {
-        const std::string expected = "http://" + normalized_host;
+        const std::string expected = std::string(status.tls ? "https://" : "http://") + normalized_host;
         if (ascii_lower(origin->second) != expected) {
             return error_response(403, "origin_rejected", "cross-origin requests are disabled");
         }
@@ -301,9 +334,14 @@ Response route_request(const http::Request& request,
                                        : status.active_connections->load(std::memory_order_acquire);
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
                         ",\"status\":\"ready\",\"auth_scope\":\"full_control\"" +
-                        ",\"bind\":{\"address\":\"127.0.0.1\",\"port\":" +
+                        ",\"bind\":{\"address\":" +
+                        json::quote(status.bind_address.empty() ? "127.0.0.1" : status.bind_address) +
+                        ",\"port\":" +
                         std::to_string(status.port) +
-                        ",\"transport\":\"loopback_plain_http\"}" +
+                        ",\"transport\":" +
+                        json::quote(status.tls
+                                        ? (status.remote ? "remote_https" : "loopback_https")
+                                        : (status.remote ? "remote_plain_http" : "loopback_plain_http")) + "}" +
                         ",\"connections\":{\"active\":" + std::to_string(active) +
                         ",\"maximum\":" + std::to_string(status.max_connections) + "}" +
                         ",\"jobs\":{\"active\":" +

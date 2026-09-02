@@ -31,7 +31,8 @@ bool needs_value(const std::string& opt) {
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--max-agent-response-bytes",
         "--max-source-code-file-size", "--trusted-prompt-dir",
-        "--workspace", "--port", "--server-secret-file", "--mcp-secret-file",
+        "--workspace", "--bind", "--port", "--server-secret-file", "--mcp-secret-file",
+        "--tls-cert", "--tls-key",
         "--max-connections", "--max-jobs", "--max-sessions",
         "--context", "--context-policy", "--image-capability", "--theme", "--color-mode",
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
@@ -331,6 +332,12 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.image = true;
         } else if ((arg == "server" && verb_after_globals()) || arg == "--server") {
             opts.server = true;
+        } else if (arg == "--insecure-plain-bind") {
+            opts.server_options_seen = true;
+            opts.insecure_plain_bind = true;
+        } else if (arg == "--allow-remote-yolo") {
+            opts.server_options_seen = true;
+            opts.allow_remote_yolo = true;
         } else if (arg == "--force") {
             opts.image_force = true;
         } else if ((arg == "grade" && verb_after_globals()) || arg == "--grade") {
@@ -740,12 +747,21 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             } else if (opt == "--workspace") {
                 opts.server_options_seen = true;
                 opts.workspace = value;
+            } else if (opt == "--bind") {
+                opts.server_options_seen = true;
+                opts.bind_address = value;
             } else if (opt == "--server-secret-file") {
                 opts.server_options_seen = true;
                 opts.server_secret_file = value;
             } else if (opt == "--mcp-secret-file") {
                 opts.server_options_seen = true;
                 opts.mcp_secret_file = value;
+            } else if (opt == "--tls-cert") {
+                opts.server_options_seen = true;
+                opts.tls_cert_file = value;
+            } else if (opt == "--tls-key") {
+                opts.server_options_seen = true;
+                opts.tls_key_file = value;
             } else if (opt == "--max-image-bytes") {
                 Error err = parse_long(opt, value, opts.max_image_bytes);
                 if (!err.ok()) {
@@ -1314,7 +1330,8 @@ Usage:
   ainiux image --provider replicate -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider fal -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider gemini -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
-  ainiux server [--workspace PATH] [--port PORT] [--server-secret-file PATH]
+  ainiux server [--workspace PATH] [--bind ADDRESS] [--port PORT]
+                [--tls-cert PATH --tls-key PATH] [--server-secret-file PATH]
 
 Examples:
   ainiux lmstudio -p "Hello"
@@ -1400,11 +1417,16 @@ Options:
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --image                   Generate one image (OpenAI, Replicate, fal, or
                                 Gemini models from images.conf; also: ainiux image ...).
-      --server                  Start the loopback Ainiux control API (also: ainiux server).
+      --server                  Start the Ainiux control API (also: ainiux server).
       --workspace PATH          Fixed server workspace; default current directory.
-      --port PORT               Loopback server port; default 8766.
+      --bind ADDRESS            IPv4 listen address; default 127.0.0.1.
+      --port PORT               Server port; default 8766.
       --server-secret-file PATH Full-control bearer secret file (or AINIUX_SERVER_SECRET).
       --mcp-secret-file PATH    MCP-only bearer secret file (or AINIUX_MCP_SECRET).
+      --tls-cert PATH           PEM certificate chain for HTTPS.
+      --tls-key PATH            Private PEM key outside the served workspace.
+      --insecure-plain-bind     Explicitly allow plain HTTP on a non-loopback bind.
+      --allow-remote-yolo       Permit remote interactive sessions to request Yolo.
       --max-connections N       Simultaneous server connections; default 64.
       --max-jobs N              Retained/in-flight server job cap; default 128.
       --max-sessions N          Interactive agent session cap; default 32.

@@ -96,9 +96,11 @@ struct Options {
     bool disable_indexing = false;
     // One-shot image generation: ainiux image / --image
     bool image = false;
-    // Loopback-only v1.3 control API server.
+    // v1.3 control API server. Loopback remains the safe default.
     bool server = false;
     bool server_options_seen = false;
+    bool insecure_plain_bind = false;
+    bool allow_remote_yolo = false;
     bool image_force = false;
     bool image_format_explicit = false;
     bool format_cli_explicit = false;
@@ -107,8 +109,11 @@ struct Options {
     std::string image_quality;
     std::string image_format = "png";
     std::string workspace = ".";
+    std::string bind_address = "127.0.0.1";
     std::string server_secret_file;
     std::string mcp_secret_file;
+    std::string tls_cert_file;
+    std::string tls_key_file;
     int port = 8766;
     int max_connections = 64;
     int max_jobs = 128;

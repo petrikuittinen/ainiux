@@ -30,6 +30,7 @@
 #include "server/mcp_adapter.hpp"
 #include "server/router.hpp"
 #include "server/session_hub.hpp"
+#include "server/tls.hpp"
 #include "server/wire.hpp"
 #include "server/workspace_service.hpp"
 
@@ -98,6 +99,37 @@ bool send_all(Socket socket, const std::string& data) {
     return true;
 }
 
+class ConnectionIo {
+   public:
+    ConnectionIo(Socket socket, TlsContext& tls) : socket_(socket), tls_context_(tls) {}
+
+    Error initialize() {
+        if (!tls_context_.enabled()) return ok_error();
+        tls_ = std::make_unique<TlsConnection>(tls_context_);
+        Error error = tls_->attach(static_cast<std::uintptr_t>(socket_));
+        if (!error.ok()) return error;
+        return tls_->accept();
+    }
+
+    int read(char* output, int size, bool& retry) {
+        retry = false;
+        if (tls_) return tls_->read(output, size, retry);
+        const int result = ::recv(socket_, output, size, 0);
+        if (result < 0 && (interrupted_error() || timeout_error())) retry = true;
+        return result;
+    }
+
+    bool write_all(std::string_view data) {
+        if (tls_) return tls_->write_all(data.data(), data.size());
+        return send_all(socket_, std::string(data));
+    }
+
+   private:
+    Socket socket_;
+    TlsContext& tls_context_;
+    std::unique_ptr<TlsConnection> tls_;
+};
+
 void set_socket_timeouts(Socket socket) {
 #if defined(_WIN32)
     const DWORD timeout_ms = 1000;
@@ -121,6 +153,12 @@ std::atomic<unsigned long long> listener_request_counter{0};
 std::string listener_request_id(const char* prefix) {
     return std::string(prefix) +
            std::to_string(listener_request_counter.fetch_add(1, std::memory_order_relaxed) + 1U);
+}
+
+bool loopback_bind_address(const std::string& address) {
+    if (address == "localhost") return true;
+    const std::size_t dot = address.find('.');
+    return dot != std::string::npos && address.substr(0, dot) == "127";
 }
 
 Response parser_error_response(const http::ParseError& error) {
@@ -163,6 +201,7 @@ struct Listener::Impl {
     std::unique_ptr<SessionHub> sessions;
     std::unique_ptr<WorkspaceService> workspace;
     std::unique_ptr<ChatService> chat_threads;
+    TlsContext tls;
 
     void reap_workers() {
         std::lock_guard<std::mutex> lock(workers_mutex);
@@ -190,6 +229,8 @@ struct Listener::Impl {
 
         const Socket socket = worker->socket.load(std::memory_order_acquire);
         set_socket_timeouts(socket);
+        ConnectionIo connection(socket, tls);
+        if (!connection.initialize().ok()) return;
         std::string pending;
         for (std::size_t count = 0; count < Limits::requests_per_connection && !stopping; ++count) {
             http::Parser parser;
@@ -201,7 +242,8 @@ struct Listener::Impl {
             pending.clear();
             while (state == http::ParseState::NeedMore && !stopping) {
                 char buffer[8192];
-                const int received = ::recv(socket, buffer, static_cast<int>(sizeof(buffer)), 0);
+                bool retry = false;
+                const int received = connection.read(buffer, static_cast<int>(sizeof(buffer)), retry);
                 if (received > 0) {
                     if (!received_any) {
                         received_any = true;
@@ -218,8 +260,7 @@ struct Listener::Impl {
                     state = parser.finish();
                     break;
                 }
-                if (interrupted_error()) continue;
-                if (!timeout_error()) return;
+                if (!retry) return;
                 const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                     std::chrono::steady_clock::now() - phase_started).count();
                 const int limit = parser.headers_complete() ? Limits::body_timeout_seconds
@@ -230,13 +271,13 @@ struct Listener::Impl {
                     timeout.status = 400;
                     timeout.message = parser.headers_complete() ? "HTTP request body timed out"
                                                                 : "HTTP request headers timed out";
-                    (void)send_all(socket, serialize_response(parser_error_response(timeout), false));
+                    (void)connection.write_all(serialize_response(parser_error_response(timeout), false));
                     return;
                 }
             }
             if (stopping) return;
             if (state == http::ParseState::Failed) {
-                (void)send_all(socket, serialize_response(parser_error_response(parser.error()), false));
+                (void)connection.write_all(serialize_response(parser_error_response(parser.error()), false));
                 return;
             }
             pending = parser.take_remaining();
@@ -251,14 +292,17 @@ struct Listener::Impl {
             public_status.sessions = sessions.get();
             public_status.workspace = workspace.get();
             public_status.chat_threads = chat_threads.get();
+            public_status.bind_address = config.bind_address;
+            public_status.tls = tls.enabled();
+            public_status.remote = !loopback_bind_address(config.bind_address);
             const Response response = route_request(parser.request(), config.auth, public_status);
             const bool keep_alive = parser.request().keep_alive &&
                                     count + 1U < Limits::requests_per_connection && !response.close;
-            if (!send_all(socket, serialize_response(response, keep_alive))) return;
+            if (!connection.write_all(serialize_response(response, keep_alive))) return;
             if (response.streaming) {
                 if (response.stream_body) {
-                    response.stream_body([socket](std::string_view data) {
-                        return send_all(socket, std::string(data));
+                    response.stream_body([&connection](std::string_view data) {
+                        return connection.write_all(data);
                     });
                 }
                 return;
@@ -274,19 +318,25 @@ Listener::~Listener() { stop(); }
 Error Listener::start(ListenerConfig config) {
     if (!impl_->network.ok()) return {ErrorCode::Connect, "could not initialize the socket runtime"};
     if (config.max_connections == 0) return {ErrorCode::BadArgs, "--max-connections must be positive"};
+    if (config.bind_address.empty()) return {ErrorCode::BadArgs, "--bind must not be empty"};
     impl_->config = std::move(config);
+    Error tls_error = impl_->tls.initialize(impl_->config.tls_cert_file,
+                                             impl_->config.tls_key_file);
+    if (!tls_error.ok()) return tls_error;
     impl_->jobs = std::make_unique<JobService>(impl_->config.base_options,
                                                 impl_->config.workspace,
                                                 impl_->config.max_jobs);
     impl_->mcp = std::make_unique<McpAdapter>(impl_->jobs.get(), impl_->config.max_jobs);
     impl_->sessions = std::make_unique<SessionHub>(impl_->config.base_options,
                                                    impl_->config.workspace,
-                                                   impl_->config.max_sessions);
+                                                   impl_->config.max_sessions,
+                                                   loopback_bind_address(impl_->config.bind_address) ||
+                                                       impl_->config.allow_remote_yolo);
     impl_->workspace = std::make_unique<WorkspaceService>(impl_->config.workspace);
     impl_->chat_threads = std::make_unique<ChatService>();
     impl_->stopping.store(false, std::memory_order_release);
     OwnedSocket socket(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
-    if (socket.get() == kInvalidSocket) return {ErrorCode::Connect, "could not create the loopback listener socket"};
+    if (socket.get() == kInvalidSocket) return {ErrorCode::Connect, "could not create the control listener socket"};
     int reuse = 1;
 #if defined(_WIN32)
     (void)setsockopt(socket.get(), SOL_SOCKET, SO_REUSEADDR,
@@ -297,13 +347,19 @@ Error Listener::start(ListenerConfig config) {
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_port = htons(impl_->config.port);
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (impl_->config.bind_address == "localhost") {
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        impl_->config.bind_address = "127.0.0.1";
+    } else if (::inet_pton(AF_INET, impl_->config.bind_address.c_str(), &address.sin_addr) != 1) {
+        return {ErrorCode::BadArgs, "--bind must be an IPv4 address or localhost"};
+    }
     if (::bind(socket.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
-        return {ErrorCode::Connect, "could not bind the control server to 127.0.0.1:" +
+        return {ErrorCode::Connect, "could not bind the control server to " +
+                                        impl_->config.bind_address + ":" +
                                         std::to_string(impl_->config.port)};
     }
     if (::listen(socket.get(), static_cast<int>(std::min<std::size_t>(impl_->config.max_connections, 128U))) != 0) {
-        return {ErrorCode::Connect, "could not listen on the loopback control socket"};
+        return {ErrorCode::Connect, "could not listen on the control socket"};
     }
     sockaddr_in actual{};
 #if defined(_WIN32)
@@ -346,7 +402,8 @@ Error Listener::serve_until(const std::function<bool()>& should_stop) {
             if (impl_->stopping) break;
             continue;
         }
-        if (ntohl(peer.sin_addr.s_addr) != INADDR_LOOPBACK) continue;
+        const bool loopback_bind = loopback_bind_address(impl_->config.bind_address);
+        if (loopback_bind && (ntohl(peer.sin_addr.s_addr) >> 24U) != 127U) continue;
         if (impl_->active.load(std::memory_order_acquire) >= impl_->config.max_connections) {
             Response busy;
             busy.status = 429;
@@ -357,7 +414,11 @@ Error Listener::serve_until(const std::function<bool()>& should_stop) {
             envelope.message = "too many simultaneous connections";
             envelope.request_id = listener_request_id("req_limit_");
             busy.body = wire::error_json(envelope);
-            (void)send_all(client.get(), serialize_response(busy, false));
+            // A TLS client must complete a handshake before an HTTP response can
+            // be written. Closing an excess TLS connection keeps the accept loop
+            // from blocking on an unauthenticated handshake.
+            if (!impl_->tls.enabled())
+                (void)send_all(client.get(), serialize_response(busy, false));
             continue;
         }
         auto worker = std::make_shared<Worker>();
@@ -388,6 +449,8 @@ void Listener::stop() {
 }
 
 unsigned short Listener::port() const { return impl_->bound_port; }
+const std::string& Listener::bind_address() const { return impl_->config.bind_address; }
+bool Listener::tls_enabled() const { return impl_->tls.enabled(); }
 std::size_t Listener::active_connections() const { return impl_->active.load(std::memory_order_acquire); }
 
 }  // namespace ainiux::server

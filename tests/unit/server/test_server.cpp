@@ -23,6 +23,8 @@
 #include <thread>
 #include <vector>
 
+#include <curl/curl.h>
+
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include "server/auth.hpp"
@@ -36,6 +38,7 @@
 #include "server/router.hpp"
 #include "server/session_hub.hpp"
 #include "server/server.hpp"
+#include "server/tls.hpp"
 #include "server/workspace_service.hpp"
 #include "support/test_support.hpp"
 
@@ -168,6 +171,23 @@ void test_auth_and_routes() {
     bad_origin.headers["origin"] = "https://example.com";
     check(route_request(bad_origin, config, status).status == 403,
           "cross-origin request is rejected");
+
+    PublicStatus remote_status = status;
+    remote_status.bind_address = "192.0.2.10";
+    remote_status.remote = true;
+    remote_status.tls = true;
+    http::Request remote = full;
+    remote.headers["host"] = "192.0.2.10:8766";
+    remote.headers["origin"] = "https://192.0.2.10:8766";
+    check(route_request(remote, config, remote_status).status == 200,
+          "remote TLS requests accept only the configured host and same HTTPS origin");
+    remote.headers["origin"] = "http://192.0.2.10:8766";
+    check(route_request(remote, config, remote_status).status == 403,
+          "remote TLS requests reject a downgraded Origin");
+    remote.headers["origin"] = "https://192.0.2.10:8766";
+    remote.headers["host"] = "192.0.2.10:9999";
+    check(route_request(remote, config, remote_status).status == 421,
+          "remote requests reject a Host with the wrong listener port");
 }
 
 void test_event_replay_is_ordered_and_bounded() {
@@ -736,10 +756,13 @@ void test_job_errors_hide_server_side_paths() {
 }
 
 void test_server_cli_contract() {
-    const char* argv[] = {"ainiux", "server", "--workspace", ".", "--port", "9001",
-                          "--max-connections", "7", "--max-jobs", "9", "--max-sessions", "5"};
-    cli::ParseResult parsed = cli::parse_args(12, const_cast<char**>(argv));
+    const char* argv[] = {"ainiux", "server", "--workspace", ".", "--bind", "127.0.0.1",
+                          "--port", "9001", "--max-connections", "7", "--max-jobs", "9",
+                          "--max-sessions", "5"};
+    cli::ParseResult parsed = cli::parse_args(
+        static_cast<int>(sizeof(argv) / sizeof(argv[0])), const_cast<char**>(argv));
     check(parsed.error.ok() && parsed.options.server && parsed.options.port == 9001 &&
+              parsed.options.bind_address == "127.0.0.1" &&
               parsed.options.max_connections == 7 && parsed.options.max_jobs == 9 &&
               parsed.options.max_sessions == 5,
           "server subcommand and bounded options parse");
@@ -756,6 +779,30 @@ void test_server_cli_contract() {
     parsed = cli::parse_args(3, const_cast<char**>(stdin_key));
     check(parsed.error.ok() && !validate_server_options(parsed.options).ok(),
           "server mode rejects provider credentials read from process stdin");
+
+    const char* unsafe_remote[] = {"ainiux", "server", "--bind", "0.0.0.0"};
+    parsed = cli::parse_args(4, const_cast<char**>(unsafe_remote));
+    check(parsed.error.ok() && !validate_server_options(parsed.options).ok(),
+          "non-loopback server binding fails closed without TLS or explicit plaintext opt-in");
+    const char* explicit_plain[] = {"ainiux", "server", "--bind", "0.0.0.0",
+                                    "--insecure-plain-bind"};
+    parsed = cli::parse_args(5, const_cast<char**>(explicit_plain));
+    check(parsed.error.ok() && parsed.options.insecure_plain_bind &&
+              validate_server_options(parsed.options).ok(),
+          "non-loopback plaintext binding requires an explicit unsafe opt-in");
+    const char* incomplete_tls[] = {"ainiux", "server", "--tls-cert", "cert.pem"};
+    parsed = cli::parse_args(4, const_cast<char**>(incomplete_tls));
+    check(parsed.error.ok() && !validate_server_options(parsed.options).ok(),
+          "server TLS requires a certificate and private key pair");
+
+    cli::Options base;
+    base.provider = "none";
+    SessionHub remote_sessions(base, ".", 1, false);
+    const SessionCreateResult denied_yolo = remote_sessions.create(
+        "{\"kind\":\"agent\",\"provider\":\"none\",\"permission_mode\":\"yolo\"}");
+    check(!denied_yolo.error.ok() && denied_yolo.error.code == ErrorCode::UnsupportedFeature,
+          "remote session policy denies an explicit Yolo request without startup opt-in");
+    remote_sessions.shutdown();
 }
 
 #if !defined(_WIN32)
@@ -792,6 +839,62 @@ std::string raw_request(unsigned short port, const std::string& request) {
     }
     ::close(socket_fd);
     return response;
+}
+
+std::size_t append_curl_body(char* data, std::size_t size, std::size_t count, void* userdata) {
+    static_cast<std::string*>(userdata)->append(data, size * count);
+    return size * count;
+}
+
+void test_tls_listener_lifecycle() {
+    if (!TlsContext::available()) return;
+    Listener listener;
+    ListenerConfig config;
+    config.port = 0;
+    config.max_connections = 2;
+    config.auth.full_control_secret = "controller";
+    config.tls_cert_file = "tests/fixtures/server_tls_cert.pem";
+    config.tls_key_file = "tests/fixtures/server_tls_key.pem";
+    check(listener.start(config).ok() && listener.tls_enabled(),
+          "listener loads a matching PEM certificate and private key through RAII TLS state");
+    std::atomic<bool> stop{false};
+    Error serve_error;
+    std::thread server_thread([&] { serve_error = listener.serve_until([&] { return stop.load(); }); });
+
+    CURL* curl = curl_easy_init();
+    std::string body;
+    long status = 0;
+    curl_slist* raw_headers = nullptr;
+    raw_headers = curl_slist_append(raw_headers, "Authorization: Bearer controller");
+    const std::string origin = "Origin: https://127.0.0.1:" + std::to_string(listener.port());
+    raw_headers = curl_slist_append(raw_headers, origin.c_str());
+    const std::string url = "https://127.0.0.1:" + std::to_string(listener.port()) +
+                            "/ainiux/v1/health";
+    check(curl != nullptr && raw_headers != nullptr, "TLS client test resources allocate");
+    if (curl != nullptr && raw_headers != nullptr) {
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, raw_headers);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_curl_body);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+        const CURLcode result = curl_easy_perform(curl);
+        (void)curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        check(result == CURLE_OK && status == 200 && body == "{\"status\":\"ok\"}",
+              "TLS listener completes an authenticated HTTPS request with strict Origin");
+    }
+    if (raw_headers != nullptr) curl_slist_free_all(raw_headers);
+    if (curl != nullptr) curl_easy_cleanup(curl);
+    stop.store(true);
+    server_thread.join();
+    check(serve_error.ok(), "TLS listener shuts down cleanly and releases connection state");
+
+    Listener mismatched;
+    config.tls_cert_file = "tests/fixtures/server_tls_key.pem";
+    check(!mismatched.start(config).ok(), "listener rejects an invalid certificate file");
 }
 
 void test_loopback_listener_lifecycle() {
@@ -840,6 +943,7 @@ void test_loopback_listener_lifecycle() {
     capped_thread.join();
 }
 #else
+void test_tls_listener_lifecycle() {}
 void test_loopback_listener_lifecycle() {
     // Native Windows socket lifecycle is compiled into the product target; the
     // platform integration gate exercises it with the packaged executable.
@@ -864,6 +968,7 @@ void run_all() {
     test_job_errors_hide_server_side_paths();
     test_server_cli_contract();
     test_loopback_listener_lifecycle();
+    test_tls_listener_lifecycle();
 }
 
 }  // namespace ainiux::test::server_control

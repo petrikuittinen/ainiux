@@ -39,6 +39,7 @@ class InteractiveSession {
                        provider::RequestContext context,
                        agent::PermissionMode permission_mode,
                        agent::AgentTaskMode task_mode,
+                       bool allow_yolo,
                        std::size_t max_events);
 
     void start_preparation();
@@ -55,6 +56,7 @@ class InteractiveSession {
     provider::RequestContext context_;
     agent::PermissionMode permission_mode_;
     agent::AgentTaskMode task_mode_;
+    bool allow_yolo_;
     std::string status_ = "preparing";
     std::string updated_at_;
     std::string active_turn_id_;
@@ -82,7 +84,8 @@ class SessionHub {
    public:
     SessionHub(cli::Options base_options,
                std::string workspace,
-               std::size_t max_sessions);
+               std::size_t max_sessions,
+               bool allow_yolo = true);
     ~SessionHub();
     SessionHub(const SessionHub&) = delete;
     SessionHub& operator=(const SessionHub&) = delete;
@@ -98,6 +101,7 @@ class SessionHub {
     cli::Options base_options_;
     std::string workspace_;
     std::size_t max_sessions_;
+    bool allow_yolo_;
     mutable std::mutex mutex_;
     std::map<std::string, std::shared_ptr<InteractiveSession>> sessions_;
     std::size_t next_session_id_ = 1;

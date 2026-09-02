@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install Ainiux build and runtime dependencies (Debian/Ubuntu apt).
 #
-# Requires libsqlite3 and libcurl at runtime; their -dev packages are needed
-# to build. Elevates with sudo when not already root.
+# Requires libsqlite3 and libcurl at runtime; OpenSSL enables control-server TLS.
+# Their -dev packages are needed to build. Elevates with sudo when not already root.
 #
 # Usage:
 #   ./scripts/install-deps.sh
@@ -28,6 +28,7 @@ Packages:
   build-essential, pkg-config, git
   libsqlite3-0, libsqlite3-dev
   libcurl4t64 or libcurl4 (runtime), libcurl4-openssl-dev
+  libssl runtime (selected by apt), libssl-dev
 EOF
 }
 
@@ -86,6 +87,7 @@ PACKAGES=(
     libsqlite3-dev
     "${CURL_RT}"
     libcurl4-openssl-dev
+    libssl-dev
 )
 
 echo "Ainiux dependency install (apt)"

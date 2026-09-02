@@ -507,5 +507,34 @@ managed-media digests, and original source references. A separate metadata-only
 query avoids materializing legacy inline payload/source columns and caps output
 at 64 attachments per message. Loads keep the newest 512 messages under a 4 MiB
 content cap and report the total count, original ordinals, and truncation;
-listing keeps the newest 200 summaries. A remote GET does not update the TUI's last-thread app
-state. Store failures cross the wire only as path-free typed errors.
+listing keeps the newest 200 summaries. A remote GET does not update the TUI's
+last-thread app state. Store failures cross the wire only as path-free typed errors.
+
+## Optional OpenSSL TLS and remote bind policy (v1.3 PR 8)
+
+The control listener keeps IPv4 loopback/plain HTTP as its dependency-tolerant
+default. The build detects OpenSSL with `pkg-config`; when present, `src/server/tls.*`
+owns `SSL_CTX` and per-connection `SSL` handles behind C++17 RAII wrappers. When
+absent, ordinary Ainiux and loopback server builds remain available and TLS startup
+returns a concrete unsupported-feature error. OpenSSL was chosen instead of a
+second HTTP stack because it is portable across the supported POSIX and MSYS2
+targets, already coexists with libcurl, and leaves HTTP parsing/routing unchanged.
+
+Direct non-loopback binds require that TLS context unless the operator supplies
+the conspicuous `--insecure-plain-bind` escape hatch. Certificate/key loading
+happens before the socket binds; failed or mismatched material releases the partial
+context. Private keys cannot live inside the served workspace or cross links and
+must pass platform-private permission checks. Encrypted keys are rejected instead
+of allowing a server process to block on stdin.
+
+Host policy is derived from the configured IPv4 bind and actual port rather than
+trusting forwarded headers. Concrete binds accept only that literal; wildcard
+binds accept IPv4 literals so they remain usable across local interfaces. Origin,
+when present, must equal the effective `http` or `https` scheme plus the accepted
+Host. This contains DNS-rebinding/cross-origin browser paths without introducing a
+new hostname configuration surface before the WUI slice.
+
+Remote interactive Yolo has a separate startup gate. Session creation rejects an
+explicit request and the runtime caps restored project Yolo state at Smart when the
+gate is absent, preventing local persisted convenience from becoming remote
+authority. Loopback sessions retain their existing behavior.

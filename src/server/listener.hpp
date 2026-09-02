@@ -14,6 +14,7 @@
 namespace ainiux::server {
 
 struct ListenerConfig {
+    std::string bind_address = "127.0.0.1";
     unsigned short port = 8766;
     std::size_t max_connections = Limits::default_max_connections;
     std::size_t max_jobs = Limits::default_max_jobs;
@@ -21,6 +22,9 @@ struct ListenerConfig {
     AuthConfig auth;
     cli::Options base_options;
     std::string workspace = ".";
+    std::string tls_cert_file;
+    std::string tls_key_file;
+    bool allow_remote_yolo = false;
 };
 
 class Listener {
@@ -34,6 +38,8 @@ class Listener {
     Error serve_until(const std::function<bool()>& should_stop);
     void stop();
     unsigned short port() const;
+    const std::string& bind_address() const;
+    bool tls_enabled() const;
     std::size_t active_connections() const;
 
    private:

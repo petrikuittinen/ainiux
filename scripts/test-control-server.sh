@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test the v1.3 PR 7 loopback control server with curl.
+# Smoke-test the v1.3 PR 8 control server on its default loopback bind with curl.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ MCP_SECRET="ainiux-control-smoke-${$}-mcp"
 
 usage() {
     cat <<'EOF'
-Smoke-test the Ainiux v1.3 PR 7 control server.
+Smoke-test the Ainiux v1.3 PR 8 control server.
 
 Usage: scripts/test-control-server.sh [options]
 

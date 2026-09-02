@@ -181,14 +181,82 @@ Error validate_environment_secret(const char* name, std::string& secret) {
     return ok_error();
 }
 
+bool ipv4_address(const std::string& text, bool& loopback) {
+    loopback = false;
+    if (text == "localhost") {
+        loopback = true;
+        return true;
+    }
+    int components = 0;
+    unsigned int first = 0;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t dot = text.find('.', start);
+        const std::string part = text.substr(
+            start, dot == std::string::npos ? std::string::npos : dot - start);
+        if (part.empty() || part.size() > 3U || (part.size() > 1U && part.front() == '0')) return false;
+        unsigned int number = 0;
+        for (unsigned char c : part) {
+            if (c < '0' || c > '9') return false;
+            number = number * 10U + static_cast<unsigned int>(c - '0');
+        }
+        if (number > 255U) return false;
+        if (components == 0) first = number;
+        ++components;
+        if (dot == std::string::npos) break;
+        start = dot + 1U;
+    }
+    loopback = components == 4 && first == 127U;
+    return components == 4;
+}
+
+Error validate_tls_file(const std::string& path,
+                        const std::filesystem::path& workspace,
+                        const char* option,
+                        bool private_file,
+                        bool outside_workspace) {
+    if (path.empty()) return ok_error();
+    bool crosses_link = false;
+    Error error = platform::path_contains_link_or_reparse(path, crosses_link);
+    if (!error.ok()) return error;
+    if (crosses_link) {
+        return {ErrorCode::Tls,
+                std::string(option) + " must not cross a symlink or reparse point"};
+    }
+    std::error_code filesystem_error;
+    const std::filesystem::path canonical = std::filesystem::canonical(
+        std::filesystem::u8path(path), filesystem_error);
+    if (filesystem_error || !std::filesystem::is_regular_file(canonical, filesystem_error)) {
+        return {ErrorCode::FileRead, std::string(option) + " must name a regular file"};
+    }
+    if (outside_workspace && path_within(workspace, canonical)) {
+        return {ErrorCode::BadArgs,
+                std::string(option) + " must be outside the served workspace"};
+    }
+    if (!private_file) return ok_error();
+#if !defined(_WIN32)
+    struct stat info{};
+    if (::lstat(canonical.c_str(), &info) != 0 || !S_ISREG(info.st_mode)) {
+        return {ErrorCode::FileRead, std::string(option) + " must name a regular file"};
+    }
+    if ((info.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
+        return {ErrorCode::Auth,
+                std::string(option) + " must not grant permissions to group or other users"};
+    }
+#else
+    return verify_windows_private_acl(canonical, option);
+#endif
+    return ok_error();
+}
+
 }  // namespace
 
 Error validate_server_options(const cli::Options& options) {
     if (!options.server) {
         return options.server_options_seen
                    ? Error{ErrorCode::BadArgs,
-                           "--workspace, --port, --server-secret-file, --mcp-secret-file, "
-                           "--max-connections, --max-jobs, and --max-sessions require server mode"}
+                           "--workspace, --bind, --port, server credentials, TLS/bind policy, "
+                           "and server limits require server mode"}
                    : ok_error();
     }
     if (options.port < 1 || options.port > 65535) {
@@ -202,6 +270,21 @@ Error validate_server_options(const cli::Options& options) {
     }
     if (options.max_sessions < 1 || options.max_sessions > 1024) {
         return {ErrorCode::BadArgs, "--max-sessions must be between 1 and 1024"};
+    }
+    bool loopback = false;
+    if (!ipv4_address(options.bind_address, loopback)) {
+        return {ErrorCode::BadArgs, "--bind must be an IPv4 address or localhost"};
+    }
+    if (options.tls_cert_file.empty() != options.tls_key_file.empty()) {
+        return {ErrorCode::BadArgs, "--tls-cert and --tls-key must be supplied together"};
+    }
+    if (!loopback && options.tls_cert_file.empty() && !options.insecure_plain_bind) {
+        return {ErrorCode::BadArgs,
+                "non-loopback --bind requires TLS or explicit --insecure-plain-bind"};
+    }
+    if (loopback && options.insecure_plain_bind) {
+        return {ErrorCode::BadArgs,
+                "--insecure-plain-bind is only meaningful with a non-loopback --bind"};
     }
     if (options.key_stdin) {
         return {ErrorCode::BadArgs,
@@ -229,6 +312,14 @@ int run_server(const cli::Options& options) {
         filesystem_error);
     if (filesystem_error || !std::filesystem::is_directory(workspace, filesystem_error)) {
         error = {ErrorCode::FileRead, "--workspace must name an existing directory"};
+        app::print_error(error);
+        return app::exit_code_for(error.code);
+    }
+    error = validate_tls_file(options.tls_cert_file, workspace, "--tls-cert", false, false);
+    if (error.ok()) {
+        error = validate_tls_file(options.tls_key_file, workspace, "--tls-key", true, true);
+    }
+    if (!error.ok()) {
         app::print_error(error);
         return app::exit_code_for(error.code);
     }
@@ -262,6 +353,8 @@ int run_server(const cli::Options& options) {
         app::print_error(error);
         return app::exit_code_for(error.code);
     }
+    bool loopback = false;
+    (void)ipv4_address(options.bind_address, loopback);
     if (!auth.mcp_secret.empty() && constant_time_equal(auth.full_control_secret, auth.mcp_secret)) {
         error = {ErrorCode::Auth, "full-control and MCP-only secrets must be different"};
         app::print_error(error);
@@ -276,6 +369,7 @@ int run_server(const cli::Options& options) {
     }
     Listener listener;
     ListenerConfig config;
+    config.bind_address = options.bind_address;
     config.port = static_cast<unsigned short>(options.port);
     config.max_connections = static_cast<std::size_t>(options.max_connections);
     config.max_jobs = static_cast<std::size_t>(options.max_jobs);
@@ -283,14 +377,26 @@ int run_server(const cli::Options& options) {
     config.auth = std::move(auth);
     config.base_options = options;
     config.workspace = workspace.u8string();
+    config.tls_cert_file = options.tls_cert_file;
+    config.tls_key_file = options.tls_key_file;
+    config.allow_remote_yolo = loopback || options.allow_remote_yolo;
     error = listener.start(std::move(config));
     if (!error.ok()) {
         app::print_error(error);
         return app::exit_code_for(error.code);
     }
     if (!options.quiet) {
-        std::cerr << "Ainiux control API listening on http://127.0.0.1:" << listener.port()
+        const char* scheme = listener.tls_enabled() ? "https" : "http";
+        std::cerr << "Ainiux control API listening on " << scheme << "://"
+                  << listener.bind_address() << ':' << listener.port()
                   << "/ainiux/v1/ (workspace fixed; bearer authentication required)\n";
+        if (!loopback) {
+            std::cerr << "WARNING: direct remote control is enabled for workspace "
+                      << workspace.u8string() << " using "
+                      << (listener.tls_enabled() ? "TLS" : "explicit insecure plain HTTP")
+                      << "; remote Yolo is "
+                      << (options.allow_remote_yolo ? "enabled" : "denied") << "\n";
+        }
     }
     error = listener.serve_until([&] { return interrupt.interrupted(); });
     if (!error.ok()) {

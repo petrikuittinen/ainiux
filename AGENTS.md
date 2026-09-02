@@ -24,7 +24,7 @@ The program must stay excellent as a scriptable CLI. Keep the core engine indepe
 
 ## Current product snapshot
 
-Status: **v1.19 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, mid-turn editor/dired review without cancelling the agent turn (`AgentController`, Ctrl+G / F4), project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals (answerable from the editor), and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. Compact native tool schemas use short industry-aligned names; removed long names and aliases are unknown tools. Agent/run/plan can also load explicitly installed MCP tools. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Apple Silicon macOS source builds are supported. The Windows target remains unreleased until its native parity gate passes. v1.3 PR 7 adds revision-safe remote chat-thread listing/loading/creation/message appends on the loopback-only authenticated server. CLI `ainiux image` is the first v1.2 slice; REPL/TUI image generation remains later. Browser web UI remains postponed.
+Status: **v1.19 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, mid-turn editor/dired review without cancelling the agent turn (`AgentController`, Ctrl+G / F4), project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals (answerable from the editor), and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. Compact native tool schemas use short industry-aligned names; removed long names and aliases are unknown tools. Agent/run/plan can also load explicitly installed MCP tools. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Apple Silicon macOS source builds are supported. The Windows target remains unreleased until its native parity gate passes. v1.3 PR 8 adds TLS and gated direct non-loopback access to the authenticated control server. CLI `ainiux image` is the first v1.2 slice; REPL/TUI image generation remains later. Browser web UI remains postponed.
 
 ### Implemented modes
 
@@ -44,7 +44,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 | Security review | `--security-review` | headless read-only whole-project review |
 | Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux-pr/index.sqlite` |
 | One-shot image generation | `image` / `--image` | CLI-only; `images.conf` selects protocol/model (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); `--attach` PNG/JPEG references; one output image |
-| Loopback control server | `server` / `--server` | v1.3 PR 7 authenticated discovery, jobs, MCP, interactive agent sessions, read-only workspace routes, and revision-safe chat threads; mutations/TLS/WUI are later slices |
+| Control server | `server` / `--server` | v1.3 PR 8 authenticated discovery, jobs, MCP, interactive agent sessions, read-only workspace routes, revision-safe chat threads, TLS, and gated direct non-loopback access; mutations/WUI are later slices |
 
 ### Implemented capabilities agents must respect
 
@@ -65,7 +65,7 @@ Status: **v1.19 plus an unreleased native Windows parity target** (see `README.m
 
 ### Not implemented yet (do not pretend they exist)
 
-- Control-API filesystem mutations, TLS/non-loopback, and browser routes beyond the landed PR 7 revision-safe chat-thread surface. OpenAI `/v1` proxy is a later adapter. Do not implement later server slices until asked.
+- Control-API filesystem mutations and browser routes beyond the landed PR 8 TLS/non-loopback surface. OpenAI `/v1` proxy is a later adapter. Do not implement later server slices until asked.
 - Browser local web UI (`src/web/` reserved; `docs/web-mode.md` is a postponed-design snapshot)
 - Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
 - `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)
@@ -197,6 +197,7 @@ Current baseline:
 
 - **libcurl** — HTTP/HTTPS, proxies, timeouts, streaming callbacks (`src/http/`).
 - **libsqlite3** — TUI chat library (`src/chat/sqlite_store.*`, `~/.ainiux/ainiux.db`).
+- **OpenSSL (optional)** — TLS for direct non-loopback control-server access (`src/server/tls.*`); builds without it retain loopback/plain-HTTP support.
 - **In-tree JSON facade** (`src/json/`) — request escaping and response parsing; expand or vendor a reviewed library only with an explicit decision.
 - **POSIX termios / native Win32 console + ANSI VT** — shared TUI and editor terminal ownership. **No ncurses dependency** today. Windows full-screen modes support Windows Terminal and modern conhost, not mintty. The editor renderer is independent of the terminal harness.
 - **Generated Unicode tables** — editor word completion / properties under `src/editor/detail/` (see `tools/generate_editor_unicode_data.py`). Full `utf8proc` / `libgrapheme` integration is future work, not required for ordinary changes.

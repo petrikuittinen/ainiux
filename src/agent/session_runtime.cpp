@@ -1418,6 +1418,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         if (!context.options.quiet)
             std::cerr << "Agent session DB: " << session_store_.path() << "\n";
         if (options_.interactive) {
+            const PermissionMode requested_permission_mode = permission_mode_;
             AgentProjectRecord project;
             error = session_store_.open_project(project);
             if (!error.ok()) {
@@ -1429,6 +1430,9 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             if (!error.ok()) {
                 reset();
                 return error;
+            }
+            if (!options_.allow_yolo && permission_mode_ == PermissionMode::Yolo) {
+                permission_mode_ = requested_permission_mode;
             }
             options_.permission_mode = permission_mode_;
             tools_.set_permission_mode(permission_mode_);

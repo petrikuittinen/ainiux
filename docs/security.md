@@ -1,5 +1,29 @@
 # Security
 
+## Control-API bind and TLS boundary
+
+`ainiux server` is loopback-only unless `--bind` selects another IPv4 address.
+Direct non-loopback startup fails closed without a full-control secret and TLS;
+`--insecure-plain-bind` is the explicit operator acknowledgement for plaintext.
+TLS uses an optional OpenSSL-backed RAII context, requires TLS 1.2 or newer, and
+loads a matching PEM chain/key without an interactive passphrase prompt. The
+private key must be outside the served workspace, must not cross a symlink or
+reparse point, and must have private POSIX permissions or a protected Windows
+current-user/SYSTEM ACL.
+
+For every transport, `Host` is restricted to the configured listener address
+and actual port. Wildcard listeners accept IPv4 literals, not arbitrary DNS
+names. A supplied `Origin` must be the exact same origin and scheme as that Host.
+Bearer credentials remain mandatory on every API/SSE request and are never read
+from URLs, cookies, provider credentials, or forwarded headers. Prefer a VPN,
+SSH tunnel, or authenticated reverse proxy to direct LAN exposure; if terminating
+TLS at a proxy, keep Ainiux on loopback rather than using the plaintext override.
+
+Remote Yolo is off independently of project-persisted permissions. Without
+`--allow-remote-yolo`, an explicit Yolo session request is rejected and restored
+Yolo state is capped at Smart before tools are armed. Enabling it grants remote
+clients the same high-risk Guard bypass documented for local Yolo.
+
 ## Control-API workspace boundary
 
 The authenticated PR 6 workspace routes are read-only and use the one canonical
@@ -118,9 +142,9 @@ Writable editor buffers coordinate ainiux processes with an atomic, user-only `F
 
 This is advisory coordination, not an operating-system write prohibition: unrelated programs can still alter the target. Device/inode, size, existence, and high-resolution modification-time fingerprints make those changes visible before editing a formerly read-only buffer or saving. Only a PID proven dead on the same hostname is recovered automatically. Remote, live, malformed, missing, token-mismatched, or nonempty locks require the user to verify ownership before manual removal.
 
-## Loopback Control API
+## Control API
 
-`ainiux server` currently binds only IPv4 loopback (`127.0.0.1`) and exposes
+`ainiux server` binds IPv4 loopback (`127.0.0.1`) by default and exposes
 authenticated discovery plus asynchronous one-shot chat, run, plan, and image
 jobs, bounded interactive agent sessions, contained read-only workspace files,
 and revision-safe chat-thread operations. It does not expose raw chat databases
@@ -149,8 +173,8 @@ provider URLs, attachment paths, or filesystem roots. Provider chat/image work
 has a global cap; run/plan reserve one fixed-workspace lane and remain headless
 under Guard. Job/event retention is bounded and in-memory only. Cancellation is
 job-scoped, SSE writers time out on disconnected/slow clients, and server-side
-credential paths are hidden from job errors. Direct non-loopback binding, TLS,
-remote Yolo, WUI assets, and later mutation routes are not present.
+credential paths are hidden from job errors. WUI assets and later mutation
+routes are not present.
 
 ## Configuration Files
 

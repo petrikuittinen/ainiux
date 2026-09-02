@@ -93,6 +93,7 @@ InteractiveSession::InteractiveSession(std::string id,
                                        provider::RequestContext context,
                                        agent::PermissionMode permission_mode,
                                        agent::AgentTaskMode task_mode,
+                                       bool allow_yolo,
                                        std::size_t max_events)
     : id_(std::move(id)),
       workspace_(std::move(workspace)),
@@ -100,6 +101,7 @@ InteractiveSession::InteractiveSession(std::string id,
       context_(std::move(context)),
       permission_mode_(permission_mode),
       task_mode_(task_mode),
+      allow_yolo_(allow_yolo),
       updated_at_(created_at_),
       controller_(std::make_shared<agent::AgentController>()),
       events_(id_, max_events, Limits::event_bytes_per_job) {
@@ -176,6 +178,7 @@ void InteractiveSession::start_preparation() {
             options.fetch_options.allow_private = context.options.allow_private_url_fetch;
             options.search_options = search::options_for(context.options);
             options.permission_mode = permission_mode_;
+            options.allow_yolo = allow_yolo_;
             options.on_prepare_progress = [this](const agent::PreparationProgress& progress) {
                 publish("preparing", "{\"completed\":" +
                         std::string(progress.completed ? "true" : "false") + "}");
@@ -434,10 +437,12 @@ void InteractiveSession::close() {
 
 SessionHub::SessionHub(cli::Options base_options,
                        std::string workspace,
-                       std::size_t max_sessions)
+                       std::size_t max_sessions,
+                       bool allow_yolo)
     : base_options_(std::move(base_options)),
       workspace_(std::move(workspace)),
-      max_sessions_(max_sessions == 0 ? 1U : max_sessions) {
+      max_sessions_(max_sessions == 0 ? 1U : max_sessions),
+      allow_yolo_(allow_yolo) {
     base_options_.server = false;
     base_options_.quiet = true;
     base_options_.prompt.clear();
@@ -480,6 +485,9 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     agent::PermissionMode permission_mode;
     if (!agent::parse_permission_mode(ascii_lower(ascii_trim(permission_text)), permission_mode))
         return {{}, field_error("permission_mode", "must be confirm, smart, or yolo")};
+    if (permission_mode == agent::PermissionMode::Yolo && !allow_yolo_)
+        return {{}, {ErrorCode::UnsupportedFeature,
+                     "remote Yolo requires the server startup option --allow-remote-yolo"}};
     agent::AgentTaskMode task_mode = agent::AgentTaskMode::Act;
     const std::string normalized_task = ascii_lower(ascii_trim(task_text));
     if (normalized_task == "plan") task_mode = agent::AgentTaskMode::Plan;
@@ -519,6 +527,7 @@ SessionCreateResult SessionHub::create(const std::string& body) {
         const std::string id = "session_" + std::to_string(next_session_id_++);
         session = std::shared_ptr<InteractiveSession>(new InteractiveSession(
             id, workspace_, std::move(built.context), permission_mode, task_mode,
+            allow_yolo_,
             Limits::events_per_job));
         sessions_.emplace(id, session);
     }

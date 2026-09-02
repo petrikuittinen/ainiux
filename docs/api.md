@@ -1,11 +1,11 @@
 # Ainiux control API
 
-The v1.3 control API is versioned under `/ainiux/v1/`. PR 7 provides a
-loopback-only listener, authenticated discovery, asynchronous one-shot jobs,
+The v1.3 control API is versioned under `/ainiux/v1/`. PR 8 provides an
+authenticated loopback-by-default listener, optional TLS/direct non-loopback access,
+asynchronous one-shot jobs,
 interactive agent sessions, read-only workspace review/dired/file routes, and
 a separate MCP 2026-07-28 endpoint at `/mcp`, plus revision-safe access to the
-existing personal chat library. Filesystem mutations, TLS/non-loopback mode,
-and the WUI remain later slices.
+existing personal chat library. Filesystem mutations and the WUI remain later slices.
 Later routes must use the PR 1 operation/wire contracts rather than exposing
 provider, runtime, or terminal-internal structures directly.
 
@@ -18,7 +18,7 @@ curl -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
   http://127.0.0.1:8766/ainiux/v1/status
 ```
 
-The listener binds only `127.0.0.1`. A full-control credential is mandatory and
+The listener binds `127.0.0.1` by default. A full-control credential is mandatory and
 comes from `AINIUX_SERVER_SECRET` or `--server-secret-file PATH`. An optional,
 different MCP-only credential comes from `AINIUX_MCP_SECRET` or
 `--mcp-secret-file PATH`; it is accepted only for `/mcp`, which is a separate
@@ -37,11 +37,46 @@ GET /ainiux/v1/capabilities
 ```
 
 `health` returns only `{"status":"ok"}`. `status` reports the API version,
-full-control scope, loopback/plain-HTTP bind state, and public connection/job
+full-control scope, bind/transport state, and public connection/job
 limits. `capabilities` lists the currently routed discovery operations, built-in
 provider names without credentials, authentication configuration, and disabled
 optional adapters. It advertises MCP as enabled separately from the control
 API job operation list.
+
+## TLS and direct non-loopback access
+
+Direct access uses an IPv4 `--bind ADDRESS`. Any non-loopback address requires
+both `--tls-cert` and `--tls-key`; only an explicit `--insecure-plain-bind`
+allows unencrypted HTTP. OpenSSL is detected at build time. A build without its
+development files still supports the default loopback HTTP listener but rejects
+TLS startup.
+
+The certificate file is a PEM chain. The matching unencrypted PEM private key
+must be a regular, non-symlinked private file outside the served workspace; on
+POSIX it may not grant group/other permissions, and on Windows it must have the
+same protected current-user/SYSTEM ACL used for other private state. The server
+requires TLS 1.2 or newer and never prompts for a key passphrase.
+
+```sh
+export AINIUX_SERVER_SECRET='use-a-long-random-value'
+ainiux server --workspace . --bind 192.0.2.10 \
+  --tls-cert /secure/ainiux-chain.pem --tls-key /secure/ainiux-key.pem
+curl --cacert /secure/ca.pem \
+  -H "Authorization: Bearer $AINIUX_SERVER_SECRET" \
+  https://192.0.2.10:8766/ainiux/v1/status
+```
+
+`Host` must match the configured address and listener port. A wildcard
+`0.0.0.0` bind accepts only IPv4-literal Host values at that port. If `Origin`
+is present, it must exactly match the request scheme and accepted Host; a TLS
+listener therefore rejects `http://` origins. DNS names, query-string tokens,
+cookies, forwarded-host authority, and cross-origin browser requests do not
+expand the allowlist.
+
+Remote interactive sessions run at Confirm/Smart authority by default. An
+explicit or project-restored Yolo mode is denied/downgraded unless startup also
+includes `--allow-remote-yolo`. This option is deliberately separate from the
+persisted project setting.
 
 ## Read-only workspace
 

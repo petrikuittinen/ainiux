@@ -16,8 +16,14 @@ LIBCURL_CFLAGS ?= $(shell pkg-config --cflags libcurl 2>/dev/null || curl-config
 LIBCURL_LIBS ?= $(shell pkg-config --libs libcurl 2>/dev/null || curl-config --libs 2>/dev/null)
 SQLITE_CFLAGS ?= $(shell pkg-config --cflags sqlite3 2>/dev/null)
 SQLITE_LIBS ?= $(shell pkg-config --libs sqlite3 2>/dev/null || printf '%s\n' -lsqlite3)
+OPENSSL_CFLAGS ?= $(shell pkg-config --cflags openssl 2>/dev/null)
+OPENSSL_LIBS ?= $(shell pkg-config --libs openssl 2>/dev/null)
 CXXFLAGS += $(LIBCURL_CFLAGS) $(SQLITE_CFLAGS)
 LDFLAGS += $(LIBCURL_LIBS) $(SQLITE_LIBS)
+ifneq ($(strip $(OPENSSL_LIBS)),)
+CXXFLAGS += $(OPENSSL_CFLAGS) -DAINIUX_HAS_OPENSSL=1
+LDFLAGS += $(OPENSSL_LIBS)
+endif
 
 # Native Windows is built from the MSYS2 UCRT64 shell. MSYS2 is a build
 # environment only: the package target gathers the native UCRT64 DLL closure.

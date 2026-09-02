@@ -28,6 +28,9 @@ struct PublicStatus {
     std::size_t max_sessions = 0;
     WorkspaceService* workspace = nullptr;
     ChatService* chat_threads = nullptr;
+    std::string bind_address = "127.0.0.1";
+    bool tls = false;
+    bool remote = false;
 };
 
 struct Response {
