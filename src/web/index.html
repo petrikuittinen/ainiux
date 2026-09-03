@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v1.css">
-  <script type="module" src="/ui/assets/app-v1.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v3.css">
+  <script type="module" src="/ui/assets/app-v3.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -63,6 +63,7 @@
               <div>
                 <h3 id="conversation-heading">Select a thread</h3>
                 <p id="thread-meta" class="muted"></p>
+                <p id="chat-metrics" class="metrics-strip" aria-live="polite"></p>
               </div>
             </div>
             <div id="chat-messages" class="message-list empty-state" aria-live="polite">Choose or create a thread.</div>
@@ -71,7 +72,7 @@
               <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" required disabled></textarea>
               <div class="form-row wrap">
                 <label>Provider <select id="chat-provider" class="provider-select"></select></label>
-                <label>Model <input id="chat-model" type="text" maxlength="512" autocomplete="off" placeholder="Server default"></label>
+                <label>Model <input id="chat-model" type="text" list="chat-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="chat-model-list"></datalist><small id="chat-model-status" class="field-hint" aria-live="polite"></small></label>
                 <label>API
                   <select id="chat-api"><option value="">Default</option><option value="chat">Chat</option><option value="responses">Responses</option></select>
                 </label>
@@ -98,7 +99,7 @@
             </label>
             <div class="form-grid">
               <label>Provider <select id="goal-provider" class="provider-select"></select></label>
-              <label>Model <input id="goal-model" maxlength="512" autocomplete="off" placeholder="Server default"></label>
+              <label>Model <input id="goal-model" list="goal-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="goal-model-list"></datalist><small id="goal-model-status" class="field-hint" aria-live="polite"></small></label>
               <label>API <select id="goal-api"><option value="">Default</option><option value="chat">Chat</option><option value="responses">Responses</option></select></label>
             </div>
             <button type="submit">Start job</button>
@@ -138,7 +139,7 @@
           </aside>
           <section class="subpanel agent-console" aria-labelledby="agent-console-heading">
             <div class="subpanel-heading">
-              <div><h3 id="agent-console-heading">No active session</h3><p id="agent-meta" class="muted"></p></div>
+              <div><h3 id="agent-console-heading">No active session</h3><p id="agent-meta" class="muted"></p><p id="agent-metrics" class="metrics-strip" aria-live="polite"></p></div>
               <button id="cancel-turn-button" class="danger" type="button" hidden>Cancel turn</button>
             </div>
             <div id="agent-events" class="event-list empty-state" aria-live="polite">Create or select an agent session.</div>
@@ -153,7 +154,7 @@
 
       <section id="workspace-panel" class="panel" aria-labelledby="workspace-heading" hidden>
         <div class="section-heading">
-          <div><p class="eyebrow">Revision-safe files</p><h2 id="workspace-heading">Workspace</h2></div>
+          <div><p class="eyebrow">Safe file editing</p><h2 id="workspace-heading">Workspace</h2></div>
           <div class="button-row"><button id="workspace-review-button" class="ghost" type="button">Review</button><button id="refresh-directory-button" type="button">Refresh</button></div>
         </div>
         <div id="workspace-summary" class="summary-strip" aria-live="polite"></div>
@@ -205,10 +206,10 @@
   <dialog id="new-thread-dialog" aria-labelledby="new-thread-title">
     <form id="new-thread-form" class="dialog-card">
       <h2 id="new-thread-title">New chat thread</h2>
-      <label>Name <input id="thread-name-input" maxlength="512" required value="Remote chat"></label>
+      <label>Name <input id="thread-name-input" maxlength="512" placeholder="Optional; first message is used"></label>
       <div class="form-grid">
         <label>Provider <select id="thread-provider" class="provider-select"></select></label>
-        <label>Model <input id="thread-model" maxlength="512" autocomplete="off" placeholder="Server default"></label>
+        <label>Model <input id="thread-model" list="thread-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="thread-model-list"></datalist><small id="thread-model-status" class="field-hint" aria-live="polite"></small></label>
       </div>
       <div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Create</button></div>
     </form>
@@ -219,7 +220,7 @@
       <h2 id="new-agent-title">New agent session</h2>
       <div class="form-grid">
         <label>Provider <select id="agent-provider" class="provider-select"></select></label>
-        <label>Model <input id="agent-model" maxlength="512" autocomplete="off" placeholder="Server default"></label>
+        <label>Model <input id="agent-model" list="agent-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="agent-model-list"></datalist><small id="agent-model-status" class="field-hint" aria-live="polite"></small></label>
         <label>API <select id="agent-api"><option value="">Default</option><option value="chat">Chat</option><option value="responses">Responses</option></select></label>
         <label>Task mode <select id="agent-task-mode"><option value="act">Act</option><option value="plan">Plan</option></select></label>
         <label>Permissions <select id="agent-permission"><option value="smart">Smart</option><option value="confirm">Confirm</option><option value="yolo">Yolo (server opt-in)</option></select></label>
@@ -259,7 +260,7 @@
 
   <dialog id="conflict-dialog" aria-labelledby="conflict-title">
     <div class="dialog-card">
-      <div><p class="eyebrow danger-text">Revision conflict</p><h2 id="conflict-title">Remote content changed</h2></div>
+      <div><p class="eyebrow danger-text">Edit conflict</p><h2 id="conflict-title">Remote content changed</h2></div>
       <p id="conflict-message">Reload the newest server version before saving again. Your draft remains in this tab until you choose reload.</p>
       <div class="dialog-actions"><button id="keep-draft-button" class="ghost" type="button">Keep draft</button><button id="reload-conflict-button" type="button">Reload server copy</button></div>
     </div>

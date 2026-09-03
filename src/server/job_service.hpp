@@ -36,6 +36,8 @@ class JobService {
                             std::vector<provider::Message> messages,
                             runtime::CancellationToken cancellation,
                             JobEvents events) const;
+    JobOutcome run_models_job(cli::Options options,
+                              runtime::CancellationToken cancellation) const;
     JobOutcome run_agent_job(cli::Options options,
                              std::string goal,
                              bool plan,

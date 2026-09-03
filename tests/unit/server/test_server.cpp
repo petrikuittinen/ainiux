@@ -140,15 +140,20 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v1.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v1.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v3.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v3.js") != std::string::npos &&
               index.body.find("Sign out / Forget authentication") != std::string::npos &&
+              index.body.find("list=\"chat-model-list\"") != std::string::npos &&
+              index.body.find("id=\"chat-metrics\"") != std::string::npos &&
+              index.body.find("id=\"agent-metrics\"") != std::string::npos &&
+              index.body.find("Revision-safe files") == std::string::npos &&
+              index.body.find("Revision conflict") == std::string::npos &&
               index.body.find("remember-token") == std::string::npos &&
               index.body.find("https://") == std::string::npos &&
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v1.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v3.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -157,13 +162,15 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find("html[data-theme=\"dark\"]") != std::string::npos &&
               stylesheet.body.find("@media (max-width: 38rem)") != std::string::npos &&
               stylesheet.body.find("grid-template-columns: repeat(6") != std::string::npos &&
+              stylesheet.body.find("height: 100dvh") != std::string::npos &&
+              stylesheet.body.find(".metrics-strip") != std::string::npos &&
               stylesheet.body.find("@import") == std::string::npos &&
               stylesheet.body.find("https://") == std::string::npos &&
               stylesheet.body.find("http://") == std::string::npos &&
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v1.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v3.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -171,6 +178,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("Reconnecting") != std::string::npos &&
               javascript.body.find("window.addEventListener(\"online\"") != std::string::npos &&
               javascript.body.find("Last-Event-ID") != std::string::npos &&
+              javascript.body.find("/jobs/models") != std::string::npos &&
+              javascript.body.find("catalog.done = true") != std::string::npos &&
+              javascript.body.find("Intl.DateTimeFormat") != std::string::npos &&
+              javascript.body.find("event.shiftKey || event.altKey") != std::string::npos &&
+              javascript.body.find("messages · revision") == std::string::npos &&
+              javascript.body.find("parent revision") == std::string::npos &&
               javascript.body.find("textContent") != std::string::npos &&
               javascript.body.find("sessionStorage") == std::string::npos &&
               javascript.body.find("document.cookie") == std::string::npos &&
@@ -187,6 +200,10 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     check(route_request(public_get("/ui/assets/"), config, status).status == 404,
           "WUI route serves only exact embedded assets and never a directory");
+    check(route_request(public_get("/ui/assets/app-v1.js"), config, status).status == 404,
+          "superseded immutable WUI asset URLs are not silently aliased");
+    check(route_request(public_get("/ui/assets/app-v2.js"), config, status).status == 404,
+          "the reconnect-loop asset URL is superseded instead of remaining cached");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");
     check(route_request(post, config, status).status == 405,
@@ -403,6 +420,29 @@ void test_job_routes_and_sse() {
     check(records.find("id: 1\n") != std::string::npos &&
               records.find("event: queued\n") != std::string::npos,
           "SSE returns retained events with ordered IDs and stable envelopes");
+
+    Response capabilities = route_request(
+        parsed_request(request_text("/ainiux/v1/capabilities")), auth, status);
+    check(capabilities.status == 200 && capabilities.body.find("\"models\"") != std::string::npos,
+          "capability discovery advertises the asynchronous model-list operation");
+    const std::string models_body = "{\"provider\":\"none\"}";
+    const std::string models_prefix =
+        "POST /ainiux/v1/jobs/models HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: application/json\r\nContent-Length: ";
+    Response models = route_request(parsed_request(
+        models_prefix + std::to_string(models_body.size()) + "\r\n\r\n" + models_body),
+        auth, status);
+    const json::ParseResult models_json = json::parse(models.body);
+    const json::Value* models_job = models_json.value.get("job");
+    const json::Value* models_id = models_job == nullptr ? nullptr : models_job->get("id");
+    std::shared_ptr<Job> retained_models =
+        models_id != nullptr && models_id->is_string()
+            ? jobs.registry().find(models_id->string) : nullptr;
+    check(models.status == 202 && models.body.find("\"operation\":\"models\"") != std::string::npos &&
+              retained_models != nullptr && wait_terminal(retained_models) &&
+              retained_models->snapshot_json().find("disables model listing") != std::string::npos &&
+              retained_models->snapshot_json().find("prompt is empty") == std::string::npos,
+          "the authenticated model-list route creates a cancellable provider job");
     jobs.shutdown();
 }
 
@@ -533,6 +573,10 @@ void test_interactive_sessions_are_bounded_and_replayable() {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     check(session->snapshot_json().find("\"status\":\"ready\"") != std::string::npos,
           "session preparation completes asynchronously without blocking creation");
+    check(session->snapshot_json().find("\"context\":{") != std::string::npos &&
+              session->snapshot_json().find("\"active_elapsed_ms\":null") != std::string::npos &&
+              session->snapshot_json().find("\"last_turn_metrics\":null") != std::string::npos,
+          "interactive snapshots expose stable context and turn-metric fields before a turn");
 
     Response listed = route_request(session_request("GET", "/ainiux/v1/sessions", ""), auth, status);
     check(listed.status == 200 && listed.body.find(id) != std::string::npos,
@@ -559,6 +603,9 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     }
     for (int i = 0; i < 200 && session->snapshot_json().find("\"turn_id\":null") == std::string::npos; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    check(session->snapshot_json().find("\"last_turn_metrics\":{") != std::string::npos &&
+              session->snapshot_json().find("\"elapsed_ms\":") != std::string::npos,
+          "completed interactive turns retain normalized token and elapsed metrics");
 
     Response over_capacity = route_request(session_request("POST", "/ainiux/v1/sessions", create_body),
                                             auth, status);
@@ -867,7 +914,7 @@ void test_revision_safe_chat_thread_routes() {
 
     Response created = route_request(session_request(
         "POST", "/ainiux/v1/chat/threads",
-        "{\"revision\":0,\"name\":\"Remote chat\",\"provider\":\"openai\",\"model\":\"model-a\"}"),
+        "{\"revision\":0,\"provider\":\"openai\",\"model\":\"model-a\"}"),
         auth, status);
     const json::ParseResult created_json = json::parse(created.body);
     const json::Value* created_thread = created_json.value.get("thread");
@@ -876,8 +923,10 @@ void test_revision_safe_chat_thread_routes() {
         created_thread == nullptr ? nullptr : created_thread->get("revision");
     check(created.status == 201 && id_value != nullptr &&
               id_value->type == json::Value::Type::Number && revision_value != nullptr &&
-              revision_value->number == 1,
-          "chat thread creation requires revision zero and returns revision one");
+              revision_value->number == 1 && created.body.find("\"name\":\"New chat\"") != std::string::npos &&
+              created.body.find("\"created_at\":\"20") != std::string::npos &&
+              created.body.find("\"modified_at\":\"20") != std::string::npos,
+          "unnamed chat creation returns a default title and human-readable timestamps");
     if (id_value == nullptr || id_value->type != json::Value::Type::Number) {
         fs::remove_all(directory, cleanup_error);
         return;
@@ -887,7 +936,7 @@ void test_revision_safe_chat_thread_routes() {
 
     Response listed = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
                                     auth, status);
-    check(listed.status == 200 && listed.body.find("Remote chat") != std::string::npos &&
+    check(listed.status == 200 && listed.body.find("New chat") != std::string::npos &&
               listed.body.find(database.u8string()) == std::string::npos,
           "chat thread listing exposes bounded summaries without the database path");
 
@@ -897,7 +946,11 @@ void test_revision_safe_chat_thread_routes() {
         "{\"role\":\"assistant\",\"content\":\"hi\"}]}"), auth, status);
     check(appended.status == 200 && appended.body.find("\"revision\":2") != std::string::npos &&
               appended.body.find("\"message_count\":2") != std::string::npos,
-          "message append atomically advances the observed thread revision");
+          "message append advances the thread's concurrency token");
+    listed = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
+                           auth, status);
+    check(listed.status == 200 && listed.body.find("\"name\":\"hello\"") != std::string::npos,
+          "the first user prompt becomes the persisted title of an unnamed thread");
 
     Response stale = route_request(session_request(
         "POST", thread_path + "/messages",

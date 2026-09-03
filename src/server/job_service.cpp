@@ -11,6 +11,7 @@
 #include "editor/editor_assist.hpp"
 #include "provider/provider.hpp"
 #include "security/redact.hpp"
+#include "server/metrics.hpp"
 #include "server/workspace_service.hpp"
 
 namespace ainiux::server {
@@ -172,15 +173,37 @@ JobOutcome JobService::run_chat_job(cli::Options options,
     Error model_error = app::choose_default_model(built.context);
     if (!model_error.ok()) return {public_operation_error(model_error, {built.context.api_key}), {}};
     app::operation::ChatResult result = app::operation::run_chat(
-        built.context, {std::move(messages)}, cancellation, std::move(events));
+        built.context, {messages}, cancellation, std::move(events));
     if (!result.error.ok()) return {public_operation_error(result.error, {built.context.api_key}), {}};
     const provider::ChatResult& response = result.response;
+    const GenerationMetrics metrics =
+        chat_generation_metrics(built.context, messages, response);
     return {ok_error(),
             "{\"model\":" + json::quote(response.model) +
                 ",\"content\":" + json::quote(response.content) +
                 ",\"usage\":" + valid_json_or_null(response.usage_json) +
                 ",\"timing\":{\"ttft_ms\":" + std::to_string(response.ttft_ms) +
-                ",\"total_ms\":" + std::to_string(response.total_ms) + "}}"};
+                ",\"total_ms\":" + std::to_string(response.total_ms) + "}" +
+                ",\"metrics\":" + generation_metrics_json(metrics) + "}"};
+}
+
+JobOutcome JobService::run_models_job(cli::Options options,
+                                      runtime::CancellationToken cancellation) const {
+    options.list_models = true;
+    provider::ContextResult built = provider::build_context(options);
+    if (!built.error.ok()) return {public_operation_error(built.error, {options.key}), {}};
+    provider::ModelsResult result;
+    const Error error = provider::list_models(built.context, result, cancellation);
+    if (!error.ok()) return {public_operation_error(error, {built.context.api_key}), {}};
+    std::string models = "[";
+    for (std::size_t index = 0; index < result.model_ids.size(); ++index) {
+        if (index != 0) models += ',';
+        models += json::quote(result.model_ids[index]);
+    }
+    models += ']';
+    return {ok_error(),
+            "{\"provider\":" + json::quote(built.context.profile.name) +
+                ",\"models\":" + models + "}"};
 }
 
 JobOutcome JobService::run_agent_job(cli::Options options,
@@ -199,15 +222,19 @@ JobOutcome JobService::run_agent_job(cli::Options options,
         if (events) (void)events({app::operation::EventType::Progress, text, 0, 0});
     };
     const std::string api_key = built.context.api_key;
+    const long long context_window_tokens = built.context.options.context_tokens;
     app::AgentGoalResult result = app::run_agent_goal(
         std::move(built.context), goal, cancellation, {}, false, progress, workspace_);
     if (!result.error.ok()) return {public_operation_error(result.error, {api_key}), {}};
+    const GenerationMetrics metrics = agent_generation_metrics(
+        -1, context_window_tokens, result.token_usage, result.elapsed_ms);
     return {ok_error(),
             "{\"content\":" + json::quote(result.final_text) +
                 ",\"turns\":" + std::to_string(result.turns) +
                 ",\"tool_calls\":" + std::to_string(result.tool_calls) +
                 ",\"failed_tool_calls\":" + std::to_string(result.failed_tool_calls) +
-                ",\"elapsed_ms\":" + std::to_string(result.elapsed_ms) + "}"};
+                ",\"elapsed_ms\":" + std::to_string(result.elapsed_ms) +
+                ",\"metrics\":" + generation_metrics_json(metrics) + "}"};
 }
 
 JobOutcome JobService::run_image_job(cli::Options options,
@@ -315,6 +342,16 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
     Error error = validate_common(parsed.value, operation, options);
     if (!error.ok()) return {{}, error};
     const std::string canonical = json::stringify(parsed.value);
+
+    if (operation == "models") {
+        error = reject_unknown(parsed.value, {"provider", "api"});
+        if (!error.ok()) return {{}, error};
+        JobWork work = [this, options](runtime::CancellationToken token, JobEvents) {
+            return run_models_job(options, token);
+        };
+        return {registry_.submit(operation, canonical, idempotency_key,
+                                 JobClass::Provider, std::move(work)), ok_error()};
+    }
 
     if (operation == "chat") {
         error = reject_unknown(parsed.value, {"provider", "model", "api", "messages"});

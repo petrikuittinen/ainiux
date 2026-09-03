@@ -48,6 +48,10 @@ struct AgentSurfaceEvent {
     long long agent_stream_output_tokens = 0;
     long long agent_stream_decode_ms = 0;
     bool agent_stream_tokens_estimated = false;
+    long long agent_elapsed_ms = -1;
+    AgentTokenUsage agent_token_usage;
+    long long agent_context_used_tokens = -1;
+    long long agent_context_window_tokens = -1;
     provider::ChatResult chat;
     std::vector<provider::Message> agent_history;
     bool agent_history_loaded = false;

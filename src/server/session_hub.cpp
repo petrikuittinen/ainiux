@@ -15,6 +15,7 @@
 #include "provider/provider.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
+#include "server/metrics.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -246,9 +247,17 @@ void InteractiveSession::consume_event(const agent::AgentSurfaceEvent& event) {
     if (event.type == agent::AgentSurfaceEvent::Type::TurnDone ||
         event.type == agent::AgentSurfaceEvent::Type::TurnError) {
         const bool cancelled = event.error.code == ErrorCode::Cancelled;
+        const double tokens_per_second = agent::agent_stream_tokens_per_second(
+            event.agent_stream_output_tokens, event.agent_stream_decode_ms);
+        const GenerationMetrics metrics = agent_generation_metrics(
+            event.agent_context_used_tokens, event.agent_context_window_tokens,
+            event.agent_token_usage, event.agent_elapsed_ms, tokens_per_second);
+        const std::string metrics_json = generation_metrics_json(metrics);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             active_turn_id_.clear();
+            active_turn_started_ = {};
+            last_turn_metrics_json_ = metrics_json;
             pending_approval_id_.clear();
             pending_review_path_.clear();
             status_ = closed_ ? "closed" : "ready";
@@ -260,12 +269,14 @@ void InteractiveSession::consume_event(const agent::AgentSurfaceEvent& event) {
                         ",\"turns\":" + std::to_string(event.agent_turns) +
                         ",\"tool_calls\":" + std::to_string(event.agent_tool_calls) +
                         ",\"failed_tool_calls\":" + std::to_string(event.agent_failed_tool_calls) +
-                        ",\"status\":" + json::quote(cancelled ? "cancelled" : "succeeded") + "}",
+                        ",\"status\":" + json::quote(cancelled ? "cancelled" : "succeeded") +
+                        ",\"metrics\":" + metrics_json + "}",
                     turn_id);
         } else {
             publish("turn_failed",
                     "{\"code\":" + json::quote(error_code_name(event.error.code)) +
-                        ",\"message\":" + json::quote(safe_error(event.error)) + "}",
+                        ",\"message\":" + json::quote(safe_error(event.error)) +
+                        ",\"metrics\":" + metrics_json + "}",
                     turn_id);
         }
         return;
@@ -274,6 +285,14 @@ void InteractiveSession::consume_event(const agent::AgentSurfaceEvent& event) {
 
 std::string InteractiveSession::snapshot_json() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    long long context_used_tokens = controller_->runtime()->estimated_request_tokens();
+    if (context_used_tokens <= 0)
+        context_used_tokens = controller_->runtime()->last_nonzero_request_tokens();
+    long long active_elapsed_ms = -1;
+    if (!active_turn_id_.empty() && active_turn_started_ != std::chrono::steady_clock::time_point{}) {
+        active_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - active_turn_started_).count();
+    }
     std::string result = "{\"id\":" + json::quote(id_) +
                          ",\"kind\":\"agent\"" +
                          ",\"status\":" + json::quote(status_) +
@@ -283,6 +302,16 @@ std::string InteractiveSession::snapshot_json() const {
                          ",\"model\":" + json::quote(context_.options.model) +
                          ",\"task_mode\":" + json::quote(task_mode_name(task_mode_)) +
                          ",\"permission_mode\":" + json::quote(agent::permission_mode_name(permission_mode_));
+    result += ",\"context\":{\"used_tokens\":" +
+              std::to_string(std::max(0LL, context_used_tokens)) +
+              ",\"window_tokens\":" +
+              (context_.options.context_tokens > 0
+                   ? std::to_string(context_.options.context_tokens)
+                   : std::string("null")) + "}";
+    result += ",\"active_elapsed_ms\":" +
+              (active_elapsed_ms >= 0 ? std::to_string(active_elapsed_ms)
+                                      : std::string("null"));
+    result += ",\"last_turn_metrics\":" + last_turn_metrics_json_;
     if (!active_turn_id_.empty()) result += ",\"turn_id\":" + json::quote(active_turn_id_);
     else result += ",\"turn_id\":null";
     if (!pending_approval_id_.empty()) {
@@ -321,6 +350,7 @@ Error InteractiveSession::start_turn(const std::string& body, std::string& turn_
         if (!controller_->prepared()) return {ErrorCode::FileLock, "session is not ready"};
         turn_id = id_ + "_turn_" + std::to_string(next_turn_++);
         active_turn_id_ = turn_id;
+        active_turn_started_ = std::chrono::steady_clock::now();
         status_ = "running";
         context = context_;
         updated_at_ = server_timestamp();
@@ -328,6 +358,7 @@ Error InteractiveSession::start_turn(const std::string& body, std::string& turn_
     publish("turn_started", "{\"text\":" + json::quote(text) + "}", turn_id);
     const bool started = controller_->start_turn(
         [this, context = std::move(context), text = std::move(text), turn_id](runtime::CancellationToken token) mutable {
+            const auto turn_started = std::chrono::steady_clock::now();
             const auto progress = [this, turn_id](const std::string& line) {
                 publish("progress", "{\"text\":" + json::quote(line) + "}", turn_id);
             };
@@ -345,11 +376,24 @@ Error InteractiveSession::start_turn(const std::string& body, std::string& turn_
             event.agent_stream_output_tokens = result.stream_output_tokens;
             event.agent_stream_decode_ms = result.stream_decode_ms;
             event.agent_stream_tokens_estimated = result.stream_tokens_estimated;
+            event.agent_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - turn_started).count();
+            event.agent_token_usage = result.token_usage;
+            event.agent_turn_started_ms = result.turn_started_ms;
+            event.agent_finished_at_ms = result.finished_at_ms;
+            event.agent_context_used_tokens =
+                controller_->runtime()->estimated_request_tokens();
+            if (event.agent_context_used_tokens <= 0) {
+                event.agent_context_used_tokens =
+                    controller_->runtime()->last_nonzero_request_tokens();
+            }
+            event.agent_context_window_tokens = context.options.context_tokens;
             return event;
         });
     if (!started) {
         std::lock_guard<std::mutex> lock(mutex_);
         active_turn_id_.clear();
+        active_turn_started_ = {};
         status_ = "ready";
         return {ErrorCode::FileLock, "could not start the interactive turn"};
     }

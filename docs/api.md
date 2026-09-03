@@ -200,8 +200,10 @@ Create a thread with revision zero:
 {"revision":0,"name":"Remote chat","provider":"openai","model":"MODEL"}
 ```
 
-`name`, `provider`, and `model` are optional bounded metadata strings. Creation
-returns `201` and revision `1`. Append one through 64 transcript messages with
+`name`, `provider`, and `model` are optional bounded metadata strings. When
+`name` is omitted or left blank, the first non-empty user-message line becomes
+the title (bounded to the store's title limit). Creation returns `201` and
+revision `1`. Append one through 64 transcript messages with
 the last revision observed by the client:
 
 ```json
@@ -298,6 +300,7 @@ Submit a JSON object to one of these routes:
 
 ```text
 POST /ainiux/v1/jobs/chat   {provider?, model?, api?, messages:[{role,content}]}
+POST /ainiux/v1/jobs/models {provider?, api?}
 POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/image  {provider?, model?, api?, prompt, size?, aspect?, quality?, format?}
@@ -306,6 +309,40 @@ GET  /ainiux/v1/jobs/:job_id
 GET  /ainiux/v1/jobs/:job_id/events
 POST /ainiux/v1/jobs/:job_id/cancel
 ```
+
+The `models` job calls the selected provider's existing model-list operation
+and returns `{"provider":"...","models":["..."]}`. It uses the same
+provider concurrency limit, cancellation, authentication, error redaction,
+retention, and SSE lifecycle as other jobs. Clients should keep manual model
+entry available when a provider does not advertise model listing or its
+endpoint is unavailable.
+
+Successful chat, run, and plan results include an additive `metrics` object.
+Interactive agent completion/failure events include the same object, and the
+latest value is retained as `last_turn_metrics` in the session snapshot:
+
+```json
+{
+  "context_used_tokens": 1200,
+  "context_window_tokens": 128000,
+  "input_tokens": 900,
+  "fresh_input_tokens": 700,
+  "cache_read_tokens": 200,
+  "cache_write_tokens": 0,
+  "output_tokens": 300,
+  "total_tokens": 1200,
+  "input_tokens_estimated": false,
+  "output_tokens_estimated": false,
+  "elapsed_ms": 2450,
+  "ttft_ms": 310,
+  "output_tokens_per_second": 42.5
+}
+```
+
+Unknown measurements are `null`; zero is a measured zero. Estimation flags
+apply independently to input and output totals. Session snapshots also expose
+`context.{used_tokens,window_tokens}` and `active_elapsed_ms` so a controller
+can display live turn time without polling faster than its own UI clock.
 
 Submission normally returns `202`; `Idempotency-Key` reuse with identical input
 returns the retained job with `200`, while changed input returns the typed
@@ -351,7 +388,7 @@ extending the request timeout.
 
 ## Concurrency ownership
 
-Provider chat and image operations share a bounded global pool. Run, plan, and
+Provider model-list, chat, and image operations share a bounded global pool. Run, plan, and
 interactive-agent mutations share one workspace lane; a conflict returns 409
 instead of queueing behind another agent. The owning session loop alone mutates
 agent, approval, dired, editor, or chat session state. Cancellation belongs to

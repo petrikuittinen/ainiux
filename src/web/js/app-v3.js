@@ -16,9 +16,13 @@ const state = {
   threads: [],
   thread: null,
   chatPending: false,
+  chatMetrics: new Map(),
   sessions: [],
   session: null,
   agentLogs: new Map(),
+  agentClock: null,
+  agentClockTimer: null,
+  modelCatalogs: new Map(),
   guard: null,
   directory: { path: ".", revision: "", entries: [] },
   file: null,
@@ -99,6 +103,66 @@ function formatBytes(value) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function formatDate(value) {
+  if (!value) return "Date unavailable";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return String(value);
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(date);
+  } catch (_) {
+    return date.toLocaleString();
+  }
+}
+
+function formatTokenCount(value, estimated = false) {
+  if (value === null || value === undefined || value === "") return "";
+  const count = Number(value);
+  if (!Number.isFinite(count) || count < 0) return "";
+  return `${estimated ? "~" : ""}${new Intl.NumberFormat().format(Math.round(count))}`;
+}
+
+function formatDuration(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return "";
+  return `${new Intl.NumberFormat().format(Math.round(milliseconds))} ms`;
+}
+
+function metricText(metrics, context = null, activeElapsed = null) {
+  const source = metrics && typeof metrics === "object" ? metrics : {};
+  const pieces = [];
+  const used = context && context.used_tokens !== undefined
+    ? context.used_tokens : source.context_used_tokens;
+  const windowTokens = context && context.window_tokens !== undefined
+    ? context.window_tokens : source.context_window_tokens;
+  const usedText = formatTokenCount(used, true);
+  const windowText = formatTokenCount(windowTokens);
+  if (usedText) pieces.push(`Context ${usedText}${windowText ? ` / ${windowText}` : ""} tok`);
+  const input = formatTokenCount(source.input_tokens, source.input_tokens_estimated === true);
+  const output = formatTokenCount(source.output_tokens, source.output_tokens_estimated === true);
+  if (input) pieces.push(`In ${input}`);
+  if (output) pieces.push(`Out ${output}`);
+  const cache = Number(source.cache_read_tokens);
+  if (Number.isFinite(cache) && cache > 0) pieces.push(`Cache ${formatTokenCount(cache)}`);
+  const elapsed = formatDuration(activeElapsed === null ? source.elapsed_ms : activeElapsed);
+  if (elapsed) pieces.push(`Elapsed ${elapsed}`);
+  const ttft = formatDuration(source.ttft_ms);
+  if (ttft) pieces.push(`TTFT ${ttft}`);
+  const rate = source.output_tokens_per_second === null ||
+      source.output_tokens_per_second === undefined
+    ? Number.NaN : Number(source.output_tokens_per_second);
+  if (Number.isFinite(rate) && rate >= 0) pieces.push(`${rate.toFixed(1)} tok/s`);
+  return pieces.join(" · ");
+}
+
+function appendMetrics(container, metrics) {
+  const text = metricText(metrics);
+  if (text) container.append(element("small", "metrics-strip", text));
 }
 
 function formatValue(value) {
@@ -307,6 +371,149 @@ function supports(operation) {
     state.capabilities.operations.includes(operation));
 }
 
+function modelControls() {
+  return [
+    { providerId: "chat-provider", modelId: "chat-model", listId: "chat-model-list", statusId: "chat-model-status", apiId: "chat-api" },
+    { providerId: "goal-provider", modelId: "goal-model", listId: "goal-model-list", statusId: "goal-model-status", apiId: "goal-api" },
+    { providerId: "thread-provider", modelId: "thread-model", listId: "thread-model-list", statusId: "thread-model-status", apiId: null },
+    { providerId: "agent-provider", modelId: "agent-model", listId: "agent-model-list", statusId: "agent-model-status", apiId: "agent-api" },
+  ];
+}
+
+function modelCatalogKey(control) {
+  return JSON.stringify([
+    byId(control.providerId).value,
+    control.apiId ? byId(control.apiId).value : "",
+  ]);
+}
+
+function renderModelControl(control) {
+  const key = modelCatalogKey(control);
+  const catalog = state.modelCatalogs.get(key);
+  const list = byId(control.listId);
+  clear(list);
+  const models = catalog && Array.isArray(catalog.models) ? catalog.models : [];
+  for (const model of models) {
+    const option = element("option");
+    option.value = model;
+    list.append(option);
+  }
+  const status = byId(control.statusId);
+  if (!supports("models")) status.textContent = state.connected ? "Enter a model manually." : "";
+  else if (!catalog || catalog.state === "loading") status.textContent = "Loading models…";
+  else if (catalog.state === "ready") status.textContent = `${models.length} model${models.length === 1 ? "" : "s"}`;
+  else status.textContent = "Model list unavailable; enter one manually.";
+  const input = byId(control.modelId);
+  if (catalog && catalog.state === "ready" && models.length === 1 && !input.value.trim()) {
+    input.value = models[0];
+  }
+}
+
+function renderMatchingModelControls(key) {
+  for (const control of modelControls()) {
+    if (modelCatalogKey(control) === key) renderModelControl(control);
+  }
+}
+
+async function finishModelCatalog(key, catalog) {
+  if (catalog.finishing || state.modelCatalogs.get(key) !== catalog) return;
+  catalog.finishing = true;
+  try {
+    const snapshot = await api(`${API_ROOT}/jobs/${encodeURIComponent(catalog.jobId)}`);
+    if (state.modelCatalogs.get(key) !== catalog) return;
+    catalog.state = snapshot.state;
+    catalog.done = TERMINAL_STATES.has(snapshot.state);
+    if (snapshot.state === "succeeded" && snapshot.result && Array.isArray(snapshot.result.models)) {
+      catalog.models = [...new Set(snapshot.result.models.filter((model) => typeof model === "string" && model))];
+      catalog.state = "ready";
+    } else if (catalog.done) {
+      catalog.state = "failed";
+    } else {
+      catalog.state = "loading";
+    }
+  } catch (_) {
+    if (state.modelCatalogs.get(key) === catalog) catalog.state = "failed";
+  } finally {
+    catalog.finishing = false;
+    catalog.done = catalog.state === "ready" || catalog.state === "failed";
+    if (catalog.done) stopStream(`models:${catalog.jobId}`);
+    renderMatchingModelControls(key);
+  }
+}
+
+async function requestModelCatalog(key, control) {
+  const catalog = { state: "loading", models: [], jobId: "", done: false, finishing: false };
+  state.modelCatalogs.set(key, catalog);
+  renderMatchingModelControls(key);
+  try {
+    const response = await api(`${API_ROOT}/jobs/models`, {
+      method: "POST",
+      body: optionalPayload({
+        provider: byId(control.providerId).value,
+        api: control.apiId ? byId(control.apiId).value : "",
+      }),
+    });
+    if (state.modelCatalogs.get(key) !== catalog) {
+      void api(`${API_ROOT}/jobs/${encodeURIComponent(response.job.id)}/cancel`, { method: "POST" }).catch(() => {});
+      return;
+    }
+    catalog.jobId = response.job.id;
+    startStream(`models:${catalog.jobId}`,
+      `${API_ROOT}/jobs/${encodeURIComponent(catalog.jobId)}/events`,
+      (event) => {
+        if (event && TERMINAL_STATES.has(event.type)) {
+          // The server closes a completed job's SSE stream immediately. Mark
+          // it done before the follow-up snapshot fetch so the generic stream
+          // watcher cannot mistake that clean EOF for a lost server.
+          catalog.done = true;
+          void finishModelCatalog(key, catalog);
+        }
+      },
+      () => finishModelCatalog(key, catalog),
+      () => catalog.done || state.modelCatalogs.get(key) !== catalog);
+    if (TERMINAL_STATES.has(response.job.state)) {
+      catalog.done = true;
+      void finishModelCatalog(key, catalog);
+    }
+  } catch (_) {
+    if (state.modelCatalogs.get(key) === catalog) {
+      catalog.state = "failed";
+      catalog.done = true;
+      renderMatchingModelControls(key);
+    }
+  }
+}
+
+function cancelUnusedModelCatalogs() {
+  const activeKeys = new Set(modelControls().map(modelCatalogKey));
+  for (const [key, catalog] of state.modelCatalogs) {
+    if (catalog.state !== "loading" || activeKeys.has(key)) continue;
+    state.modelCatalogs.delete(key);
+    catalog.done = true;
+    if (catalog.jobId) {
+      stopStream(`models:${catalog.jobId}`);
+      void api(`${API_ROOT}/jobs/${encodeURIComponent(catalog.jobId)}/cancel`, { method: "POST" }).catch(() => {});
+    }
+  }
+}
+
+function refreshModelControl(control) {
+  const key = modelCatalogKey(control);
+  renderModelControl(control);
+  if (supports("models") && !state.modelCatalogs.has(key)) void requestModelCatalog(key, control);
+  cancelUnusedModelCatalogs();
+}
+
+function refreshModelControls() {
+  for (const control of modelControls()) refreshModelControl(control);
+}
+
+function resetLoadingModelCatalogs() {
+  for (const [key, catalog] of state.modelCatalogs) {
+    if (catalog.state === "loading") state.modelCatalogs.delete(key);
+  }
+}
+
 function populateProviders() {
   const providers = state.capabilities && Array.isArray(state.capabilities.providers)
     ? state.capabilities.providers : [];
@@ -327,6 +534,7 @@ function populateProviders() {
 
 function applyCapabilities() {
   populateProviders();
+  refreshModelControls();
   byId("new-thread-button").disabled = !supports("chat_threads");
   byId("chat-send").disabled = !state.thread || state.thread.read_only === true ||
     state.chatPending || !supports("chat");
@@ -395,7 +603,10 @@ function markConnectionLost() {
   if (!state.authenticated) return;
   const wasConnected = state.connected;
   state.connected = false;
-  if (wasConnected) stopAllStreams();
+  if (wasConnected) {
+    stopAllStreams();
+    resetLoadingModelCatalogs();
+  }
   setConnectionStatus("Reconnecting…", "reconnecting");
   byId("disconnect-button").hidden = false;
   applyCapabilities();
@@ -488,6 +699,7 @@ async function connect(token, previouslyValidated = false) {
 function forgetAuthentication(message = "") {
   cancelReconnect();
   stopAllStreams();
+  stopAgentClock();
   state.token = "";
   state.authenticated = false;
   state.connected = false;
@@ -495,7 +707,9 @@ function forgetAuthentication(message = "") {
   state.capabilities = null;
   state.status = null;
   state.thread = null;
+  state.chatMetrics.clear();
   state.session = null;
+  state.modelCatalogs.clear();
   state.file = null;
   state.guard = null;
   storageSet(TOKEN_STORAGE_KEY, "");
@@ -556,10 +770,12 @@ function renderJobResult(container, job) {
   }
   if (typeof result.content === "string") {
     container.append(element("pre", "", result.content));
+    appendMetrics(container, result.metrics);
     return;
   }
   if (job.operation === "editor-assist" && result.edit) {
     container.append(element("pre", "", result.edit.replacement || "Empty replacement"));
+    appendMetrics(container, result.metrics);
     return;
   }
   if (TERMINAL_STATES.has(job.state) && Object.keys(result).length) {
@@ -694,8 +910,10 @@ function renderThreads() {
   for (const thread of state.threads) {
     const button = element("button", `list-button ${state.thread && state.thread.id === thread.id ? "selected" : ""}`);
     button.type = "button";
-    button.append(element("strong", "", thread.name || `Thread ${thread.id}`),
-      element("small", "", `${thread.message_count || 0} messages · revision ${thread.revision}`));
+    const details = [formatDate(thread.modified_at), `${thread.message_count || 0} messages`];
+    if (thread.provider || thread.model) details.push(`${thread.provider || "provider"} / ${thread.model || "default"}`);
+    button.append(element("strong", "", thread.name || "New chat"),
+      element("small", "", details.join(" · ")));
     button.addEventListener("click", () => void loadThread(thread.id));
     list.append(button);
   }
@@ -706,13 +924,15 @@ function renderChat() {
   if (!state.thread) {
     byId("conversation-heading").textContent = "Select a thread";
     byId("thread-meta").textContent = "";
+    byId("chat-metrics").textContent = "";
     setEmpty(messages, "Choose or create a thread.");
     byId("chat-input").disabled = true;
     byId("chat-send").disabled = true;
     return;
   }
-  byId("conversation-heading").textContent = state.thread.name || `Thread ${state.thread.id}`;
-  byId("thread-meta").textContent = `Revision ${state.thread.revision} · ${state.thread.message_count || state.thread.messages.length} messages`;
+  byId("conversation-heading").textContent = state.thread.name || "New chat";
+  byId("thread-meta").textContent = `${formatDate(state.thread.modified_at)} · ${state.thread.message_count || state.thread.messages.length} messages`;
+  byId("chat-metrics").textContent = metricText(state.chatMetrics.get(state.thread.id));
   const transcript = Array.isArray(state.thread.messages) ? state.thread.messages : [];
   if (!transcript.length) setEmpty(messages, "This thread is empty.");
   else {
@@ -772,9 +992,13 @@ async function sendChatMessage(text) {
   try {
     const appended = await appendThreadMessages(threadId, state.thread.revision,
       [{ role: "user", content: text }]);
-    state.thread.revision = appended.thread.revision;
-    state.thread.message_count = appended.thread.message_count;
+    const messages = state.thread.messages;
+    state.thread = { ...state.thread, ...appended.thread, messages };
     state.thread.messages.push({ role: "user", content: text });
+    if (!state.thread.name || state.thread.name === "New chat") {
+      const firstLine = text.split(/\r?\n/, 1)[0].trim();
+      state.thread.name = [...firstLine].slice(0, 40).join("") || "New chat";
+    }
     const transcript = state.thread.messages.slice(-64).map((message) => ({
       role: message.role,
       content: message.content,
@@ -810,6 +1034,7 @@ async function finishChatJob(job, context) {
     return;
   }
   try {
+    state.chatMetrics.set(context.threadId, job.result.metrics || null);
     await appendThreadMessages(context.threadId, context.revision,
       [{ role: "assistant", content: job.result.content }]);
     if (state.thread && state.thread.id === context.threadId) await loadThread(context.threadId);
@@ -843,17 +1068,60 @@ function renderSessions() {
   }
 }
 
+function stopAgentClock() {
+  if (state.agentClockTimer !== null) window.clearInterval(state.agentClockTimer);
+  state.agentClockTimer = null;
+  state.agentClock = null;
+}
+
+function syncAgentClock() {
+  const session = state.session;
+  if (!session || !session.turn_id) {
+    stopAgentClock();
+    return;
+  }
+  if (!state.agentClock || state.agentClock.sessionId !== session.id ||
+      state.agentClock.turnId !== session.turn_id) {
+    state.agentClock = {
+      sessionId: session.id,
+      turnId: session.turn_id,
+      baseMs: Number.isFinite(Number(session.active_elapsed_ms)) ? Number(session.active_elapsed_ms) : 0,
+      startedAt: performance.now(),
+    };
+  }
+  if (state.agentClockTimer === null) {
+    state.agentClockTimer = window.setInterval(renderAgentMetrics, 250);
+  }
+}
+
+function renderAgentMetrics() {
+  const target = byId("agent-metrics");
+  if (!state.session) {
+    target.textContent = "";
+    return;
+  }
+  let activeElapsed = null;
+  let metrics = state.session.last_turn_metrics;
+  if (state.session.turn_id && state.agentClock) {
+    activeElapsed = state.agentClock.baseMs + performance.now() - state.agentClock.startedAt;
+    metrics = null;
+  }
+  target.textContent = metricText(metrics, state.session.context, activeElapsed);
+}
+
 function renderAgent() {
   renderSessions();
   const events = byId("agent-events");
   if (!state.session) {
     byId("agent-console-heading").textContent = "No active session";
     byId("agent-meta").textContent = "";
+    byId("agent-metrics").textContent = "";
     setEmpty(events, "Create or select an agent session.");
     byId("agent-turn-input").disabled = true;
     byId("agent-turn-submit").disabled = true;
     byId("cancel-turn-button").hidden = true;
     byId("close-agent-button").hidden = true;
+    stopAgentClock();
     return;
   }
   const session = state.session;
@@ -871,6 +1139,7 @@ function renderAgent() {
         typeof data.message === "string" ? data.message :
           typeof data.text === "string" ? data.text : JSON.stringify(data, null, 2);
       if (text && text !== "{}") card.append(element("pre", "", text));
+      appendMetrics(card, data.metrics);
       events.append(card);
     }
     events.scrollTop = events.scrollHeight;
@@ -880,6 +1149,8 @@ function renderAgent() {
   byId("agent-turn-submit").disabled = !ready;
   byId("cancel-turn-button").hidden = !session.turn_id;
   byId("close-agent-button").hidden = false;
+  syncAgentClock();
+  renderAgentMetrics();
 }
 
 async function loadSessions() {
@@ -888,7 +1159,7 @@ async function loadSessions() {
     state.sessions = Array.isArray(sessions) ? sessions : [];
     if (state.session) {
       const updated = state.sessions.find((item) => item.id === state.session.id);
-      if (updated) state.session = updated;
+      if (updated) state.session = { ...state.session, ...updated };
     }
     renderAgent();
   } catch (error) {
@@ -913,7 +1184,10 @@ function showGuard(sessionId, approval, turnId = null) {
 
 async function selectSession(sessionId) {
   try {
-    if (state.session && state.session.id !== sessionId) stopStream(`session:${state.session.id}`);
+    if (state.session && state.session.id !== sessionId) {
+      stopStream(`session:${state.session.id}`);
+      stopAgentClock();
+    }
     state.session = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}`);
     if (!state.agentLogs.has(sessionId)) state.agentLogs.set(sessionId, []);
     renderAgent();
@@ -941,10 +1215,22 @@ function watchSession(sessionId) {
         ...event.data,
       }, event.turn_id);
       if (state.session && state.session.id === sessionId) {
+        if (event.type === "turn_started") {
+          state.session.turn_id = event.turn_id;
+          state.session.status = "running";
+          state.session.active_elapsed_ms = 0;
+        }
+        if (event.type === "approval_required") state.session.status = "waiting_guard";
         if (event.type === "ready" || event.type === "session_created" || event.type === "session_closed") {
           state.session = event.data;
         }
         if (["turn_completed", "turn_failed", "approval_resolved"].includes(event.type)) {
+          if (["turn_completed", "turn_failed"].includes(event.type)) {
+            state.session.turn_id = null;
+            state.session.status = "ready";
+            state.session.active_elapsed_ms = null;
+            if (event.data && event.data.metrics) state.session.last_turn_metrics = event.data.metrics;
+          }
           void refreshSelectedSession();
         }
         renderAgent();
@@ -1170,7 +1456,7 @@ function openMutation(type, entry = null) {
     path.value = `${directoryPrefix()}new-file.txt`;
   } else if (type === "mkdir") {
     title.textContent = "Create folder";
-    description.textContent = "Create a directory only if the parent revision still matches.";
+    description.textContent = "Create a directory only if the reviewed parent is still current.";
     path.value = `${directoryPrefix()}new-folder`;
   } else if (type === "rename" || type === "copy") {
     title.textContent = type === "rename" ? "Rename or move" : "Copy";
@@ -1311,6 +1597,10 @@ function bindEvents() {
   for (const button of document.querySelectorAll(".dialog-cancel")) {
     button.addEventListener("click", () => closeDialog(button.closest("dialog")));
   }
+  for (const control of modelControls()) {
+    byId(control.providerId).addEventListener("change", () => refreshModelControl(control));
+    if (control.apiId) byId(control.apiId).addEventListener("change", () => refreshModelControl(control));
+  }
 
   byId("theme-select").addEventListener("change", (event) => {
     document.documentElement.dataset.theme = event.target.value;
@@ -1393,6 +1683,7 @@ function bindEvents() {
         }),
       });
       closeDialog(byId("new-thread-dialog"));
+      byId("thread-name-input").value = "";
       state.thread = response.thread;
       await loadThreads();
       renderChat();
@@ -1402,6 +1693,12 @@ function bindEvents() {
     event.preventDefault();
     const text = byId("chat-input").value.trim();
     if (text) void sendChatMessage(text);
+  });
+  byId("chat-input").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey ||
+        event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    byId("chat-form").requestSubmit();
   });
 
   byId("new-agent-button").addEventListener("click", () => openDialog(byId("new-agent-dialog")));
@@ -1435,6 +1732,13 @@ function bindEvents() {
       });
       state.session.turn_id = response.turn_id;
       state.session.status = "running";
+      state.session.active_elapsed_ms = 0;
+      state.agentClock = {
+        sessionId: state.session.id,
+        turnId: response.turn_id,
+        baseMs: 0,
+        startedAt: performance.now(),
+      };
       byId("agent-turn-input").value = "";
       renderAgent();
     } catch (error) { toast(errorMessage(error), "error"); }

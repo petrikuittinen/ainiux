@@ -5,6 +5,7 @@
 #include "json/json.hpp"
 #include "server/wire.hpp"
 #include "server/limits.hpp"
+#include "server/metrics.hpp"
 #include "support/test_support.hpp"
 
 namespace ainiux::test::server_wire {
@@ -101,6 +102,41 @@ void test_initial_server_limits_are_bounded() {
           "initial operation concurrency is explicit");
 }
 
+void test_generation_metrics_are_normalized() {
+    provider::RequestContext context;
+    context.options.context_tokens = 8192;
+    context.options.stream = true;
+    std::vector<provider::Message> messages{{"user", "Please summarize this text."}};
+    provider::ChatResult chat;
+    chat.completion_tokens = 12;
+    chat.completion_tokens_estimated = true;
+    chat.total_ms = 2400;
+    chat.ttft_ms = 320;
+    const server::GenerationMetrics normalized =
+        server::chat_generation_metrics(context, messages, chat);
+    const std::string encoded = server::generation_metrics_json(normalized);
+    const json::ParseResult parsed = json::parse(encoded);
+    check(parsed.error.ok() && parsed.value.is_object() &&
+              parsed.value.get("context_used_tokens") != nullptr &&
+              parsed.value.get("context_window_tokens") != nullptr &&
+              parsed.value.get("input_tokens_estimated") != nullptr &&
+              parsed.value.get("input_tokens_estimated")->boolean &&
+              parsed.value.get("output_tokens_estimated") != nullptr &&
+              parsed.value.get("output_tokens_estimated")->boolean,
+          "chat metrics expose context, timing, and explicit estimation markers");
+
+    agent::AgentTokenUsage usage;
+    usage.input_tokens = 50;
+    usage.output_tokens = 10;
+    usage.cache_read_tokens = 20;
+    const std::string agent_encoded = server::generation_metrics_json(
+        server::agent_generation_metrics(300, 4096, usage, 750, 20.0));
+    check(agent_encoded.find("\"total_tokens\":60") != std::string::npos &&
+              agent_encoded.find("\"elapsed_ms\":750") != std::string::npos &&
+              agent_encoded.find("\"output_tokens_per_second\":20") != std::string::npos,
+          "agent metrics retain token totals, elapsed milliseconds, and decode rate");
+}
+
 }  // namespace
 
 void run_all() {
@@ -109,6 +145,7 @@ void run_all() {
     test_invalid_details_are_not_injected();
     test_operation_event_conversion();
     test_initial_server_limits_are_bounded();
+    test_generation_metrics_are_normalized();
 }
 
 }  // namespace ainiux::test::server_wire

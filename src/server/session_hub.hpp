@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -60,6 +61,8 @@ class InteractiveSession {
     std::string status_ = "preparing";
     std::string updated_at_;
     std::string active_turn_id_;
+    std::chrono::steady_clock::time_point active_turn_started_{};
+    std::string last_turn_metrics_json_ = "null";
     std::string pending_approval_id_;
     std::string pending_review_path_;
     std::string pending_tool_name_;

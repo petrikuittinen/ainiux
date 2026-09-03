@@ -44,7 +44,9 @@ browser URLs.
 The controller capability-detects the server before enabling features. It
 provides:
 
-- revision-safe ordinary chat threads and asynchronous model responses;
+- concurrency-safe ordinary chat threads and asynchronous model responses;
+- provider model suggestions for chat, run/plan, thread creation, and agent
+  session creation, with manual model entry retained as a fallback;
 - run/plan jobs, progress, replay/reconnect, cancellation, and image results;
 - interactive Act/Plan agent sessions, Confirm/Smart/Yolo selection subject to
   server policy, correlated turn cancellation, and Guard review/allow/deny;
@@ -60,6 +62,13 @@ matches. On a conflict, the completed result remains in Jobs and the UI asks
 the user to reload. File drafts likewise remain visible until the user chooses
 whether to keep the draft or reload the current server copy.
 
+An unnamed thread initially appears as “New chat”; its first non-empty user
+prompt supplies the stored title. Thread rows show the locally formatted
+modified date and message count rather than internal concurrency values.
+Completed chat and agent turns show compact context, input/output token, elapsed,
+TTFT, cache, and decode-rate measurements when the provider/runtime supplies
+them. A `~` marker identifies estimated token values.
+
 ## Responsive and accessible behavior
 
 The layout uses flexible CSS Grid/Flex regions. Wide screens show navigation
@@ -69,6 +78,12 @@ with pointer, touch, or keyboard input. Semantic headings, labels, live regions,
 native labelled dialogs, a skip link, and visible focus indicators support
 assistive and keyboard-only use. Reduced-motion and forced-color preferences are
 respected.
+
+Chat and Agent keep their headings and composers inside the dynamic viewport;
+thread, message, session, and event lists scroll within their panels. In the
+chat composer, Enter sends the message. Shift+Enter and Alt+Enter insert a
+newline; Ctrl+Enter and Command+Enter remain multiline editing input and do not
+submit.
 
 The default theme follows `prefers-color-scheme`. The explicit System, Dark,
 and Light selector is stored for the browser origin. Its palettes use the same
@@ -102,5 +117,5 @@ absence of external resource URLs, raw-HTML sinks, cookie/query-string token
 handling, and third-party JavaScript.
 `scripts/test-control-server.sh --build` exercises the embedded assets and API
 through the real loopback listener with `curl`. JavaScript syntax can also be
-checked with `node --check src/web/js/app-v1.js` when Node.js happens to be
+checked with `node --check src/web/js/app-v3.js` when Node.js happens to be
 installed; Node.js is not a build or runtime dependency.

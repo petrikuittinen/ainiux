@@ -446,7 +446,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"chat\",\"run\",\"plan\",\"image\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
@@ -770,7 +770,7 @@ Response route_request(const http::Request& request,
     }
     if (status.jobs == nullptr) return error_response(503, "jobs_unavailable", "job service is unavailable");
     std::string suffix = request.path.substr(jobs_prefix.size());
-    if (suffix == "chat" || suffix == "run" || suffix == "plan" || suffix == "image" ||
+    if (suffix == "models" || suffix == "chat" || suffix == "run" || suffix == "plan" || suffix == "image" ||
         suffix == "editor-assist") {
         if (request.method != "POST") {
             response = error_response(405, "method_not_allowed", "job submission accepts POST only");
