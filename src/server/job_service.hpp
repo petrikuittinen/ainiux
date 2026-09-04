@@ -7,6 +7,7 @@
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include "server/job_registry.hpp"
+#include "server/image_input_store.hpp"
 
 namespace ainiux::server {
 
@@ -32,6 +33,11 @@ class JobService {
                                const std::string& idempotency_key);
     JobRegistry& registry() { return registry_; }
     const JobRegistry& registry() const { return registry_; }
+    std::string image_catalog_json() const;
+    Error add_image_input(std::string mime_type,
+                          std::string bytes,
+                          StoredImageInput& output);
+    bool remove_image_input(const std::string& id);
     void shutdown() { registry_.shutdown(); }
 
    private:
@@ -65,6 +71,7 @@ class JobService {
     cli::Options base_options_;
     std::string workspace_;
     JobRegistry registry_;
+    ImageInputStore image_inputs_;
 };
 
 }  // namespace ainiux::server

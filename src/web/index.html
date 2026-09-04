@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v14.css">
-  <script type="module" src="/ui/assets/app-v14.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v15.css">
+  <script type="module" src="/ui/assets/app-v16.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -111,15 +111,22 @@
           <form id="image-job-form" class="control-pane stack">
             <div class="pane-bar"><h2>Generate image</h2></div>
             <label>Prompt <textarea id="image-prompt" rows="8" maxlength="262144" required placeholder="Describe one image…"></textarea></label>
-            <label>Provider <select id="image-provider" class="provider-select"></select></label>
-            <label>Model <input id="image-model" maxlength="512" autocomplete="off" placeholder="Catalog default"></label>
+            <label>Provider <select id="image-provider"><option value="">Loading catalog…</option></select></label>
+            <label>Model <select id="image-model"><option value="">Loading catalog…</option></select></label>
             <div class="form-grid">
-              <label>Size <input id="image-size" maxlength="64" autocomplete="off" placeholder="1024x1024"></label>
-              <label>Aspect <input id="image-aspect" maxlength="64" autocomplete="off" placeholder="1:1"></label>
-              <label>Quality <input id="image-quality" maxlength="64" autocomplete="off" placeholder="Default"></label>
-              <label>Format <input id="image-format" maxlength="32" autocomplete="off" placeholder="png"></label>
+              <label>Size <select id="image-size"><option value="">Model default</option></select></label>
+              <label>Aspect <select id="image-aspect"><option value="">Model default</option></select></label>
+              <label>Quality <select id="image-quality"><option value="">Model default</option></select></label>
+              <label>Format <select id="image-format"><option value="">Model default</option></select></label>
             </div>
-            <div class="button-row"><button id="image-generate-button" type="submit">Generate</button><button id="image-cancel-button" class="danger" type="button" hidden>Cancel</button></div>
+            <div id="image-custom-size" class="form-grid" hidden>
+              <label>Width <input id="image-width" type="number" min="1" step="1" value="1024"></label>
+              <label>Height <input id="image-height" type="number" min="1" step="1" value="1024"></label>
+            </div>
+            <label>Reference images <input id="image-input-files" type="file" accept="image/png,image/jpeg" multiple><small id="image-input-hint" class="field-hint">Choose PNG or JPEG files for image-to-image models.</small></label>
+            <div id="image-input-list" class="image-input-list" aria-live="polite"></div>
+            <p id="image-options-status" class="field-hint" aria-live="polite"></p>
+            <div class="button-row"><button id="image-generate-button" type="submit">Generate</button><button id="image-reset-button" class="ghost" type="button">Reset</button><button id="image-cancel-button" class="danger" type="button" hidden>Cancel</button></div>
           </form>
           <section class="content-pane image-preview" aria-labelledby="image-preview-heading">
             <div class="pane-bar"><h2 id="image-preview-heading">Preview</h2><button id="image-download-button" class="ghost" type="button" hidden>Download</button></div>

@@ -16,6 +16,7 @@
 #include "provider/provider.hpp"
 #include "security/redact.hpp"
 #include "server/metrics.hpp"
+#include "server/image_catalog_api.hpp"
 #include "server/workspace_service.hpp"
 
 namespace ainiux::server {
@@ -137,7 +138,8 @@ Error persist_generated_image(const std::string& workspace,
 JobService::JobService(cli::Options base_options, std::string workspace, std::size_t max_jobs)
     : base_options_(std::move(base_options)),
       workspace_(std::move(workspace)),
-      registry_(max_jobs) {
+      registry_(max_jobs),
+      image_inputs_(Limits::image_upload_store_bytes) {
     base_options_.server = false;
     base_options_.quiet = true;
     base_options_.prompt.clear();
@@ -148,6 +150,20 @@ JobService::JobService(cli::Options base_options, std::string workspace, std::si
     base_options_.fetch_url.clear();
     base_options_.search_query.clear();
     base_options_.stream = true;
+}
+
+std::string JobService::image_catalog_json() const {
+    return public_image_catalog_json(base_options_.image_catalog, base_options_.provider);
+}
+
+Error JobService::add_image_input(std::string mime_type,
+                                  std::string bytes,
+                                  StoredImageInput& output) {
+    return image_inputs_.add(std::move(mime_type), std::move(bytes), output);
+}
+
+bool JobService::remove_image_input(const std::string& id) {
+    return image_inputs_.erase(id);
 }
 
 Error JobService::validate_common(const json::Value& root,
@@ -474,7 +490,7 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
     if (operation == "image") {
         error = reject_unknown(parsed.value,
                                {"provider", "model", "api", "prompt", "size", "aspect",
-                                "quality", "format"});
+                                "quality", "format", "input_image_ids"});
         if (!error.ok()) return {{}, error};
         app::operation::ImageRequest request;
         error = required_string(parsed.value, "prompt", request.prompt);
@@ -490,6 +506,45 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
         if (!error.ok()) return {{}, error};
         request.format_explicit = parsed.value.get("format") != nullptr;
         request.max_image_bytes = Limits::upload_body_bytes;
+        std::vector<std::string> input_ids;
+        if (const json::Value* values = parsed.value.get("input_image_ids")) {
+            if (!values->is_array()) {
+                return {{}, field_error("input_image_ids", "must be an array of upload identifiers")};
+            }
+            for (const json::Value& value : values->array) {
+                if (!value.is_string() || value.string.empty() || value.string.size() > 128U) {
+                    return {{}, field_error("input_image_ids", "must contain valid upload identifier strings")};
+                }
+                input_ids.push_back(value.string);
+            }
+        }
+        std::vector<StoredImageInput> stored;
+        error = image_inputs_.resolve(input_ids, stored);
+        if (!error.ok()) return {{}, error};
+        const std::string provider_name = provider::canonical_profile_name(options.provider);
+        const std::string selected_model = request.model.empty()
+                                               ? config::default_image_model(options.image_catalog,
+                                                                             provider_name)
+                                               : request.model;
+        const ImageCapability* capability = config::resolve_image_capability(
+            options.image_catalog, provider_name, selected_model);
+        if (!stored.empty() && capability != nullptr) {
+            if (!capability->edits) {
+                return {{}, field_error("input_image_ids",
+                                        "is not supported by the selected image model")};
+            }
+            const int maximum = capability->max_input_images > 0
+                                    ? capability->max_input_images
+                                    : provider::kMaxImageEditInputs;
+            if (stored.size() > static_cast<std::size_t>(maximum)) {
+                return {{}, field_error("input_image_ids", "exceeds the selected model's limit of " +
+                                                          std::to_string(maximum))};
+            }
+        }
+        for (StoredImageInput& image : stored) {
+            request.input_images.push_back(
+                {image.mime_type, image.id, std::move(image.bytes)});
+        }
         JobWork work = [this, options, request = std::move(request)](
                            runtime::CancellationToken token, JobEvents events) mutable {
             return run_image_job(options, std::move(request), token, std::move(events));

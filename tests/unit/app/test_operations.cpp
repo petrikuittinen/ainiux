@@ -1,5 +1,6 @@
 #include "app/test_operations.hpp"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -158,6 +159,30 @@ void test_image_operation_is_output_neutral() {
               events.front().text ==
                   "Generating image with gpt-image-2 (size auto, quality auto, png)",
           "image operation preserves the CLI generation status text");
+
+    app::operation::ImageRequest edited = image_request;
+    edited.input_images.push_back({"image/png", "input_first",
+        std::make_shared<const std::string>("\x89PNG\r\n\x1a\n", 8)});
+    edited.input_images.push_back({"image/jpeg", "input_second",
+        std::make_shared<const std::string>("\xff\xd8\xff", 3)});
+    const app::operation::ImageResult edit_result = app::operation::run_image(
+        image_context, edited, runtime::CancellationToken(), {},
+        [](const provider::RequestContext&,
+           const provider::ImageGenerateRequest& request,
+           provider::ImageGenerateResult& output,
+           runtime::CancellationToken) {
+            check(request.images.size() == 2 &&
+                      request.images[0].display_name == "input_first" &&
+                      request.images[1].display_name == "input_second" &&
+                      request.images[0].mime_type == "image/png" &&
+                      request.images[1].mime_type == "image/jpeg",
+                  "image operation preserves ordered managed reference images");
+            output.bytes = "fake-edited-png";
+            output.output_format = "png";
+            return ok_error();
+        });
+    check(edit_result.error.ok(),
+          "managed PNG and JPEG references share the existing image edit operation");
 }
 
 }  // namespace

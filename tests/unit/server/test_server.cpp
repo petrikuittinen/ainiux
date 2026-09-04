@@ -34,6 +34,7 @@
 #include "server/event_broker.hpp"
 #include "server/job_registry.hpp"
 #include "server/job_service.hpp"
+#include "server/image_input_store.hpp"
 #include "server/listener.hpp"
 #include "server/mcp_adapter.hpp"
 #include "server/router.hpp"
@@ -124,6 +125,13 @@ void test_strict_framing_and_limits() {
               http::ParseState::Failed && small.error().status == 413,
           "route body limit is enforced before buffering the body");
 
+    const std::string png("\x89PNG\r\n\x1a\n", 8);
+    http::Parser binary(Limits::upload_body_bytes);
+    check(binary.feed("POST /ainiux/v1/images/inputs HTTP/1.1\r\nHost: localhost\r\n"
+                      "Content-Length: 8\r\n\r\n" + png) == http::ParseState::Complete &&
+              binary.request().body == png,
+          "HTTP header line-ending checks do not reject binary image body bytes");
+
     std::string headers = "GET / HTTP/1.1\r\nHost: localhost\r\n";
     for (int i = 0; i < 100; ++i) headers += "X-" + std::to_string(i) + ": y\r\n";
     headers += "\r\n";
@@ -140,8 +148,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v14.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v14.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v15.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v16.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -156,6 +164,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("id=\"new-agent-dialog\"") == std::string::npos &&
               index.body.find("id=\"image-output\"") != std::string::npos &&
               index.body.find("id=\"image-download-button\"") != std::string::npos &&
+              index.body.find("id=\"image-input-files\"") != std::string::npos &&
+              index.body.find("id=\"image-reset-button\"") != std::string::npos &&
               index.body.find("id=\"chat-api\"") == std::string::npos &&
               index.body.find("id=\"goal-api\"") == std::string::npos &&
               index.body.find("id=\"agent-api\"") == std::string::npos &&
@@ -176,7 +186,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v14.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v15.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -214,7 +224,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v14.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v16.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -248,6 +258,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("const followTail =") != std::string::npos &&
               javascript.body.find("followTail ? events.scrollHeight : previousScrollTop") != std::string::npos &&
               javascript.body.find("function downloadGeneratedImage") != std::string::npos &&
+              javascript.body.find("uploadImageInputs") != std::string::npos &&
+              javascript.body.find("function resetImageForm") != std::string::npos &&
+              javascript.body.find("./image-options-v1.js") != std::string::npos &&
               javascript.body.find("server_path") != std::string::npos &&
               javascript.body.find("function agentEventVisible") != std::string::npos &&
               javascript.body.find("apiId") == std::string::npos &&
@@ -311,6 +324,14 @@ void test_embedded_web_ui_assets_and_browser_security() {
               syntax_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI syntax module is dependency-free, DOM-safe, and immutable");
 
+    Response image_options = route_request(public_get("/ui/assets/image-options-v1.js"), config, status);
+    check(image_options.status == 200 &&
+              image_options.body.find("export function normalizeImageCatalog") != std::string::npos &&
+              image_options.body.find("export function customDimensionError") != std::string::npos &&
+              image_options.body.find("export function resetImageFormValues") != std::string::npos &&
+              image_options.body.find("fetch(") == std::string::npos,
+          "embedded image option module is pure and served as an immutable exact-path asset");
+
     const std::size_t chat_submit_start = javascript.body.find("async function sendChatMessage");
     const std::size_t chat_submit_end = javascript.body.find("async function finishChatJob");
     check(chat_submit_start != std::string::npos && chat_submit_end > chat_submit_start &&
@@ -349,6 +370,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/app-v12.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v13.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v13.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v14.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v14.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v15.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v3.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/syntax-v1.js"), config, status).status == 404 &&
@@ -431,6 +455,93 @@ void test_auth_and_routes() {
     remote.headers["host"] = "192.0.2.10:9999";
     check(route_request(remote, config, remote_status).status == 421,
           "remote requests reject a Host with the wrong listener port");
+}
+
+void test_image_catalog_uploads_and_job_references() {
+    const std::string png("\x89PNG\r\n\x1a\n", 8);
+    ImageInputStore store(8U);
+    StoredImageInput first;
+    check(store.add("image/png", png, first).ok() && first.bytes &&
+              first.id.rfind("input_", 0) == 0 && store.resident_bytes() == png.size(),
+          "managed image store validates and retains an opaque PNG input");
+    check(store.erase(first.id) && store.resident_bytes() == png.size(),
+          "deleting a managed input leaves bytes alive while a job-style reference owns them");
+    StoredImageInput over_capacity;
+    check(store.add("image/png", png, over_capacity).code == ErrorCode::RateLimit,
+          "managed image store accounts for live shared buffers against its byte budget");
+    first = {};
+    check(store.resident_bytes() == 0 && store.add("image/png", png, over_capacity).ok(),
+          "managed image bytes are released when their final shared owner is gone");
+
+    ImageInputStore expiring(32U, std::chrono::seconds(0));
+    StoredImageInput expired;
+    check(expiring.add("image/png", png, expired).ok(),
+          "zero-lifetime managed input can be created for expiry coverage");
+    std::vector<StoredImageInput> resolved;
+    check(expiring.resolve({expired.id}, resolved).code == ErrorCode::FileRead,
+          "expired managed image identifiers are rejected and removed");
+
+    cli::Options options;
+    options.provider = "openai";
+    ImageCapability capability;
+    capability.id = "test-image";
+    capability.provider = "openai";
+    capability.model_regex = "^test-image$";
+    capability.api_model = "test-image";
+    capability.default_for_provider = true;
+    capability.edits = true;
+    capability.max_input_images = 2;
+    capability.size_mode = ImageSizeMode::Pixels;
+    capability.size_classes = {{"1k", 1024}};
+    capability.aspect_ratios = {"1:1"};
+    capability.quality = {"low", "high"};
+    capability.format = {"png", "jpeg"};
+    capability.format_default = "png";
+    capability.multiple = 16;
+    capability.max_edge = 2048;
+    options.image_catalog.models.push_back(capability);
+    JobService jobs(std::move(options), ".", 8U);
+    AuthConfig auth{"controller", "mcp-token"};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 8, &active};
+    status.jobs = &jobs;
+
+    Response catalog = route_request(
+        parsed_request(request_text("/ainiux/v1/images/catalog")), auth, status);
+    check(catalog.status == 200 && catalog.body.find("\"model\":\"test-image\"") != std::string::npos &&
+              catalog.body.find("\"max_image_bytes\":20971520") != std::string::npos &&
+              catalog.body.find("model_regex") == std::string::npos &&
+              catalog.body.find("protocol") == std::string::npos,
+          "image catalog route exposes safe effective model options and upload limits only");
+
+    http::Request upload = parsed_request(
+        "POST /ainiux/v1/images/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: image/png\r\nContent-Length: 0\r\n\r\n");
+    upload.body = png;
+    Response created = route_request(upload, auth, status);
+    const json::ParseResult created_json = json::parse(created.body);
+    const json::Value* id = created_json.error.ok() ? created_json.value.get("id") : nullptr;
+    check(created.status == 201 && id != nullptr && id->is_string() &&
+              created.body.find("\"mime_type\":\"image/png\"") != std::string::npos,
+          "authenticated raw image upload returns an opaque managed identifier");
+    check(id != nullptr && route_request(parsed_request(
+              "DELETE /ainiux/v1/images/inputs/" + id->string +
+              " HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer controller\r\n\r\n"),
+              auth, status).status == 200,
+          "managed image upload can be explicitly deleted");
+
+    Response denial;
+    http::Request unauthorized = upload;
+    unauthorized.headers["authorization"] = "Bearer wrong";
+    check(!preflight_request_body(unauthorized, Limits::upload_body_bytes, auth, status, denial) &&
+              denial.status == 401,
+          "large upload authorization is checked before its body is accepted");
+    http::Request ordinary = upload;
+    ordinary.path = "/ainiux/v1/jobs/chat";
+    check(!preflight_request_body(ordinary, Limits::json_body_bytes + 1U, auth, status, denial) &&
+              denial.status == 413,
+          "ordinary JSON routes retain the 1 MiB request limit");
+    jobs.shutdown();
 }
 
 void test_event_replay_is_ordered_and_bounded() {
@@ -1618,6 +1729,17 @@ void test_loopback_listener_lifecycle() {
               response.find("Content-Security-Policy: default-src 'none'") != std::string::npos,
           "raw loopback request reaches authenticated health with hardened headers");
 
+    const std::string png("\x89PNG\r\n\x1a\n", 8);
+    const std::string upload_response = raw_request(
+        listener.port(),
+        "POST /ainiux/v1/images/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: image/png\r\n"
+        "Content-Length: 8\r\nConnection: close\r\n\r\n" + png);
+    check(upload_response.find("HTTP/1.1 201 Created") == 0 &&
+              upload_response.find("\"mime_type\":\"image/png\"") != std::string::npos &&
+              upload_response.find("\"id\":\"input_") != std::string::npos,
+          "listener accepts an authenticated raw PNG upload through the large-body route");
+
     const int idle_client = open_loopback(listener.port());
     for (int i = 0; i < 50 && listener.active_connections() == 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -1661,6 +1783,7 @@ void run_all() {
     test_strict_framing_and_limits();
     test_embedded_web_ui_assets_and_browser_security();
     test_auth_and_routes();
+    test_image_catalog_uploads_and_job_references();
     test_event_replay_is_ordered_and_bounded();
     test_job_registry_idempotency_lane_and_cancellation();
     test_provider_job_concurrency_cap();

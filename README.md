@@ -345,6 +345,11 @@ and errors use distinct TUI-derived colors; fenced excerpts in activity rows
 reuse the same syntax highlighter. Workspace dired colors directories and
 executables distinctly, and opened files use extension-aware syntax colors in
 both the viewer and the live-highlighted editor as the draft changes.
+The Image tab reads its provider/model and compatible size, aspect, quality, and
+format choices from the effective layered `images.conf`. Models that advertise
+editing accept ordered PNG/JPEG reference images with local previews; uploads
+remain memory-only, use opaque expiring IDs, and are bounded to 20 MiB per file,
+40 MiB per job, and the model's configured input count.
 
 For script-oriented API use, configure a known token and use plain server mode
 in one terminal:
@@ -405,7 +410,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not yet implement an OpenAI-compatible `/v1` proxy, interactive/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The embedded browser controller, one-shot control-API jobs, interactive agent sessions, revision-safe chat threads, revision-safe workspace review/dired/file mutations and editor assist, TLS/direct non-loopback policy, the MCP server adapter, and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); keys remain server-side. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not yet implement an OpenAI-compatible `/v1` proxy, REPL/TUI image generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The embedded browser controller, one-shot control-API jobs including config-driven image generation and edits, interactive agent sessions, revision-safe chat threads, revision-safe workspace review/dired/file mutations and editor assist, TLS/direct non-loopback policy, the MCP server adapter, and CLI image generation are implemented; CLI `ainiux image` uses `images.conf` (`openai_images` for `gpt-image-2`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); keys remain server-side. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

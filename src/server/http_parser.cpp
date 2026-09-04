@@ -78,9 +78,13 @@ ParseState Parser::finish() {
 }
 
 ParseState Parser::parse_available() {
-    if (!valid_line_endings(buffer_)) return fail(400, "HTTP request must use CRLF line endings");
-
     if (header_end_ == std::string::npos) {
+        const std::size_t discovered_header_end = buffer_.find("\r\n\r\n");
+        const std::size_t header_bytes = discovered_header_end == std::string::npos
+                                             ? buffer_.size() : discovered_header_end + 4U;
+        if (!valid_line_endings(buffer_.substr(0, header_bytes))) {
+            return fail(400, "HTTP request must use CRLF line endings");
+        }
         const std::size_t first_line = buffer_.find("\r\n");
         if (first_line == std::string::npos && buffer_.size() > Limits::request_line_bytes) {
             return fail(414, "HTTP request line exceeds 8 KiB");
@@ -88,7 +92,7 @@ ParseState Parser::parse_available() {
         if (first_line != std::string::npos && first_line > Limits::request_line_bytes) {
             return fail(414, "HTTP request line exceeds 8 KiB");
         }
-        header_end_ = buffer_.find("\r\n\r\n");
+        header_end_ = discovered_header_end;
         if (header_end_ == std::string::npos) {
             if (buffer_.size() > Limits::header_bytes + Limits::request_line_bytes) {
                 return fail(431, "HTTP request headers exceed 32 KiB");
@@ -172,6 +176,7 @@ ParseState Parser::parse_available() {
             return fail(400, "HTTP/1.1 Host header is required");
         }
         if (content_length > body_limit_) return fail(413, "HTTP request body exceeds its route limit");
+        content_length_ = content_length;
         expected_size_ = header_end_ + 4U + content_length;
         const auto connection = request_.headers.find("connection");
         request_.keep_alive = connection == request_.headers.end() ||

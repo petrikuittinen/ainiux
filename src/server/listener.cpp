@@ -234,11 +234,36 @@ struct Listener::Impl {
         if (!connection.initialize().ok()) return;
         std::string pending;
         for (std::size_t count = 0; count < Limits::requests_per_connection && !stopping; ++count) {
-            http::Parser parser;
+            PublicStatus public_status;
+            public_status.port = bound_port;
+            public_status.max_connections = config.max_connections;
+            public_status.max_jobs = config.max_jobs;
+            public_status.max_sessions = config.max_sessions;
+            public_status.active_connections = &active;
+            public_status.jobs = jobs.get();
+            public_status.mcp = mcp.get();
+            public_status.sessions = sessions.get();
+            public_status.workspace = workspace.get();
+            public_status.chat_threads = chat_threads.get();
+            public_status.bind_address = config.bind_address;
+            public_status.tls = tls.enabled();
+            public_status.remote = !loopback_bind_address(config.bind_address);
+            http::Parser parser(Limits::upload_body_bytes);
             auto phase_started = std::chrono::steady_clock::now();
             bool received_any = !pending.empty();
             http::ParseState state = pending.empty() ? http::ParseState::NeedMore
                                                      : parser.feed(pending);
+            bool body_preflighted = false;
+            auto preflight = [&]() -> bool {
+                if (body_preflighted || !parser.headers_complete()) return true;
+                body_preflighted = true;
+                Response denial;
+                if (preflight_request_body(parser.request(), parser.content_length(),
+                                           config.auth, public_status, denial)) return true;
+                (void)connection.write_all(serialize_response(denial, false));
+                return false;
+            };
+            if (!preflight()) return;
             if (parser.headers_complete()) phase_started = std::chrono::steady_clock::now();
             pending.clear();
             while (state == http::ParseState::NeedMore && !stopping) {
@@ -254,6 +279,7 @@ struct Listener::Impl {
                     state = parser.feed(std::string_view(buffer, static_cast<std::size_t>(received)));
                     if (!had_headers && parser.headers_complete()) {
                         phase_started = std::chrono::steady_clock::now();
+                        if (!preflight()) return;
                     }
                     continue;
                 }
@@ -282,20 +308,6 @@ struct Listener::Impl {
                 return;
             }
             pending = parser.take_remaining();
-            PublicStatus public_status;
-            public_status.port = bound_port;
-            public_status.max_connections = config.max_connections;
-            public_status.max_jobs = config.max_jobs;
-            public_status.max_sessions = config.max_sessions;
-            public_status.active_connections = &active;
-            public_status.jobs = jobs.get();
-            public_status.mcp = mcp.get();
-            public_status.sessions = sessions.get();
-            public_status.workspace = workspace.get();
-            public_status.chat_threads = chat_threads.get();
-            public_status.bind_address = config.bind_address;
-            public_status.tls = tls.enabled();
-            public_status.remote = !loopback_bind_address(config.bind_address);
             const Response response = route_request(parser.request(), config.auth, public_status);
             const bool keep_alive = parser.request().keep_alive &&
                                     count + 1U < Limits::requests_per_connection && !response.close;

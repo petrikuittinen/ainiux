@@ -238,6 +238,23 @@ Error decode_base64(const std::string& encoded, std::string& decoded) {
     return ok_error();
 }
 
+std::string encode_base64(const std::string& bytes) {
+    return base64_encode(bytes);
+}
+
+Error validate_image_bytes(const std::string& bytes, const std::string& mime_type) {
+    if (mime_type != "image/png" && mime_type != "image/jpeg") {
+        return {ErrorCode::UnsupportedFeature,
+                "image uploads support Content-Type image/png or image/jpeg only"};
+    }
+    if (bytes.empty()) return {ErrorCode::BadArgs, "image upload is empty"};
+    if (!signature_matches(bytes, mime_type)) {
+        return {ErrorCode::UnsupportedFeature,
+                "image content does not match the declared " + mime_type + " type"};
+    }
+    return ok_error();
+}
+
 bool path_has_supported_image_extension(const std::string& path) {
     const std::string lower = ascii_lower(path);
     return ends_with(lower, ".png") || ends_with(lower, ".jpg") || ends_with(lower, ".jpeg") ||

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -49,9 +50,15 @@ ChatResult run_chat(const provider::RequestContext& context,
                     ChatExecutor executor = {});
 
 struct ImageRequest {
+    struct InlineImage {
+        std::string mime_type;
+        std::string display_name;
+        std::shared_ptr<const std::string> bytes;
+    };
     std::string model;
     std::string prompt;
     std::vector<std::string> attachment_paths;
+    std::vector<InlineImage> input_images;
     std::string size;
     std::string aspect;
     std::string quality;

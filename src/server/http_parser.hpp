@@ -37,6 +37,7 @@ class Parser {
     const Request& request() const { return request_; }
     const ParseError& error() const { return error_; }
     bool headers_complete() const { return header_end_ != std::string::npos; }
+    std::size_t content_length() const { return content_length_; }
     std::string take_remaining();
 
    private:
@@ -47,6 +48,7 @@ class Parser {
     std::string buffer_;
     std::size_t header_end_ = std::string::npos;
     std::size_t expected_size_ = 0;
+    std::size_t content_length_ = 0;
     Request request_;
     ParseError error_;
     ParseState state_ = ParseState::NeedMore;

@@ -23,6 +23,34 @@ Error load_image_attachments(const provider::RequestContext& context,
                              runtime::CancellationToken cancellation,
                              const EventSink& events,
                              std::vector<provider::ImageInput>& images) {
+    const int max_inputs = capability.max_input_images > 0
+                               ? capability.max_input_images
+                               : provider::kMaxImageEditInputs;
+    if (!request.input_images.empty() && !capability.edits) {
+        return {ErrorCode::BadArgs,
+                "image model " + context.options.model +
+                    " does not support reference images"};
+    }
+    for (const ImageRequest::InlineImage& source : request.input_images) {
+        if (cancellation.cancelled()) return cancelled_error();
+        if (!source.bytes) return {ErrorCode::Internal, "uploaded image data is unavailable"};
+        Error error = input::validate_image_bytes(*source.bytes, source.mime_type);
+        if (!error.ok()) return error;
+        provider::ImageInput image{source.mime_type, input::encode_base64(*source.bytes)};
+        image.display_name = source.display_name;
+        image.source_ref = source.display_name;
+        image.byte_size = static_cast<long long>(source.bytes->size());
+        images.push_back(std::move(image));
+        if (static_cast<int>(images.size()) > max_inputs) {
+            return {ErrorCode::BadArgs,
+                    "this image model accepts at most " + std::to_string(max_inputs) +
+                        " reference images"};
+        }
+        error = publish(events, {EventType::Progress,
+                                 "Attached uploaded image: " + source.display_name,
+                                 images.size(), static_cast<std::size_t>(max_inputs)});
+        if (!error.ok()) return error;
+    }
     for (const std::string& path : request.attachment_paths) {
         if (cancellation.cancelled()) return cancelled_error();
         input::FileType type;
@@ -50,9 +78,6 @@ Error load_image_attachments(const provider::RequestContext& context,
         image.source_ref = path;
         image.byte_size = static_cast<long long>(loaded.byte_size);
         images.push_back(std::move(image));
-        const int max_inputs = capability.max_input_images > 0
-                                   ? capability.max_input_images
-                                   : provider::kMaxImageEditInputs;
         if (static_cast<int>(images.size()) > max_inputs) {
             return {ErrorCode::BadArgs,
                     "this image model accepts at most " + std::to_string(max_inputs) +

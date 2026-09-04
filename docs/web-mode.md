@@ -54,8 +54,12 @@ provides:
 - one human-facing workspace Agent with inline provider, model, reasoning,
   Act/Plan, and Confirm/Smart/Yolo controls, live response/reasoning/tool
   activity, correlated turn cancellation, and Guard review/allow/deny;
-- a dedicated Image tab with generation controls, an in-page preview, the
-  collision-safe server filename, and browser-local download;
+- a dedicated Image tab whose provider/model/size/aspect/quality/format controls
+  come from the effective system and user `images.conf`, with dependent choices,
+  validated custom dimensions, in-page preview, collision-safe server filename,
+  and browser-local download;
+- ordered PNG/JPEG reference-image selection for catalog models that support
+  image editing, including local thumbnails and per-model input limits;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
 - a bounded UTF-8 editor with optimistic saves, conflict recovery, and AI
@@ -66,6 +70,14 @@ Provider selection uses the server/provider API default. The WUI does not carry
 a Chat Completions/Responses override between providers: OpenAI may use its
 configured Responses default, while DeepSeek and other OpenAI-compatible
 providers use Chat Completions unless the server configuration says otherwise.
+
+Reference images are uploaded to authenticated, memory-only server storage when
+Generate is selected. Each file is limited to 20 MiB, one image job is limited
+to 40 MiB combined and 16 files globally, and each model may advertise a lower
+count. Opaque upload IDs expire after one hour; removing a preview or logging out
+requests early deletion. A running job retains only the immutable buffers it
+needs. Uploads are never exposed as workspace paths or persisted by the input
+store.
 
 Chat submission first persists the user message, runs the shared asynchronous
 chat job, and appends the assistant result only if the thread revision still

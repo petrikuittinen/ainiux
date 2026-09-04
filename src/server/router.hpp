@@ -49,6 +49,13 @@ struct Response {
 Response route_request(const http::Request& request,
                        const AuthConfig& auth,
                        const PublicStatus& status);
+// Runs the security and route-size checks before a potentially large upload
+// body is read from the socket. Returns false and fills denial when rejected.
+bool preflight_request_body(const http::Request& request,
+                            std::size_t content_length,
+                            const AuthConfig& auth,
+                            const PublicStatus& status,
+                            Response& denial);
 std::string serialize_response(const Response& response, bool keep_alive);
 
 }  // namespace ainiux::server

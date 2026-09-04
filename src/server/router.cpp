@@ -319,6 +319,52 @@ Response job_submission_response(const ServiceSubmitResult& submitted) {
 
 }  // namespace
 
+bool preflight_request_body(const http::Request& request,
+                            std::size_t content_length,
+                            const AuthConfig& auth,
+                            const PublicStatus& status,
+                            Response& denial) {
+    const bool upload = request.method == "POST" &&
+                        request.path == "/ainiux/v1/images/inputs";
+    const std::size_t limit = upload ? Limits::upload_body_bytes : Limits::json_body_bytes;
+    if (content_length > limit) {
+        denial = error_response(413, "content_too_large",
+                                upload ? "image upload exceeds the 20 MiB per-file limit"
+                                       : "HTTP request body exceeds the 1 MiB JSON limit");
+        return false;
+    }
+    if (!upload) return true;
+    const auto host = request.headers.find("host");
+    const std::string normalized_host = host == request.headers.end()
+                                            ? std::string() : ascii_lower(host->second);
+    if (host == request.headers.end() || !allowed_host(normalized_host, status)) {
+        denial = error_response(421, "invalid_host", "Host is not allowed for this listener");
+        return false;
+    }
+    const auto origin = request.headers.find("origin");
+    if (origin != request.headers.end()) {
+        const std::string expected = std::string(status.tls ? "https://" : "http://") + normalized_host;
+        if (ascii_lower(origin->second) != expected) {
+            denial = error_response(403, "origin_rejected", "cross-origin requests are disabled");
+            return false;
+        }
+    }
+    if (authenticate(request, auth) != AuthScope::FullControl) {
+        denial = error_response(401, "authentication_failed",
+                                "a valid Bearer controller credential is required");
+        return false;
+    }
+    const auto type = request.headers.find("content-type");
+    const std::string mime = type == request.headers.end()
+                                 ? std::string() : ascii_lower(ascii_trim(type->second));
+    if (mime != "image/png" && mime != "image/jpeg") {
+        denial = error_response(415, "unsupported_media_type",
+                                "image input uploads require Content-Type: image/png or image/jpeg");
+        return false;
+    }
+    return true;
+}
+
 Response route_request(const http::Request& request,
                        const AuthConfig& auth,
                        const PublicStatus& status) {
@@ -446,13 +492,85 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
                         ",\"providers\":" + providers +
                         ",\"sessions\":{\"maximum\":" + std::to_string(status.max_sessions) +
                         ",\"active\":" + std::to_string(status.sessions == nullptr ? 0U : status.sessions->size()) + "}}";
+        return response;
+    }
+
+    if (request.path == "/ainiux/v1/images/catalog") {
+        if (request.method != "GET") {
+            response = error_response(405, "method_not_allowed", "image catalog accepts GET only");
+            response.allow = "GET";
+            return response;
+        }
+        if (!request.query.empty() || !request.body.empty()) {
+            return error_response(400, "invalid_request", "image catalog does not accept a query or body");
+        }
+        if (status.jobs == nullptr) {
+            return error_response(503, "images_unavailable", "image service is unavailable");
+        }
+        response.body = status.jobs->image_catalog_json();
+        return response;
+    }
+
+    const std::string image_inputs_path = "/ainiux/v1/images/inputs";
+    if (request.path == image_inputs_path) {
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed", "image input uploads accept POST only");
+            response.allow = "POST";
+            return response;
+        }
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "image input uploads do not accept query parameters");
+        }
+        const auto content_type = request.headers.find("content-type");
+        const std::string mime = content_type == request.headers.end()
+                                     ? std::string() : ascii_lower(ascii_trim(content_type->second));
+        if (mime != "image/png" && mime != "image/jpeg") {
+            return error_response(415, "unsupported_media_type",
+                                  "image input uploads require Content-Type: image/png or image/jpeg");
+        }
+        if (status.jobs == nullptr) {
+            return error_response(503, "images_unavailable", "image service is unavailable");
+        }
+        StoredImageInput stored;
+        const Error error = status.jobs->add_image_input(mime, request.body, stored);
+        if (!error.ok()) {
+            if (error.code == ErrorCode::RateLimit) {
+                return error_response(429, "image_input_capacity", error.message);
+            }
+            return error_response(error.code == ErrorCode::UnsupportedFeature ? 415 : 400,
+                                  "invalid_image_input", error.message);
+        }
+        response.status = 201;
+        response.body = "{\"id\":" + json::quote(stored.id) +
+                        ",\"mime_type\":" + json::quote(stored.mime_type) +
+                        ",\"size\":" + std::to_string(stored.bytes->size()) +
+                        ",\"expires_at\":" +
+                            json::quote(image_input_expiry_timestamp(stored.expires_at)) + "}";
+        return response;
+    }
+    if (request.path.rfind(image_inputs_path + "/", 0) == 0) {
+        if (request.method != "DELETE") {
+            response = error_response(405, "method_not_allowed", "image input deletion accepts DELETE only");
+            response.allow = "DELETE";
+            return response;
+        }
+        if (!request.query.empty() || !request.body.empty()) {
+            return error_response(400, "invalid_request", "image input deletion does not accept a query or body");
+        }
+        const std::string id = request.path.substr(image_inputs_path.size() + 1U);
+        if (id.empty() || id.find('/') != std::string::npos || status.jobs == nullptr ||
+            !status.jobs->remove_image_input(id)) {
+            return error_response(404, "image_input_not_found",
+                                  "uploaded image input is missing or expired");
+        }
+        response.body = "{\"deleted\":true,\"id\":" + json::quote(id) + "}";
         return response;
     }
 

@@ -315,7 +315,10 @@ POST /ainiux/v1/jobs/chat   {provider?, model?, api?, reasoning?, messages:[{rol
 POST /ainiux/v1/jobs/models {provider?, api?}
 POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}
-POST /ainiux/v1/jobs/image  {provider?, model?, api?, prompt, size?, aspect?, quality?, format?}
+GET  /ainiux/v1/images/catalog
+POST /ainiux/v1/images/inputs  (raw image/png or image/jpeg)
+DELETE /ainiux/v1/images/inputs/:input_id
+POST /ainiux/v1/jobs/image  {provider?, model?, api?, prompt, size?, aspect?, quality?, format?, input_image_ids?:[]}
 POST /ainiux/v1/jobs/editor-assist {provider?, model?, api?, path, revision, instruction, selection_start?, selection_end?}
 GET  /ainiux/v1/jobs/:job_id
 GET  /ainiux/v1/jobs/:job_id/events
@@ -337,6 +340,18 @@ Successful chat results identify the effective `provider` and `model`. A
 successful image result contains the encoded image plus a workspace-relative
 `server_path` such as `image2.png`. The server creates the first available
 `imageN.ext` atomically and never overwrites an existing workspace file.
+
+The authenticated image catalog is a safe projection of the effective layered
+`images.conf`. It exposes provider/model identifiers, defaults, edit support,
+input counts, selector values, custom-dimension constraints, and upload limits;
+protocol details, field mappings, regular expressions, defaults JSON, and config
+paths stay server-side. Uploads use a raw body with an exact `image/png` or
+`image/jpeg` content type. The response contains an opaque `id`, MIME type, byte
+size, and expiry. Inputs are memory-only, expire after one hour, and can be
+deleted early. Limits are 20 MiB per file, 40 MiB combined per image job, 16
+inputs globally per job (with lower catalog model limits), and 160 MiB of live
+server upload buffers. `input_image_ids` preserves array order. Missing or
+expired IDs are rejected before a job starts.
 
 Successful chat, run, and plan results include an additive `metrics` object.
 Interactive agent completion/failure events include the same object, and the

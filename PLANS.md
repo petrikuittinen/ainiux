@@ -172,7 +172,7 @@ later optional layer on that daemon, not a substitute for the control API.
 
 ## Current implementation
 
-CLI-only single-turn `ainiux image` / `--image` is landed. Image **models** are `[image]` records in `images.conf`; image **protocols** are compiled adapters. `openai_images`, `replicate_predictions`, `fal_queue`, and `gemini_interactions` are implemented. The bundled catalog defaults `--provider openai` to `gpt-image-2`, `--provider replicate` to `prunaai/z-image-turbo`, `--provider fal` to `fal-ai/flux/schnell`, and `--provider gemini` to `gemini-3.1-flash-image`. `--size` / `--ar` / `--quality` / `--format` are mapped from the matched record. Further image or video models for those protocols should be catalog-only.
+Single-turn `ainiux image` / `--image` and one-shot WebUI image generation are landed. Image **models** are `[image]` records in `images.conf`; image **protocols** are compiled adapters. `openai_images`, `replicate_predictions`, `fal_queue`, and `gemini_interactions` are implemented. The browser consumes a safe control-API projection of the effective layered catalog and supports ordered, memory-only PNG/JPEG reference uploads for edit-capable models. The bundled catalog defaults `--provider openai` to `gpt-image-2`, `--provider replicate` to `prunaai/z-image-turbo`, `--provider fal` to `fal-ai/flux/schnell`, and `--provider gemini` to `gemini-3.1-flash-image`. `--size` / `--ar` / `--quality` / `--format` are mapped from the matched record. Further image or video models for those protocols should be catalog-only.
 
 ## Goal
 
@@ -183,7 +183,6 @@ Remaining surfaces:
 
 - REPL `/image` commands
 - cancellable TUI image-generation job
-- server/browser exposure through the landed v1.30 listener (one-shot `POST /ainiux/v1/image`)
 
 Text chat must never generate images merely because an ordinary prompt asks for one.
 

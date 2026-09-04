@@ -1,5 +1,9 @@
 import { renderMarkdown } from "./highlight-v4.js";
 import { appendHighlightedCode, languageForPath } from "./syntax-v3.js";
+import {
+  normalizeImageCatalog, selectImageModel, imageFileError, customDimensionError,
+  resetImageFormValues,
+} from "./image-options-v1.js";
 
 const API_ROOT = "/ainiux/v1";
 const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";
@@ -36,8 +40,11 @@ const state = {
   agentClockTimer: null,
   modelCatalogs: new Map(),
   imageJobId: "",
+  imageSubmitting: false,
   imageResult: null,
   imageError: "",
+  imageCatalog: null,
+  imageInputs: [],
   guard: null,
   directory: { path: ".", revision: "", entries: [] },
   file: null,
@@ -329,7 +336,10 @@ async function api(path, options = {}) {
   headers.set("Authorization", `Bearer ${state.token}`);
   headers.set("Accept", "application/json");
   let body;
-  if (options.body !== undefined) {
+  if (options.rawBody !== undefined) {
+    headers.set("Content-Type", options.contentType || "application/octet-stream");
+    body = options.rawBody;
+  } else if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
   }
@@ -698,6 +708,176 @@ function populateProviders() {
   }
 }
 
+function fillImageSelect(id, values, placeholder, previous = "") {
+  const select = byId(id);
+  clear(select);
+  const automatic = element("option", "", placeholder);
+  automatic.value = "";
+  select.append(automatic);
+  for (const value of values) {
+    const option = element("option", "", value);
+    option.value = value;
+    select.append(option);
+  }
+  if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+}
+
+function selectedImageModel() {
+  if (!state.imageCatalog) return null;
+  return selectImageModel(state.imageCatalog, byId("image-provider").value,
+    byId("image-model").value);
+}
+
+function imageReferenceError(model) {
+  if (!state.imageCatalog) return "Image catalog is unavailable.";
+  const basic = imageFileError(state.imageInputs.map((input) => input.file), state.imageCatalog.limits);
+  if (basic) return basic;
+  if (state.imageInputs.length && (!model || !model.edits)) {
+    return "The selected model does not support reference images.";
+  }
+  if (model && state.imageInputs.length > Number(model.max_input_images || 0)) {
+    return `The selected model accepts at most ${model.max_input_images} reference images.`;
+  }
+  return "";
+}
+
+function renderImageInputList() {
+  const list = byId("image-input-list");
+  clear(list);
+  if (!state.imageInputs.length) {
+    list.classList.add("empty-state");
+    list.textContent = "No reference images selected.";
+    return;
+  }
+  for (const input of state.imageInputs) {
+    const row = element("div", "image-input-row");
+    const preview = element("img");
+    preview.src = input.previewUrl;
+    preview.alt = "";
+    const details = element("span", "", `${input.file.name} · ${formatBytes(input.file.size)}`);
+    const remove = element("button", "ghost", "Remove");
+    remove.type = "button";
+    remove.addEventListener("click", () => void removeImageInput(input));
+    row.append(preview, details, remove);
+    list.append(row);
+  }
+}
+
+function renderImageOptions(resetModel = false) {
+  const catalog = state.imageCatalog;
+  const status = byId("image-options-status");
+  if (!catalog) {
+    status.textContent = "Connect to load image models from images.conf.";
+    byId("image-generate-button").disabled = true;
+    return;
+  }
+  const provider = byId("image-provider");
+  const previousProvider = provider.value;
+  fillImageSelect("image-provider", catalog.providers,
+    `Server default (${catalog.default_provider || "provider"})`, previousProvider);
+  if (previousProvider && catalog.providers.includes(previousProvider)) provider.value = previousProvider;
+  const requestedModel = resetModel ? "" : byId("image-model").value;
+  const effectiveProvider = provider.value || catalog.default_provider;
+  const models = catalog.models.filter((item) => item.provider === effectiveProvider || item.provider === "any");
+  fillImageSelect("image-model", models.map((item) => item.model), "Catalog default", requestedModel);
+  const model = selectImageModel(catalog, provider.value, byId("image-model").value);
+  if (model && !byId("image-model").value) byId("image-model").value = model.model;
+  const previous = {
+    size: byId("image-size").value,
+    aspect: byId("image-aspect").value,
+    quality: byId("image-quality").value,
+    format: byId("image-format").value,
+  };
+  const sizes = model && Array.isArray(model.sizes) ? [...model.sizes] : [];
+  if (model && model.custom_size && model.custom_size.enabled) sizes.push("Custom…");
+  fillImageSelect("image-size", sizes, "Model default", previous.size);
+  fillImageSelect("image-aspect", model && model.aspect_ratios || [], "Model default", previous.aspect);
+  fillImageSelect("image-quality", model && model.qualities || [], "Model default", previous.quality);
+  fillImageSelect("image-format", model && model.formats || [],
+    model && model.format_default ? `Model default (${model.format_default})` : "Model default",
+    previous.format);
+  const custom = byId("image-size").value === "Custom…";
+  byId("image-custom-size").hidden = !custom;
+  const multiple = model && model.custom_size ? Number(model.custom_size.multiple) || 1 : 1;
+  for (const id of ["image-width", "image-height"]) {
+    byId(id).step = String(multiple);
+    byId(id).min = String(multiple);
+    if (model && model.custom_size && model.custom_size.max_edge) {
+      byId(id).max = String(model.custom_size.max_edge);
+    } else {
+      byId(id).removeAttribute("max");
+    }
+  }
+  const dimensionError = custom
+    ? customDimensionError(model, byId("image-width").value, byId("image-height").value) : "";
+  const referenceError = imageReferenceError(model);
+  status.textContent = referenceError || dimensionError ||
+    (model ? `${model.edits ? `Up to ${model.max_input_images} reference images` : "Text-to-image only"}.` :
+      "No configured image model is available for this provider.");
+  status.classList.toggle("error-text", Boolean(referenceError || dimensionError || !model));
+  byId("image-input-files").disabled = !model || !model.edits;
+  const activeJob = state.imageJobId ? state.jobs.get(state.imageJobId) : null;
+  byId("image-generate-button").disabled = !supports("image") || !model ||
+    state.imageSubmitting || Boolean(activeJob && !TERMINAL_STATES.has(activeJob.state)) ||
+    Boolean(referenceError || dimensionError);
+}
+
+async function removeImageInput(input) {
+  state.imageInputs = state.imageInputs.filter((item) => item !== input);
+  URL.revokeObjectURL(input.previewUrl);
+  if (input.uploadId && state.token) {
+    await api(`${API_ROOT}/images/inputs/${encodeURIComponent(input.uploadId)}`, {
+      method: "DELETE",
+    }).catch(() => {});
+  }
+  renderImageInputList();
+  renderImageOptions();
+}
+
+function releaseAllImageInputs() {
+  const token = state.token;
+  for (const input of state.imageInputs) {
+    URL.revokeObjectURL(input.previewUrl);
+    if (input.uploadId && token) {
+      void fetch(`${API_ROOT}/images/inputs/${encodeURIComponent(input.uploadId)}`, {
+        method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+        credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
+      }).catch(() => {});
+    }
+  }
+  state.imageInputs = [];
+  renderImageInputList();
+}
+
+function resetImageForm() {
+  const values = resetImageFormValues(byId("image-provider").value, byId("image-model").value);
+  byId("image-provider").value = values.provider;
+  byId("image-model").value = values.model;
+  byId("image-prompt").value = values.prompt;
+  byId("image-input-files").value = "";
+  byId("image-size").value = values.size;
+  byId("image-aspect").value = values.aspect;
+  byId("image-quality").value = values.quality;
+  byId("image-format").value = values.format;
+  byId("image-width").value = values.width;
+  byId("image-height").value = values.height;
+  releaseAllImageInputs();
+  renderImageOptions();
+  byId("image-prompt").focus();
+}
+
+async function uploadImageInputs() {
+  for (const input of state.imageInputs) {
+    if (input.uploadId) continue;
+    const stored = await api(`${API_ROOT}/images/inputs`, {
+      method: "POST", rawBody: input.file, contentType: input.file.type,
+    });
+    input.uploadId = stored.id;
+    input.expiresAt = stored.expires_at;
+  }
+  return state.imageInputs.map((input) => input.uploadId);
+}
+
 function applyCapabilities() {
   populateProviders();
   refreshModelControls();
@@ -713,6 +893,7 @@ function applyCapabilities() {
   byId("create-directory-button").disabled = !supports("workspace_mutations");
   for (const control of byId("goal-job-form").elements) control.disabled = !supports("run") && !supports("plan");
   for (const control of byId("image-job-form").elements) control.disabled = !supports("image");
+  renderImageOptions();
 }
 
 function renderSettings() {
@@ -738,12 +919,14 @@ function renderSettings() {
 }
 
 async function refreshSettings() {
-  const [capabilities, status] = await Promise.all([
+  const [capabilities, status, imageCatalog] = await Promise.all([
     api(`${API_ROOT}/capabilities`),
     api(`${API_ROOT}/status`),
+    api(`${API_ROOT}/images/catalog`),
   ]);
   state.capabilities = capabilities;
   state.status = status;
+  state.imageCatalog = normalizeImageCatalog(imageCatalog);
   renderSettings();
   applyCapabilities();
 }
@@ -874,12 +1057,14 @@ function forgetAuthentication(message = "") {
   cancelReconnect();
   stopAllStreams();
   stopAgentClock();
+  releaseAllImageInputs();
   state.token = "";
   state.authenticated = false;
   state.connected = false;
   state.reconnectAttempt = 0;
   state.capabilities = null;
   state.status = null;
+  state.imageCatalog = null;
   state.thread = null;
   state.chatMetrics.clear();
   state.session = null;
@@ -900,6 +1085,7 @@ function forgetAuthentication(message = "") {
   closeDialog(byId("guard-dialog"));
   byId("auth-error").textContent = message;
   openDialog(byId("auth-dialog"));
+  renderImageOptions();
 }
 
 function invalidateAuthentication() {
@@ -1149,6 +1335,7 @@ async function handleJobCompletion(job) {
       ? (job.error.message || "Image generation failed")
       : job.state === "cancelled" ? "Image generation cancelled." : "";
     renderImage();
+    renderImageOptions();
   }
 }
 
@@ -2436,25 +2623,78 @@ function bindEvents() {
 
   byId("image-job-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    state.imageSubmitting = true;
+    renderImageOptions();
     try {
       state.imageError = "";
       state.imageResult = null;
-      const job = await submitJob("image", optionalPayload({
+      const model = selectedImageModel();
+      const validation = imageReferenceError(model);
+      if (validation) throw new ApiError(400, "invalid_image_input", validation);
+      const custom = byId("image-size").value === "Custom…";
+      const makePayload = async () => optionalPayload({
         prompt: byId("image-prompt").value.trim(),
         provider: byId("image-provider").value,
-        model: byId("image-model").value.trim(),
-        size: byId("image-size").value.trim(),
-        aspect: byId("image-aspect").value.trim(),
-        quality: byId("image-quality").value.trim(),
-        format: byId("image-format").value.trim(),
-      }), { type: "image" });
+        model: model ? model.model : "",
+        size: custom ? `${byId("image-width").value}x${byId("image-height").value}` :
+          byId("image-size").value,
+        aspect: custom && model && model.size_mode === "aspect" ? "custom" :
+          byId("image-aspect").value,
+        quality: byId("image-quality").value,
+        format: byId("image-format").value,
+        input_image_ids: await uploadImageInputs(),
+      });
+      let job;
+      try {
+        job = await submitJob("image", await makePayload(), { type: "image" });
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.code !== "not_found") throw error;
+        await Promise.all(state.imageInputs.map(async (input) => {
+          if (input.uploadId) {
+            await api(`${API_ROOT}/images/inputs/${encodeURIComponent(input.uploadId)}`, {
+              method: "DELETE",
+            }).catch(() => {});
+          }
+          input.uploadId = "";
+        }));
+        job = await submitJob("image", await makePayload(), { type: "image" });
+      }
       state.imageJobId = job.id;
       renderImage();
     } catch (error) { toast(errorMessage(error), "error"); }
+    finally {
+      state.imageSubmitting = false;
+      renderImageOptions();
+    }
+  });
+  byId("image-provider").addEventListener("change", () => renderImageOptions(true));
+  byId("image-model").addEventListener("change", () => renderImageOptions());
+  for (const id of ["image-size", "image-aspect", "image-quality", "image-format",
+    "image-width", "image-height"]) {
+    byId(id).addEventListener("change", () => renderImageOptions());
+    if (id === "image-width" || id === "image-height") {
+      byId(id).addEventListener("input", () => renderImageOptions());
+    }
+  }
+  byId("image-input-files").addEventListener("change", (event) => {
+    const additions = Array.from(event.target.files || []);
+    const combined = [...state.imageInputs.map((input) => input.file), ...additions];
+    const validation = state.imageCatalog
+      ? imageFileError(combined, state.imageCatalog.limits) : "Image catalog is unavailable.";
+    if (validation) toast(validation, "error");
+    else {
+      for (const file of additions) {
+        state.imageInputs.push({ file, previewUrl: URL.createObjectURL(file), uploadId: "" });
+      }
+    }
+    event.target.value = "";
+    renderImageInputList();
+    renderImageOptions();
   });
   byId("image-cancel-button").addEventListener("click", () => {
     if (state.imageJobId) void cancelJob(state.imageJobId);
   });
+  byId("image-reset-button").addEventListener("click", resetImageForm);
   byId("image-download-button").addEventListener("click", downloadGeneratedImage);
   byId("edit-file-button").addEventListener("click", beginFileEdit);
 
@@ -2591,6 +2831,7 @@ async function boot() {
   }
   renderJobs();
   renderImage();
+  renderImageInputList();
   renderChat();
   renderAgent();
   const remembered = storageGet(TOKEN_STORAGE_KEY);
@@ -2607,6 +2848,7 @@ async function boot() {
     }
   }
   openDialog(byId("auth-dialog"));
+  renderImageOptions();
 }
 
 void boot();

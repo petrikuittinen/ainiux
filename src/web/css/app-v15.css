@@ -381,6 +381,12 @@ kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0
 .image-output img { display: block; max-width: 100%; max-height: calc(100dvh - var(--topbar-height) - 5rem); object-fit: contain; background: var(--bg); box-shadow: var(--shadow); }
 .image-meta { margin: 0; color: var(--muted); font-size: 0.75rem; text-align: center; }
 .image-progress { text-align: center; }
+.image-input-list { display: grid; gap: 0.3rem; min-height: 2rem; }
+.image-input-list.empty-state { padding: 0.45rem; font-size: 0.72rem; }
+.image-input-row { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr) auto; gap: 0.4rem; align-items: center; padding: 0.3rem; border: 1px solid var(--soft-border); background: var(--raised); font-size: 0.72rem; }
+.image-input-row img { width: 2.5rem; height: 2.5rem; object-fit: cover; background: var(--code); }
+.image-input-row span { min-width: 0; overflow-wrap: anywhere; }
+.image-input-row button { min-height: 1.7rem; padding: 0.14rem 0.3rem; }
 .spinner { width: 1.5rem; height: 1.5rem; border: 2px solid var(--soft-border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

@@ -170,16 +170,17 @@ FULL_AUTH=(--header "Authorization: Bearer ${FULL_SECRET}")
 MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
 request 200 "public embedded WUI index" "${BASE_URL}/ui/"
-expect_body '/ui/assets/app-v14.css' "WUI stylesheet reference"
-expect_body '/ui/assets/app-v14.js' "WUI JavaScript reference"
+expect_body '/ui/assets/app-v15.css' "WUI stylesheet reference"
+expect_body '/ui/assets/app-v16.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
-    "${BASE_URL}/ui/assets/app-v14.js"
+    "${BASE_URL}/ui/assets/app-v16.js"
 expect_body 'localStorage' "persistent browser token storage"
 expect_body 'Invalid authentication' "invalid browser authentication state"
 expect_body 'Last-Event-ID' "authenticated SSE replay"
 expect_body 'updateVisibleChatStream' "live chat delta rendering"
 expect_body 'cancelActiveAgentTurn' "agent keyboard cancellation"
+expect_body 'resetImageForm' "image form reset behavior"
 grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
     die "versioned WUI asset did not receive immutable caching"
 grep -Fq "Content-Security-Policy: default-src 'none'; script-src 'self'" "${WUI_HEADERS}" || \
@@ -200,6 +201,9 @@ expect_body 'javascript' "JavaScript fence support"
 expect_body 'scanHtml' "HTML embedded-language support"
 grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
     die "versioned WUI syntax asset did not receive immutable caching"
+request 200 "versioned WUI image option module" \
+    "${BASE_URL}/ui/assets/image-options-v1.js"
+expect_body 'normalizeImageCatalog' "config-driven image option module"
 request 404 "WUI directory serving rejection" "${BASE_URL}/ui/assets/"
 
 request 200 "authenticated health" "${FULL_AUTH[@]}" "${BASE_URL}/ainiux/v1/health"
@@ -220,10 +224,30 @@ expect_body '"auth_scope":"full_control"' "status authentication scope"
 
 request 200 "authenticated capabilities" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/capabilities"
-expect_body '"operations":["health","status","capabilities","models","chat"' "model/chat capability operations"
+expect_body '"image_catalog","image_inputs","models","chat"' "image catalog/upload capability operations"
 expect_body '"chat_threads"]' "chat-thread capability operation"
 expect_body '"mcp":true' "MCP adapter availability"
 expect_body '"web_ui":true' "embedded WUI availability"
+
+request 200 "effective image catalog" "${FULL_AUTH[@]}" \
+    "${BASE_URL}/ainiux/v1/images/catalog"
+expect_body '"max_image_bytes":20971520' "image catalog upload limit"
+expect_body '"model":"gpt-image-2"' "bundled image catalog model"
+PNG_INPUT="${TEMP_DIR}/input.png"
+printf '\211PNG\r\n\032\n' >"${PNG_INPUT}"
+request 201 "managed PNG image input" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: image/png' --data-binary "@${PNG_INPUT}" \
+    "${BASE_URL}/ainiux/v1/images/inputs"
+expect_body '"mime_type":"image/png"' "managed image MIME"
+INPUT_ID="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "${RESPONSE_FILE}")"
+[ -n "${INPUT_ID}" ] || die "managed image response omitted its opaque identifier"
+request 202 "image edit job with managed input" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: application/json' \
+    --data "{\"provider\":\"openai\",\"model\":\"gpt-image-2\",\"prompt\":\"edit this image\",\"input_image_ids\":[\"${INPUT_ID}\"]}" \
+    "${BASE_URL}/ainiux/v1/jobs/image"
+expect_body '"operation":"image"' "managed-input image job operation"
+request 200 "managed image deletion" "${FULL_AUTH[@]}" --request DELETE \
+    "${BASE_URL}/ainiux/v1/images/inputs/${INPUT_ID}"
 
 request 401 "MCP token cannot access control API" "${MCP_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/status"

@@ -13,6 +13,9 @@ struct Limits {
     static constexpr std::size_t header_count = 100U;
     static constexpr std::size_t json_body_bytes = 1U * 1024U * 1024U;
     static constexpr std::size_t upload_body_bytes = 20U * 1024U * 1024U;
+    static constexpr std::size_t image_job_upload_bytes = 40U * 1024U * 1024U;
+    static constexpr std::size_t image_upload_store_bytes = 160U * 1024U * 1024U;
+    static constexpr std::size_t image_input_count = 16U;
     static constexpr std::size_t requests_per_connection = 100U;
     static constexpr std::size_t default_max_connections = 64U;
     static constexpr std::size_t default_max_jobs = 128U;
