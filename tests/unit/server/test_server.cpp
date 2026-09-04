@@ -140,8 +140,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v12.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v12.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v14.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v14.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -166,6 +166,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("id=\"chat-heading\"") == std::string::npos &&
               index.body.find("id=\"chat-metrics\"") != std::string::npos &&
               index.body.find("id=\"agent-metrics\"") != std::string::npos &&
+              index.body.find("id=\"file-edit-layer\"") != std::string::npos &&
+              index.body.find("id=\"file-edit-highlight\"") != std::string::npos &&
+              index.body.find("wrap=\"off\"") != std::string::npos &&
               index.body.find("Revision-safe files") == std::string::npos &&
               index.body.find("Revision conflict") == std::string::npos &&
               index.body.find("remember-token") == std::string::npos &&
@@ -173,7 +176,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v12.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v14.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -193,6 +196,14 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find("--syntax-heading: #f9a8d4") != std::string::npos &&
               stylesheet.body.find("--syntax-link: #0451a5") != std::string::npos &&
               stylesheet.body.find("--syntax-keyword: #c4b5fd") != std::string::npos &&
+              stylesheet.body.find("--thinking: #93c5fd") != std::string::npos &&
+              stylesheet.body.find(".event-card.thinking") != std::string::npos &&
+              stylesheet.body.find(".event-card.tool") != std::string::npos &&
+              stylesheet.body.find(".event-card.notice") != std::string::npos &&
+              stylesheet.body.find(".file-highlight") != std::string::npos &&
+              stylesheet.body.find(".file-edit-layer") != std::string::npos &&
+              stylesheet.body.find(".directory-entry") != std::string::npos &&
+              stylesheet.body.find(".executable-entry") != std::string::npos &&
               stylesheet.body.find(".syntax-comment") != std::string::npos &&
               stylesheet.body.find(".syntax-property") != std::string::npos &&
               stylesheet.body.find("scrollbar-gutter: stable") != std::string::npos &&
@@ -203,7 +214,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v12.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v14.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -225,7 +236,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("control || event.altKey") != std::string::npos &&
               javascript.body.find("function toggleChatThinking") != std::string::npos &&
               javascript.body.find("function handleThemeCommand") != std::string::npos &&
-              javascript.body.find("import { renderMarkdown } from \"./highlight-v3.js\"") != std::string::npos &&
+              javascript.body.find("import { renderMarkdown } from \"./highlight-v4.js\"") != std::string::npos &&
+              javascript.body.find("languageForPath") != std::string::npos &&
+              javascript.body.find("event-card") != std::string::npos &&
+              javascript.body.find("file-highlight") != std::string::npos &&
+              javascript.body.find("function renderEditHighlight") != std::string::npos &&
+              javascript.body.find("addEventListener(\"scroll\", syncEditorHighlightScroll)") != std::string::npos &&
               javascript.body.find("function renderChatContent") != std::string::npos &&
               javascript.body.find("function scheduleAgentRender") != std::string::npos &&
               javascript.body.find("async function ensureWorkspaceAgent") != std::string::npos &&
@@ -256,7 +272,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript_headers.find("X-Frame-Options: DENY") != std::string::npos,
           "embedded WUI JavaScript uses authenticated fetch/replay and hardened same-origin headers");
 
-    Response highlighter = route_request(public_get("/ui/assets/highlight-v3.js"), config, status);
+    Response highlighter = route_request(public_get("/ui/assets/highlight-v4.js"), config, status);
     const std::string highlighter_headers = serialize_response(highlighter, true);
     check(highlighter.status == 200 &&
               highlighter.content_type == "text/javascript; charset=utf-8" &&
@@ -275,11 +291,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               highlighter_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI Markdown module builds safe semantic DOM under immutable CSP headers");
 
-    Response syntax = route_request(public_get("/ui/assets/syntax-v2.js"), config, status);
+    Response syntax = route_request(public_get("/ui/assets/syntax-v3.js"), config, status);
     const std::string syntax_headers = serialize_response(syntax, true);
     check(syntax.status == 200 &&
               syntax.content_type == "text/javascript; charset=utf-8" &&
               syntax.body.find("export function appendHighlightedCode") != std::string::npos &&
+              syntax.body.find("export function languageForPath") != std::string::npos &&
               syntax.body.find("function scanHtml") != std::string::npos &&
               syntax.body.find("javascript: \"javascript\"") != std::string::npos &&
               syntax.body.find("typescript: \"typescript\"") != std::string::npos &&
@@ -328,8 +345,14 @@ void test_embedded_web_ui_assets_and_browser_security() {
           "the Markdown-only WUI assets are superseded after fenced-code highlighting");
     check(route_request(public_get("/ui/assets/app-v11.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v11.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v12.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v12.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v13.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v13.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v2.js"), config, status).status == 404 &&
-              route_request(public_get("/ui/assets/syntax-v1.js"), config, status).status == 404,
+              route_request(public_get("/ui/assets/highlight-v3.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/syntax-v1.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/syntax-v2.js"), config, status).status == 404,
           "the first-batch WUI syntax assets are superseded after full language parity");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");
@@ -838,11 +861,17 @@ void test_read_only_workspace_routes_are_contained_and_bounded() {
         std::ofstream(workspace / "visible.txt", std::ios::binary) << "visible text\n";
         std::ofstream(workspace / fs::u8path("space λ.txt"), std::ios::binary) << "encoded path\n";
         std::ofstream(workspace / "nested" / "inside.md", std::ios::binary) << "nested text\n";
+        std::ofstream(workspace / "run.sh", std::ios::binary) << "#!/bin/sh\nexit 0\n";
         std::ofstream(workspace / ".ainiux-pr" / "private.json", std::ios::binary) << "private";
         std::ofstream(workspace / "config.conf", std::ios::binary) << "provider_secret = hidden\n";
         std::ofstream(workspace / "secret.txt", std::ios::binary) << "do not expose\n";
         std::ofstream(outside / "outside.txt", std::ios::binary) << "outside\n";
     }
+#if !defined(_WIN32)
+    fs::permissions(workspace / "run.sh",
+                    fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec,
+                    fs::perm_options::replace, cleanup_error);
+#endif
 #if !defined(_WIN32)
     fs::create_symlink(outside / "outside.txt", workspace / "escape", cleanup_error);
 #endif
@@ -854,6 +883,10 @@ void test_read_only_workspace_routes_are_contained_and_bounded() {
     std::string body;
     check(service.list("", body).ok() && body.find("visible.txt") != std::string::npos &&
               body.find("nested") != std::string::npos &&
+              body.find("run.sh") != std::string::npos &&
+#if !defined(_WIN32)
+              body.find("\"executable\":true") != std::string::npos &&
+#endif
               body.find("private.json") == std::string::npos &&
               body.find("config.conf") == std::string::npos &&
               body.find("secret.txt") == std::string::npos &&

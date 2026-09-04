@@ -1,4 +1,4 @@
-/* Dependency-free syntax highlighting for Markdown code fences. */
+/* Dependency-free syntax highlighting for Markdown, Agent, and workspace files. */
 const MAX_HIGHLIGHT_BYTES = 1024 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
 const MAX_TOKENS = 50000;
@@ -30,6 +30,34 @@ const LANGUAGE_ALIASES = new Map(Object.entries({
   toml: "toml", conf: "toml",
   yaml: "yaml", yml: "yaml",
   ini: "ini", dosini: "ini", cfg: "ini",
+}));
+
+// Keep file-view detection aligned with the native TUI/editor detector. The
+// returned value is always a canonical language understood by this module.
+const PATH_LANGUAGE_EXTENSIONS = new Map(Object.entries({
+  ".md": "markdown", ".markdown": "markdown", ".mdown": "markdown", ".mkd": "markdown",
+  ".py": "python", ".pyw": "python", ".pyi": "python",
+  ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".c++": "cpp",
+  ".hh": "cpp", ".hpp": "cpp", ".hxx": "cpp", ".h++": "cpp", ".ipp": "cpp", ".tpp": "cpp", ".inl": "cpp",
+  ".cs": "csharp", ".java": "java",
+  ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript", ".jsx": "javascript",
+  ".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "typescript",
+  ".html": "html", ".htm": "html", ".xhtml": "htmlonly", ".css": "css",
+  ".xml": "xml", ".xsd": "xml", ".xsl": "xml", ".xslt": "xml", ".svg": "xml",
+  ".json": "json", ".jsonl": "json", ".ndjson": "json", ".geojson": "json", ".json5": "json",
+  ".sh": "bash", ".bash": "bash", ".php": "php", ".php3": "php", ".php4": "php", ".php5": "php",
+  ".php7": "php", ".php8": "php", ".phtml": "php", ".phps": "php",
+  ".pl": "perl", ".pm": "perl", ".pod": "perl", ".t": "perl",
+  ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby", ".rs": "rust", ".go": "go",
+  ".ps1": "powershell", ".psm1": "powershell", ".psd1": "powershell",
+  ".asm": "assembly", ".s": "assembly", ".sql": "sql", ".toml": "toml", ".conf": "toml",
+  ".yaml": "yaml", ".yml": "yaml", ".ini": "ini", ".cfg": "ini",
+}));
+
+const PATH_LANGUAGE_FILENAMES = new Map(Object.entries({
+  ".bashrc": "bash", ".bash_profile": "bash", ".bash_login": "bash", ".bash_logout": "bash",
+  ".profile": "bash", "bashrc": "bash", "bash_profile": "bash", "bash_login": "bash", "bash_logout": "bash",
+  "profile": "bash", "gemfile": "ruby", "rakefile": "ruby", ".editorconfig": "ini", ".gitconfig": "ini",
 }));
 
 const words = (source) => new Set(source.split(" "));
@@ -99,6 +127,15 @@ const OPERATOR_CHARS = new Set("+-*/%=!<>?:&|^~.,;()[]{}");
 
 export function canonicalLanguage(label) {
   return LANGUAGE_ALIASES.get(String(label || "").trim().toLowerCase()) || "";
+}
+
+export function languageForPath(path) {
+  const source = String(path || "").split("\\").join("/");
+  const filename = source.slice(source.lastIndexOf("/") + 1).toLowerCase();
+  if (PATH_LANGUAGE_FILENAMES.has(filename)) return PATH_LANGUAGE_FILENAMES.get(filename);
+  const dot = filename.lastIndexOf(".");
+  if (dot === -1) return "text";
+  return PATH_LANGUAGE_EXTENSIONS.get(filename.slice(dot)) || "text";
 }
 
 function isIdentifierStart(character) {

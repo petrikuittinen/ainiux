@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v12.css">
-  <script type="module" src="/ui/assets/app-v12.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v14.css">
+  <script type="module" src="/ui/assets/app-v14.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -140,8 +140,12 @@
             <div id="directory-list" class="file-list empty-state">Connect to browse the workspace.</div>
           </section>
           <section class="editor-panel" aria-labelledby="editor-heading">
-            <div class="pane-bar"><div><h2 id="editor-heading">Editor</h2><span id="editor-meta" class="muted">Open a text file.</span></div><div class="button-row"><button id="editor-assist-button" class="ghost" type="button" disabled>AI assist</button><button id="save-file-button" type="button" disabled>Save</button></div></div>
-            <textarea id="file-editor" class="code-editor" aria-label="File content" spellcheck="false" disabled></textarea>
+            <div class="pane-bar"><div><h2 id="editor-heading">Editor</h2><span id="editor-meta" class="muted">Open a text file.</span></div><div class="button-row"><button id="edit-file-button" class="ghost" type="button" hidden>Edit</button><button id="editor-assist-button" class="ghost" type="button" disabled>AI assist</button><button id="save-file-button" type="button" disabled>Save</button></div></div>
+            <pre id="file-highlight" class="file-highlight" hidden aria-label="Highlighted file content"><code></code></pre>
+            <div id="file-edit-layer" class="file-edit-layer" hidden>
+              <pre id="file-edit-highlight" class="file-highlight file-edit-highlight" aria-hidden="true"><code></code></pre>
+              <textarea id="file-editor" class="code-editor" aria-label="File content" spellcheck="false" wrap="off" disabled></textarea>
+            </div>
           </section>
         </div>
       </section>

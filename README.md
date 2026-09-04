@@ -340,8 +340,11 @@ clickable HTTP(S) links. Fenced code supports the full TUI language set:
 Markdown, Python, C/C++, C#, Java, JavaScript/TypeScript, HTML/HTML-only, CSS,
 XML, JSON, Bash, PHP, Perl, Ruby, Rust, Go, PowerShell, Assembly, SQL, TOML,
 YAML, and INI. HTML fences also highlight embedded script/style bodies and
-inline event/style attributes. Tool, thinking, approval, error, and job output
-remains literal.
+inline event/style attributes. Agent thinking, tool calls, notices, approvals,
+and errors use distinct TUI-derived colors; fenced excerpts in activity rows
+reuse the same syntax highlighter. Workspace dired colors directories and
+executables distinctly, and opened files use extension-aware syntax colors in
+both the viewer and the live-highlighted editor as the draft changes.
 
 For script-oriented API use, configure a known token and use plain server mode
 in one terminal:

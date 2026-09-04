@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderMarkdown } from "../../../src/web/js/highlight-v3.js";
-import { canonicalLanguage } from "../../../src/web/js/syntax-v2.js";
+import { renderMarkdown } from "../../../src/web/js/highlight-v4.js";
+import {
+  appendHighlightedCode,
+  canonicalLanguage,
+  languageForPath,
+} from "../../../src/web/js/syntax-v3.js";
 
 class FakeNode {
   constructor(type, name = "", value = "") {
@@ -19,6 +23,11 @@ class FakeNode {
       if (node.nodeType === 11) this.childNodes.push(...node.childNodes);
       else this.childNodes.push(node);
     }
+  }
+
+  replaceChildren(...nodes) {
+    this.childNodes = [];
+    this.append(...nodes);
   }
 
   setAttribute(name, value) {
@@ -74,6 +83,31 @@ test("recognizes every TUI fence language and compatibility alias", () => {
   for (const [language, labels] of Object.entries(aliases)) {
     for (const label of labels) assert.equal(canonicalLanguage(label), language, label);
   }
+});
+
+test("detects source languages for workspace file names", () => {
+  const paths = {
+    "main.js": "javascript", "component.tsx": "typescript", "server.py": "python",
+    "header.hpp": "cpp", "Main.java": "java", "index.html": "html", "site.css": "css",
+    "data.jsonl": "json", "run.sh": "bash", "tool.ps1": "powershell", "lib.rs": "rust",
+    "cmd.go": "go", "query.sql": "sql", "config.toml": "toml", ".editorconfig": "ini",
+    "README.md": "markdown", "unknown.bin": "text",
+  };
+  for (const [path, language] of Object.entries(paths)) assert.equal(languageForPath(path), language, path);
+});
+
+test("rebuilds workspace highlighting from the current edited draft", () => {
+  const layer = fakeDocument.createElement("pre");
+  appendHighlightedCode(fakeDocument, layer, "let value = 1;", languageForPath("src/app.js"));
+  assert.ok(syntaxText(layer, "keyword").includes("let"));
+  assert.ok(syntaxText(layer, "number").includes("1"));
+
+  layer.replaceChildren();
+  appendHighlightedCode(fakeDocument, layer, "const value = 2;", languageForPath("src/app.js"));
+  assert.equal(layer.textContent, "const value = 2;");
+  assert.ok(syntaxText(layer, "keyword").includes("const"));
+  assert.ok(syntaxText(layer, "number").includes("2"));
+  assert.ok(!syntaxText(layer, "keyword").includes("let"));
 });
 
 test("renders ATX and Setext headings as semantic heading elements", () => {

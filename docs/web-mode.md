@@ -128,9 +128,13 @@ client-side coloring for Markdown, Python, C/C++, C#, Java,
 JavaScript/TypeScript, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby,
 Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI. HTML composes the
 markup, CSS, and JavaScript lexers for style/script element bodies and inline
-style/event attributes. Unknown or unlabelled fences stay plain, and
-browser-editor highlighting remains later work. Tool activity, thinking traces,
-approvals, errors, system rows, and run/plan job output also remain literal.
+style/event attributes. Unknown or unlabelled fences stay plain. Agent
+thinking, tool calls, notices, approvals, and errors use distinct TUI-derived
+colors; fenced source excerpts in activity rows reuse the same highlighter.
+Workspace dired colors directories and executables distinctly, and the file
+viewer and live editor detect the native TUI language from its path. Editor
+highlighting follows each draft change and stays aligned while scrolling.
+Run/plan job output and unstructured activity remain safely literal.
 
 Markdown and bare absolute HTTP(S) links are underlined and open in a new tab
 with `noopener`, `noreferrer`, and no referrer. Relative links, URL credentials,

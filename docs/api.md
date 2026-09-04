@@ -125,7 +125,8 @@ GET /ainiux/v1/files?path=RELATIVE_PATH
 
 Paths use slash-separated workspace-relative components. The dired response
 contains `path`, an opaque directory `revision`, bounded `entries` (`name`,
-`path`, `type`, opaque `revision`, `size`, `modified_at`, and `mutable`), and
+`path`, `type`, opaque `revision`, `size`, `modified_at`, `mutable`, and
+`executable`), and
 `truncated`. Review recursively returns the same entry shape plus a
 file/directory/byte summary. File reads return `path`, opaque `revision`,
 JSON-safe `content`, byte `size`, and `truncated:false`; individual remote

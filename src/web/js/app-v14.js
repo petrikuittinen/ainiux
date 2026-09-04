@@ -1,4 +1,5 @@
-import { renderMarkdown } from "./highlight-v3.js";
+import { renderMarkdown } from "./highlight-v4.js";
+import { appendHighlightedCode, languageForPath } from "./syntax-v3.js";
 
 const API_ROOT = "/ainiux/v1";
 const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";
@@ -202,6 +203,12 @@ function appendMarkdown(parent, text) {
   } catch (_) {
     parent.append(element("pre", "", text));
   }
+}
+
+function appendHighlightedSource(parent, text, language) {
+  const code = element("code");
+  appendHighlightedCode(document, code, text, language);
+  parent.append(code);
 }
 
 function renderChatContent(output, role, content, streaming) {
@@ -887,8 +894,7 @@ function forgetAuthentication(message = "") {
   setEmpty(byId("chat-messages"), "Choose or create a thread.");
   setEmpty(byId("agent-events"), "Open Agent to initialize this workspace.");
   setEmpty(byId("directory-list"), "Connect to browse the workspace.");
-  byId("file-editor").value = "";
-  byId("file-editor").disabled = true;
+  clearEditor();
   byId("chat-input").disabled = true;
   byId("agent-turn-input").disabled = true;
   closeDialog(byId("guard-dialog"));
@@ -1507,6 +1513,7 @@ function agentEventDisplay(entry, live) {
   if (type === "turn_started") { label = "you"; kind = "user"; }
   else if (type === "turn_completed") { label = "assistant"; kind = "assistant"; }
   else if (type === "turn_failed") { label = "error"; kind = "error"; }
+  else if (type === "session_error") { label = "error"; kind = "error"; }
   else if (type === "approval_required") { label = "guard"; kind = "notice"; }
   else if (type === "thinking") label = "thinking";
   else if (type === "tool") label = "tool";
@@ -1520,11 +1527,18 @@ function agentEventDisplay(entry, live) {
 
 function appendAgentEvent(container, entry, live = false) {
   const display = agentEventDisplay(entry, live);
-  const card = element("article", `event-card ${display.kind}${live ? " streaming" : ""}`);
+  const failedTool = display.kind === "tool" && /\b(?:error|failed|denied)\b/i.test(display.text);
+  const card = element("article", `event-card ${display.kind}${failedTool ? " failed" : ""}${live ? " streaming" : ""}`);
   card.append(element("div", "event-type", display.label));
   const text = display.text;
   if (text && text !== "{}") {
     if (["user", "assistant", "response"].includes(display.kind)) {
+      const output = element("div", "message-content");
+      appendMarkdown(output, text);
+      card.append(output);
+    } else if (/```/.test(text)) {
+      // Thinking/tool notices can contain an explicitly fenced source excerpt;
+      // use the same Markdown lexer and language highlighter as assistant text.
       const output = element("div", "message-content");
       appendMarkdown(output, text);
       card.append(output);
@@ -1538,7 +1552,7 @@ function appendAgentEvent(container, entry, live = false) {
 
 function agentEventVisible(event) {
   return event && ["turn_started", "turn_completed", "turn_failed",
-    "approval_required"].includes(event.type);
+    "approval_required", "session_error"].includes(event.type);
 }
 
 function applyAgentActivity(sessionId, event, logs) {
@@ -1757,6 +1771,7 @@ function watchSession(sessionId) {
           state.session.active_elapsed_ms = 0;
         }
         if (event.type === "approval_required") state.session.status = "waiting_guard";
+        if (event.type === "session_error") state.session.status = "error";
         if (event.type === "ready" || event.type === "session_created" ||
             event.type === "session_closed" || event.type === "reasoning_changed" ||
             event.type === "settings_changed") {
@@ -1973,6 +1988,11 @@ function clearEditor() {
   state.file = null;
   byId("file-editor").value = "";
   byId("file-editor").disabled = true;
+  byId("file-edit-layer").hidden = true;
+  byId("file-edit-highlight").replaceChildren();
+  byId("file-highlight").hidden = true;
+  byId("file-highlight").replaceChildren();
+  byId("edit-file-button").hidden = true;
   byId("editor-heading").textContent = "Editor";
   byId("save-file-button").disabled = true;
   byId("editor-assist-button").disabled = true;
@@ -2012,7 +2032,9 @@ function renderDirectory() {
   for (const entry of entries) {
     const row = element("div", `file-row ${state.file && state.file.path === entry.path ? "selected" : ""}`);
     const main = element("div", "file-main");
-    const open = element("button", "", `${entry.type === "directory" ? "▸" : "·"} ${entry.name}`);
+    const entryClass = entry.type === "directory" ? "directory-entry" :
+      entry.executable ? "executable-entry" : "file-entry";
+    const open = element("button", entryClass, `${entry.type === "directory" ? "▸" : "·"} ${entry.name}`);
     open.type = "button";
     open.addEventListener("click", () => entry.type === "directory" ? void loadDirectory(entry.path) : void loadFile(entry.path));
     main.append(open, element("small", "", entry.type === "directory" ? "Directory" : `${formatBytes(entry.size)} · ${entry.modified_at || ""}`));
@@ -2061,7 +2083,53 @@ function updateEditorMeta() {
   }
   byId("editor-meta").textContent = `${state.file.path} · ${formatBytes(new TextEncoder().encode(byId("file-editor").value).length)}${state.file.dirty ? " · unsaved" : ""}`;
   byId("save-file-button").disabled = !state.file.dirty;
+  byId("edit-file-button").hidden = !byId("file-edit-layer").hidden;
+  byId("edit-file-button").disabled = !state.file;
   byId("editor-assist-button").disabled = state.file.dirty || !supports("editor_assist");
+}
+
+function renderFileHighlight() {
+  const viewer = byId("file-highlight");
+  viewer.replaceChildren();
+  if (!state.file) {
+    viewer.hidden = true;
+    return;
+  }
+  appendHighlightedSource(viewer, state.file.content || "", languageForPath(state.file.path));
+  viewer.hidden = false;
+}
+
+function syncEditorHighlightScroll() {
+  const editor = byId("file-editor");
+  const highlight = byId("file-edit-highlight");
+  highlight.scrollTop = editor.scrollTop;
+  highlight.scrollLeft = editor.scrollLeft;
+}
+
+function renderEditHighlight() {
+  const highlight = byId("file-edit-highlight");
+  highlight.replaceChildren();
+  if (!state.file) return;
+  appendHighlightedSource(highlight, byId("file-editor").value, languageForPath(state.file.path));
+  syncEditorHighlightScroll();
+}
+
+function beginFileEdit() {
+  if (!state.file) return;
+  byId("file-highlight").hidden = true;
+  byId("file-edit-layer").hidden = false;
+  byId("file-editor").disabled = false;
+  renderEditHighlight();
+  byId("edit-file-button").hidden = true;
+  byId("file-editor").focus();
+}
+
+function showFileViewer() {
+  if (!state.file || state.file.dirty) return;
+  byId("file-edit-layer").hidden = true;
+  byId("file-editor").disabled = true;
+  renderFileHighlight();
+  byId("edit-file-button").hidden = false;
 }
 
 async function loadFile(path) {
@@ -2071,7 +2139,9 @@ async function loadFile(path) {
     const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`);
     state.file = { ...response, dirty: false };
     byId("file-editor").value = response.content || "";
-    byId("file-editor").disabled = false;
+    byId("file-editor").disabled = true;
+    byId("file-edit-layer").hidden = true;
+    renderFileHighlight();
     byId("editor-heading").textContent = response.path;
     updateEditorMeta();
     renderDirectory();
@@ -2092,6 +2162,7 @@ async function saveFile() {
     state.file.content = byId("file-editor").value;
     state.file.dirty = false;
     updateEditorMeta();
+    showFileViewer();
     await loadDirectory(state.directory.path);
     toast(`Saved ${path}`);
   } catch (error) {
@@ -2182,7 +2253,10 @@ async function applyMutation() {
   state.mutation = null;
   await loadDirectory(state.directory.path);
   await loadWorkspaceReview();
-  if (type === "create-file" && response.file) await loadFile(response.file.path);
+  if (type === "create-file" && response.file) {
+    await loadFile(response.file.path);
+    beginFileEdit();
+  }
   else if (type === "delete" && openPath) clearEditor();
   else if (type === "rename" && openPath) {
     const suffix = openPath === entry.path ? "" : openPath.slice(entry.path.length);
@@ -2246,6 +2320,7 @@ function finishAssistJob(job, context) {
   }
   try {
     byId("file-editor").value = applyByteEdit(byId("file-editor").value, job.result.edit);
+    beginFileEdit();
     state.file.dirty = true;
     updateEditorMeta();
     switchPanel("workspace-panel");
@@ -2381,6 +2456,7 @@ function bindEvents() {
     if (state.imageJobId) void cancelJob(state.imageJobId);
   });
   byId("image-download-button").addEventListener("click", downloadGeneratedImage);
+  byId("edit-file-button").addEventListener("click", beginFileEdit);
 
   byId("new-thread-button").addEventListener("click", () => openDialog(byId("new-thread-dialog")));
   byId("chat-regenerate-button").addEventListener("click", () => void regenerateChat());
@@ -2482,8 +2558,10 @@ function bindEvents() {
   byId("file-editor").addEventListener("input", () => {
     if (!state.file) return;
     state.file.dirty = byId("file-editor").value !== state.file.content;
+    renderEditHighlight();
     updateEditorMeta();
   });
+  byId("file-editor").addEventListener("scroll", syncEditorHighlightScroll);
   byId("save-file-button").addEventListener("click", () => void saveFile());
   byId("editor-assist-button").addEventListener("click", () => openDialog(byId("assist-dialog")));
   byId("assist-form").addEventListener("submit", (event) => {

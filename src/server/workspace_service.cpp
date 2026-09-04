@@ -37,6 +37,7 @@ struct RemoteEntry {
     std::uint64_t size = 0;
     std::int64_t modified_at = 0;
     bool mutable_target = true;
+    bool executable = false;
 };
 
 struct TreeItem {
@@ -301,7 +302,8 @@ Error snapshot_file(const std::string& root,
 Error remote_entry(const std::string& root,
                    const std::string& relative,
                    const std::string& name,
-                   RemoteEntry& entry) {
+                   RemoteEntry& entry,
+                   bool executable = false) {
     fs::path path;
     Error error = resolve_existing(root, relative, false, path);
     if (!error.ok()) return error;
@@ -320,6 +322,7 @@ Error remote_entry(const std::string& root,
     entry.size = size;
     entry.modified_at = modified_seconds(path);
     entry.mutable_target = directory || size <= kMaxFileBytes;
+    entry.executable = !directory && executable;
     return ok_error();
 }
 
@@ -354,7 +357,8 @@ Error collect_directory(const std::string& root,
             break;
         }
         RemoteEntry entry;
-        Error child_error = remote_entry(root, child, source.name, entry);
+        Error child_error = remote_entry(root, child, source.name, entry,
+                                         editor::dired_entry_is_executable(source));
         if (!child_error.ok()) continue;
         entries.push_back(std::move(entry));
     }
@@ -368,7 +372,8 @@ std::string entry_json(const RemoteEntry& entry) {
            ",\"revision\":" + json::quote(entry.revision) +
            ",\"size\":" + std::to_string(entry.size) +
            ",\"modified_at\":" + std::to_string(entry.modified_at) +
-           ",\"mutable\":" + (entry.mutable_target ? "true" : "false") + "}";
+           ",\"mutable\":" + (entry.mutable_target ? "true" : "false") +
+           ",\"executable\":" + (entry.executable ? "true" : "false") + "}";
 }
 
 std::string entries_json(const std::vector<RemoteEntry>& entries) {

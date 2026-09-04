@@ -47,7 +47,7 @@ error layers should serve:
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
 | **v1.30** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | **Landed through PR 10** |
-| WebUI highlighting | Dependency-free client rendering, then editor and TUI-language parity | Markdown and full TUI fenced-language parity landed; browser editor later |
+| WebUI highlighting | Dependency-free client rendering, then editor and TUI-language parity | Markdown, Agent activity, and full TUI fenced-language/file-view/live-edit parity landed |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 The embedded browser controller completes the v1.30 control-server milestone.
