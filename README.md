@@ -334,7 +334,10 @@ is never put in a cookie, URL, log, or rendered page content. The same-origin WU
 chat threads, jobs and images, interactive agent/Guard flows, workspace review
 and mutations, revision-safe file editing/assist, and non-secret server status.
 It follows the system light/dark preference and also has an explicit theme
-selector.
+selector. Chat and Agent prose is rendered as safe client-side Markdown with
+semantic headings, responsive tables, TUI-derived syntax colors, and explicit
+clickable HTTP(S) links; tool, thinking, approval, error, and job output remains
+literal.
 
 For script-oriented API use, configure a known token and use plain server mode
 in one terminal:

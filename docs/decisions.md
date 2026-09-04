@@ -567,7 +567,7 @@ edits.
 ## Embedded dependency-free browser controller (v1.30 PR 10)
 
 The final control-server slice serves a same-origin application from `/ui/`.
-Source HTML, CSS, and one JavaScript ES module live under `src/web/`; the
+Source HTML, CSS, and small JavaScript ES modules live under `src/web/`; the
 Makefile converts them into a generated C++ string table consumed by
 `server/embedded_assets`. Versioned asset URLs receive immutable caching while
 the HTML shell remains no-store. Exact lookup replaces filesystem-backed static
@@ -587,8 +587,11 @@ The UI capability-detects the existing domain routes and never performs
 provider or filesystem work directly. Chat and file mutations retain their
 optimistic revisions; Guard approvals retain session/turn/approval identity;
 editor-assist byte ranges are applied to a browser draft and still require an
-explicit revision-safe save. Dynamic output uses constructed DOM nodes and
-`textContent`. A restrictive CSP and browser hardening headers preserve the
+explicit revision-safe save. Dynamic output uses constructed DOM nodes and text
+nodes. The client-side Markdown module retains that rule: it emits only an
+allowlisted semantic DOM, keeps raw HTML and images inert, and permits only
+credential-free absolute HTTP(S) anchors with explicit new-tab isolation. A
+restrictive CSP and browser hardening headers preserve the
 same-origin boundary. Responsive grid/flex breakpoints, semantic controls,
 visible focus, live regions, reduced motion, and TUI-derived light/dark colors
 are part of the shipped source rather than runtime dependencies.

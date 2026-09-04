@@ -170,11 +170,11 @@ FULL_AUTH=(--header "Authorization: Bearer ${FULL_SECRET}")
 MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
 request 200 "public embedded WUI index" "${BASE_URL}/ui/"
-expect_body '/ui/assets/app-v9.css' "WUI stylesheet reference"
-expect_body '/ui/assets/app-v9.js' "WUI JavaScript reference"
+expect_body '/ui/assets/app-v10.css' "WUI stylesheet reference"
+expect_body '/ui/assets/app-v10.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
-    "${BASE_URL}/ui/assets/app-v9.js"
+    "${BASE_URL}/ui/assets/app-v10.js"
 expect_body 'localStorage' "persistent browser token storage"
 expect_body 'Invalid authentication' "invalid browser authentication state"
 expect_body 'Last-Event-ID' "authenticated SSE replay"
@@ -186,6 +186,13 @@ grep -Fq "Content-Security-Policy: default-src 'none'; script-src 'self'" "${WUI
     die "WUI response did not receive the strict same-origin CSP"
 grep -Fq 'Referrer-Policy: no-referrer' "${WUI_HEADERS}" || \
     die "WUI response did not disable referrer disclosure"
+request 200 "versioned WUI Markdown renderer" --dump-header "${WUI_HEADERS}" \
+    "${BASE_URL}/ui/assets/highlight-v1.js"
+expect_body 'export function renderMarkdown' "client-side Markdown renderer"
+expect_body 'createDocumentFragment' "safe Markdown DOM construction"
+expect_body 'noopener noreferrer' "safe Markdown link navigation"
+grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
+    die "versioned WUI Markdown asset did not receive immutable caching"
 request 404 "WUI directory serving rejection" "${BASE_URL}/ui/assets/"
 
 request 200 "authenticated health" "${FULL_AUTH[@]}" "${BASE_URL}/ainiux/v1/health"

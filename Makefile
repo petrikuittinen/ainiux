@@ -69,8 +69,9 @@ COMMON_CONFIG_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/config.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
 WEB_INDEX := src/web/index.html
-WEB_STYLESHEET := src/web/css/app-v9.css
-WEB_JAVASCRIPT := src/web/js/app-v9.js
+WEB_STYLESHEET := src/web/css/app-v10.css
+WEB_JAVASCRIPT := src/web/js/app-v10.js
+WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v1.js
 WEB_ASSET_HEADER := $(GENERATED_DIR)/embedded_web_assets.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
@@ -124,7 +125,7 @@ APP_LINK_EXTRA :=
 APP_LINK_FLAGS :=
 endif
 
-.PHONY: all clean optimized test test-full test-unit test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
+.PHONY: all clean optimized test test-full test-unit test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
 
 all: $(BIN)
 
@@ -210,12 +211,13 @@ $(IMAGES_CONFIG_HEADER): $(IMAGES_CONFIG)
 
 $(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(IMAGES_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
 
-$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT)
+$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGHLIGHT_JAVASCRIPT)
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
-			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v9.css";' \
-			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v9.js";' \
+			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v10.css";' \
+			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v10.js";' \
+			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v1.js";' \
 			'inline constexpr char kIndexHtml[] = R"AINIUX_WEB_HTML('; \
 		cat $(WEB_INDEX); \
 		printf '%s\n' ')AINIUX_WEB_HTML";' \
@@ -224,7 +226,10 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT)
 		printf '%s\n' ')AINIUX_WEB_CSS";' \
 			'inline constexpr char kJavascript[] = R"AINIUX_WEB_JS('; \
 		cat $(WEB_JAVASCRIPT); \
-		printf '%s\n' ')AINIUX_WEB_JS";' '}  // namespace ainiux::server::web'; \
+		printf '%s\n' ')AINIUX_WEB_JS";' \
+			'inline constexpr char kHighlightJavascript[] = R"AINIUX_HL('; \
+		cat $(WEB_HIGHLIGHT_JAVASCRIPT); \
+		printf '%s\n' ')AINIUX_HL";' '}  // namespace ainiux::server::web'; \
 	} >$@.tmp
 	@mv $@.tmp $@
 
@@ -278,6 +283,16 @@ endif
 test-unit: $(TEST_BIN)
 	$(TEST_BIN)
 	tests/unit/config/test_config_migration.sh
+	$(MAKE) test-web-js
+
+test-web-js:
+	@if command -v node >/dev/null 2>&1; then \
+		node --experimental-default-type=module --check $(WEB_JAVASCRIPT); \
+		node --experimental-default-type=module --check $(WEB_HIGHLIGHT_JAVASCRIPT); \
+		node --experimental-default-type=module --test tests/unit/web/test_highlight.mjs; \
+	else \
+		echo "SKIP: Node.js is unavailable; browser JavaScript tests were not run"; \
+	fi
 
 ifeq ($(WINDOWS_NATIVE),1)
 test-unit-faults: $(IO_FAULT_BIN)

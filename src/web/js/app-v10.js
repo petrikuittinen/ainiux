@@ -1,3 +1,5 @@
+import { renderMarkdown } from "./highlight-v1.js";
+
 const API_ROOT = "/ainiux/v1";
 const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";
 const THEME_STORAGE_KEY = "ainiux.ui.theme.v1";
@@ -43,6 +45,9 @@ const state = {
 };
 
 const byId = (id) => document.getElementById(id);
+let chatRenderFrame = null;
+let pendingChatStream = null;
+let agentRenderFrame = null;
 
 class ApiError extends Error {
   constructor(status, code, message, details = {}) {
@@ -139,38 +144,82 @@ function activePanelId() {
   return panel ? panel.id : "";
 }
 
-function chatDisplayText(content) {
+function appendDisplaySegment(segments, kind, text) {
+  if (!text) return;
+  const previous = segments[segments.length - 1];
+  if (previous && previous.kind === kind) previous.text += text;
+  else segments.push({ kind, text });
+}
+
+function chatDisplaySegments(content) {
   const text = String(content || "");
-  if (state.showThinkingTraces) return text;
   const lower = text.toLowerCase();
   const openTag = "<think>";
   const closeTag = "</think>";
-  let output = "";
+  const segments = [];
   let position = 0;
-  let thinking = false;
   while (position < text.length) {
-    const tag = thinking ? closeTag : openTag;
-    const found = lower.indexOf(tag, position);
-    if (found === -1) {
-      if (!thinking) {
-        const remainder = text.slice(position);
+    const open = lower.indexOf(openTag, position);
+    if (open === -1) {
+      let remainder = text.slice(position);
+      if (!state.showThinkingTraces) {
         const lowerRemainder = lower.slice(position);
-        let held = 0;
         for (let length = Math.min(openTag.length - 1, lowerRemainder.length); length > 0; --length) {
           if (lowerRemainder.endsWith(openTag.slice(0, length))) {
-            held = length;
+            remainder = remainder.slice(0, -length);
             break;
           }
         }
-        output += held ? remainder.slice(0, -held) : remainder;
       }
+      appendDisplaySegment(segments, "markdown", remainder);
       break;
     }
-    if (!thinking) output += text.slice(position, found);
-    position = found + tag.length;
-    thinking = !thinking;
+    appendDisplaySegment(segments, "markdown", text.slice(position, open));
+    const close = lower.indexOf(closeTag, open + openTag.length);
+    if (close === -1) {
+      if (state.showThinkingTraces) appendDisplaySegment(segments, "thinking", text.slice(open));
+      break;
+    }
+    if (state.showThinkingTraces) {
+      appendDisplaySegment(segments, "thinking", text.slice(open, close + closeTag.length));
+    }
+    position = close + closeTag.length;
   }
-  return output.replace(/^[\r\n]+|[\r\n]+$/g, "");
+  if (!state.showThinkingTraces) {
+    while (segments.length && !segments[0].text.replace(/[\r\n]/g, "")) segments.shift();
+    while (segments.length && !segments[segments.length - 1].text.replace(/[\r\n]/g, "")) segments.pop();
+    if (segments.length) {
+      segments[0].text = segments[0].text.replace(/^[\r\n]+/, "");
+      segments[segments.length - 1].text = segments[segments.length - 1].text.replace(/[\r\n]+$/, "");
+    }
+  }
+  return segments;
+}
+
+function appendMarkdown(parent, text) {
+  try {
+    parent.append(renderMarkdown(text));
+  } catch (_) {
+    parent.append(element("pre", "", text));
+  }
+}
+
+function renderChatContent(output, role, content, streaming) {
+  output.replaceChildren();
+  if (role === "assistant") {
+    const segments = chatDisplaySegments(content);
+    for (const segment of segments) {
+      if (segment.kind === "thinking") output.append(element("pre", "thinking-trace", segment.text));
+      else appendMarkdown(output, segment.text);
+    }
+    if (!output.textContent.trim() && streaming) output.append(element("pre", "", "Thinking…"));
+    return;
+  }
+  if (role === "user") {
+    appendMarkdown(output, String(content || ""));
+    return;
+  }
+  output.append(element("pre", "", String(content || "")));
 }
 
 function formatBytes(value) {
@@ -1133,23 +1182,31 @@ function renderThreads() {
 function appendChatMessage(container, role, content, streaming = false) {
   const card = element("article", `message ${role || "system"}${streaming ? " streaming" : ""}`);
   if (streaming) card.id = "chat-stream-message";
-  const shown = role === "assistant" ? chatDisplayText(content) : String(content || "");
-  card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"),
-    element("pre", "", shown || (streaming ? "Thinking…" : "")));
+  const output = element("div", "message-content");
+  renderChatContent(output, role, content, streaming);
+  card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"), output);
   container.append(card);
 }
 
 function updateVisibleChatStream(context) {
   if (!state.thread || state.thread.id !== context.threadId) return;
-  const card = byId("chat-stream-message");
-  if (!card) {
-    renderChat();
-    return;
-  }
-  const output = card.querySelector("pre");
-  if (output) output.textContent = chatDisplayText(context.streamText) || "Thinking…";
-  const messages = byId("chat-messages");
-  messages.scrollTop = messages.scrollHeight;
+  pendingChatStream = context;
+  if (chatRenderFrame !== null) return;
+  chatRenderFrame = window.requestAnimationFrame(() => {
+    chatRenderFrame = null;
+    const pending = pendingChatStream;
+    pendingChatStream = null;
+    if (!pending || !state.thread || state.thread.id !== pending.threadId) return;
+    const card = byId("chat-stream-message");
+    if (!card) {
+      renderChat();
+      return;
+    }
+    const output = card.querySelector(".message-content");
+    if (output) renderChatContent(output, "assistant", pending.streamText, true);
+    const messages = byId("chat-messages");
+    messages.scrollTop = messages.scrollHeight;
+  });
 }
 
 function renderChat() {
@@ -1453,7 +1510,7 @@ function agentEventDisplay(entry, live) {
   else if (type === "approval_required") { label = "guard"; kind = "notice"; }
   else if (type === "thinking") label = "thinking";
   else if (type === "tool") label = "tool";
-  else if (type === "assistant") kind = "assistant";
+  else if (type === "assistant" || type === "response") kind = "assistant";
   const text = type === "approval_required" ? (data.message || "Approval required") :
     typeof data.content === "string" ? data.content :
     typeof data.message === "string" ? data.message :
@@ -1466,7 +1523,15 @@ function appendAgentEvent(container, entry, live = false) {
   const card = element("article", `event-card ${display.kind}${live ? " streaming" : ""}`);
   card.append(element("div", "event-type", display.label));
   const text = display.text;
-  if (text && text !== "{}") card.append(element("pre", "", text));
+  if (text && text !== "{}") {
+    if (["user", "assistant", "response"].includes(display.kind)) {
+      const output = element("div", "message-content");
+      appendMarkdown(output, text);
+      card.append(output);
+    } else {
+      card.append(element("pre", "", text));
+    }
+  }
   appendMetrics(card, display.metrics);
   container.append(card);
 }
@@ -1575,6 +1640,14 @@ function renderAgent() {
   }
   syncAgentClock();
   renderAgentMetrics();
+}
+
+function scheduleAgentRender() {
+  if (agentRenderFrame !== null) return;
+  agentRenderFrame = window.requestAnimationFrame(() => {
+    agentRenderFrame = null;
+    renderAgent();
+  });
 }
 
 async function loadSessions() {
@@ -1699,7 +1772,9 @@ function watchSession(sessionId) {
           }
           void refreshSelectedSession();
         }
-        renderAgent();
+        if (event.type === "activity" && event.data && event.data.kind === "response" &&
+            ["append", "upsert"].includes(event.data.action)) scheduleAgentRender();
+        else renderAgent();
       }
     },
     async () => {

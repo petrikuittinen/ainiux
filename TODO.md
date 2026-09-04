@@ -37,6 +37,9 @@
 ## Syntax Highlighting
 
 - Add startup and `/theme` warnings for explicit low-contrast user syntax colors while preserving those overrides.
+- Extend the landed WebUI Markdown renderer to browser Editor and fenced HTML,
+  JavaScript/TypeScript, Python, C/C++, Bash, and the remaining TUI languages in
+  later milestones; keep the client dependency-free and its raw-HTML boundary inert.
 
 ## Editor AI Commands
 
