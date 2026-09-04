@@ -47,14 +47,14 @@ error layers should serve:
 | **v1.1** | **Lightweight definition ranking and index tuning; later `/goal`, `/loop`, and sub-agents** | **Next priority** |
 | **v1.2** | **Image generation across CLI and interactive surfaces** | CLI `ainiux image` landed; REPL/TUI remaining |
 | **v1.30** | **Remote control API** (`ainiux server`): HTTP `/ainiux/v1`, MCP adapter, remote review/editor/dired, embedded vanilla-JS WUI | **Landed through PR 10** |
-| WebUI highlighting | Dependency-free client rendering, then editor and TUI-language parity | Markdown plus the first fenced-code language batch landed; browser editor and remaining TUI languages later |
+| WebUI highlighting | Dependency-free client rendering, then editor and TUI-language parity | Markdown and full TUI fenced-language parity landed; browser editor later |
 
 Each milestone must leave ordinary CLI chat and existing interactive modes usable.
 The embedded browser controller completes the v1.30 control-server milestone.
 
 ## Current baseline
 
-Implementation status (2026-09-02): **v1.30**.
+Implementation status (2026-09-04): **v1.31**.
 
 The shipped product includes:
 
@@ -85,8 +85,8 @@ The shipped product includes:
   revision-safe remote chat/workspace/editor operations, and embedded responsive vanilla-JS WUI
 - safe client-side Markdown rendering for WebUI Chat and Agent prose, with semantic headings,
   responsive tables, clickable HTTP(S) links, and TUI-derived light/dark colors
-- dependency-free fenced-code highlighting for JavaScript, TypeScript, Python, C, C++, HTML,
-  CSS, and Bash, including embedded CSS/JavaScript within HTML fences
+- dependency-free fenced-code highlighting for the full TUI language set, including embedded
+  CSS/JavaScript within HTML fences
 
 The current v1.1 index stores files and definitions for every supported scanner
 language, plus static declaration importance. It intentionally has no reference
@@ -101,7 +101,7 @@ older Windows, and mintty full-screen operation are explicit non-goals.
 
 ## Release history
 
-The compact v0.0–v1.30 timeline lives in `docs/version-history.md`. Historical
+The compact v0.0–v1.31 timeline lives in `docs/version-history.md`. Historical
 implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing

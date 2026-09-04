@@ -104,7 +104,7 @@ transport, filesystem, or PTY boundary is involved.
 - Control-server WUI exact asset routing, API-auth separation, immutable/no-store
   caching, CSP and browser hardening headers, TUI-derived light/dark palettes,
   responsive/reduced-motion markers, safe semantic Markdown DOM construction,
-  headings/tables/links, inert raw HTML, first-batch fenced-code languages and
+  headings/tables/links, inert raw HTML, all TUI fenced-code languages and aliases,
   HTML-embedded CSS/JavaScript, strict browser query-path decoding, and
   managed-secret stability/private permissions, browser-server CLI aliases and
   URL reporting, persistent `localStorage` authentication, reconnect markers,

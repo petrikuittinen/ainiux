@@ -1,6 +1,6 @@
 # Embedded browser controller
 
-Ainiux v1.30 serves a responsive browser controller from `/ui/` while
+Ainiux v1.31 serves a responsive browser controller from `/ui/` while
 `ainiux server` is running. It is embedded in the executable and uses only
 vanilla HTML, CSS, and JavaScript ES modules: there is no Node.js runtime,
 framework, npm bundle, CDN, hosted font, or external script.
@@ -46,8 +46,8 @@ provides:
 
 - concurrency-safe ordinary chat threads with live streamed model responses;
 - safe client-side Markdown rendering for Chat and Agent prose, including
-  semantic headings, responsive GFM tables, clickable HTTP(S) links, and
-  highlighted JavaScript, TypeScript, Python, C, C++, HTML, CSS, and Bash fences;
+  semantic headings, responsive GFM tables, clickable HTTP(S) links, and the
+  full TUI set of highlighted fenced-code languages;
 - provider model suggestions for chat, run/plan, thread creation, and the
   workspace agent, with manual model entry retained as a fallback;
 - focused run/plan job progress, replay/reconnect, and cancellation;
@@ -123,13 +123,14 @@ color codes as the built-in Ainiux TUI themes, including dark
 Chat user/assistant prose and Agent user/response prose use the embedded
 dependency-free Markdown renderer, including while a response streams. It
 supports headings, paragraphs and hard breaks, emphasis, lists, blockquotes,
-rules, inline/fenced code, and GFM tables. JavaScript, TypeScript, Python, C,
-C++, HTML, CSS, and Bash fences receive TUI-role-compatible client-side token
-coloring. HTML composes the markup, CSS, and JavaScript lexers for style/script
-element bodies and inline style/event attributes. Unknown or unlabelled fences
-stay plain, and browser-editor highlighting remains later work. Tool activity,
-thinking traces, approvals, errors, system rows, and run/plan job output also
-remain literal.
+rules, inline/fenced code, and GFM tables. Fences receive TUI-role-compatible
+client-side coloring for Markdown, Python, C/C++, C#, Java,
+JavaScript/TypeScript, HTML/HTML-only, CSS, XML, JSON, Bash, PHP, Perl, Ruby,
+Rust, Go, PowerShell, Assembly, SQL, TOML, YAML, and INI. HTML composes the
+markup, CSS, and JavaScript lexers for style/script element bodies and inline
+style/event attributes. Unknown or unlabelled fences stay plain, and
+browser-editor highlighting remains later work. Tool activity, thinking traces,
+approvals, errors, system rows, and run/plan job output also remain literal.
 
 Markdown and bare absolute HTTP(S) links are underlined and open in a new tab
 with `noopener`, `noreferrer`, and no referrer. Relative links, URL credentials,

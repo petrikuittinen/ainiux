@@ -69,10 +69,10 @@ COMMON_CONFIG_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/config.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
 WEB_INDEX := src/web/index.html
-WEB_STYLESHEET := src/web/css/app-v11.css
-WEB_JAVASCRIPT := src/web/js/app-v11.js
-WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v2.js
-WEB_SYNTAX_JAVASCRIPT := src/web/js/syntax-v1.js
+WEB_STYLESHEET := src/web/css/app-v12.css
+WEB_JAVASCRIPT := src/web/js/app-v12.js
+WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v3.js
+WEB_SYNTAX_JAVASCRIPT := src/web/js/syntax-v2.js
 WEB_ASSET_HEADER := $(GENERATED_DIR)/embedded_web_assets.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
@@ -216,10 +216,10 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGH
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
-			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v11.css";' \
-			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v11.js";' \
-			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v2.js";' \
-			'inline constexpr std::string_view kSyntaxJavascriptPath = "/ui/assets/syntax-v1.js";' \
+			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v12.css";' \
+			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v12.js";' \
+			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v3.js";' \
+			'inline constexpr std::string_view kSyntaxJavascriptPath = "/ui/assets/syntax-v2.js";' \
 			'inline constexpr char kIndexHtml[] = R"AINIUX_WEB_HTML('; \
 		cat $(WEB_INDEX); \
 		printf '%s\n' ')AINIUX_WEB_HTML";' \

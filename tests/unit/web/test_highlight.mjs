@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderMarkdown } from "../../../src/web/js/highlight-v2.js";
+import { renderMarkdown } from "../../../src/web/js/highlight-v3.js";
+import { canonicalLanguage } from "../../../src/web/js/syntax-v2.js";
 
 class FakeNode {
   constructor(type, name = "", value = "") {
@@ -55,6 +56,25 @@ function syntaxText(root, role) {
     .filter((node) => node.className === `syntax-${role}`)
     .map((node) => node.textContent);
 }
+
+test("recognizes every TUI fence language and compatibility alias", () => {
+  const aliases = {
+    text: ["text", "txt", "plain", "plaintext"],
+    markdown: ["markdown", "md"], python: ["python", "py"], c: ["c"],
+    cpp: ["cpp", "c++", "cxx"], csharp: ["csharp", "c#", "cs"], java: ["java"],
+    javascript: ["javascript", "js"], typescript: ["typescript", "ts"],
+    html: ["html", "html5", "html-multi", "htmlmulti"],
+    htmlonly: ["htmlonly", "html-only"], css: ["css", "css3"], xml: ["xml"],
+    json: ["json", "jsonl", "ndjson"], bash: ["bash", "sh", "shell"], php: ["php"],
+    perl: ["perl", "pl"], ruby: ["ruby", "rb"], rust: ["rust", "rs"],
+    go: ["go", "golang"], powershell: ["powershell", "pwsh", "ps1"],
+    assembly: ["assembly", "assembler", "asm"], sql: ["sql"], toml: ["toml"],
+    yaml: ["yaml", "yml"], ini: ["ini", "dosini"],
+  };
+  for (const [language, labels] of Object.entries(aliases)) {
+    for (const label of labels) assert.equal(canonicalLanguage(label), language, label);
+  }
+});
 
 test("renders ATX and Setext headings as semantic heading elements", () => {
   const root = render("# One\n\n## Two\n\n### C#\n\nSetext one\n===\n\nSetext two\n---");
@@ -230,4 +250,128 @@ test("unknown fences remain literal and supported multiline states are preserved
   assert.deepEqual(syntaxText(multiline, "comment"), ["/* first", "still comment */"]);
   assert.deepEqual(syntaxText(multiline, "string"), ["`two", "lines`"]);
   assert.ok(syntaxText(multiline, "keyword").includes("const"));
+});
+
+test("highlights Java and C# fences", () => {
+  const java = render("```java\npublic class Greeter {\n  String hello(int count) { return \"hi\"; }\n}\n```");
+  assert.ok(syntaxText(java, "keyword").includes("public"));
+  assert.ok(syntaxText(java, "type").includes("Greeter"));
+  assert.ok(syntaxText(java, "type").includes("String"));
+  assert.ok(syntaxText(java, "function").includes("hello"));
+  assert.ok(syntaxText(java, "string").includes("\"hi\""));
+
+  const csharp = render("```c#\npublic record User(string Name);\nbool Ready() => true; // done\n```");
+  assert.ok(syntaxText(csharp, "keyword").includes("record"));
+  assert.ok(syntaxText(csharp, "type").includes("User"));
+  assert.ok(syntaxText(csharp, "type").includes("bool"));
+  assert.ok(syntaxText(csharp, "function").includes("Ready"));
+  assert.ok(syntaxText(csharp, "literal").includes("true"));
+});
+
+test("highlights XML and HTML-only markup without embedded-language coloring", () => {
+  const xml = render("```xml\n<?xml version=\"1.0\"?>\n<root id=\"main\"><child /></root>\n```");
+  assert.ok(syntaxText(xml, "preprocessor").includes("<?xml version=\"1.0\"?>"));
+  assert.ok(syntaxText(xml, "tag").includes("root"));
+  assert.ok(syntaxText(xml, "attribute").includes("id"));
+  assert.ok(syntaxText(xml, "string").includes("main"));
+
+  const htmlOnly = render("```htmlonly\n<script>const value = true;</script>\n```");
+  assert.ok(syntaxText(htmlOnly, "tag").includes("script"));
+  assert.equal(syntaxText(htmlOnly, "keyword").length, 0);
+  assert.equal(syntaxText(htmlOnly, "literal").length, 0);
+});
+
+test("highlights JSON properties, literals, comments, and numbers", () => {
+  const root = render("```jsonc\n{\"ready\": true, \"count\": 3, \"name\": \"Ainiux\"} // note\n```");
+  assert.ok(syntaxText(root, "property").includes("\"ready\""));
+  assert.ok(syntaxText(root, "literal").includes("true"));
+  assert.ok(syntaxText(root, "number").includes("3"));
+  assert.ok(syntaxText(root, "string").includes("\"Ainiux\""));
+  assert.ok(syntaxText(root, "comment").includes("// note"));
+});
+
+test("highlights PHP, Perl, and Ruby fences", () => {
+  const php = render("```php\n<?php function greet(string $name) { return \"Hi $name\"; } // note\n```");
+  assert.ok(syntaxText(php, "preprocessor").includes("<?php"));
+  assert.ok(syntaxText(php, "keyword").includes("function"));
+  assert.ok(syntaxText(php, "function").includes("greet"));
+  assert.ok(syntaxText(php, "type").includes("string"));
+  assert.ok(syntaxText(php, "variable").includes("$name"));
+
+  const perl = render("```perl\nsub greet { my ($name) = @_; return \"Hi\"; } # note\n```");
+  assert.ok(syntaxText(perl, "keyword").includes("sub"));
+  assert.ok(syntaxText(perl, "function").includes("greet"));
+  assert.ok(syntaxText(perl, "variable").includes("$name"));
+  assert.ok(syntaxText(perl, "comment").includes("# note"));
+
+  const ruby = render("```rb\nclass Greeter\n  def call; @status = :ok; end\nend\n```");
+  assert.ok(syntaxText(ruby, "type").includes("Greeter"));
+  assert.ok(syntaxText(ruby, "function").includes("call"));
+  assert.ok(syntaxText(ruby, "variable").includes("@status"));
+  assert.ok(syntaxText(ruby, "literal").includes(":ok"));
+});
+
+test("highlights Rust, Go, and PowerShell fences", () => {
+  const rust = render("```rust\npub fn main() { let value: Option<i32> = true; println!(\"ok\"); }\n/* outer /* nested */ done */\n```");
+  assert.ok(syntaxText(rust, "keyword").includes("fn"));
+  assert.ok(syntaxText(rust, "function").includes("main"));
+  assert.ok(syntaxText(rust, "type").includes("Option"));
+  assert.ok(syntaxText(rust, "function").includes("println"));
+  assert.ok(syntaxText(rust, "comment").includes("/* outer /* nested */ done */"));
+
+  const go = render("```go\nfunc main() { var names map[string]bool; names[\"x\"] = true }\n```");
+  assert.ok(syntaxText(go, "keyword").includes("func"));
+  assert.ok(syntaxText(go, "function").includes("main"));
+  assert.ok(syntaxText(go, "type").includes("string"));
+  assert.ok(syntaxText(go, "literal").includes("true"));
+
+  const powershell = render("```pwsh\nfunction Get-Greeting([string]$Name) { Write-Host $Name -ForegroundColor Green }\n$ready = $true # note\n```");
+  assert.ok(syntaxText(powershell, "keyword").includes("function"));
+  assert.ok(syntaxText(powershell, "function").includes("Get-Greeting"));
+  assert.ok(syntaxText(powershell, "type").includes("string"));
+  assert.ok(syntaxText(powershell, "variable").includes("$Name"));
+  assert.ok(syntaxText(powershell, "literal").includes("$true"));
+});
+
+test("highlights Assembly and SQL fences", () => {
+  const assembly = render("```asm\n.global _start\n_start:\n  mov $1, %rax ; exit\n```");
+  assert.ok(syntaxText(assembly, "preprocessor").includes(".global"));
+  assert.ok(syntaxText(assembly, "function").includes("_start"));
+  assert.ok(syntaxText(assembly, "keyword").includes("mov"));
+  assert.ok(syntaxText(assembly, "type").includes("%rax"));
+  assert.ok(syntaxText(assembly, "comment").includes("; exit"));
+
+  const sql = render("```sql\nSELECT count(*) FROM users WHERE active = TRUE AND score > 10; -- note\n```");
+  assert.ok(syntaxText(sql, "keyword").includes("SELECT"));
+  assert.ok(syntaxText(sql, "function").includes("count"));
+  assert.ok(syntaxText(sql, "literal").includes("TRUE"));
+  assert.ok(syntaxText(sql, "number").includes("10"));
+  assert.ok(syntaxText(sql, "comment").includes("-- note"));
+});
+
+test("highlights TOML, YAML, INI, Markdown, and plain-text fences", () => {
+  const toml = render("```toml\n[server]\nport = 8080\nenabled = true # note\n```");
+  assert.ok(syntaxText(toml, "heading").includes("[server]"));
+  assert.ok(syntaxText(toml, "property").includes("port"));
+  assert.ok(syntaxText(toml, "literal").includes("true"));
+
+  const yaml = render("```yaml\nservice: &main\n  enabled: true\n  description: |\n    two lines\n```");
+  assert.ok(syntaxText(yaml, "property").includes("service"));
+  assert.ok(syntaxText(yaml, "variable").includes("&main"));
+  assert.ok(syntaxText(yaml, "literal").includes("true"));
+  assert.ok(syntaxText(yaml, "string").includes("    two lines"));
+
+  const ini = render("```ini\n[server]\nport=8080\n; note\n```");
+  assert.ok(syntaxText(ini, "heading").includes("[server]"));
+  assert.ok(syntaxText(ini, "property").includes("port"));
+  assert.ok(syntaxText(ini, "comment").includes("; note"));
+
+  const markdown = render("````markdown\n# Title\n**bold** and [link](https://example.test)\n````");
+  assert.ok(syntaxText(markdown, "heading").includes("# Title"));
+  assert.ok(syntaxText(markdown, "emphasis").includes("**bold**"));
+  assert.ok(syntaxText(markdown, "link").includes("[link](https://example.test)"));
+
+  const plain = render("```text\nconst untouched = true;\n```");
+  assert.equal(descendants(plain, "SPAN").length, 0);
+  assert.equal(plain.textContent, "const untouched = true;");
 });

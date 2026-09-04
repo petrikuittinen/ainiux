@@ -288,6 +288,9 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .markdown-body .syntax-tag { color: var(--syntax-tag); }
 .markdown-body .syntax-attribute { color: var(--syntax-attribute); }
 .markdown-body .syntax-property { color: var(--syntax-property); }
+.markdown-body .syntax-heading { color: var(--syntax-heading); font-weight: 700; }
+.markdown-body .syntax-emphasis { color: var(--syntax-emphasis); }
+.markdown-body .syntax-link { color: var(--syntax-link); text-decoration: underline; }
 .markdown-body blockquote {
   margin: 0.45rem 0 0.62rem;
   padding: 0.1rem 0 0.1rem 0.7rem;

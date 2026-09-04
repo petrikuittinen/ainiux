@@ -140,8 +140,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v11.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v11.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v12.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v12.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -173,7 +173,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v11.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v12.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -203,7 +203,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v11.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v12.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -225,7 +225,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("control || event.altKey") != std::string::npos &&
               javascript.body.find("function toggleChatThinking") != std::string::npos &&
               javascript.body.find("function handleThemeCommand") != std::string::npos &&
-              javascript.body.find("import { renderMarkdown } from \"./highlight-v2.js\"") != std::string::npos &&
+              javascript.body.find("import { renderMarkdown } from \"./highlight-v3.js\"") != std::string::npos &&
               javascript.body.find("function renderChatContent") != std::string::npos &&
               javascript.body.find("function scheduleAgentRender") != std::string::npos &&
               javascript.body.find("async function ensureWorkspaceAgent") != std::string::npos &&
@@ -256,7 +256,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript_headers.find("X-Frame-Options: DENY") != std::string::npos,
           "embedded WUI JavaScript uses authenticated fetch/replay and hardened same-origin headers");
 
-    Response highlighter = route_request(public_get("/ui/assets/highlight-v2.js"), config, status);
+    Response highlighter = route_request(public_get("/ui/assets/highlight-v3.js"), config, status);
     const std::string highlighter_headers = serialize_response(highlighter, true);
     check(highlighter.status == 200 &&
               highlighter.content_type == "text/javascript; charset=utf-8" &&
@@ -275,7 +275,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               highlighter_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI Markdown module builds safe semantic DOM under immutable CSP headers");
 
-    Response syntax = route_request(public_get("/ui/assets/syntax-v1.js"), config, status);
+    Response syntax = route_request(public_get("/ui/assets/syntax-v2.js"), config, status);
     const std::string syntax_headers = serialize_response(syntax, true);
     check(syntax.status == 200 &&
               syntax.content_type == "text/javascript; charset=utf-8" &&
@@ -284,6 +284,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               syntax.body.find("javascript: \"javascript\"") != std::string::npos &&
               syntax.body.find("typescript: \"typescript\"") != std::string::npos &&
               syntax.body.find("python: \"python\"") != std::string::npos &&
+              syntax.body.find("powershell: \"powershell\"") != std::string::npos &&
+              syntax.body.find("assembly: \"assembly\"") != std::string::npos &&
               syntax.body.find("innerHTML") == std::string::npos &&
               syntax.body.find("outerHTML") == std::string::npos &&
               syntax.body.find("DOMParser") == std::string::npos &&
@@ -324,6 +326,11 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/app-v10.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v1.js"), config, status).status == 404,
           "the Markdown-only WUI assets are superseded after fenced-code highlighting");
+    check(route_request(public_get("/ui/assets/app-v11.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v11.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/highlight-v2.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/syntax-v1.js"), config, status).status == 404,
+          "the first-batch WUI syntax assets are superseded after full language parity");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");
     check(route_request(post, config, status).status == 405,
