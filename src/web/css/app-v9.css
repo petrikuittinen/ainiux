@@ -169,8 +169,11 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .list-button strong, .list-button small { display: block; overflow-wrap: anywhere; }
 .list-button small { margin-top: 0.12rem; color: var(--muted); font-size: 0.7rem; font-weight: 500; }
 .conversation, .agent-console { display: flex; flex-direction: column; background: var(--bg); }
+.agent-console { height: 100%; max-height: 100%; overflow: hidden; }
+.agent-toolbar, .agent-composer { flex: 0 0 auto; }
 .conversation-bar { flex: 0 0 auto; }
 .message-list, .event-list { flex: 1; min-height: 0; overflow: auto; background: var(--code); }
+.event-list { overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
 .message, .event-card {
   padding: 0.62rem 0.78rem;
   border-bottom: 1px solid var(--soft-border);

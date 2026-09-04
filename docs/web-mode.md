@@ -93,6 +93,10 @@ Chat and Agent keep their headings and composers inside the dynamic viewport;
 thread, message, and event lists scroll within their panels. The WUI does not
 present a general session manager: opening Agent attaches the newest live
 workspace agent or creates one using the project's `.ainiux-pr` settings. In the
+Agent view, the activity transcript owns the vertical scrollbar while the
+instruction composer remains anchored at the bottom of the viewport. New
+activity follows the bottom only while the reader is already near it, so
+scrolling back through a running transcript does not immediately jump down. In the
 chat composer, Enter sends the message. Shift+Enter and Alt+Enter insert a
 newline; Ctrl+Enter and Command+Enter remain multiline editing input and do not
 submit.
@@ -139,5 +143,5 @@ absence of external resource URLs, raw-HTML sinks, cookie/query-string token
 handling, and third-party JavaScript.
 `scripts/test-control-server.sh --build` exercises the embedded assets and API
 through the real loopback listener with `curl`. JavaScript syntax can also be
-checked with `node --check src/web/js/app-v8.js` when Node.js happens to be
+checked with `node --check src/web/js/app-v9.js` when Node.js happens to be
 installed; Node.js is not a build or runtime dependency.

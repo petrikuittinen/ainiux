@@ -170,11 +170,11 @@ FULL_AUTH=(--header "Authorization: Bearer ${FULL_SECRET}")
 MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
 request 200 "public embedded WUI index" "${BASE_URL}/ui/"
-expect_body '/ui/assets/app-v8.css' "WUI stylesheet reference"
-expect_body '/ui/assets/app-v8.js' "WUI JavaScript reference"
+expect_body '/ui/assets/app-v9.css' "WUI stylesheet reference"
+expect_body '/ui/assets/app-v9.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
-    "${BASE_URL}/ui/assets/app-v8.js"
+    "${BASE_URL}/ui/assets/app-v9.js"
 expect_body 'localStorage' "persistent browser token storage"
 expect_body 'Invalid authentication' "invalid browser authentication state"
 expect_body 'Last-Event-ID' "authenticated SSE replay"

@@ -1510,6 +1510,9 @@ function applyAgentActivity(sessionId, event, logs) {
 
 function renderAgent() {
   const events = byId("agent-events");
+  const followTail = events.classList.contains("empty-state") ||
+    events.scrollHeight - events.scrollTop - events.clientHeight <= 40;
+  const previousScrollTop = events.scrollTop;
   if (!state.session) {
     byId("agent-meta").textContent = state.agentInitializing
       ? "Preparing the workspace agent…" : "Open Agent to initialize this workspace.";
@@ -1560,7 +1563,7 @@ function renderAgent() {
       appendAgentEvent(events, entry);
     }
     if (activities) for (const entry of activities.values()) appendAgentEvent(events, entry, true);
-    events.scrollTop = events.scrollHeight;
+    events.scrollTop = followTail ? events.scrollHeight : previousScrollTop;
   }
   const ready = session.status === "ready" && !session.turn_id;
   byId("agent-turn-input").disabled = !ready;

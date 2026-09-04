@@ -140,8 +140,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v8.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v8.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v9.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v9.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -173,7 +173,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v8.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v9.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -187,6 +187,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find("height: 100dvh") != std::string::npos &&
               stylesheet.body.find(".metrics-strip") != std::string::npos &&
               stylesheet.body.find(".agent-toolbar") != std::string::npos &&
+              stylesheet.body.find(".agent-console { height: 100%; max-height: 100%; overflow: hidden; }") != std::string::npos &&
+              stylesheet.body.find("scrollbar-gutter: stable") != std::string::npos &&
               stylesheet.body.find("ui-monospace") != std::string::npos &&
               stylesheet.body.find("@import") == std::string::npos &&
               stylesheet.body.find("https://") == std::string::npos &&
@@ -194,7 +196,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v8.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v9.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -217,6 +219,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("function toggleChatThinking") != std::string::npos &&
               javascript.body.find("function handleThemeCommand") != std::string::npos &&
               javascript.body.find("async function ensureWorkspaceAgent") != std::string::npos &&
+              javascript.body.find("const followTail =") != std::string::npos &&
+              javascript.body.find("followTail ? events.scrollHeight : previousScrollTop") != std::string::npos &&
               javascript.body.find("function downloadGeneratedImage") != std::string::npos &&
               javascript.body.find("server_path") != std::string::npos &&
               javascript.body.find("function agentEventVisible") != std::string::npos &&
@@ -265,6 +269,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
           "the previous WUI asset is superseded after compact controls and provider defaults");
     check(route_request(public_get("/ui/assets/app-v7.js"), config, status).status == 404,
           "the previous WUI asset is superseded after the single-workspace redesign");
+    check(route_request(public_get("/ui/assets/app-v8.js"), config, status).status == 404,
+          "the previous WUI asset is superseded after the agent viewport fix");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");
     check(route_request(post, config, status).status == 405,
