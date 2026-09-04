@@ -573,7 +573,7 @@ Response route_request(const http::Request& request,
         long long thread_id = 0;
         if (!positive_decimal_id(id_text, thread_id) ||
             (slash != std::string::npos && action.empty()) ||
-            (!action.empty() && action != "messages")) {
+            (!action.empty() && action != "messages" && action != "regenerate")) {
             return error_response(404, "thread_route_not_found", "no chat thread route matches this path");
         }
         if (action.empty()) {
@@ -592,18 +592,26 @@ Response route_request(const http::Request& request,
             return response;
         }
         if (request.method != "POST") {
-            response = error_response(405, "method_not_allowed", "message append accepts POST only");
+            response = error_response(
+                405, "method_not_allowed",
+                action == "regenerate" ? "chat regeneration accepts POST only"
+                                       : "message append accepts POST only");
             response.allow = "POST";
             return response;
         }
         if (!json_content_type(request)) {
             return error_response(415, "unsupported_media_type",
-                                  "message append requires Content-Type: application/json");
+                                  action == "regenerate"
+                                      ? "chat regeneration requires Content-Type: application/json"
+                                      : "message append requires Content-Type: application/json");
         }
         std::string body;
         long long current_revision = 0;
-        const Error error = status.chat_threads->append(thread_id, request.body, body,
-                                                        current_revision);
+        const Error error = action == "regenerate"
+                                ? status.chat_threads->rewind_last_answer(
+                                      thread_id, request.body, body, current_revision)
+                                : status.chat_threads->append(
+                                      thread_id, request.body, body, current_revision);
         if (!error.ok()) return chat_thread_error(error, current_revision);
         response.body = std::move(body);
         return response;
@@ -712,6 +720,38 @@ Response route_request(const http::Request& request,
             response.status = 202;
             response.body = "{\"session_id\":" + json::quote(session_id) +
                             ",\"turn_id\":" + json::quote(turn_id) + "}";
+            return response;
+        }
+        if (action == "reasoning") {
+            if (request.method != "POST") {
+                response = error_response(405, "method_not_allowed",
+                                          "session reasoning accepts POST only");
+                response.allow = "POST";
+                return response;
+            }
+            if (!json_content_type(request)) {
+                return error_response(415, "unsupported_media_type",
+                                      "session reasoning requires Content-Type: application/json");
+            }
+            const Error error = session->set_reasoning(request.body);
+            if (!error.ok()) return session_error(error);
+            response.body = session->snapshot_json();
+            return response;
+        }
+        if (action == "settings") {
+            if (request.method != "POST") {
+                response = error_response(405, "method_not_allowed",
+                                          "session settings accept POST only");
+                response.allow = "POST";
+                return response;
+            }
+            if (!json_content_type(request)) {
+                return error_response(415, "unsupported_media_type",
+                                      "session settings require Content-Type: application/json");
+            }
+            const Error error = session->set_settings(request.body);
+            if (!error.ok()) return session_error(error);
+            response.body = session->snapshot_json();
             return response;
         }
         if (action.rfind("turns/", 0) == 0 && action.size() > 13U &&

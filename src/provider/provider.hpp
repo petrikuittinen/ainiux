@@ -297,7 +297,8 @@ Error send_tool_round(const RequestContext& context,
                       const ToolRoundObserver* observer = nullptr,
                       const ToolRoundContext& observation_context = ToolRoundContext{},
                       ReasoningDeltaCallback on_reasoning_delta = {},
-                      WorkingCallback on_working = {});
+                      WorkingCallback on_working = {},
+                      DeltaCallback on_content_delta = {});
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());

@@ -5,77 +5,63 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v3.css">
-  <script type="module" src="/ui/assets/app-v3.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v8.css">
+  <script type="module" src="/ui/assets/app-v8.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="app-shell">
-    <header class="app-header">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">A</span>
-        <div>
-          <h1>Ainiux</h1>
-          <p>Workspace controller</p>
-        </div>
+    <header class="topbar">
+      <div class="brand" aria-label="Ainiux connection status">
+        <strong>Ainiux</strong>
+        <span id="connection-badge" class="connection-dot offline" role="status"><span class="sr-only">Offline</span></span>
       </div>
-      <div class="header-actions">
-        <span id="connection-badge" class="status-badge offline" role="status">Offline</span>
-        <label class="compact-field" for="theme-select">
-          <span>Theme</span>
-          <select id="theme-select">
-            <option value="auto">System</option>
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-          </select>
-        </label>
-        <button id="disconnect-button" class="ghost" type="button" hidden>Sign out / Forget authentication</button>
-      </div>
+      <nav class="primary-nav" aria-label="Controller sections">
+        <button type="button" data-panel="chat-panel" aria-current="page">Chat</button>
+        <button type="button" data-panel="jobs-panel">Jobs</button>
+        <button type="button" data-panel="agent-panel">Agent</button>
+        <button type="button" data-panel="image-panel">Image</button>
+        <button type="button" data-panel="video-panel">Video</button>
+        <button type="button" data-panel="workspace-panel">Workspace</button>
+        <button type="button" data-panel="settings-panel">Settings</button>
+      </nav>
+      <button id="disconnect-button" class="nav-action" type="button" hidden>Logout</button>
     </header>
 
-    <nav class="primary-nav" aria-label="Controller sections">
-      <button type="button" data-panel="chat-panel" aria-current="page">Chat</button>
-      <button type="button" data-panel="jobs-panel">Jobs</button>
-      <button type="button" data-panel="agent-panel">Agent</button>
-      <button type="button" data-panel="workspace-panel">Workspace</button>
-      <button type="button" data-panel="settings-panel">Settings</button>
-    </nav>
-
     <main id="main" tabindex="-1">
-      <section id="chat-panel" class="panel active" aria-labelledby="chat-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Conversation</p>
-            <h2 id="chat-heading">Chat threads</h2>
-          </div>
-          <button id="new-thread-button" type="button">New thread</button>
-        </div>
+      <section id="chat-panel" class="panel active" aria-label="Chat">
         <div class="chat-layout">
-          <aside class="subpanel thread-sidebar" aria-label="Saved chat threads">
-            <div class="subpanel-heading">
-              <h3>Threads</h3>
-              <button id="refresh-threads-button" class="icon-button" type="button" aria-label="Refresh threads">↻</button>
+          <aside class="thread-sidebar" aria-labelledby="threads-heading">
+            <div class="pane-bar">
+              <h2 id="threads-heading">Threads</h2>
+              <div class="button-row">
+                <button id="new-thread-button" type="button">New</button>
+                <button id="refresh-threads-button" class="icon-button ghost" type="button" aria-label="Refresh threads">↻</button>
+              </div>
             </div>
             <div id="thread-list" class="item-list empty-state">Connect to load threads.</div>
           </aside>
-          <section class="subpanel conversation" aria-labelledby="conversation-heading">
-            <div class="subpanel-heading">
-              <div>
-                <h3 id="conversation-heading">Select a thread</h3>
-                <p id="thread-meta" class="muted"></p>
-                <p id="chat-metrics" class="metrics-strip" aria-live="polite"></p>
+          <section class="conversation" aria-labelledby="conversation-heading">
+            <div class="pane-bar conversation-bar">
+              <div class="pane-title">
+                <h2 id="conversation-heading">Select a thread</h2>
+                <span id="thread-meta" class="muted"></span>
+                <span id="chat-metrics" class="metrics-strip" aria-live="polite"></span>
+              </div>
+              <div class="button-row chat-actions" aria-label="Chat actions">
+                <button id="chat-regenerate-button" class="tool-button" type="button" disabled>Regenerate <kbd>Ctrl+R</kbd></button>
+                <button id="chat-cycle-reasoning-button" class="tool-button" type="button">Reasoning <kbd>Alt+T</kbd></button>
+                <button id="chat-thinking-button" class="tool-button" type="button" aria-pressed="false">Thinking hidden <kbd>Alt+W</kbd></button>
               </div>
             </div>
             <div id="chat-messages" class="message-list empty-state" aria-live="polite">Choose or create a thread.</div>
-            <form id="chat-form" class="composer">
-              <label for="chat-input">Message</label>
-              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" required disabled></textarea>
-              <div class="form-row wrap">
+            <form id="chat-form" class="composer chat-composer">
+              <label class="sr-only" for="chat-input">Message</label>
+              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" required disabled aria-keyshortcuts="Control+R Alt+T Alt+W Escape"></textarea>
+              <div class="compact-controls">
                 <label>Provider <select id="chat-provider" class="provider-select"></select></label>
                 <label>Model <input id="chat-model" type="text" list="chat-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="chat-model-list"></datalist><small id="chat-model-status" class="field-hint" aria-live="polite"></small></label>
-                <label>API
-                  <select id="chat-api"><option value="">Default</option><option value="chat">Chat</option><option value="responses">Responses</option></select>
-                </label>
+                <label>Reasoning <select id="chat-reasoning"><option value="">Server default</option></select></label>
                 <button id="chat-send" type="submit" disabled>Send</button>
               </div>
             </form>
@@ -83,107 +69,88 @@
         </div>
       </section>
 
-      <section id="jobs-panel" class="panel" aria-labelledby="jobs-heading" hidden>
-        <div class="section-heading">
-          <div><p class="eyebrow">One-shot work</p><h2 id="jobs-heading">Jobs</h2></div>
-          <button id="refresh-jobs-button" class="ghost" type="button">Refresh retained</button>
-        </div>
-        <div class="two-column">
-          <form id="goal-job-form" class="subpanel stack">
-            <h3>Run or plan</h3>
-            <label>Operation
-              <select id="goal-operation"><option value="run">Run</option><option value="plan">Plan</option></select>
-            </label>
-            <label>Goal
-              <textarea id="goal-input" rows="5" maxlength="262144" required placeholder="Describe the outcome…"></textarea>
-            </label>
-            <div class="form-grid">
-              <label>Provider <select id="goal-provider" class="provider-select"></select></label>
-              <label>Model <input id="goal-model" list="goal-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="goal-model-list"></datalist><small id="goal-model-status" class="field-hint" aria-live="polite"></small></label>
-              <label>API <select id="goal-api"><option value="">Default</option><option value="chat">Chat</option><option value="responses">Responses</option></select></label>
-            </div>
+      <section id="jobs-panel" class="panel" aria-label="Jobs" hidden>
+        <div class="utility-layout">
+          <form id="goal-job-form" class="control-pane stack">
+            <div class="pane-bar"><h2>Run or plan</h2></div>
+            <label>Operation <select id="goal-operation"><option value="run">Run</option><option value="plan">Plan</option></select></label>
+            <label>Goal <textarea id="goal-input" rows="8" maxlength="262144" required placeholder="Describe the outcome…"></textarea></label>
+            <label>Provider <select id="goal-provider" class="provider-select"></select></label>
+            <label>Model <input id="goal-model" list="goal-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="goal-model-list"></datalist><small id="goal-model-status" class="field-hint" aria-live="polite"></small></label>
             <button type="submit">Start job</button>
           </form>
-
-          <form id="image-job-form" class="subpanel stack">
-            <h3>Generate image</h3>
-            <label>Prompt
-              <textarea id="image-prompt" rows="5" maxlength="262144" required placeholder="Describe one image…"></textarea>
-            </label>
-            <div class="form-grid">
-              <label>Provider <select id="image-provider" class="provider-select"></select></label>
-              <label>Model <input id="image-model" maxlength="512" autocomplete="off" placeholder="Catalog default"></label>
-              <label>Size <input id="image-size" maxlength="64" autocomplete="off" placeholder="1024x1024"></label>
-              <label>Aspect <input id="image-aspect" maxlength="64" autocomplete="off" placeholder="1:1"></label>
-              <label>Quality <input id="image-quality" maxlength="64" autocomplete="off" placeholder="Model default"></label>
-              <label>Format <input id="image-format" maxlength="32" autocomplete="off" placeholder="png"></label>
-            </div>
-            <button type="submit">Generate</button>
-          </form>
+          <section class="content-pane job-center" aria-labelledby="job-center-heading">
+            <div class="pane-bar"><h2 id="job-center-heading">Activity</h2><div class="button-row"><button id="refresh-jobs-button" class="ghost" type="button">Refresh</button><button id="clear-finished-button" class="ghost" type="button">Clear finished</button></div></div>
+            <div id="job-list" class="card-list empty-state" aria-live="polite">No run or plan jobs.</div>
+          </section>
         </div>
-        <section class="subpanel job-center" aria-labelledby="job-center-heading">
-          <div class="subpanel-heading"><h3 id="job-center-heading">Activity</h3><button id="clear-finished-button" class="ghost" type="button">Clear finished</button></div>
-          <div id="job-list" class="card-list empty-state" aria-live="polite">No jobs in this tab.</div>
+      </section>
+
+      <section id="agent-panel" class="panel" aria-label="Agent" hidden>
+        <section class="agent-console">
+          <div class="agent-toolbar">
+            <label>Provider <select id="agent-provider" class="provider-select"></select></label>
+            <label>Model <input id="agent-model" list="agent-model-list" maxlength="512" autocomplete="off"><datalist id="agent-model-list"></datalist><small id="agent-model-status" class="field-hint" aria-live="polite"></small></label>
+            <label>Reasoning <select id="agent-reasoning"><option value="">Auto</option></select></label>
+            <label>Mode <select id="agent-task-mode"><option value="act">Act</option><option value="plan">Plan</option></select></label>
+            <label>Permissions <select id="agent-permission"><option value="smart">Smart</option><option value="confirm">Confirm</option><option value="yolo">Yolo</option></select></label>
+            <div class="agent-state"><span id="agent-meta" class="muted">Open Agent to initialize this workspace.</span><span id="agent-metrics" class="metrics-strip" aria-live="polite"></span></div>
+            <button id="cancel-turn-button" class="danger" type="button" hidden>Cancel <kbd>Esc</kbd></button>
+          </div>
+          <div id="agent-events" class="event-list empty-state" aria-live="polite">Open Agent to initialize this workspace.</div>
+          <form id="agent-turn-form" class="composer agent-composer">
+            <label class="sr-only" for="agent-turn-input">Agent instruction</label>
+            <textarea id="agent-turn-input" rows="4" maxlength="262144" required disabled placeholder="Describe the task…" aria-keyshortcuts="Alt+T Escape"></textarea>
+            <button id="agent-turn-submit" type="submit" disabled>Send</button>
+          </form>
         </section>
       </section>
 
-      <section id="agent-panel" class="panel" aria-labelledby="agent-heading" hidden>
-        <div class="section-heading">
-          <div><p class="eyebrow">Interactive tools</p><h2 id="agent-heading">Agent</h2></div>
-          <div class="button-row"><button id="new-agent-button" type="button">New session</button><button id="close-agent-button" class="danger" type="button" hidden>Close session</button></div>
-        </div>
-        <div class="agent-layout">
-          <aside class="subpanel agent-sidebar">
-            <div class="subpanel-heading"><h3>Sessions</h3><button id="refresh-agents-button" class="icon-button" type="button" aria-label="Refresh sessions">↻</button></div>
-            <div id="agent-list" class="item-list empty-state">Connect to load sessions.</div>
-          </aside>
-          <section class="subpanel agent-console" aria-labelledby="agent-console-heading">
-            <div class="subpanel-heading">
-              <div><h3 id="agent-console-heading">No active session</h3><p id="agent-meta" class="muted"></p><p id="agent-metrics" class="metrics-strip" aria-live="polite"></p></div>
-              <button id="cancel-turn-button" class="danger" type="button" hidden>Cancel turn</button>
+      <section id="image-panel" class="panel" aria-label="Image" hidden>
+        <div class="image-layout">
+          <form id="image-job-form" class="control-pane stack">
+            <div class="pane-bar"><h2>Generate image</h2></div>
+            <label>Prompt <textarea id="image-prompt" rows="8" maxlength="262144" required placeholder="Describe one image…"></textarea></label>
+            <label>Provider <select id="image-provider" class="provider-select"></select></label>
+            <label>Model <input id="image-model" maxlength="512" autocomplete="off" placeholder="Catalog default"></label>
+            <div class="form-grid">
+              <label>Size <input id="image-size" maxlength="64" autocomplete="off" placeholder="1024x1024"></label>
+              <label>Aspect <input id="image-aspect" maxlength="64" autocomplete="off" placeholder="1:1"></label>
+              <label>Quality <input id="image-quality" maxlength="64" autocomplete="off" placeholder="Default"></label>
+              <label>Format <input id="image-format" maxlength="32" autocomplete="off" placeholder="png"></label>
             </div>
-            <div id="agent-events" class="event-list empty-state" aria-live="polite">Create or select an agent session.</div>
-            <form id="agent-turn-form" class="composer">
-              <label for="agent-turn-input">Agent instruction</label>
-              <textarea id="agent-turn-input" rows="4" maxlength="262144" required disabled placeholder="Describe the task…"></textarea>
-              <button id="agent-turn-submit" type="submit" disabled>Send turn</button>
-            </form>
+            <div class="button-row"><button id="image-generate-button" type="submit">Generate</button><button id="image-cancel-button" class="danger" type="button" hidden>Cancel</button></div>
+          </form>
+          <section class="content-pane image-preview" aria-labelledby="image-preview-heading">
+            <div class="pane-bar"><h2 id="image-preview-heading">Preview</h2><button id="image-download-button" class="ghost" type="button" hidden>Download</button></div>
+            <div id="image-output" class="image-output empty-state" aria-live="polite">Your generated image will appear here.</div>
           </section>
         </div>
       </section>
 
-      <section id="workspace-panel" class="panel" aria-labelledby="workspace-heading" hidden>
-        <div class="section-heading">
-          <div><p class="eyebrow">Safe file editing</p><h2 id="workspace-heading">Workspace</h2></div>
-          <div class="button-row"><button id="workspace-review-button" class="ghost" type="button">Review</button><button id="refresh-directory-button" type="button">Refresh</button></div>
-        </div>
-        <div id="workspace-summary" class="summary-strip" aria-live="polite"></div>
+      <section id="video-panel" class="panel placeholder-panel" aria-label="Video" hidden>
+        <div><h2>Video</h2><p>Video generation is not available yet.</p></div>
+      </section>
+
+      <section id="workspace-panel" class="panel" aria-label="Workspace" hidden>
+        <div class="workspace-toolbar"><div id="workspace-summary" class="summary-strip" aria-live="polite"></div><div class="button-row"><button id="workspace-review-button" class="ghost" type="button">Review</button><button id="refresh-directory-button" type="button">Refresh</button></div></div>
         <div class="workspace-layout">
-          <section class="subpanel dired-panel" aria-labelledby="dired-heading">
-            <div class="subpanel-heading vertical-mobile">
-              <div><h3 id="dired-heading">Files</h3><nav id="breadcrumbs" class="breadcrumbs" aria-label="Current workspace path"></nav></div>
-              <div class="button-row"><button id="create-file-button" class="ghost" type="button">New file</button><button id="create-directory-button" class="ghost" type="button">New folder</button></div>
-            </div>
+          <section class="dired-panel" aria-labelledby="dired-heading">
+            <div class="pane-bar vertical-mobile"><div><h2 id="dired-heading">Files</h2><nav id="breadcrumbs" class="breadcrumbs" aria-label="Current workspace path"></nav></div><div class="button-row"><button id="create-file-button" class="ghost" type="button">New file</button><button id="create-directory-button" class="ghost" type="button">New folder</button></div></div>
             <div id="directory-list" class="file-list empty-state">Connect to browse the workspace.</div>
           </section>
-          <section class="subpanel editor-panel" aria-labelledby="editor-heading">
-            <div class="subpanel-heading">
-              <div><h3 id="editor-heading">Editor</h3><p id="editor-meta" class="muted">Open a text file.</p></div>
-              <div class="button-row"><button id="editor-assist-button" class="ghost" type="button" disabled>AI assist</button><button id="save-file-button" type="button" disabled>Save</button></div>
-            </div>
+          <section class="editor-panel" aria-labelledby="editor-heading">
+            <div class="pane-bar"><div><h2 id="editor-heading">Editor</h2><span id="editor-meta" class="muted">Open a text file.</span></div><div class="button-row"><button id="editor-assist-button" class="ghost" type="button" disabled>AI assist</button><button id="save-file-button" type="button" disabled>Save</button></div></div>
             <textarea id="file-editor" class="code-editor" aria-label="File content" spellcheck="false" disabled></textarea>
           </section>
         </div>
       </section>
 
-      <section id="settings-panel" class="panel" aria-labelledby="settings-heading" hidden>
-        <div class="section-heading">
-          <div><p class="eyebrow">Non-secret server data</p><h2 id="settings-heading">Connection &amp; capabilities</h2></div>
-          <button id="refresh-settings-button" type="button">Refresh</button>
-        </div>
-        <div class="two-column">
-          <section class="subpanel"><h3>Status</h3><dl id="status-details" class="details-list"></dl></section>
-          <section class="subpanel"><h3>Capabilities</h3><dl id="capability-details" class="details-list"></dl></section>
+      <section id="settings-panel" class="panel settings-panel" aria-label="Settings" hidden>
+        <div class="settings-grid">
+          <section class="control-pane"><h2>Appearance</h2><label>Theme <select id="theme-select"><option value="auto">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><p class="muted">In Chat or Agent, use <code>/theme light</code> or <code>/theme dark</code>.</p></section>
+          <section class="control-pane"><div class="pane-bar"><h2>Status</h2><button id="refresh-settings-button" class="ghost" type="button">Refresh</button></div><dl id="status-details" class="details-list"></dl></section>
+          <section class="control-pane"><h2>Capabilities</h2><dl id="capability-details" class="details-list"></dl></section>
         </div>
         <p class="callout">Provider and controller credentials, environment variables, database paths, TLS material, and hidden project state are never requested by this view.</p>
       </section>
@@ -192,12 +159,9 @@
 
   <dialog id="auth-dialog" aria-labelledby="auth-title">
     <form id="auth-form" class="dialog-card">
-      <div><p class="eyebrow">Same-origin controller</p><h2 id="auth-title">Connect to Ainiux</h2></div>
-      <p>Enter the full-control server token once. After Ainiux validates it, this browser saves it locally for this origin.</p>
-      <label>Controller token
-        <input id="token-input" type="password" autocomplete="current-password" required autofocus>
-      </label>
-      <p class="muted">Use “Sign out / Forget authentication” to remove the saved token from this browser.</p>
+      <h2 id="auth-title">Connect to Ainiux</h2>
+      <p>Enter the full-control server token. This browser saves it locally for this origin after validation.</p>
+      <label>Controller token <input id="token-input" type="password" autocomplete="current-password" required autofocus></label>
       <p id="auth-error" class="error-text" role="alert"></p>
       <button type="submit">Connect</button>
     </form>
@@ -207,63 +171,25 @@
     <form id="new-thread-form" class="dialog-card">
       <h2 id="new-thread-title">New chat thread</h2>
       <label>Name <input id="thread-name-input" maxlength="512" placeholder="Optional; first message is used"></label>
-      <div class="form-grid">
-        <label>Provider <select id="thread-provider" class="provider-select"></select></label>
-        <label>Model <input id="thread-model" list="thread-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="thread-model-list"></datalist><small id="thread-model-status" class="field-hint" aria-live="polite"></small></label>
-      </div>
+      <div class="form-grid"><label>Provider <select id="thread-provider" class="provider-select"></select></label><label>Model <input id="thread-model" list="thread-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="thread-model-list"></datalist><small id="thread-model-status" class="field-hint" aria-live="polite"></small></label></div>
       <div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Create</button></div>
     </form>
   </dialog>
 
-  <dialog id="new-agent-dialog" aria-labelledby="new-agent-title">
-    <form id="new-agent-form" class="dialog-card">
-      <h2 id="new-agent-title">New agent session</h2>
-      <div class="form-grid">
-        <label>Provider <select id="agent-provider" class="provider-select"></select></label>
-        <label>Model <input id="agent-model" list="agent-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="agent-model-list"></datalist><small id="agent-model-status" class="field-hint" aria-live="polite"></small></label>
-        <label>API <select id="agent-api"><option value="">Default</option><option value="chat">Chat</option><option value="responses">Responses</option></select></label>
-        <label>Task mode <select id="agent-task-mode"><option value="act">Act</option><option value="plan">Plan</option></select></label>
-        <label>Permissions <select id="agent-permission"><option value="smart">Smart</option><option value="confirm">Confirm</option><option value="yolo">Yolo (server opt-in)</option></select></label>
-      </div>
-      <div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Create session</button></div>
-    </form>
-  </dialog>
-
   <dialog id="guard-dialog" aria-labelledby="guard-title">
-    <div class="dialog-card">
-      <div><p class="eyebrow danger-text">Guard approval</p><h2 id="guard-title">Review agent action</h2></div>
-      <dl id="guard-details" class="details-list"></dl>
-      <pre id="guard-review" class="review-box" hidden></pre>
-      <div class="dialog-actions three"><button id="guard-review-button" class="ghost" type="button">Review file</button><button id="guard-deny-button" class="danger" type="button">Deny</button><button id="guard-allow-button" type="button">Allow</button></div>
-    </div>
+    <div class="dialog-card"><h2 id="guard-title">Review agent action</h2><dl id="guard-details" class="details-list"></dl><pre id="guard-review" class="review-box" hidden></pre><div class="dialog-actions three"><button id="guard-review-button" class="ghost" type="button">Review file</button><button id="guard-deny-button" class="danger" type="button">Deny</button><button id="guard-allow-button" type="button">Allow</button></div></div>
   </dialog>
 
   <dialog id="mutation-dialog" aria-labelledby="mutation-title">
-    <form id="mutation-form" class="dialog-card">
-      <h2 id="mutation-title">Workspace action</h2>
-      <p id="mutation-description"></p>
-      <label id="mutation-path-label">Path <input id="mutation-path" maxlength="8192" required autocomplete="off"></label>
-      <label id="mutation-recursive-row" class="checkbox-row" hidden><input id="mutation-recursive" type="checkbox"> Delete non-empty directory recursively</label>
-      <label id="mutation-confirm-row" hidden>Type the confirmation exactly <input id="mutation-confirm" autocomplete="off"></label>
-      <div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button id="mutation-submit" type="submit">Apply</button></div>
-    </form>
+    <form id="mutation-form" class="dialog-card"><h2 id="mutation-title">Workspace action</h2><p id="mutation-description"></p><label id="mutation-path-label">Path <input id="mutation-path" maxlength="8192" required autocomplete="off"></label><label id="mutation-recursive-row" class="checkbox-row" hidden><input id="mutation-recursive" type="checkbox"> Delete non-empty directory recursively</label><label id="mutation-confirm-row" hidden>Type the confirmation exactly <input id="mutation-confirm" autocomplete="off"></label><div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button id="mutation-submit" type="submit">Apply</button></div></form>
   </dialog>
 
   <dialog id="assist-dialog" aria-labelledby="assist-title">
-    <form id="assist-form" class="dialog-card">
-      <h2 id="assist-title">Editor AI assist</h2>
-      <label>Instruction <textarea id="assist-instruction" rows="5" maxlength="262144" required placeholder="Describe the edit…"></textarea></label>
-      <label class="checkbox-row"><input id="assist-selection" type="checkbox"> Limit to the current selection</label>
-      <div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Request proposal</button></div>
-    </form>
+    <form id="assist-form" class="dialog-card"><h2 id="assist-title">Editor AI assist</h2><label>Instruction <textarea id="assist-instruction" rows="5" maxlength="262144" required placeholder="Describe the edit…"></textarea></label><label class="checkbox-row"><input id="assist-selection" type="checkbox"> Limit to the current selection</label><div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Request proposal</button></div></form>
   </dialog>
 
   <dialog id="conflict-dialog" aria-labelledby="conflict-title">
-    <div class="dialog-card">
-      <div><p class="eyebrow danger-text">Edit conflict</p><h2 id="conflict-title">Remote content changed</h2></div>
-      <p id="conflict-message">Reload the newest server version before saving again. Your draft remains in this tab until you choose reload.</p>
-      <div class="dialog-actions"><button id="keep-draft-button" class="ghost" type="button">Keep draft</button><button id="reload-conflict-button" type="button">Reload server copy</button></div>
-    </div>
+    <div class="dialog-card"><h2 id="conflict-title">Remote content changed</h2><p id="conflict-message">Reload the newest server version before saving again. Your draft remains in this tab until you choose reload.</p><div class="dialog-actions"><button id="keep-draft-button" class="ghost" type="button">Keep draft</button><button id="reload-conflict-button" type="button">Reload server copy</button></div></div>
   </dialog>
 
   <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>

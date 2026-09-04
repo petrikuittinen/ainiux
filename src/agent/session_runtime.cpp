@@ -2319,6 +2319,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
     std::size_t active_round_id = 0;
     constexpr std::size_t kWorkingNoticeId =
         std::numeric_limits<std::size_t>::max() - 1;
+    constexpr std::size_t kResponseId =
+        std::numeric_limits<std::size_t>::max() - 2;
     bool working_row_started = false;
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
@@ -2457,6 +2459,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         provider::ToolRoundResult round;
         active_round_id = state_.turn + 1;
         std::string round_reasoning;
+        bool response_row_started = false;
         std::string round_preview;
         bool reasoning_row_started = false;
         const std::size_t thinking_preview_max_chars = static_cast<std::size_t>(
@@ -2515,6 +2518,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         bool retry_notice_active = false;
         auto on_retry = [&](const Error& retry_error, int attempt,
                             int backoff_seconds) {
+                if (response_row_started) {
+                    structured_progress({AgentProgressAction::Discard,
+                                         AgentProgressKind::Response, active_round_id,
+                                         kResponseId, {}, 0});
+                    response_row_started = false;
+                }
                 round_reasoning.clear();
                 round_preview.clear();
                 reasoning_row_started = false;
@@ -2712,10 +2721,21 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                    "agent reasoning preview cancelled"}
                            : ok_error();
             };
+        auto on_content = [&](const std::string& delta) -> Error {
+                if (!options_.interactive || delta.empty()) return ok_error();
+                structured_progress({AgentProgressAction::Append,
+                                     AgentProgressKind::Response, active_round_id,
+                                     kResponseId, delta, 0});
+                response_row_started = true;
+                return cancellation.cancelled()
+                           ? Error{ErrorCode::Cancelled,
+                                   "agent response preview cancelled"}
+                           : ok_error();
+            };
         Error error = send_tool_round_with_transport_retries(
             context, conversation_, definitions, round, cancellation,
             limits_.transport_attempts, observer_pointer, observation_context,
-            on_retry, on_reasoning, on_working);
+            on_retry, on_reasoning, on_working, on_content);
         clear_retry_notice();
         if (!error.ok() && options_.auto_compact &&
             options_.compact_strategy != CompactionStrategy::Fast &&
@@ -2728,6 +2748,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 progress(recovered.notice + "; retrying rejected model round once");
                 round = provider::ToolRoundResult{};
                 round_reasoning.clear();
+                if (response_row_started) {
+                    structured_progress({AgentProgressAction::Discard,
+                                         AgentProgressKind::Response, active_round_id,
+                                         kResponseId, {}, 0});
+                    response_row_started = false;
+                }
                 round_preview.clear();
                 reasoning_row_started = false;
                 opening_thinking_frozen = false;
@@ -2743,13 +2769,20 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 error = send_tool_round_with_transport_retries(
                     context, conversation_, definitions, round, cancellation,
                     limits_.transport_attempts, observer_pointer,
-                    observation_context, on_retry, on_reasoning, on_working);
+                    observation_context, on_retry, on_reasoning, on_working,
+                    on_content);
                 clear_retry_notice();
             } else if (!recovered.error.ok()) {
                 error = recovered.error;
             }
         }
         if (!error.ok()) {
+            if (response_row_started) {
+                structured_progress({AgentProgressAction::Discard,
+                                     AgentProgressKind::Response, active_round_id,
+                                     kResponseId, {}, 0});
+                response_row_started = false;
+            }
             hide_working_row();
             if (finished_thinking_started)
                 discard_thinking_line(kFinishedThinkingId);
@@ -2812,6 +2845,12 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         AgentRoundOutcome outcome = handle_agent_tool_round(
             state_, limits_, context, conversation_, std::move(round), known_tools_, executor,
             cancellation);
+        if (response_row_started) {
+            structured_progress({AgentProgressAction::Discard,
+                                 AgentProgressKind::Response, active_round_id,
+                                 kResponseId, {}, 0});
+            response_row_started = false;
+        }
         turn_tool_calls += outcome.tool_calls;
         turn_failed_tool_calls += outcome.failed_tool_calls;
         // Conversation grew (assistant/tool items); publish for TUI chrome.

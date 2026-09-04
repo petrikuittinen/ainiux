@@ -29,7 +29,9 @@ void apply_agent_progress_update(chat::Session& session,
     const std::string role =
         update.kind == agent::AgentProgressKind::Thinking
             ? "thinking"
-            : update.kind == agent::AgentProgressKind::Tool ? "tool" : "notice";
+            : update.kind == agent::AgentProgressKind::Tool
+                  ? "tool"
+                  : update.kind == agent::AgentProgressKind::Response ? "assistant" : "notice";
     if (row == rows.end()) {
         provider::Message message{role, update.text};
         message.created_at_ms = update.created_at_ms;
@@ -40,7 +42,10 @@ void apply_agent_progress_update(chat::Session& session,
     }
     if (row->message_index >= session.messages.size()) return;
     provider::Message& message = session.messages[row->message_index];
-    message.content = update.text;
+    if (update.action == agent::AgentProgressAction::Append)
+        message.content += update.text;
+    else
+        message.content = update.text;
     if (update.created_at_ms > 0) message.created_at_ms = update.created_at_ms;
 }
 

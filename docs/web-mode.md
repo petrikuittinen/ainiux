@@ -44,21 +44,29 @@ browser URLs.
 The controller capability-detects the server before enabling features. It
 provides:
 
-- concurrency-safe ordinary chat threads and asynchronous model responses;
-- provider model suggestions for chat, run/plan, thread creation, and agent
-  session creation, with manual model entry retained as a fallback;
-- run/plan jobs, progress, replay/reconnect, cancellation, and image results;
-- interactive Act/Plan agent sessions, Confirm/Smart/Yolo selection subject to
-  server policy, correlated turn cancellation, and Guard review/allow/deny;
+- concurrency-safe ordinary chat threads with live streamed model responses;
+- provider model suggestions for chat, run/plan, thread creation, and the
+  workspace agent, with manual model entry retained as a fallback;
+- focused run/plan job progress, replay/reconnect, and cancellation;
+- one human-facing workspace Agent with inline provider, model, reasoning,
+  Act/Plan, and Confirm/Smart/Yolo controls, live response/reasoning/tool
+  activity, correlated turn cancellation, and Guard review/allow/deny;
+- a dedicated Image tab with generation controls, an in-page preview, the
+  collision-safe server filename, and browser-local download;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
 - a bounded UTF-8 editor with optimistic saves, conflict recovery, and AI
   proposals that modify only the browser draft until Save is selected;
 - safe status and capability data already exposed by the control API.
 
+Provider selection uses the server/provider API default. The WUI does not carry
+a Chat Completions/Responses override between providers: OpenAI may use its
+configured Responses default, while DeepSeek and other OpenAI-compatible
+providers use Chat Completions unless the server configuration says otherwise.
+
 Chat submission first persists the user message, runs the shared asynchronous
 chat job, and appends the assistant result only if the thread revision still
-matches. On a conflict, the completed result remains in Jobs and the UI asks
+matches. On a conflict, the completed result remains visible in Chat and the UI asks
 the user to reload. File drafts likewise remain visible until the user chooses
 whether to keep the draft or reload the current server copy.
 
@@ -71,22 +79,36 @@ them. A `~` marker identifies estimated token values.
 
 ## Responsive and accessible behavior
 
-The layout uses flexible CSS Grid/Flex regions. Wide screens show navigation
-and work areas side by side; tablet and narrow-mobile breakpoints stack them
-without horizontal page scrolling. Controls have touch-sized targets and work
+The compact, terminal-inspired layout combines the brand and Chat, Jobs, Agent,
+Image, Video, Workspace, Settings, and Logout navigation in one top bar. It
+keeps metadata, transcripts, and composers visible without wrapping each event
+in oversized application cards. Wide screens show navigation and work areas side by side; tablet and
+narrow-mobile breakpoints stack them without horizontal page scrolling. Controls work
 with pointer, touch, or keyboard input. Semantic headings, labels, live regions,
 native labelled dialogs, a skip link, and visible focus indicators support
 assistive and keyboard-only use. Reduced-motion and forced-color preferences are
 respected.
 
 Chat and Agent keep their headings and composers inside the dynamic viewport;
-thread, message, session, and event lists scroll within their panels. In the
+thread, message, and event lists scroll within their panels. The WUI does not
+present a general session manager: opening Agent attaches the newest live
+workspace agent or creates one using the project's `.ainiux-pr` settings. In the
 chat composer, Enter sends the message. Shift+Enter and Alt+Enter insert a
 newline; Ctrl+Enter and Command+Enter remain multiline editing input and do not
 submit.
 
+Chat provides Regenerate, Reasoning, and Thinking controls beside the transcript.
+Ctrl+R, Ctrl+T, and Ctrl+W are handled when the browser forwards those events,
+but ordinary browser tabs reserve Ctrl+T and Ctrl+W and may never deliver them
+to a page. Alt+T and Alt+W are therefore provided as keyboard fallbacks, while
+the visible buttons work in every supported browser. Esc interrupts the active
+response. Agent provides the same visible reasoning control, Alt+T fallback,
+and Esc interruption.
+
 The default theme follows `prefers-color-scheme`. The explicit System, Dark,
-and Light selector is stored for the browser origin. Its palettes use the same
+and Light selector lives in Settings and is stored for the browser origin.
+Chat and Agent also accept `/theme light`, `/theme dark`, and `/theme auto`
+locally without sending those commands to a model. The palettes use the same
 color codes as the built-in Ainiux TUI themes, including dark
 `#0B0F14`/`#E6EDF3` and light
 `#FFFFFF`/`#000000` foundations.
@@ -117,5 +139,5 @@ absence of external resource URLs, raw-HTML sinks, cookie/query-string token
 handling, and third-party JavaScript.
 `scripts/test-control-server.sh --build` exercises the embedded assets and API
 through the real loopback listener with `curl`. JavaScript syntax can also be
-checked with `node --check src/web/js/app-v3.js` when Node.js happens to be
+checked with `node --check src/web/js/app-v8.js` when Node.js happens to be
 installed; Node.js is not a build or runtime dependency.

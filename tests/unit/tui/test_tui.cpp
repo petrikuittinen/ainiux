@@ -2551,6 +2551,22 @@ void test_agent_progress_replaces_rows_in_place() {
          1, 0, {}, 0});
     check(session.messages.size() == 2 && session.messages[0].role == "tool",
           "failed provisional Thinking row is discarded and row indexes stay valid");
+
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Append, agent::AgentProgressKind::Response,
+         2, 0, "streamed ", 0});
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Append, agent::AgentProgressKind::Response,
+         2, 0, "answer", 0});
+    check(session.messages.back().role == "assistant" &&
+              session.messages.back().content == "streamed answer",
+          "agent response deltas append to one live assistant row");
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Discard, agent::AgentProgressKind::Response,
+         2, 0, {}, 0});
 }
 
 void test_agent_progress_opening_and_finished_thinking_rows() {

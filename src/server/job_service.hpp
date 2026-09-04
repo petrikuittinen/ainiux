@@ -15,6 +15,12 @@ struct ServiceSubmitResult {
     Error validation_error;
 };
 
+// Internal server helper exposed for focused collision/cleanup coverage.
+Error persist_generated_image(const std::string& workspace,
+                              const std::string& extension,
+                              const std::string& bytes,
+                              std::string& relative_path);
+
 class JobService {
    public:
     JobService(cli::Options base_options, std::string workspace, std::size_t max_jobs);

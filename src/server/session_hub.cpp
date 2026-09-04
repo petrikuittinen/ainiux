@@ -10,7 +10,9 @@
 
 #include "app/app.hpp"
 #include "agent/approval.hpp"
+#include "agent/project_settings.hpp"
 #include "agent/session_runtime.hpp"
+#include "config/model_catalog.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "search/search.hpp"
@@ -85,6 +87,26 @@ bool path_within(const std::filesystem::path& root,
 
 std::string task_mode_name(agent::AgentTaskMode mode) {
     return mode == agent::AgentTaskMode::Plan ? "plan" : "act";
+}
+
+const char* progress_action_name(agent::AgentProgressAction action) {
+    switch (action) {
+        case agent::AgentProgressAction::Upsert: return "upsert";
+        case agent::AgentProgressAction::Append: return "append";
+        case agent::AgentProgressAction::Commit: return "commit";
+        case agent::AgentProgressAction::Discard: return "discard";
+    }
+    return "upsert";
+}
+
+const char* progress_kind_name(agent::AgentProgressKind kind) {
+    switch (kind) {
+        case agent::AgentProgressKind::Thinking: return "thinking";
+        case agent::AgentProgressKind::Tool: return "tool";
+        case agent::AgentProgressKind::Notice: return "notice";
+        case agent::AgentProgressKind::Response: return "assistant";
+    }
+    return "notice";
 }
 
 }  // namespace
@@ -302,6 +324,20 @@ std::string InteractiveSession::snapshot_json() const {
                          ",\"model\":" + json::quote(context_.options.model) +
                          ",\"task_mode\":" + json::quote(task_mode_name(task_mode_)) +
                          ",\"permission_mode\":" + json::quote(agent::permission_mode_name(permission_mode_));
+    result += ",\"reasoning\":" +
+              json::quote(config::reasoning_selection_value(context_.options.reasoning));
+    const config::ReasoningSelectorData reasoning = config::reasoning_selector_data(
+        context_.options.model_catalog, context_.profile.name,
+        context_.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+        context_.options.model);
+    result += ",\"reasoning_options\":[";
+    for (std::size_t index = 0; index < reasoning.values.size(); ++index) {
+        if (index != 0) result += ',';
+        result += "{\"value\":" +
+                  json::quote(config::reasoning_selection_value(reasoning.values[index])) +
+                  ",\"label\":" + json::quote(reasoning.labels[index]) + "}";
+    }
+    result += ']';
     result += ",\"context\":{\"used_tokens\":" +
               std::to_string(std::max(0LL, context_used_tokens)) +
               ",\"window_tokens\":" +
@@ -362,8 +398,20 @@ Error InteractiveSession::start_turn(const std::string& body, std::string& turn_
             const auto progress = [this, turn_id](const std::string& line) {
                 publish("progress", "{\"text\":" + json::quote(line) + "}", turn_id);
             };
+            const auto structured_progress = [this, turn_id](
+                                                 const agent::AgentProgressUpdate& update) {
+                publish("activity",
+                        "{\"action\":" + json::quote(progress_action_name(update.action)) +
+                            ",\"kind\":" + json::quote(progress_kind_name(update.kind)) +
+                            ",\"round_id\":" + std::to_string(update.round_id) +
+                            ",\"tool_id\":" + std::to_string(update.tool_id) +
+                            ",\"text\":" + json::quote(update.text) +
+                            ",\"created_at_ms\":" +
+                            std::to_string(update.created_at_ms) + "}",
+                        turn_id);
+            };
             agent::SessionTurnResult result = controller_->runtime()->run_user_turn(
-                context, text, token, {}, progress, {});
+                context, text, token, {}, progress, structured_progress);
             agent::AgentSurfaceEvent event;
             event.type = result.error.ok() ? agent::AgentSurfaceEvent::Type::TurnDone
                                            : agent::AgentSurfaceEvent::Type::TurnError;
@@ -408,6 +456,119 @@ Error InteractiveSession::cancel_turn(const std::string& turn_id) {
     }
     controller_->cancel_turn();
     publish("turn_cancel_requested", "{}", turn_id);
+    return ok_error();
+}
+
+Error InteractiveSession::set_reasoning(const std::string& body) {
+    const json::ParseResult parsed = json::parse(body);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return {ErrorCode::JsonParse, "reasoning body must be one JSON object"};
+    }
+    Error error = reject_unknown(parsed.value, {"reasoning"});
+    if (!error.ok()) return error;
+    std::string value;
+    error = required_string(parsed.value, "reasoning", value, 64U);
+    if (!error.ok()) return error;
+    ReasoningSelection selection;
+    error = config::parse_reasoning_selection(value, selection);
+    if (!error.ok()) return field_error("reasoning", "is invalid: " + error.message);
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (closed_) return {ErrorCode::Cancelled, "session is closed"};
+        if (status_ != "ready" || !active_turn_id_.empty() || controller_->turn_running())
+            return {ErrorCode::FileLock,
+                    "agent settings can be changed only while the session is idle"};
+        provider::RequestContext next = context_;
+        error = config::resolve_reasoning_off(
+            next.options.model_catalog, next.profile.name,
+            next.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
+            next.options.model, selection);
+        if (!error.ok()) return error;
+        next.options.reasoning = std::move(selection);
+        next.options.reasoning_explicit = true;
+        error = controller_->runtime()->update_project_settings(next);
+        if (!error.ok()) return {error.code, safe_error(error)};
+        context_ = std::move(next);
+    }
+    publish("reasoning_changed", snapshot_json());
+    return ok_error();
+}
+
+Error InteractiveSession::set_settings(const std::string& body) {
+    const json::ParseResult parsed = json::parse(body);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return {ErrorCode::JsonParse, "agent settings body must be one JSON object"};
+    }
+    Error error = reject_unknown(parsed.value,
+                                 {"provider", "model", "task_mode", "permission_mode"});
+    if (!error.ok()) return error;
+    const char* selected = nullptr;
+    for (const char* field : {"provider", "model", "task_mode", "permission_mode"}) {
+        if (parsed.value.get(field) == nullptr) continue;
+        if (selected != nullptr) {
+            return {ErrorCode::BadArgs,
+                    "agent settings requests must change exactly one setting at a time"};
+        }
+        selected = field;
+    }
+    if (selected == nullptr) {
+        return {ErrorCode::BadArgs,
+                "agent settings requests must include provider, model, task_mode, or permission_mode"};
+    }
+    std::string value;
+    error = required_string(parsed.value, selected, value, 512U);
+    if (!error.ok()) return error;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (closed_) return {ErrorCode::Cancelled, "session is closed"};
+        if (status_ != "ready" || !active_turn_id_.empty() || controller_->turn_running())
+            return {ErrorCode::FileLock,
+                    "agent settings can be changed only while the session is idle"};
+
+        if (std::string(selected) == "provider") {
+            if (!known_provider(value))
+                return field_error("provider", "names an unknown configured provider profile");
+            cli::Options options = context_.options;
+            provider::apply_provider_target(options, value);
+            options.provider_explicit = true;
+            provider::ContextResult built = provider::build_context(options);
+            if (!built.error.ok()) return public_context_error(std::move(built.error));
+            built.context.routing_session_id = context_.routing_session_id;
+            error = controller_->runtime()->update_project_settings(built.context);
+            if (!error.ok()) return {error.code, safe_error(error)};
+            context_ = std::move(built.context);
+        } else if (std::string(selected) == "model") {
+            provider::RequestContext next = context_;
+            next.options.model = value;
+            next.options.model_explicit = true;
+            next.options.reasoning = ReasoningSelection::automatic();
+            next.options.reasoning_explicit = true;
+            error = controller_->runtime()->update_project_settings(next);
+            if (!error.ok()) return {error.code, safe_error(error)};
+            context_ = std::move(next);
+        } else if (std::string(selected) == "task_mode") {
+            agent::AgentTaskMode mode;
+            if (value == "act") mode = agent::AgentTaskMode::Act;
+            else if (value == "plan") mode = agent::AgentTaskMode::Plan;
+            else return field_error("task_mode", "must be act or plan");
+            error = controller_->runtime()->switch_task_mode(mode);
+            if (!error.ok()) return {error.code, safe_error(error)};
+            task_mode_ = mode;
+        } else {
+            agent::PermissionMode mode;
+            if (!agent::parse_permission_mode(value, mode))
+                return field_error("permission_mode", "must be confirm, smart, or yolo");
+            if (mode == agent::PermissionMode::Yolo && !allow_yolo_)
+                return {ErrorCode::UnsupportedFeature,
+                        "remote Yolo requires the server startup option --allow-remote-yolo"};
+            error = controller_->runtime()->switch_permission_mode(mode, context_);
+            if (!error.ok()) return {error.code, safe_error(error)};
+            permission_mode_ = mode;
+        }
+    }
+    publish("settings_changed", snapshot_json());
     return ok_error();
 }
 
@@ -496,6 +657,7 @@ SessionHub::SessionHub(cli::Options base_options,
     base_options_.input_path.clear();
     base_options_.fetch_url.clear();
     base_options_.search_query.clear();
+    base_options_.stream = true;
 }
 
 SessionHub::~SessionHub() { shutdown(); }
@@ -504,13 +666,16 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     const json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok()) return {{}, {ErrorCode::JsonParse, "session body is not valid JSON"}};
     if (!parsed.value.is_object()) return {{}, {ErrorCode::BadArgs, "session body must be a JSON object"}};
-    Error error = reject_unknown(parsed.value, {"kind", "provider", "model", "api", "permission_mode", "task_mode"});
+    Error error = reject_unknown(parsed.value,
+                                 {"kind", "provider", "model", "api", "reasoning",
+                                  "permission_mode", "task_mode"});
     if (!error.ok()) return {{}, error};
     std::string kind = "agent";
     std::string provider_name;
     std::string model;
     std::string api;
-    std::string permission_text = "smart";
+    std::string reasoning;
+    std::string permission_text;
     std::string task_text = "act";
     error = optional_string(parsed.value, "kind", kind, 32U);
     if (!error.ok()) return {{}, error};
@@ -520,18 +685,14 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     if (!error.ok()) return {{}, error};
     error = optional_string(parsed.value, "api", api, 32U);
     if (!error.ok()) return {{}, error};
+    error = optional_string(parsed.value, "reasoning", reasoning, 64U);
+    if (!error.ok()) return {{}, error};
     error = optional_string(parsed.value, "permission_mode", permission_text, 32U);
     if (!error.ok()) return {{}, error};
     error = optional_string(parsed.value, "task_mode", task_text, 32U);
     if (!error.ok()) return {{}, error};
     if (ascii_lower(ascii_trim(kind)) != "agent")
         return {{}, {ErrorCode::UnsupportedFeature, "only kind 'agent' sessions are supported"}};
-    agent::PermissionMode permission_mode;
-    if (!agent::parse_permission_mode(ascii_lower(ascii_trim(permission_text)), permission_mode))
-        return {{}, field_error("permission_mode", "must be confirm, smart, or yolo")};
-    if (permission_mode == agent::PermissionMode::Yolo && !allow_yolo_)
-        return {{}, {ErrorCode::UnsupportedFeature,
-                     "remote Yolo requires the server startup option --allow-remote-yolo"}};
     agent::AgentTaskMode task_mode = agent::AgentTaskMode::Act;
     const std::string normalized_task = ascii_lower(ascii_trim(task_text));
     if (normalized_task == "plan") task_mode = agent::AgentTaskMode::Plan;
@@ -542,6 +703,19 @@ SessionCreateResult SessionHub::create(const std::string& body) {
         return {{}, field_error("api", "must be chat or responses")};
 
     cli::Options options = base_options_;
+    agent::PermissionMode permission_mode = agent::PermissionMode::Smart;
+    bool restored = false;
+    error = agent::restore_project_settings(workspace_, options, restored,
+                                            &permission_mode);
+    if (!error.ok()) return {{}, public_context_error(std::move(error))};
+    if (!permission_text.empty()) {
+        if (!agent::parse_permission_mode(ascii_lower(ascii_trim(permission_text)),
+                                          permission_mode))
+            return {{}, field_error("permission_mode", "must be confirm, smart, or yolo")};
+    }
+    if (permission_mode == agent::PermissionMode::Yolo && !allow_yolo_)
+        return {{}, {ErrorCode::UnsupportedFeature,
+                     "remote Yolo requires the server startup option --allow-remote-yolo"}};
     if (!provider_name.empty()) {
         provider::apply_provider_target(options, provider_name);
         options.provider_explicit = true;
@@ -553,6 +727,13 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     if (!api.empty()) {
         options.api = api;
         options.api_explicit = true;
+    }
+    if (!reasoning.empty()) {
+        error = config::parse_reasoning_selection(reasoning, options.reasoning);
+        if (!error.ok()) {
+            return {{}, field_error("reasoning", "is invalid: " + error.message)};
+        }
+        options.reasoning_explicit = true;
     }
     options.agent = true;
     options.agent_run = false;

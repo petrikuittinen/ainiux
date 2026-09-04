@@ -108,7 +108,8 @@ Error send_tool_round_with_transport_retries(
     std::function<void(const Error& error, int attempt, int backoff_seconds)> on_retry =
         {},
     provider::ReasoningDeltaCallback on_reasoning_delta = {},
-    provider::WorkingCallback on_working = {});
+    provider::WorkingCallback on_working = {},
+    provider::DeltaCallback on_content_delta = {});
 
 // Normalize arguments and tool names; mark invalid args for history hygiene.
 std::vector<PreparedToolCall> prepare_tool_calls(

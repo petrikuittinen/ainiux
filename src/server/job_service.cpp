@@ -1,14 +1,18 @@
 #include "server/job_service.hpp"
 
-#include <set>
 #include <cmath>
+#include <filesystem>
 #include <optional>
+#include <set>
 #include <utility>
 
 #include "app/app.hpp"
 #include "app/operations.hpp"
+#include "config/model_catalog.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/editor_assist.hpp"
+#include "platform/filesystem.hpp"
+#include "provider/image.hpp"
 #include "provider/provider.hpp"
 #include "security/redact.hpp"
 #include "server/metrics.hpp"
@@ -107,6 +111,29 @@ Error public_operation_error(Error error, const std::vector<std::string>& secret
 
 }  // namespace
 
+Error persist_generated_image(const std::string& workspace,
+                              const std::string& extension,
+                              const std::string& bytes,
+                              std::string& relative_path) {
+    namespace fs = std::filesystem;
+    const std::string ext = extension.empty() ? "png" : extension;
+    const fs::path root = fs::u8path(workspace);
+    for (int number = 1; number <= 9999; ++number) {
+        relative_path = "image" + std::to_string(number) + "." + ext;
+        const fs::path candidate = root / fs::u8path(relative_path);
+        const Error error = platform::atomic_write_shared_create(
+            candidate.u8string(), bytes, true);
+        if (error.ok()) return error;
+        std::error_code exists_error;
+        if (fs::exists(candidate, exists_error) && !exists_error) continue;
+        relative_path.clear();
+        return error;
+    }
+    relative_path.clear();
+    return {ErrorCode::FileWrite,
+            "could not allocate an unused imageN." + ext + " name in the workspace"};
+}
+
 JobService::JobService(cli::Options base_options, std::string workspace, std::size_t max_jobs)
     : base_options_(std::move(base_options)),
       workspace_(std::move(workspace)),
@@ -120,6 +147,7 @@ JobService::JobService(cli::Options base_options, std::string workspace, std::si
     base_options_.input_path.clear();
     base_options_.fetch_url.clear();
     base_options_.search_query.clear();
+    base_options_.stream = true;
 }
 
 Error JobService::validate_common(const json::Value& root,
@@ -157,6 +185,18 @@ Error JobService::validate_common(const json::Value& root,
         options.api = api;
         options.api_explicit = true;
     }
+    std::string reasoning;
+    error = optional_string(root, "reasoning", reasoning, 64U);
+    if (!error.ok()) return error;
+    if (root.get("reasoning") != nullptr) {
+        ReasoningSelection selection;
+        const Error reasoning_error = config::parse_reasoning_selection(reasoning, selection);
+        if (!reasoning_error.ok()) {
+            return field_error("reasoning", "is invalid: " + reasoning_error.message);
+        }
+        options.reasoning = std::move(selection);
+        options.reasoning_explicit = true;
+    }
     options.image = operation == "image";
     options.agent_run = operation == "run" || operation == "plan";
     options.agent_plan = operation == "plan";
@@ -179,7 +219,8 @@ JobOutcome JobService::run_chat_job(cli::Options options,
     const GenerationMetrics metrics =
         chat_generation_metrics(built.context, messages, response);
     return {ok_error(),
-            "{\"model\":" + json::quote(response.model) +
+            "{\"provider\":" + json::quote(built.context.profile.name) +
+                ",\"model\":" + json::quote(response.model) +
                 ",\"content\":" + json::quote(response.content) +
                 ",\"usage\":" + valid_json_or_null(response.usage_json) +
                 ",\"timing\":{\"ttft_ms\":" + std::to_string(response.ttft_ms) +
@@ -201,9 +242,31 @@ JobOutcome JobService::run_models_job(cli::Options options,
         models += json::quote(result.model_ids[index]);
     }
     models += ']';
+    std::string reasoning_options = "[";
+    bool first_reasoning_model = true;
+    const std::string api = built.context.api_kind == provider::ApiKind::Responses
+                                ? "responses" : "chat";
+    for (const std::string& model : result.model_ids) {
+        const config::ReasoningSelectorData selector = config::reasoning_selector_data(
+            built.context.options.model_catalog, built.context.profile.name, api, model);
+        if (selector.values.empty()) continue;
+        if (!first_reasoning_model) reasoning_options += ',';
+        first_reasoning_model = false;
+        reasoning_options += "{\"model\":" + json::quote(model) + ",\"options\":[";
+        for (std::size_t index = 0; index < selector.values.size(); ++index) {
+            if (index != 0) reasoning_options += ',';
+            reasoning_options +=
+                "{\"value\":" +
+                json::quote(config::reasoning_selection_value(selector.values[index])) +
+                ",\"label\":" + json::quote(selector.labels[index]) + "}";
+        }
+        reasoning_options += "]}";
+    }
+    reasoning_options += ']';
     return {ok_error(),
             "{\"provider\":" + json::quote(built.context.profile.name) +
-                ",\"models\":" + models + "}"};
+                ",\"models\":" + models +
+                ",\"reasoning_options\":" + reasoning_options + "}"};
 }
 
 JobOutcome JobService::run_agent_job(cli::Options options,
@@ -252,9 +315,15 @@ JobOutcome JobService::run_image_job(cli::Options options,
     const std::string format = result.response.output_format.empty()
                                    ? result.request.output_format
                                    : result.response.output_format;
+    std::string server_path;
+    const Error save_error = persist_generated_image(
+        workspace_, provider::image_extension_for_format(format),
+        result.response.bytes, server_path);
+    if (!save_error.ok()) return {public_operation_error(save_error), {}};
     return {ok_error(),
             "{\"model\":" + json::quote(result.selected_model) +
                 ",\"format\":" + json::quote(format) +
+                ",\"server_path\":" + json::quote(server_path) +
                 ",\"data_base64\":" + json::quote(base64_encode(result.response.bytes)) +
                 ",\"size\":" + json::quote(result.response.size) +
                 ",\"total_ms\":" + std::to_string(result.response.total_ms) + "}"};
@@ -310,10 +379,12 @@ JobOutcome JobService::run_editor_assist_job(
 
     if (events) (void)events({app::operation::EventType::Progress, "editor assist thinking", 0, 0});
     provider::ChatResult chat;
-    auto on_delta = [&cancellation](const std::string&) -> Error {
-        return cancellation.cancelled()
-                   ? Error{ErrorCode::Cancelled, "editor assist cancelled"}
-                   : ok_error();
+    auto on_delta = [&cancellation, &events](const std::string& delta) -> Error {
+        if (cancellation.cancelled()) {
+            return {ErrorCode::Cancelled, "editor assist cancelled"};
+        }
+        return events ? events({app::operation::EventType::Delta, delta, 0, 0})
+                      : ok_error();
     };
     provider::RequestContext request = editor::assist_request_context(assist, false);
     error = provider::send_chat_messages(request, execution.messages, on_delta, chat, cancellation);
@@ -354,7 +425,8 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
     }
 
     if (operation == "chat") {
-        error = reject_unknown(parsed.value, {"provider", "model", "api", "messages"});
+        error = reject_unknown(parsed.value,
+                               {"provider", "model", "api", "reasoning", "messages"});
         if (!error.ok()) return {{}, error};
         const json::Value* messages_value = parsed.value.get("messages");
         if (messages_value == nullptr || !messages_value->is_array() || messages_value->array.empty()) {

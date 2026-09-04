@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,6 +68,8 @@ class SqliteStore {
     Error append_messages(long long thread_id,
                           long long expected_revision,
                           const std::vector<provider::Message>& messages,
+                          const std::optional<std::string>& provider,
+                          const std::optional<std::string>& model,
                           long long& revision,
                           long long& message_count);
     Error load_session(long long thread_id,

@@ -140,10 +140,30 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v3.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v3.js") != std::string::npos &&
-              index.body.find("Sign out / Forget authentication") != std::string::npos &&
+              index.body.find("/ui/assets/app-v8.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v8.js") != std::string::npos &&
+              index.body.find(">Logout</button>") != std::string::npos &&
+              index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
+              index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
               index.body.find("list=\"chat-model-list\"") != std::string::npos &&
+              index.body.find("id=\"chat-reasoning\"") != std::string::npos &&
+              index.body.find("id=\"agent-reasoning\"") != std::string::npos &&
+              index.body.find("aria-keyshortcuts=\"Control+R Alt+T Alt+W Escape\"") != std::string::npos &&
+              index.body.find("id=\"chat-regenerate-button\"") != std::string::npos &&
+              index.body.find("id=\"chat-cycle-reasoning-button\"") != std::string::npos &&
+              index.body.find("id=\"chat-thinking-button\"") != std::string::npos &&
+              index.body.find("id=\"agent-list\"") == std::string::npos &&
+              index.body.find("id=\"new-agent-dialog\"") == std::string::npos &&
+              index.body.find("id=\"image-output\"") != std::string::npos &&
+              index.body.find("id=\"image-download-button\"") != std::string::npos &&
+              index.body.find("id=\"chat-api\"") == std::string::npos &&
+              index.body.find("id=\"goal-api\"") == std::string::npos &&
+              index.body.find("id=\"agent-api\"") == std::string::npos &&
+              index.body.find("id=\"threads-heading\">Threads</h2>") != std::string::npos &&
+              index.body.find("id=\"new-thread-button\"") <
+                  index.body.find("id=\"thread-list\"") &&
+              index.body.find("<p class=\"eyebrow\">Conversation</p>") == std::string::npos &&
+              index.body.find("id=\"chat-heading\"") == std::string::npos &&
               index.body.find("id=\"chat-metrics\"") != std::string::npos &&
               index.body.find("id=\"agent-metrics\"") != std::string::npos &&
               index.body.find("Revision-safe files") == std::string::npos &&
@@ -153,24 +173,28 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v3.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v8.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
               stylesheet.body.find("prefers-reduced-motion: reduce") != std::string::npos &&
               stylesheet.body.find("html[data-theme=\"light\"]") != std::string::npos &&
               stylesheet.body.find("html[data-theme=\"dark\"]") != std::string::npos &&
-              stylesheet.body.find("@media (max-width: 38rem)") != std::string::npos &&
-              stylesheet.body.find("grid-template-columns: repeat(6") != std::string::npos &&
+              stylesheet.body.find("@media (max-width: 42rem)") != std::string::npos &&
+              stylesheet.body.find(".topbar") != std::string::npos &&
+              stylesheet.body.find(".image-layout") != std::string::npos &&
+              stylesheet.body.find(".panel.placeholder-panel.active") != std::string::npos &&
               stylesheet.body.find("height: 100dvh") != std::string::npos &&
               stylesheet.body.find(".metrics-strip") != std::string::npos &&
+              stylesheet.body.find(".agent-toolbar") != std::string::npos &&
+              stylesheet.body.find("ui-monospace") != std::string::npos &&
               stylesheet.body.find("@import") == std::string::npos &&
               stylesheet.body.find("https://") == std::string::npos &&
               stylesheet.body.find("http://") == std::string::npos &&
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v3.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v8.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -179,6 +203,26 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("window.addEventListener(\"online\"") != std::string::npos &&
               javascript.body.find("Last-Event-ID") != std::string::npos &&
               javascript.body.find("/jobs/models") != std::string::npos &&
+              javascript.body.find("reasoning_options") != std::string::npos &&
+              javascript.body.find("chat-reasoning") != std::string::npos &&
+              javascript.body.find("event.type === \"delta\"") != std::string::npos &&
+              javascript.body.find("updateVisibleChatStream") != std::string::npos &&
+              javascript.body.find("data.action === \"append\"") != std::string::npos &&
+              javascript.body.find("async function regenerateChat") != std::string::npos &&
+              javascript.body.find("async function cancelActiveAgentTurn") != std::string::npos &&
+              javascript.body.find("key === \"r\"") != std::string::npos &&
+              javascript.body.find("key === \"t\"") != std::string::npos &&
+              javascript.body.find("key === \"w\"") != std::string::npos &&
+              javascript.body.find("control || event.altKey") != std::string::npos &&
+              javascript.body.find("function toggleChatThinking") != std::string::npos &&
+              javascript.body.find("function handleThemeCommand") != std::string::npos &&
+              javascript.body.find("async function ensureWorkspaceAgent") != std::string::npos &&
+              javascript.body.find("function downloadGeneratedImage") != std::string::npos &&
+              javascript.body.find("server_path") != std::string::npos &&
+              javascript.body.find("function agentEventVisible") != std::string::npos &&
+              javascript.body.find("apiId") == std::string::npos &&
+              javascript.body.find("byId(\"chat-api\")") == std::string::npos &&
+              javascript.body.find("event.key === \"Escape\"") != std::string::npos &&
               javascript.body.find("catalog.done = true") != std::string::npos &&
               javascript.body.find("Intl.DateTimeFormat") != std::string::npos &&
               javascript.body.find("event.shiftKey || event.altKey") != std::string::npos &&
@@ -198,12 +242,29 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript_headers.find("X-Frame-Options: DENY") != std::string::npos,
           "embedded WUI JavaScript uses authenticated fetch/replay and hardened same-origin headers");
 
+    const std::size_t chat_submit_start = javascript.body.find("async function sendChatMessage");
+    const std::size_t chat_submit_end = javascript.body.find("async function finishChatJob");
+    check(chat_submit_start != std::string::npos && chat_submit_end > chat_submit_start &&
+              javascript.body.substr(chat_submit_start, chat_submit_end - chat_submit_start)
+                      .find("switchPanel(\"jobs-panel\")") == std::string::npos,
+          "submitting chat work keeps the active browser panel on Chat");
+
     check(route_request(public_get("/ui/assets/"), config, status).status == 404,
           "WUI route serves only exact embedded assets and never a directory");
     check(route_request(public_get("/ui/assets/app-v1.js"), config, status).status == 404,
           "superseded immutable WUI asset URLs are not silently aliased");
     check(route_request(public_get("/ui/assets/app-v2.js"), config, status).status == 404,
           "the reconnect-loop asset URL is superseded instead of remaining cached");
+    check(route_request(public_get("/ui/assets/app-v3.js"), config, status).status == 404,
+          "the previous WUI asset URL is superseded after the chat layout update");
+    check(route_request(public_get("/ui/assets/app-v4.js"), config, status).status == 404,
+          "the previous WUI asset URL is superseded after chat navigation changes");
+    check(route_request(public_get("/ui/assets/app-v5.js"), config, status).status == 404,
+          "the previous immutable WUI asset is superseded after streaming changes");
+    check(route_request(public_get("/ui/assets/app-v6.js"), config, status).status == 404,
+          "the previous WUI asset is superseded after compact controls and provider defaults");
+    check(route_request(public_get("/ui/assets/app-v7.js"), config, status).status == 404,
+          "the previous WUI asset is superseded after the single-workspace redesign");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");
     check(route_request(post, config, status).status == 405,
@@ -367,6 +428,36 @@ void test_provider_job_concurrency_cap() {
     registry.shutdown();
 }
 
+void test_generated_images_use_collision_safe_workspace_names() {
+    namespace fs = std::filesystem;
+    const fs::path workspace = fs::temp_directory_path() / "ainiux-server-image-output-test";
+    std::error_code cleanup_error;
+    fs::remove_all(workspace, cleanup_error);
+    fs::create_directories(workspace, cleanup_error);
+    check(!cleanup_error, "image output test creates an isolated workspace");
+    std::ofstream(workspace / "image1.png", std::ios::binary) << "existing";
+
+    std::string first_path;
+    std::string second_path;
+    Error first = persist_generated_image(workspace.u8string(), "png", "first-bytes", first_path);
+    Error second = persist_generated_image(workspace.u8string(), "png", "second-bytes", second_path);
+    std::string first_bytes;
+    std::string second_bytes;
+    if (first.ok()) {
+        (void)platform::read_file_bounded((workspace / fs::u8path(first_path)).u8string(),
+                                          1024U, first_bytes);
+    }
+    if (second.ok()) {
+        (void)platform::read_file_bounded((workspace / fs::u8path(second_path)).u8string(),
+                                          1024U, second_bytes);
+    }
+    check(first.ok() && second.ok() && first_path == "image2.png" &&
+              second_path == "image3.png" && first_bytes == "first-bytes" &&
+              second_bytes == "second-bytes",
+          "generated images skip existing files and return only relative workspace names");
+    fs::remove_all(workspace, cleanup_error);
+}
+
 void test_terminal_retention_eviction_releases_workers_safely() {
     JobRegistry registry(1, 1);
     for (int i = 0; i < 6; ++i) {
@@ -390,7 +481,9 @@ void test_job_routes_and_sse() {
     AuthConfig auth{"controller", {}};
     std::atomic<std::size_t> active{1};
     PublicStatus status{8766, 64, 8, &active, &jobs};
-    const std::string body = "{\"provider\":\"none\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
+    const std::string body =
+        "{\"provider\":\"none\",\"reasoning\":\"high\","
+        "\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}";
     const std::string prefix = "POST /ainiux/v1/jobs/chat HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                "Authorization: Bearer controller\r\nContent-Type: application/json\r\n"
                                "Idempotency-Key: route-key\r\nContent-Length: ";
@@ -399,7 +492,16 @@ void test_job_routes_and_sse() {
     Response existing = route_request(request, auth, status);
     check(created.status == 202 && existing.status == 200 &&
               existing.body.find("\"existing\":true") != std::string::npos,
-          "authenticated JSON submission creates and idempotently reuses a job resource");
+          "chat submission accepts reasoning and idempotently reuses a job resource");
+
+    ServiceSubmitResult invalid_reasoning = jobs.submit(
+        "chat",
+        "{\"provider\":\"none\",\"reasoning\":\"high effort\","
+        "\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}", "");
+    check(invalid_reasoning.validation_error.code == ErrorCode::BadArgs &&
+              invalid_reasoning.validation_error.message.find("field 'reasoning'") !=
+                  std::string::npos,
+          "chat reasoning rejects values outside the bounded CLI grammar");
 
     const json::ParseResult creation = json::parse(created.body);
     const json::Value* job_value = creation.value.get("job");
@@ -554,7 +656,8 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     status.max_sessions = 1;
 
     const std::string create_body =
-        "{\"kind\":\"agent\",\"provider\":\"none\",\"permission_mode\":\"confirm\",\"task_mode\":\"act\"}";
+        "{\"kind\":\"agent\",\"provider\":\"none\",\"reasoning\":\"high\","
+        "\"permission_mode\":\"confirm\",\"task_mode\":\"act\"}";
     Response created = route_request(session_request("POST", "/ainiux/v1/sessions/agent", create_body),
                                      auth, status);
     const json::ParseResult created_json = json::parse(created.body);
@@ -574,6 +677,8 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     check(session->snapshot_json().find("\"status\":\"ready\"") != std::string::npos,
           "session preparation completes asynchronously without blocking creation");
     check(session->snapshot_json().find("\"context\":{") != std::string::npos &&
+              session->snapshot_json().find("\"reasoning\":\"high\"") != std::string::npos &&
+              session->snapshot_json().find("\"reasoning_options\":[") != std::string::npos &&
               session->snapshot_json().find("\"active_elapsed_ms\":null") != std::string::npos &&
               session->snapshot_json().find("\"last_turn_metrics\":null") != std::string::npos,
           "interactive snapshots expose stable context and turn-metric fields before a turn");
@@ -586,6 +691,37 @@ void test_interactive_sessions_are_bounded_and_replayable() {
               replay.events.back().type == "ready",
           "session events retain ordered creation and readiness state");
 
+    Response reasoning = route_request(session_request(
+        "POST", "/ainiux/v1/sessions/" + id + "/reasoning",
+        "{\"reasoning\":\"low\"}"), auth, status);
+    check(reasoning.status == 200 &&
+              reasoning.body.find("\"reasoning\":\"low\"") != std::string::npos &&
+              session->events().replay_after(0).events.back().type == "reasoning_changed",
+          "idle interactive sessions accept a validated reasoning-effort change");
+    Response invalid_reasoning = route_request(session_request(
+        "POST", "/ainiux/v1/sessions/" + id + "/reasoning",
+        "{\"reasoning\":\"\"}"), auth, status);
+    check(invalid_reasoning.status == 400,
+          "interactive session reasoning rejects an empty selection");
+    Response task_mode = route_request(session_request(
+        "POST", "/ainiux/v1/sessions/" + id + "/settings",
+        "{\"task_mode\":\"plan\"}"), auth, status);
+    check(task_mode.status == 200 &&
+              task_mode.body.find("\"task_mode\":\"plan\"") != std::string::npos &&
+              session->events().replay_after(0).events.back().type == "settings_changed",
+          "idle workspace agents accept a single inline setting change");
+    Response model_setting = route_request(session_request(
+        "POST", "/ainiux/v1/sessions/" + id + "/settings",
+        "{\"model\":\"local-model\"}"), auth, status);
+    check(model_setting.status == 200 &&
+              model_setting.body.find("\"model\":\"local-model\"") != std::string::npos,
+          "agent model changes update the active workspace snapshot");
+    Response mixed_settings = route_request(session_request(
+        "POST", "/ainiux/v1/sessions/" + id + "/settings",
+        "{\"model\":\"one\",\"task_mode\":\"act\"}"), auth, status);
+    check(mixed_settings.status == 400,
+          "agent setting requests reject ambiguous multi-setting updates");
+
     Response turn = route_request(session_request(
         "POST", "/ainiux/v1/sessions/" + id + "/turns", "{\"text\":\"hello\"}"), auth, status);
     const json::ParseResult turn_json = json::parse(turn.body);
@@ -597,6 +733,11 @@ void test_interactive_sessions_are_bounded_and_replayable() {
         Response conflict = route_request(session_request(
             "POST", "/ainiux/v1/sessions/" + id + "/turns", "{\"text\":\"second\"}"), auth, status);
         check(conflict.status == 409, "a session rejects a concurrent turn instead of racing controllers");
+        Response busy_setting = route_request(session_request(
+            "POST", "/ainiux/v1/sessions/" + id + "/settings",
+            "{\"task_mode\":\"act\"}"), auth, status);
+        check(busy_setting.status == 409,
+              "agent settings cannot change during an active turn");
         Response cancelled = route_request(session_request(
             "POST", "/ainiux/v1/sessions/" + id + "/turns/" + turn_id + "/cancel", ""), auth, status);
         check(cancelled.status == 200, "interactive turn cancellation is explicit and idempotent at the session boundary");
@@ -942,11 +1083,14 @@ void test_revision_safe_chat_thread_routes() {
 
     Response appended = route_request(session_request(
         "POST", thread_path + "/messages",
-        "{\"revision\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"},"
+        "{\"revision\":1,\"provider\":\"deepseek\",\"model\":\"model-b\","
+        "\"messages\":[{\"role\":\"user\",\"content\":\"hello\"},"
         "{\"role\":\"assistant\",\"content\":\"hi\"}]}"), auth, status);
     check(appended.status == 200 && appended.body.find("\"revision\":2") != std::string::npos &&
-              appended.body.find("\"message_count\":2") != std::string::npos,
-          "message append advances the thread's concurrency token");
+              appended.body.find("\"message_count\":2") != std::string::npos &&
+              appended.body.find("\"provider\":\"deepseek\"") != std::string::npos &&
+              appended.body.find("\"model\":\"model-b\"") != std::string::npos,
+          "message append advances the thread and its selected provider/model atomically");
     listed = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
                            auth, status);
     check(listed.status == 200 && listed.body.find("\"name\":\"hello\"") != std::string::npos,
@@ -963,8 +1107,10 @@ void test_revision_safe_chat_thread_routes() {
     Response loaded = route_request(session_request("GET", thread_path, ""), auth, status);
     check(loaded.status == 200 && loaded.body.find("hello") != std::string::npos &&
               loaded.body.find("stale write") == std::string::npos &&
-              loaded.body.find("\"revision\":2") != std::string::npos,
-          "thread loading returns the committed transcript and rejects stale content");
+              loaded.body.find("\"revision\":2") != std::string::npos &&
+              loaded.body.find("\"provider\":\"deepseek\"") != std::string::npos &&
+              loaded.body.find("\"model\":\"model-b\"") != std::string::npos,
+          "thread loading returns its committed transcript and provider/model selection");
 
     {
         chat::SqliteStore tui_store;
@@ -1038,6 +1184,21 @@ void test_revision_safe_chat_thread_routes() {
         "\"attachments\":[{\"path\":\"/private/file\"}]}]}"), auth, status);
     check(invalid_attachment.status == 400,
           "remote message input rejects unrestricted attachment fields");
+
+    Response regenerated = route_request(session_request(
+        "POST", thread_path + "/regenerate", "{\"revision\":4}"), auth, status);
+    loaded = route_request(session_request("GET", thread_path, ""), auth, status);
+    check(regenerated.status == 200 &&
+              regenerated.body.find("\"revision\":5") != std::string::npos &&
+              regenerated.body.find("\"prompt\":\"from TUI\"") != std::string::npos &&
+              loaded.body.find("from TUI") != std::string::npos &&
+              loaded.body.find("remote wins") == std::string::npos,
+          "regeneration revision-safely removes only the answer after the latest user prompt");
+    Response stale_regenerate = route_request(session_request(
+        "POST", thread_path + "/regenerate", "{\"revision\":4}"), auth, status);
+    check(stale_regenerate.status == 409 &&
+              stale_regenerate.body.find("\"current_revision\":5") != std::string::npos,
+          "stale regeneration cannot rewind a thread changed by another client");
 
     long long large_thread_id = 0;
     {
@@ -1404,6 +1565,7 @@ void run_all() {
     test_event_replay_is_ordered_and_bounded();
     test_job_registry_idempotency_lane_and_cancellation();
     test_provider_job_concurrency_cap();
+    test_generated_images_use_collision_safe_workspace_names();
     test_terminal_retention_eviction_releases_workers_safely();
     test_job_routes_and_sse();
     test_mcp_stateless_adapter_and_tasks();

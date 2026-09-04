@@ -1289,6 +1289,8 @@ Error SqliteStore::save_session(Session& session) {
 Error SqliteStore::append_messages(long long thread_id,
                                    long long expected_revision,
                                    const std::vector<provider::Message>& messages,
+                                   const std::optional<std::string>& provider,
+                                   const std::optional<std::string>& model,
                                    long long& revision,
                                    long long& message_count) {
     revision = 0;
@@ -1311,10 +1313,13 @@ Error SqliteStore::append_messages(long long thread_id,
     if (!err.ok()) return err;
 
     std::string name;
+    std::string current_provider;
+    std::string current_model;
     {
         Statement current(db_, path_);
         err = current.prepare(
-            "SELECT revision, name, message_count, read_only, read_only_reason "
+            "SELECT revision, name, message_count, read_only, read_only_reason, "
+            "last_provider, last_model "
             "FROM threads WHERE id = ?1 AND deleted_at IS NULL;");
         if (!err.ok()) return err;
         err = BindChain(current).int64(1, thread_id).error();
@@ -1335,6 +1340,8 @@ Error SqliteStore::append_messages(long long thread_id,
                     "chat thread is read-only" +
                         (reason.empty() ? std::string() : ": " + reason)};
         }
+        current_provider = current.column_text(5);
+        current_model = current.column_text(6);
     }
     if (revision != expected_revision) {
         return {ErrorCode::FileLock, "chat thread revision is stale"};
@@ -1352,18 +1359,23 @@ Error SqliteStore::append_messages(long long thread_id,
     }
 
     const std::string now = current_timestamp_utc();
+    const std::string& next_provider = provider.has_value() ? *provider : current_provider;
+    const std::string& next_model = model.has_value() ? *model : current_model;
     Statement update(db_, path_);
     err = update.prepare(
         "UPDATE threads SET revision = revision + 1, name = ?1, modified_at = ?2, "
-        "message_count = message_count + ?3 WHERE id = ?4 AND revision = ?5 "
+        "message_count = message_count + ?3, last_provider = ?4, last_model = ?5 "
+        "WHERE id = ?6 AND revision = ?7 "
         "AND deleted_at IS NULL;");
     if (!err.ok()) return err;
     err = BindChain(update)
               .text(1, name)
               .text(2, now)
               .int64(3, static_cast<long long>(messages.size()))
-              .int64(4, thread_id)
-              .int64(5, expected_revision)
+              .text(4, next_provider)
+              .text(5, next_model)
+              .int64(6, thread_id)
+              .int64(7, expected_revision)
               .step_done("could not advance SQLite chat revision");
     if (!err.ok()) return err;
     if (sqlite3_changes(db_) != 1) {

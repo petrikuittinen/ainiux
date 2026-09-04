@@ -26,8 +26,8 @@ struct PreparationProgress {
     long long total_elapsed_ms = 0;
 };
 
-enum class AgentProgressAction { Upsert, Commit, Discard };
-enum class AgentProgressKind { Thinking, Tool, Notice };
+enum class AgentProgressAction { Upsert, Append, Commit, Discard };
+enum class AgentProgressKind { Thinking, Tool, Notice, Response };
 
 struct AgentProgressUpdate {
     AgentProgressAction action = AgentProgressAction::Upsert;

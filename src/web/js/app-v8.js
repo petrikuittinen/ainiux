@@ -1,6 +1,7 @@
 const API_ROOT = "/ainiux/v1";
 const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";
 const THEME_STORAGE_KEY = "ainiux.ui.theme.v1";
+const THINKING_STORAGE_KEY = "ainiux.chat.thinking.v1";
 const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
 
 const state = {
@@ -16,13 +17,24 @@ const state = {
   threads: [],
   thread: null,
   chatPending: false,
+  chatPendingJobId: "",
+  chatStreams: new Map(),
+  chatRegenerateQueued: false,
+  showThinkingTraces: false,
   chatMetrics: new Map(),
   sessions: [],
   session: null,
+  agentInitializing: false,
+  agentSettingsPending: false,
   agentLogs: new Map(),
+  agentActivities: new Map(),
+  agentSeenEvents: new Map(),
   agentClock: null,
   agentClockTimer: null,
   modelCatalogs: new Map(),
+  imageJobId: "",
+  imageResult: null,
+  imageError: "",
   guard: null,
   directory: { path: ".", revision: "", entries: [] },
   file: null,
@@ -85,6 +97,31 @@ function storageSet(key, value) {
   }
 }
 
+function applyTheme(theme, announce = false) {
+  if (!["auto", "dark", "light"].includes(theme)) return false;
+  document.documentElement.dataset.theme = theme;
+  byId("theme-select").value = theme;
+  storageSet(THEME_STORAGE_KEY, theme);
+  if (announce) toast(`Theme: ${theme === "auto" ? "system" : theme}`);
+  return true;
+}
+
+function handleThemeCommand(text) {
+  if (!/^\/theme(?:\s|$)/i.test(text)) return false;
+  const match = text.match(/^\/theme(?:\s+(auto|light|dark))?\s*$/i);
+  if (!match) {
+    toast("Usage: /theme light or /theme dark", "error");
+    return true;
+  }
+  if (!match[1]) {
+    const current = document.documentElement.dataset.theme || "auto";
+    toast(`Theme: ${current === "auto" ? "system" : current}`);
+    return true;
+  }
+  applyTheme(match[1].toLowerCase(), true);
+  return true;
+}
+
 function toast(message, kind = "info") {
   const region = byId("toast-region");
   const item = element("div", `toast ${kind === "error" ? "error" : ""}`, message);
@@ -95,6 +132,45 @@ function toast(message, kind = "info") {
 function errorMessage(error) {
   if (error instanceof ApiError) return `${error.message} (${error.code})`;
   return error instanceof Error ? error.message : "Unexpected controller error";
+}
+
+function activePanelId() {
+  const panel = document.querySelector(".panel.active");
+  return panel ? panel.id : "";
+}
+
+function chatDisplayText(content) {
+  const text = String(content || "");
+  if (state.showThinkingTraces) return text;
+  const lower = text.toLowerCase();
+  const openTag = "<think>";
+  const closeTag = "</think>";
+  let output = "";
+  let position = 0;
+  let thinking = false;
+  while (position < text.length) {
+    const tag = thinking ? closeTag : openTag;
+    const found = lower.indexOf(tag, position);
+    if (found === -1) {
+      if (!thinking) {
+        const remainder = text.slice(position);
+        const lowerRemainder = lower.slice(position);
+        let held = 0;
+        for (let length = Math.min(openTag.length - 1, lowerRemainder.length); length > 0; --length) {
+          if (lowerRemainder.endsWith(openTag.slice(0, length))) {
+            held = length;
+            break;
+          }
+        }
+        output += held ? remainder.slice(0, -held) : remainder;
+      }
+      break;
+    }
+    if (!thinking) output += text.slice(position, found);
+    position = found + tag.length;
+    thinking = !thinking;
+  }
+  return output.replace(/^[\r\n]+|[\r\n]+$/g, "");
 }
 
 function formatBytes(value) {
@@ -373,18 +449,47 @@ function supports(operation) {
 
 function modelControls() {
   return [
-    { providerId: "chat-provider", modelId: "chat-model", listId: "chat-model-list", statusId: "chat-model-status", apiId: "chat-api" },
-    { providerId: "goal-provider", modelId: "goal-model", listId: "goal-model-list", statusId: "goal-model-status", apiId: "goal-api" },
-    { providerId: "thread-provider", modelId: "thread-model", listId: "thread-model-list", statusId: "thread-model-status", apiId: null },
-    { providerId: "agent-provider", modelId: "agent-model", listId: "agent-model-list", statusId: "agent-model-status", apiId: "agent-api" },
+    { providerId: "chat-provider", modelId: "chat-model", listId: "chat-model-list", statusId: "chat-model-status", reasoningId: "chat-reasoning" },
+    { providerId: "goal-provider", modelId: "goal-model", listId: "goal-model-list", statusId: "goal-model-status" },
+    { providerId: "thread-provider", modelId: "thread-model", listId: "thread-model-list", statusId: "thread-model-status" },
+    { providerId: "agent-provider", modelId: "agent-model", listId: "agent-model-list", statusId: "agent-model-status", reasoningId: "agent-reasoning" },
   ];
 }
 
+const FALLBACK_REASONING_OPTIONS = [
+  ["auto", "Auto"], ["off", "Off"], ["minimal", "Minimal"], ["low", "Low"],
+  ["medium", "Medium"], ["high", "High"], ["xhigh", "XHigh"], ["max", "Max"],
+];
+
+function renderReasoningControl(control, catalog) {
+  if (!control.reasoningId) return;
+  const select = byId(control.reasoningId);
+  const previous = select.value;
+  const model = byId(control.modelId).value.trim();
+  const matched = catalog && catalog.reasoningOptions instanceof Map
+    ? catalog.reasoningOptions.get(model) : null;
+  const choices = Array.isArray(matched) && matched.length
+    ? matched.map((choice) => [choice.value, choice.label])
+    : FALLBACK_REASONING_OPTIONS;
+  clear(select);
+  const defaultOption = element("option", "", "Server default");
+  defaultOption.value = "";
+  select.append(defaultOption);
+  for (const [value, label] of choices) {
+    if (typeof value !== "string" || !value || typeof label !== "string") continue;
+    const option = element("option", "", label);
+    option.value = value;
+    select.append(option);
+  }
+  select.value = [...select.options].some((option) => option.value === previous) ? previous : "";
+  select.title = matched
+    ? "Reasoning choices for the selected model"
+    : "Common reasoning choices; the provider validates support";
+  if (control.reasoningId === "chat-reasoning") renderChatToolbar();
+}
+
 function modelCatalogKey(control) {
-  return JSON.stringify([
-    byId(control.providerId).value,
-    control.apiId ? byId(control.apiId).value : "",
-  ]);
+  return byId(control.providerId).value;
 }
 
 function renderModelControl(control) {
@@ -407,6 +512,7 @@ function renderModelControl(control) {
   if (catalog && catalog.state === "ready" && models.length === 1 && !input.value.trim()) {
     input.value = models[0];
   }
+  renderReasoningControl(control, catalog);
 }
 
 function renderMatchingModelControls(key) {
@@ -425,6 +531,11 @@ async function finishModelCatalog(key, catalog) {
     catalog.done = TERMINAL_STATES.has(snapshot.state);
     if (snapshot.state === "succeeded" && snapshot.result && Array.isArray(snapshot.result.models)) {
       catalog.models = [...new Set(snapshot.result.models.filter((model) => typeof model === "string" && model))];
+      const reasoningOptions = Array.isArray(snapshot.result.reasoning_options)
+        ? snapshot.result.reasoning_options : [];
+      catalog.reasoningOptions = new Map(reasoningOptions
+        .filter((entry) => entry && typeof entry.model === "string" && Array.isArray(entry.options))
+        .map((entry) => [entry.model, entry.options]));
       catalog.state = "ready";
     } else if (catalog.done) {
       catalog.state = "failed";
@@ -450,7 +561,6 @@ async function requestModelCatalog(key, control) {
       method: "POST",
       body: optionalPayload({
         provider: byId(control.providerId).value,
-        api: control.apiId ? byId(control.apiId).value : "",
       }),
     });
     if (state.modelCatalogs.get(key) !== catalog) {
@@ -538,7 +648,9 @@ function applyCapabilities() {
   byId("new-thread-button").disabled = !supports("chat_threads");
   byId("chat-send").disabled = !state.thread || state.thread.read_only === true ||
     state.chatPending || !supports("chat");
-  byId("new-agent-button").disabled = !supports("sessions");
+  for (const control of byId("agent-panel").querySelectorAll("select, input, textarea, button")) {
+    control.disabled = !supports("sessions");
+  }
   byId("workspace-review-button").disabled = !supports("review");
   byId("refresh-directory-button").disabled = !supports("dired");
   byId("create-file-button").disabled = !supports("files");
@@ -581,8 +693,12 @@ async function refreshSettings() {
 }
 
 function setConnectionStatus(label, className) {
-  byId("connection-badge").textContent = label;
-  byId("connection-badge").className = `status-badge ${className}`;
+  const badge = byId("connection-badge");
+  badge.className = `connection-dot ${className}`;
+  badge.title = label;
+  badge.setAttribute("aria-label", label);
+  const text = badge.querySelector(".sr-only");
+  if (text) text.textContent = label;
 }
 
 function cancelReconnect() {
@@ -630,6 +746,8 @@ async function restoreBrowserState() {
       await loadSessions();
       if (sessionId && state.sessions.some((item) => item.id === sessionId)) {
         await selectSession(sessionId);
+      } else if (activePanelId() === "agent-panel") {
+        await ensureWorkspaceAgent();
       }
     })());
   }
@@ -718,8 +836,7 @@ function forgetAuthentication(message = "") {
   byId("disconnect-button").hidden = true;
   setEmpty(byId("thread-list"), "Connect to load threads.");
   setEmpty(byId("chat-messages"), "Choose or create a thread.");
-  setEmpty(byId("agent-list"), "Connect to load sessions.");
-  setEmpty(byId("agent-events"), "Create or select an agent session.");
+  setEmpty(byId("agent-events"), "Open Agent to initialize this workspace.");
   setEmpty(byId("directory-list"), "Connect to browse the workspace.");
   byId("file-editor").value = "";
   byId("file-editor").disabled = true;
@@ -745,6 +862,8 @@ function switchPanel(panelId) {
     else button.removeAttribute("aria-current");
   }
   byId("main").focus({ preventScroll: true });
+  if (panelId === "agent-panel" && state.connected) void ensureWorkspaceAgent();
+  if (panelId === "image-panel") renderImage();
 }
 
 function jobLabel(job) {
@@ -755,6 +874,10 @@ function renderJobResult(container, job) {
   const result = job.result && typeof job.result === "object" ? job.result : {};
   if (job.state === "failed" && job.error) {
     container.append(element("pre", "danger-text", job.error.message || "Job failed"));
+    return;
+  }
+  if (!TERMINAL_STATES.has(job.state) && job._streamText) {
+    container.append(element("pre", "streaming-output", job._streamText));
     return;
   }
   if (job.operation === "image" && result.data_base64) {
@@ -785,14 +908,83 @@ function renderJobResult(container, job) {
   }
 }
 
+function imageMimeType(format) {
+  const normalized = String(format || "png").toLowerCase();
+  if (normalized === "jpg" || normalized === "jpeg") return "image/jpeg";
+  if (normalized === "webp") return "image/webp";
+  return "image/png";
+}
+
+function renderImage() {
+  const output = byId("image-output");
+  const cancel = byId("image-cancel-button");
+  const download = byId("image-download-button");
+  const job = state.imageJobId ? state.jobs.get(state.imageJobId) : null;
+  cancel.hidden = !job || TERMINAL_STATES.has(job.state);
+  download.hidden = !(state.imageResult && state.imageResult.data_base64);
+  if (job && !TERMINAL_STATES.has(job.state)) {
+    clear(output);
+    output.classList.add("image-progress");
+    const latest = Array.isArray(job._events) ? job._events[job._events.length - 1] : null;
+    output.append(element("div", "spinner", ""),
+      element("strong", "", job.state === "queued" ? "Queued" : "Generating…"),
+      element("p", "muted", latest && latest.data && latest.data.text
+        ? latest.data.text : "Waiting for the image provider."));
+    return;
+  }
+  output.classList.remove("image-progress");
+  if (state.imageError) {
+    setEmpty(output, state.imageError);
+    output.classList.add("danger-text");
+    return;
+  }
+  output.classList.remove("danger-text");
+  const result = state.imageResult;
+  if (!result || !result.data_base64) {
+    setEmpty(output, "Your generated image will appear here.");
+    return;
+  }
+  clear(output);
+  const image = element("img");
+  image.alt = "Image generated by Ainiux";
+  image.src = `data:${imageMimeType(result.format)};base64,${result.data_base64}`;
+  const details = [result.model || "model", result.size || "generated size"];
+  if (result.server_path) details.push(`saved as ${result.server_path}`);
+  if (Number.isFinite(Number(result.total_ms)) && Number(result.total_ms) >= 0) {
+    details.push(formatDuration(result.total_ms));
+  }
+  output.append(image, element("p", "image-meta", details.join(" · ")));
+}
+
+function downloadGeneratedImage() {
+  const result = state.imageResult;
+  if (!result || !result.data_base64) return;
+  try {
+    const binary = window.atob(result.data_base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; ++index) bytes[index] = binary.charCodeAt(index);
+    const url = URL.createObjectURL(new Blob([bytes], { type: imageMimeType(result.format) }));
+    const link = element("a");
+    link.href = url;
+    link.download = result.server_path || `image.${String(result.format || "png").toLowerCase()}`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  } catch (error) {
+    toast(`Could not prepare the local image copy: ${errorMessage(error)}`, "error");
+  }
+}
+
 function renderJobs() {
   const list = byId("job-list");
-  if (state.jobs.size === 0) {
-    setEmpty(list, "No jobs in this tab.");
+  const jobs = [...state.jobs.values()]
+    .filter((job) => job.operation === "run" || job.operation === "plan").reverse();
+  if (jobs.length === 0) {
+    setEmpty(list, "No run or plan jobs.");
     return;
   }
   clear(list);
-  const jobs = [...state.jobs.values()].reverse();
   for (const job of jobs) {
     const card = element("article", "job-card");
     const header = element("header");
@@ -819,9 +1011,11 @@ function updateJob(snapshot, context) {
     _events: previous._events || [],
     _context: context || previous._context || null,
     _handled: previous._handled || false,
+    _streamText: previous._streamText || "",
   };
   state.jobs.set(merged.id, merged);
   renderJobs();
+  if (merged.operation === "image") renderImage();
   return merged;
 }
 
@@ -833,6 +1027,7 @@ async function submitJob(operation, payload, context = null) {
     headers: { "Idempotency-Key": `wui-${idempotency}` },
     body: payload,
   });
+  if (context) context.jobId = response.job.id;
   const job = updateJob(response.job, context);
   watchJob(job.id);
   return job;
@@ -852,8 +1047,16 @@ function watchJob(jobId) {
       if (event && event.id && job._events.some((entry) => entry.id === event.id)) return;
       job._events.push(event);
       if (job._events.length > 24) job._events.shift();
+      if (event && event.type === "delta" && event.data && typeof event.data.text === "string") {
+        job._streamText += event.data.text;
+        if (job._context && job._context.type === "chat") {
+          job._context.streamText += event.data.text;
+          updateVisibleChatStream(job._context);
+        }
+      }
       if (event && TERMINAL_STATES.has(event.type)) job.state = event.type;
-      renderJobs();
+      if (job.operation === "image") renderImage();
+      else if (activePanelId() === "jobs-panel" || !event || event.type !== "delta") renderJobs();
       if (event && TERMINAL_STATES.has(event.type)) void refreshJob(jobId);
     },
     async () => {
@@ -884,6 +1087,14 @@ async function handleJobCompletion(job) {
   job._handled = true;
   if (job._context && job._context.type === "chat") await finishChatJob(job, job._context);
   if (job._context && job._context.type === "assist") finishAssistJob(job, job._context);
+  if (job.operation === "image") {
+    state.imageJobId = "";
+    state.imageResult = job.state === "succeeded" ? job.result : null;
+    state.imageError = job.state === "failed" && job.error
+      ? (job.error.message || "Image generation failed")
+      : job.state === "cancelled" ? "Image generation cancelled." : "";
+    renderImage();
+  }
 }
 
 async function cancelJob(jobId) {
@@ -919,6 +1130,28 @@ function renderThreads() {
   }
 }
 
+function appendChatMessage(container, role, content, streaming = false) {
+  const card = element("article", `message ${role || "system"}${streaming ? " streaming" : ""}`);
+  if (streaming) card.id = "chat-stream-message";
+  const shown = role === "assistant" ? chatDisplayText(content) : String(content || "");
+  card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"),
+    element("pre", "", shown || (streaming ? "Thinking…" : "")));
+  container.append(card);
+}
+
+function updateVisibleChatStream(context) {
+  if (!state.thread || state.thread.id !== context.threadId) return;
+  const card = byId("chat-stream-message");
+  if (!card) {
+    renderChat();
+    return;
+  }
+  const output = card.querySelector("pre");
+  if (output) output.textContent = chatDisplayText(context.streamText) || "Thinking…";
+  const messages = byId("chat-messages");
+  messages.scrollTop = messages.scrollHeight;
+}
+
 function renderChat() {
   const messages = byId("chat-messages");
   if (!state.thread) {
@@ -928,26 +1161,28 @@ function renderChat() {
     setEmpty(messages, "Choose or create a thread.");
     byId("chat-input").disabled = true;
     byId("chat-send").disabled = true;
+    renderChatToolbar();
     return;
   }
   byId("conversation-heading").textContent = state.thread.name || "New chat";
   byId("thread-meta").textContent = `${formatDate(state.thread.modified_at)} · ${state.thread.message_count || state.thread.messages.length} messages`;
   byId("chat-metrics").textContent = metricText(state.chatMetrics.get(state.thread.id));
   const transcript = Array.isArray(state.thread.messages) ? state.thread.messages : [];
-  if (!transcript.length) setEmpty(messages, "This thread is empty.");
+  const stream = state.chatStreams.get(state.thread.id);
+  if (!transcript.length && !stream) setEmpty(messages, "This thread is empty.");
   else {
     clear(messages);
     for (const message of transcript) {
-      const card = element("article", `message ${message.role || "system"}`);
-      card.append(element("div", "role", message.role || "message"), element("pre", "", message.content || ""));
-      messages.append(card);
+      appendChatMessage(messages, message.role, message.content);
     }
+    if (stream) appendChatMessage(messages, "assistant", stream.streamText, true);
     messages.scrollTop = messages.scrollHeight;
   }
   const readOnly = state.thread.read_only === true;
   if (readOnly) byId("thread-meta").textContent += " · read-only";
   byId("chat-input").disabled = readOnly;
   byId("chat-send").disabled = readOnly || state.chatPending || !supports("chat");
+  renderChatToolbar();
   renderThreads();
 }
 
@@ -965,16 +1200,33 @@ async function loadThread(threadId) {
   try {
     const response = await api(`${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}`);
     state.thread = response.thread;
+    applyThreadModelSettings(state.thread);
     renderChat();
   } catch (error) {
     toast(errorMessage(error), "error");
   }
 }
 
-async function appendThreadMessages(threadId, revision, messages) {
+function applyThreadModelSettings(thread) {
+  if (!thread) return;
+  const provider = byId("chat-provider");
+  const storedProvider = typeof thread.provider === "string" ? thread.provider : "";
+  provider.value = [...provider.options].some((option) => option.value === storedProvider)
+    ? storedProvider : "";
+  byId("chat-model").value = typeof thread.model === "string" ? thread.model : "";
+  const control = modelControls().find((item) => item.providerId === "chat-provider");
+  if (control) refreshModelControl(control);
+}
+
+async function appendThreadMessages(threadId, revision, messages, metadata = null) {
+  const body = { revision, messages };
+  if (metadata) {
+    body.provider = metadata.provider;
+    body.model = metadata.model;
+  }
   return api(`${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
     method: "POST",
-    body: { revision, messages },
+    body,
   });
 }
 
@@ -990,8 +1242,12 @@ async function sendChatMessage(text) {
   renderChat();
   const threadId = state.thread.id;
   try {
+    const selected = {
+      provider: byId("chat-provider").value,
+      model: byId("chat-model").value.trim(),
+    };
     const appended = await appendThreadMessages(threadId, state.thread.revision,
-      [{ role: "user", content: text }]);
+      [{ role: "user", content: text }], selected);
     const messages = state.thread.messages;
     state.thread = { ...state.thread, ...appended.thread, messages };
     state.thread.messages.push({ role: "user", content: text });
@@ -1006,19 +1262,26 @@ async function sendChatMessage(text) {
     const payload = optionalPayload({
       provider: byId("chat-provider").value,
       model: byId("chat-model").value.trim(),
-      api: byId("chat-api").value,
+      reasoning: byId("chat-reasoning").value,
       messages: transcript,
     });
-    await submitJob("chat", payload, {
+    const context = {
       type: "chat",
       threadId,
       revision: state.thread.revision,
-    });
+      streamText: "",
+      jobId: "",
+    };
+    state.chatStreams.set(threadId, context);
+    renderChat();
+    const job = await submitJob("chat", payload, context);
+    state.chatPendingJobId = job.id;
     byId("chat-input").value = "";
     renderChat();
-    switchPanel("jobs-panel");
   } catch (error) {
     state.chatPending = false;
+    state.chatPendingJobId = "";
+    state.chatStreams.delete(threadId);
     renderChat();
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict("The chat thread changed in another client. Reload it before sending again.",
@@ -1027,16 +1290,103 @@ async function sendChatMessage(text) {
   }
 }
 
-async function finishChatJob(job, context) {
-  state.chatPending = false;
-  if (job.state !== "succeeded" || !job.result || typeof job.result.content !== "string") {
-    renderChat();
+async function regenerateChat() {
+  if (!state.thread || state.thread.read_only === true) {
+    toast("Select a writable chat thread before regenerating", "error");
     return;
   }
+  if (state.chatPending) {
+    if (!state.chatPendingJobId) return;
+    state.chatRegenerateQueued = true;
+    await cancelJob(state.chatPendingJobId);
+    toast("Cancelling the current response before regenerating");
+    return;
+  }
+
+  const threadId = state.thread.id;
+  try {
+    const response = await api(
+      `${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}/regenerate`, {
+        method: "POST",
+        body: { revision: state.thread.revision },
+      });
+    const messages = Array.isArray(state.thread.messages) ? state.thread.messages : [];
+    let userIndex = messages.length - 1;
+    while (userIndex >= 0 && messages[userIndex].role !== "user") userIndex -= 1;
+    if (userIndex < 0) throw new Error("This thread has no user prompt to regenerate");
+    state.thread = {
+      ...state.thread,
+      ...response.thread,
+      messages: messages.slice(0, userIndex + 1),
+    };
+    renderChat();
+    await sendChatMessageFromTranscript(response.prompt);
+    toast("Regenerating the previous answer");
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "revision_conflict") {
+      showConflict("The chat thread changed in another client. Reload it before regenerating.",
+        () => loadThread(threadId));
+    } else toast(errorMessage(error), "error");
+  }
+}
+
+async function sendChatMessageFromTranscript(prompt) {
+  if (!state.thread || state.chatPending) return;
+  const threadId = state.thread.id;
+  state.chatPending = true;
+  const transcript = state.thread.messages.slice(-64).map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+  const payload = optionalPayload({
+    provider: byId("chat-provider").value,
+    model: byId("chat-model").value.trim(),
+    reasoning: byId("chat-reasoning").value,
+    messages: transcript,
+  });
+  const context = {
+    type: "chat",
+    threadId,
+    revision: state.thread.revision,
+    streamText: "",
+    jobId: "",
+  };
+  state.chatStreams.set(threadId, context);
+  renderChat();
+  try {
+    const job = await submitJob("chat", payload, context);
+    state.chatPendingJobId = job.id;
+  } catch (error) {
+    state.chatPending = false;
+    state.chatPendingJobId = "";
+    state.chatStreams.delete(threadId);
+    renderChat();
+    throw error;
+  }
+  if (prompt) byId("chat-input").value = "";
+}
+
+async function finishChatJob(job, context) {
+  const regenerate = state.chatRegenerateQueued;
+  state.chatRegenerateQueued = false;
+  state.chatPending = false;
+  state.chatPendingJobId = "";
+  if (job.state !== "succeeded" || !job.result || typeof job.result.content !== "string") {
+    state.chatStreams.delete(context.threadId);
+    renderChat();
+    if (regenerate) void regenerateChat();
+    return;
+  }
+  context.streamText = job.result.content;
+  updateVisibleChatStream(context);
   try {
     state.chatMetrics.set(context.threadId, job.result.metrics || null);
     await appendThreadMessages(context.threadId, context.revision,
-      [{ role: "assistant", content: job.result.content }]);
+      [{ role: "assistant", content: job.result.content }], {
+        provider: typeof job.result.provider === "string" ? job.result.provider : "",
+        model: typeof job.result.model === "string" ? job.result.model : "",
+      });
+    state.chatStreams.delete(context.threadId);
     if (state.thread && state.thread.id === context.threadId) await loadThread(context.threadId);
     await loadThreads();
     toast("Chat response saved to the thread");
@@ -1047,24 +1397,7 @@ async function finishChatJob(job, context) {
     } else toast(errorMessage(error), "error");
   } finally {
     renderChat();
-  }
-}
-
-function renderSessions() {
-  const list = byId("agent-list");
-  if (!state.sessions.length) {
-    setEmpty(list, "No retained agent sessions.");
-    return;
-  }
-  clear(list);
-  for (const session of state.sessions) {
-    const selected = state.session && state.session.id === session.id;
-    const button = element("button", `list-button ${selected ? "selected" : ""}`);
-    button.type = "button";
-    button.append(element("strong", "", `${session.task_mode || "act"} · ${session.id}`),
-      element("small", "", `${session.status} · ${session.provider || "provider"} / ${session.model || "default"}`));
-    button.addEventListener("click", () => void selectSession(session.id));
-    list.append(button);
+    if (regenerate) void regenerateChat();
   }
 }
 
@@ -1109,46 +1442,134 @@ function renderAgentMetrics() {
   target.textContent = metricText(metrics, state.session.context, activeElapsed);
 }
 
+function agentEventDisplay(entry, live) {
+  const type = entry.type || "event";
+  const data = entry.data || {};
+  let label = type;
+  let kind = type;
+  if (type === "turn_started") { label = "you"; kind = "user"; }
+  else if (type === "turn_completed") { label = "assistant"; kind = "assistant"; }
+  else if (type === "turn_failed") { label = "error"; kind = "error"; }
+  else if (type === "approval_required") { label = "guard"; kind = "notice"; }
+  else if (type === "thinking") label = "thinking";
+  else if (type === "tool") label = "tool";
+  else if (type === "assistant") kind = "assistant";
+  const text = type === "approval_required" ? (data.message || "Approval required") :
+    typeof data.content === "string" ? data.content :
+    typeof data.message === "string" ? data.message :
+      typeof data.text === "string" ? data.text : JSON.stringify(data, null, 2);
+  return { label: live ? `${label} · streaming` : label, kind, text, metrics: data.metrics };
+}
+
+function appendAgentEvent(container, entry, live = false) {
+  const display = agentEventDisplay(entry, live);
+  const card = element("article", `event-card ${display.kind}${live ? " streaming" : ""}`);
+  card.append(element("div", "event-type", display.label));
+  const text = display.text;
+  if (text && text !== "{}") card.append(element("pre", "", text));
+  appendMetrics(card, display.metrics);
+  container.append(card);
+}
+
+function agentEventVisible(event) {
+  return event && ["turn_started", "turn_completed", "turn_failed",
+    "approval_required"].includes(event.type);
+}
+
+function applyAgentActivity(sessionId, event, logs) {
+  let activities = state.agentActivities.get(sessionId);
+  if (!activities) {
+    activities = new Map();
+    state.agentActivities.set(sessionId, activities);
+  }
+  const data = event.data || {};
+  const key = `${event.turn_id || "turn"}:${data.kind || "activity"}:${data.round_id}:${data.tool_id}`;
+  if (data.action === "discard") {
+    activities.delete(key);
+    return;
+  }
+  const entry = {
+    id: event.id,
+    type: data.kind || "activity",
+    data: { text: data.text || "" },
+  };
+  if (data.action === "append") {
+    const previous = activities.get(key);
+    if (previous && previous.data) entry.data.text = `${previous.data.text || ""}${entry.data.text}`;
+    activities.set(key, entry);
+    return;
+  }
+  if (data.action === "commit") {
+    activities.delete(key);
+    logs.push(entry);
+    if (logs.length > 150) logs.shift();
+  } else {
+    activities.set(key, entry);
+  }
+}
+
 function renderAgent() {
-  renderSessions();
   const events = byId("agent-events");
   if (!state.session) {
-    byId("agent-console-heading").textContent = "No active session";
-    byId("agent-meta").textContent = "";
+    byId("agent-meta").textContent = state.agentInitializing
+      ? "Preparing the workspace agent…" : "Open Agent to initialize this workspace.";
     byId("agent-metrics").textContent = "";
-    setEmpty(events, "Create or select an agent session.");
+    setEmpty(events, state.agentInitializing
+      ? "Loading the project context and tools…" : "Open Agent to initialize this workspace.");
     byId("agent-turn-input").disabled = true;
     byId("agent-turn-submit").disabled = true;
     byId("cancel-turn-button").hidden = true;
-    byId("close-agent-button").hidden = true;
+    for (const id of ["agent-provider", "agent-model", "agent-reasoning",
+      "agent-task-mode", "agent-permission"]) byId(id).disabled = true;
     stopAgentClock();
     return;
   }
   const session = state.session;
-  byId("agent-console-heading").textContent = session.id;
-  byId("agent-meta").textContent = `${session.status} · ${session.task_mode} · ${session.permission_mode} · ${session.provider || "provider"} / ${session.model || "default"}`;
+  byId("agent-meta").textContent = `${session.status} · ${session.permission_mode} · ${session.provider || "provider"} / ${session.model || "default"} · reasoning ${session.reasoning || "auto"}`;
+  const provider = byId("agent-provider");
+  if ([...provider.options].some((option) => option.value === session.provider)) {
+    provider.value = session.provider;
+  }
+  byId("agent-model").value = session.model || "";
+  const reasoning = byId("agent-reasoning");
+  const reasoningChoices = Array.isArray(session.reasoning_options)
+    ? session.reasoning_options : [];
+  clear(reasoning);
+  for (const choice of reasoningChoices) {
+    if (!choice || typeof choice.value !== "string" || !choice.value) continue;
+    const option = element("option", "", choice.label || choice.value);
+    option.value = choice.value;
+    reasoning.append(option);
+  }
+  if (![...reasoning.options].some((option) => option.value === session.reasoning)) {
+    const option = element("option", "", session.reasoning || "Auto");
+    option.value = session.reasoning || "auto";
+    reasoning.prepend(option);
+  }
+  reasoning.value = session.reasoning || "auto";
+  byId("agent-task-mode").value = session.task_mode || "act";
+  byId("agent-permission").value = session.permission_mode || "smart";
   const logs = state.agentLogs.get(session.id) || [];
-  if (!logs.length) setEmpty(events, "Waiting for session events…");
+  const activities = state.agentActivities.get(session.id);
+  if (!logs.length && (!activities || activities.size === 0)) {
+    setEmpty(events, "Waiting for session events…");
+  }
   else {
     clear(events);
     for (const entry of logs) {
-      const card = element("article", "event-card");
-      card.append(element("div", "event-type", entry.type || "event"));
-      const data = entry.data || {};
-      const text = typeof data.content === "string" ? data.content :
-        typeof data.message === "string" ? data.message :
-          typeof data.text === "string" ? data.text : JSON.stringify(data, null, 2);
-      if (text && text !== "{}") card.append(element("pre", "", text));
-      appendMetrics(card, data.metrics);
-      events.append(card);
+      appendAgentEvent(events, entry);
     }
+    if (activities) for (const entry of activities.values()) appendAgentEvent(events, entry, true);
     events.scrollTop = events.scrollHeight;
   }
   const ready = session.status === "ready" && !session.turn_id;
   byId("agent-turn-input").disabled = !ready;
   byId("agent-turn-submit").disabled = !ready;
   byId("cancel-turn-button").hidden = !session.turn_id;
-  byId("close-agent-button").hidden = false;
+  for (const id of ["agent-provider", "agent-model", "agent-reasoning",
+    "agent-task-mode", "agent-permission"]) {
+    byId(id).disabled = !ready || state.agentSettingsPending;
+  }
   syncAgentClock();
   renderAgentMetrics();
 }
@@ -1162,8 +1583,32 @@ async function loadSessions() {
       if (updated) state.session = { ...state.session, ...updated };
     }
     renderAgent();
+  } catch (error) { toast(errorMessage(error), "error"); }
+}
+
+async function ensureWorkspaceAgent() {
+  if (state.session || state.agentInitializing || !supports("sessions")) return;
+  state.agentInitializing = true;
+  renderAgent();
+  try {
+    await loadSessions();
+    if (state.sessions.length) {
+      const newest = [...state.sessions].sort((left, right) =>
+        new Date(right.updated_at || 0).getTime() - new Date(left.updated_at || 0).getTime())[0];
+      await selectSession(newest.id);
+    } else {
+      const response = await api(`${API_ROOT}/sessions/agent`, {
+        method: "POST",
+        body: { kind: "agent" },
+      });
+      state.sessions = [response.session];
+      await selectSession(response.session.id);
+    }
   } catch (error) {
-    setEmpty(byId("agent-list"), errorMessage(error));
+    toast(errorMessage(error), "error");
+  } finally {
+    state.agentInitializing = false;
+    renderAgent();
   }
 }
 
@@ -1190,6 +1635,8 @@ async function selectSession(sessionId) {
     }
     state.session = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}`);
     if (!state.agentLogs.has(sessionId)) state.agentLogs.set(sessionId, []);
+    if (!state.agentActivities.has(sessionId)) state.agentActivities.set(sessionId, new Map());
+    if (!state.agentSeenEvents.has(sessionId)) state.agentSeenEvents.set(sessionId, new Set());
     renderAgent();
     if (state.session.approval) showGuard(sessionId, {
       ...state.session.approval,
@@ -1206,9 +1653,21 @@ function watchSession(sessionId) {
   startStream(key, `${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/events`,
     (event) => {
       const logs = state.agentLogs.get(sessionId) || [];
-      if (event && event.id && logs.some((entry) => entry.id === event.id)) return;
-      logs.push(event);
-      if (logs.length > 150) logs.shift();
+      let seen = state.agentSeenEvents.get(sessionId);
+      if (!seen) {
+        seen = new Set();
+        state.agentSeenEvents.set(sessionId, seen);
+      }
+      if (event && event.id && seen.has(event.id)) return;
+      if (event && event.id) {
+        seen.add(event.id);
+        if (seen.size > 512) seen.delete(seen.values().next().value);
+      }
+      if (event.type === "activity") applyAgentActivity(sessionId, event, logs);
+      else if (agentEventVisible(event)) {
+        logs.push(event);
+        if (logs.length > 150) logs.shift();
+      }
       state.agentLogs.set(sessionId, logs);
       if (event.type === "approval_required") showGuard(sessionId, {
         id: event.data.approval_id,
@@ -1216,16 +1675,20 @@ function watchSession(sessionId) {
       }, event.turn_id);
       if (state.session && state.session.id === sessionId) {
         if (event.type === "turn_started") {
+          state.agentActivities.set(sessionId, new Map());
           state.session.turn_id = event.turn_id;
           state.session.status = "running";
           state.session.active_elapsed_ms = 0;
         }
         if (event.type === "approval_required") state.session.status = "waiting_guard";
-        if (event.type === "ready" || event.type === "session_created" || event.type === "session_closed") {
+        if (event.type === "ready" || event.type === "session_created" ||
+            event.type === "session_closed" || event.type === "reasoning_changed" ||
+            event.type === "settings_changed") {
           state.session = event.data;
         }
         if (["turn_completed", "turn_failed", "approval_resolved"].includes(event.type)) {
           if (["turn_completed", "turn_failed"].includes(event.type)) {
+            state.agentActivities.set(sessionId, new Map());
             state.session.turn_id = null;
             state.session.status = "ready";
             state.session.active_elapsed_ms = null;
@@ -1252,6 +1715,132 @@ async function refreshSelectedSession() {
   } catch (error) {
     toast(errorMessage(error), "error");
   }
+}
+
+function cycleSelect(select) {
+  const choices = [...select.options].filter((option) => option.value);
+  if (!choices.length) return "";
+  const current = choices.findIndex((option) => option.value === select.value);
+  const next = choices[(current + 1) % choices.length];
+  select.value = next.value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  return next.textContent || next.value;
+}
+
+function cycleChatReasoning() {
+  const label = cycleSelect(byId("chat-reasoning"));
+  renderChatToolbar();
+  if (label) toast(`Chat reasoning: ${label}`);
+}
+
+function toggleChatThinking() {
+  state.showThinkingTraces = !state.showThinkingTraces;
+  storageSet(THINKING_STORAGE_KEY, state.showThinkingTraces ? "show" : "hide");
+  renderChat();
+  toast(`Thinking traces ${state.showThinkingTraces ? "shown" : "hidden"}`);
+}
+
+function renderChatToolbar() {
+  const regenerate = byId("chat-regenerate-button");
+  regenerate.disabled = !state.thread || state.thread.read_only === true;
+  const selected = byId("chat-reasoning");
+  const option = selected.options[selected.selectedIndex];
+  byId("chat-cycle-reasoning-button").childNodes[0].textContent =
+    `Reasoning: ${option ? option.textContent : "default"} `;
+  const thinking = byId("chat-thinking-button");
+  thinking.childNodes[0].textContent =
+    `Thinking ${state.showThinkingTraces ? "shown" : "hidden"} `;
+  thinking.setAttribute("aria-pressed", state.showThinkingTraces ? "true" : "false");
+}
+
+async function cycleAgentReasoning() {
+  if (!state.session || state.session.turn_id) {
+    toast("Select an idle agent session before changing reasoning", "error");
+    return;
+  }
+  const configured = Array.isArray(state.session.reasoning_options)
+    ? state.session.reasoning_options : [];
+  const choices = configured.length
+    ? configured.filter((choice) => choice && typeof choice.value === "string" && choice.value)
+    : FALLBACK_REASONING_OPTIONS.map(([value, label]) => ({ value, label }));
+  if (!choices.length) return;
+  const current = choices.findIndex((choice) => choice.value === state.session.reasoning);
+  const next = choices[(current + 1) % choices.length];
+  await setAgentReasoning(next.value, next.label || next.value);
+}
+
+async function setAgentReasoning(value, label = value) {
+  if (!state.session || state.session.turn_id || state.agentSettingsPending || !value) return;
+  state.agentSettingsPending = true;
+  renderAgent();
+  try {
+    state.session = await api(
+      `${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/reasoning`, {
+        method: "POST",
+        body: { reasoning: value },
+      });
+    renderAgent();
+    toast(`Agent reasoning: ${label}`);
+  } catch (error) {
+    toast(errorMessage(error), "error");
+  } finally {
+    state.agentSettingsPending = false;
+    renderAgent();
+  }
+}
+
+async function setAgentSetting(field, value) {
+  if (!state.session || state.session.turn_id || state.agentSettingsPending || !value) return;
+  state.agentSettingsPending = true;
+  renderAgent();
+  try {
+    state.session = await api(
+      `${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/settings`, {
+        method: "POST",
+        body: { [field]: value },
+      });
+    const index = state.sessions.findIndex((item) => item.id === state.session.id);
+    if (index >= 0) state.sessions[index] = state.session;
+    if (field === "provider") {
+      const control = modelControls().find((item) => item.providerId === "agent-provider");
+      if (control) refreshModelControl(control);
+    }
+    toast(`Agent ${field.replace("_", " ")} updated`);
+  } catch (error) {
+    toast(errorMessage(error), "error");
+    await refreshSelectedSession();
+  } finally {
+    state.agentSettingsPending = false;
+    renderAgent();
+  }
+}
+
+async function cancelActiveAgentTurn() {
+  if (!state.session || !state.session.turn_id) return false;
+  try {
+    await api(`${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/turns/${encodeURIComponent(state.session.turn_id)}/cancel`, { method: "POST" });
+    if (state.guard) {
+      state.guard = null;
+      closeDialog(byId("guard-dialog"));
+    }
+    toast("Agent turn cancellation requested");
+    return true;
+  } catch (error) {
+    toast(errorMessage(error), "error");
+    return false;
+  }
+}
+
+async function interruptCurrentTask() {
+  if (activePanelId() === "chat-panel" && state.chatPendingJobId) {
+    state.chatRegenerateQueued = false;
+    await cancelJob(state.chatPendingJobId);
+    return;
+  }
+  if (activePanelId() === "agent-panel" && await cancelActiveAgentTurn()) return;
+  const running = [...state.jobs.values()].reverse()
+    .find((job) => !TERMINAL_STATES.has(job.state));
+  if (running) await cancelJob(running.id);
 }
 
 async function resolveGuard(decision) {
@@ -1554,7 +2143,6 @@ async function requestAssist(instruction, selectionOnly) {
     instruction,
     provider: byId("chat-provider").value,
     model: byId("chat-model").value.trim(),
-    api: byId("chat-api").value,
   });
   if (selectionOnly) {
     if (editor.selectionStart === editor.selectionEnd) throw new Error("Select a non-empty editor range first");
@@ -1591,6 +2179,41 @@ function finishAssistJob(job, context) {
 }
 
 function bindEvents() {
+  window.addEventListener("keydown", (event) => {
+    if (event.isComposing) return;
+    const modal = document.querySelector("dialog[open]");
+    if (modal && event.key !== "Escape") return;
+    const key = event.key.toLowerCase();
+    const control = event.ctrlKey && !event.altKey && !event.metaKey;
+    if (control && key === "r" && activePanelId() === "chat-panel") {
+      event.preventDefault();
+      void regenerateChat();
+      return;
+    }
+    if ((control || event.altKey) && key === "t") {
+      if (activePanelId() === "chat-panel") {
+        event.preventDefault();
+        cycleChatReasoning();
+      } else if (activePanelId() === "agent-panel") {
+        event.preventDefault();
+        void cycleAgentReasoning();
+      }
+      return;
+    }
+    if ((control || event.altKey) && key === "w" && activePanelId() === "chat-panel") {
+      event.preventDefault();
+      toggleChatThinking();
+      return;
+    }
+    if (event.key === "Escape") {
+      if (modal && modal.id !== "guard-dialog") return;
+      if ((state.chatPendingJobId || (state.session && state.session.turn_id) ||
+          [...state.jobs.values()].some((job) => !TERMINAL_STATES.has(job.state)))) {
+        event.preventDefault();
+        void interruptCurrentTask();
+      }
+    }
+  });
   for (const button of document.querySelectorAll(".primary-nav button")) {
     button.addEventListener("click", () => switchPanel(button.dataset.panel));
   }
@@ -1599,12 +2222,16 @@ function bindEvents() {
   }
   for (const control of modelControls()) {
     byId(control.providerId).addEventListener("change", () => refreshModelControl(control));
-    if (control.apiId) byId(control.apiId).addEventListener("change", () => refreshModelControl(control));
+    if (control.reasoningId) {
+      byId(control.modelId).addEventListener("input", () => {
+        renderReasoningControl(control, state.modelCatalogs.get(modelCatalogKey(control)));
+      });
+    }
   }
+  byId("chat-reasoning").addEventListener("change", renderChatToolbar);
 
   byId("theme-select").addEventListener("change", (event) => {
-    document.documentElement.dataset.theme = event.target.value;
-    storageSet(THEME_STORAGE_KEY, event.target.value);
+    applyTheme(event.target.value);
   });
   byId("disconnect-button").addEventListener("click", () => forgetAuthentication());
   byId("auth-dialog").addEventListener("cancel", (event) => {
@@ -1633,7 +2260,10 @@ function bindEvents() {
   byId("refresh-settings-button").addEventListener("click", () => void refreshSettings().catch((error) => toast(errorMessage(error), "error")));
   byId("refresh-jobs-button").addEventListener("click", () => void refreshKnownJobs());
   byId("clear-finished-button").addEventListener("click", () => {
-    for (const [id, job] of state.jobs) if (TERMINAL_STATES.has(job.state)) state.jobs.delete(id);
+    for (const [id, job] of state.jobs) {
+      if ((job.operation === "run" || job.operation === "plan") &&
+          TERMINAL_STATES.has(job.state)) state.jobs.delete(id);
+    }
     renderJobs();
   });
 
@@ -1646,7 +2276,6 @@ function bindEvents() {
         goal: byId("goal-input").value.trim(),
         provider: byId("goal-provider").value,
         model: byId("goal-model").value.trim(),
-        api: byId("goal-api").value,
       }));
       byId("goal-input").value = "";
     } catch (error) { toast(errorMessage(error), "error"); }
@@ -1655,7 +2284,9 @@ function bindEvents() {
   byId("image-job-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await submitJob("image", optionalPayload({
+      state.imageError = "";
+      state.imageResult = null;
+      const job = await submitJob("image", optionalPayload({
         prompt: byId("image-prompt").value.trim(),
         provider: byId("image-provider").value,
         model: byId("image-model").value.trim(),
@@ -1663,12 +2294,20 @@ function bindEvents() {
         aspect: byId("image-aspect").value.trim(),
         quality: byId("image-quality").value.trim(),
         format: byId("image-format").value.trim(),
-      }));
-      byId("image-prompt").value = "";
+      }), { type: "image" });
+      state.imageJobId = job.id;
+      renderImage();
     } catch (error) { toast(errorMessage(error), "error"); }
   });
+  byId("image-cancel-button").addEventListener("click", () => {
+    if (state.imageJobId) void cancelJob(state.imageJobId);
+  });
+  byId("image-download-button").addEventListener("click", downloadGeneratedImage);
 
   byId("new-thread-button").addEventListener("click", () => openDialog(byId("new-thread-dialog")));
+  byId("chat-regenerate-button").addEventListener("click", () => void regenerateChat());
+  byId("chat-cycle-reasoning-button").addEventListener("click", cycleChatReasoning);
+  byId("chat-thinking-button").addEventListener("click", toggleChatThinking);
   byId("refresh-threads-button").addEventListener("click", () => void loadThreads());
   byId("new-thread-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1685,6 +2324,7 @@ function bindEvents() {
       closeDialog(byId("new-thread-dialog"));
       byId("thread-name-input").value = "";
       state.thread = response.thread;
+      applyThreadModelSettings(state.thread);
       await loadThreads();
       renderChat();
     } catch (error) { toast(errorMessage(error), "error"); }
@@ -1692,6 +2332,10 @@ function bindEvents() {
   byId("chat-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const text = byId("chat-input").value.trim();
+    if (handleThemeCommand(text)) {
+      byId("chat-input").value = "";
+      return;
+    }
     if (text) void sendChatMessage(text);
   });
   byId("chat-input").addEventListener("keydown", (event) => {
@@ -1701,34 +2345,29 @@ function bindEvents() {
     byId("chat-form").requestSubmit();
   });
 
-  byId("new-agent-button").addEventListener("click", () => openDialog(byId("new-agent-dialog")));
-  byId("refresh-agents-button").addEventListener("click", () => void loadSessions());
-  byId("new-agent-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      const response = await api(`${API_ROOT}/sessions/agent`, {
-        method: "POST",
-        body: optionalPayload({
-          kind: "agent",
-          provider: byId("agent-provider").value,
-          model: byId("agent-model").value.trim(),
-          api: byId("agent-api").value,
-          task_mode: byId("agent-task-mode").value,
-          permission_mode: byId("agent-permission").value,
-        }),
-      });
-      closeDialog(byId("new-agent-dialog"));
-      await loadSessions();
-      await selectSession(response.session.id);
-    } catch (error) { toast(errorMessage(error), "error"); }
-  });
+  byId("agent-provider").addEventListener("change", (event) =>
+    void setAgentSetting("provider", event.target.value));
+  byId("agent-model").addEventListener("change", (event) =>
+    void setAgentSetting("model", event.target.value.trim()));
+  byId("agent-reasoning").addEventListener("change", (event) =>
+    void setAgentReasoning(event.target.value,
+      event.target.options[event.target.selectedIndex]?.textContent || event.target.value));
+  byId("agent-task-mode").addEventListener("change", (event) =>
+    void setAgentSetting("task_mode", event.target.value));
+  byId("agent-permission").addEventListener("change", (event) =>
+    void setAgentSetting("permission_mode", event.target.value));
   byId("agent-turn-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const text = byId("agent-turn-input").value.trim();
+    if (handleThemeCommand(text)) {
+      byId("agent-turn-input").value = "";
+      return;
+    }
     if (!state.session) return;
     try {
       const response = await api(`${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/turns`, {
         method: "POST",
-        body: { text: byId("agent-turn-input").value.trim() },
+        body: { text },
       });
       state.session.turn_id = response.turn_id;
       state.session.status = "running";
@@ -1743,24 +2382,7 @@ function bindEvents() {
       renderAgent();
     } catch (error) { toast(errorMessage(error), "error"); }
   });
-  byId("cancel-turn-button").addEventListener("click", async () => {
-    if (!state.session || !state.session.turn_id) return;
-    try {
-      await api(`${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/turns/${encodeURIComponent(state.session.turn_id)}/cancel`, { method: "POST" });
-      toast("Agent turn cancellation requested");
-    } catch (error) { toast(errorMessage(error), "error"); }
-  });
-  byId("close-agent-button").addEventListener("click", async () => {
-    if (!state.session || !window.confirm("Close this interactive agent session?")) return;
-    const id = state.session.id;
-    try {
-      await api(`${API_ROOT}/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-      stopStream(`session:${id}`);
-      state.session = null;
-      await loadSessions();
-      renderAgent();
-    } catch (error) { toast(errorMessage(error), "error"); }
-  });
+  byId("cancel-turn-button").addEventListener("click", () => void cancelActiveAgentTurn());
   byId("guard-review-button").addEventListener("click", () => void reviewGuardFile());
   byId("guard-allow-button").addEventListener("click", () => void resolveGuard("allow"));
   byId("guard-deny-button").addEventListener("click", () => void resolveGuard("deny"));
@@ -1806,12 +2428,13 @@ function bindEvents() {
 
 async function boot() {
   bindEvents();
+  state.showThinkingTraces = storageGet(THINKING_STORAGE_KEY) === "show";
   const theme = storageGet(THEME_STORAGE_KEY);
   if (["auto", "dark", "light"].includes(theme)) {
-    document.documentElement.dataset.theme = theme;
-    byId("theme-select").value = theme;
+    applyTheme(theme);
   }
   renderJobs();
+  renderImage();
   renderChat();
   renderAgent();
   const remembered = storageGet(TOKEN_STORAGE_KEY);

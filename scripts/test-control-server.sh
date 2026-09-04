@@ -170,14 +170,16 @@ FULL_AUTH=(--header "Authorization: Bearer ${FULL_SECRET}")
 MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
 request 200 "public embedded WUI index" "${BASE_URL}/ui/"
-expect_body '/ui/assets/app-v1.css' "WUI stylesheet reference"
-expect_body '/ui/assets/app-v1.js' "WUI JavaScript reference"
+expect_body '/ui/assets/app-v8.css' "WUI stylesheet reference"
+expect_body '/ui/assets/app-v8.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
-    "${BASE_URL}/ui/assets/app-v1.js"
+    "${BASE_URL}/ui/assets/app-v8.js"
 expect_body 'localStorage' "persistent browser token storage"
 expect_body 'Invalid authentication' "invalid browser authentication state"
 expect_body 'Last-Event-ID' "authenticated SSE replay"
+expect_body 'updateVisibleChatStream' "live chat delta rendering"
+expect_body 'cancelActiveAgentTurn' "agent keyboard cancellation"
 grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
     die "versioned WUI asset did not receive immutable caching"
 grep -Fq "Content-Security-Policy: default-src 'none'; script-src 'self'" "${WUI_HEADERS}" || \
@@ -204,7 +206,8 @@ expect_body '"auth_scope":"full_control"' "status authentication scope"
 
 request 200 "authenticated capabilities" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/capabilities"
-expect_body '"operations":["health","status","capabilities","chat","run","plan","image","editor_assist","sessions","review","dired","workspace_mutations","files","chat_threads"]' "capability operations"
+expect_body '"operations":["health","status","capabilities","models","chat"' "model/chat capability operations"
+expect_body '"chat_threads"]' "chat-thread capability operation"
 expect_body '"mcp":true' "MCP adapter availability"
 expect_body '"web_ui":true' "embedded WUI availability"
 

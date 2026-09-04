@@ -25,6 +25,10 @@ class ChatService {
                  const std::string& request_body,
                  std::string& body,
                  long long& current_revision);
+    Error rewind_last_answer(long long thread_id,
+                             const std::string& request_body,
+                             std::string& body,
+                             long long& current_revision);
 
    private:
     Error ensure_open();

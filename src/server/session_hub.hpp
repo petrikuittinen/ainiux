@@ -28,6 +28,8 @@ class InteractiveSession {
 
     Error start_turn(const std::string& body, std::string& turn_id);
     Error cancel_turn(const std::string& turn_id);
+    Error set_reasoning(const std::string& body);
+    Error set_settings(const std::string& body);
     Error resolve_approval(const std::string& approval_id,
                            const std::string& decision);
     Error review_file(const std::string& approval_id, std::string& body) const;

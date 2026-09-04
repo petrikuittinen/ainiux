@@ -1094,6 +1094,21 @@ void test_gemini_uses_chat_after_inherited_responses() {
                   ainiux::provider::ApiKind::ChatCompletions,
           "agent provider picker uses Chat Completions for Gemini");
 
+    ainiux::cli::Options deepseek_from_openai;
+    deepseek_from_openai.provider = "openai";
+    deepseek_from_openai.api = "responses";
+    deepseek_from_openai.api_explicit = true;
+    deepseek_from_openai.list_models = true;
+    deepseek_from_openai.key = "test-key";
+    ainiux::provider::apply_provider_target(deepseek_from_openai, "deepseek");
+    ainiux::provider::ContextResult deepseek =
+        ainiux::provider::build_context(deepseek_from_openai);
+    check(deepseek.error.ok() &&
+              deepseek.context.profile.name == "deepseek" &&
+              deepseek.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions,
+          "selecting DeepSeek for model listing drops a stale OpenAI Responses override");
+
     ainiux::cli::Options openai_again = selected.context.options;
     ainiux::provider::apply_provider_target(openai_again, "openai");
     ainiux::provider::ContextResult back =

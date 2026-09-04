@@ -185,6 +185,7 @@ GET  /ainiux/v1/chat/threads
 POST /ainiux/v1/chat/threads
 GET  /ainiux/v1/chat/threads/:thread_id
 POST /ainiux/v1/chat/threads/:thread_id/messages
+POST /ainiux/v1/chat/threads/:thread_id/regenerate
 ```
 
 Listing returns at most 200 newest summaries with `id`, `revision`, `name`,
@@ -209,6 +210,8 @@ the last revision observed by the client:
 ```json
 {
   "revision": 1,
+  "provider": "deepseek",
+  "model": "deepseek-chat",
   "messages": [
     {"role":"user","content":"Hello"},
     {"role":"assistant","content":"Hi"}
@@ -216,7 +219,10 @@ the last revision observed by the client:
 }
 ```
 
-Roles are `system`, `user`, or `assistant`. This persistence operation does not
+Roles are `system`, `user`, or `assistant`. Optional bounded `provider` and
+`model` values update the thread metadata in the same revision-checked
+transaction, so a resumed browser or TUI chat keeps its effective routing.
+This persistence operation does not
 start a model request; use the asynchronous chat job route for provider work.
 Successful appends return the new revision and message count. Existing TUI
 saves advance the same SQLite revision, so a stale API append returns
@@ -229,6 +235,11 @@ omission. Managed-media identifiers, inline attachment bodies, original
 source references, database paths, base URLs, usage internals, and provider
 credentials are omitted. PR 7 does not accept remote attachment input or
 delete/rename threads.
+
+Regenerate accepts `{"revision":N}`. It atomically removes messages after the
+latest user prompt and returns that prompt plus the advanced thread revision;
+the client then submits a normal streaming chat job and appends its replacement
+answer. A stale revision cannot discard newer TUI or API messages.
 
 From a source checkout, run `scripts/test-control-server.sh --build` for a
 self-contained curl smoke test of the listener, authentication scopes, discovery,
@@ -299,7 +310,7 @@ Events use monotonically increasing integer IDs and this stable envelope:
 Submit a JSON object to one of these routes:
 
 ```text
-POST /ainiux/v1/jobs/chat   {provider?, model?, api?, messages:[{role,content}]}
+POST /ainiux/v1/jobs/chat   {provider?, model?, api?, reasoning?, messages:[{role,content}]}
 POST /ainiux/v1/jobs/models {provider?, api?}
 POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}
@@ -311,11 +322,20 @@ POST /ainiux/v1/jobs/:job_id/cancel
 ```
 
 The `models` job calls the selected provider's existing model-list operation
-and returns `{"provider":"...","models":["..."]}`. It uses the same
+and returns `{"provider":"...","models":["..."],"reasoning_options":[...]}`.
+Catalog-matched models include their model-aware reasoning values and labels in
+`reasoning_options`; unmatched models are omitted from that metadata. The chat
+job's optional `reasoning` field accepts the same `auto|off|VALUE|TOKENS` syntax
+as the CLI. Model requests use the same
 provider concurrency limit, cancellation, authentication, error redaction,
 retention, and SSE lifecycle as other jobs. Clients should keep manual model
 entry available when a provider does not advertise model listing or its
 endpoint is unavailable.
+
+Successful chat results identify the effective `provider` and `model`. A
+successful image result contains the encoded image plus a workspace-relative
+`server_path` such as `image2.png`. The server creates the first available
+`imageN.ext` atomically and never overwrites an existing workspace file.
 
 Successful chat, run, and plan results include an additive `metrics` object.
 Interactive agent completion/failure events include the same object, and the
@@ -351,6 +371,9 @@ lane at submission and return `agent_lane_busy` (409) instead of waiting.
 
 The events route uses `text/event-stream`. Each `data:` value is the full event
 DTO above. Reconnect with `Last-Event-ID`; ordered retained events are replayed.
+Chat and editor-assist jobs emit `delta` events while model text arrives. The
+server enables provider streaming for browser-created chat, run, plan,
+editor-assist, and interactive-agent work by default.
 An evicted cursor returns `replay_expired` (410), requiring a fresh job snapshot.
 Event count and bytes are bounded per job, terminal jobs are bounded by
 `--max-jobs`, and none of this state survives a server restart.
@@ -407,6 +430,8 @@ POST   /ainiux/v1/sessions/agent
 GET    /ainiux/v1/sessions
 GET    /ainiux/v1/sessions/:session_id
 GET    /ainiux/v1/sessions/:session_id/events
+POST   /ainiux/v1/sessions/:session_id/reasoning
+POST   /ainiux/v1/sessions/:session_id/settings
 POST   /ainiux/v1/sessions/:session_id/turns
 POST   /ainiux/v1/sessions/:session_id/turns/:turn_id/cancel
 POST   /ainiux/v1/sessions/:session_id/approvals/:approval_id
@@ -414,15 +439,27 @@ GET    /ainiux/v1/sessions/:session_id/approvals/:approval_id/review-file
 DELETE /ainiux/v1/sessions/:session_id
 ```
 
-Session creation accepts `kind` (`agent`), `provider`, `model`, `api`,
+Session creation accepts `kind` (`agent`), `provider`, `model`, `api`, `reasoning`,
 `permission_mode` (`confirm`, `smart`, or `yolo`), and `task_mode`
 (`act` or `plan`). Preparation is asynchronous and returns `202` with an
 opaque session ID. A turn body is `{"text":"..."}` and returns `202`
 with a server-generated turn ID. Only one turn may be active per session; a
 concurrent turn returns `409`.
 
+An idle session's reasoning selector can be changed with
+`{"reasoning":"auto|off|VALUE|TOKENS"}`. Snapshots include the effective
+`reasoning` value and catalog-derived `reasoning_options`.
+
+The settings route accepts exactly one of `provider`, `model`, `task_mode`, or
+`permission_mode` per request and only while the session is idle. It returns
+the updated snapshot and emits `settings_changed`. Provider changes use that
+profile's configured API default; the browser does not choose Chat Completions
+or Responses itself.
+
 Session SSE events use the same bounded ordered replay contract as jobs and
-include the session and turn IDs. Guard Ask produces an `approval_required`
+include the session and turn IDs. Streaming agent rounds publish `activity`
+events with append/upsert/commit/discard actions for live assistant text,
+reasoning, tools, and notices. Guard Ask produces an `approval_required`
 event with a server-generated approval ID. Resolve it with
 `{"decision":"allow"}`, `{"decision":"deny"}`, or
 `{"decision":"cancelled"}`. Approval IDs are single-use and tied to the
@@ -430,7 +467,10 @@ active turn. Review-file returns only the bounded workspace-relative file
 requested by the pending Guard approval; absolute and out-of-root paths are
 rejected. Closing a session cancels active work, finishes its project session,
 closes its event stream, and releases retained state. Sessions are bounded by
-`--max-sessions` (default 32) and are not restored after a server restart.
+`--max-sessions` (default 32). In-memory controllers and event streams are not
+restored after a server restart. A newly created controller does restore the
+workspace's persisted `.ainiux-pr` provider, model, API, reasoning, and
+permission settings before applying explicit creation fields.
 
 ## MCP 2026-07-28 endpoint
 

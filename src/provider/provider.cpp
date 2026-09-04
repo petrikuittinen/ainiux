@@ -3935,7 +3935,8 @@ Error send_tool_round(const RequestContext& context,
                       const ToolRoundObserver* observer,
                       const ToolRoundContext& observation_context,
                       ReasoningDeltaCallback on_reasoning_delta,
-                      WorkingCallback on_working) {
+                      WorkingCallback on_working,
+                      DeltaCallback on_content_delta) {
     Error precondition_error;
     if (context.profile.offline)
         precondition_error = {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
@@ -4014,7 +4015,7 @@ Error send_tool_round(const RequestContext& context,
                (item_type->string == "function_call" || item_type->string == "message" ||
                 item_type->string == "web_search_call");
     };
-    if (context.options.stream && (on_reasoning_delta || on_working)) {
+    if (context.options.stream && (on_reasoning_delta || on_working || on_content_delta)) {
         request.on_body = [&](const std::string& chunk) -> Error {
             reasoning_stream_buffer += chunk;
             std::size_t position = 0;
@@ -4029,10 +4030,25 @@ Error send_tool_round(const RequestContext& context,
                 position = next;
                 if (lines.empty()) continue;
                 const std::string data = join_sse_data_lines(lines);
-                if (data.empty() || data == "[DONE]") continue;
+                if (data.empty()) continue;
+                if (data == "[DONE]") {
+                    if (context.api_kind == ApiKind::ChatCompletions) {
+                        const output::ThinkingChunk tail = thinking_splitter.finish();
+                        if (!tail.trace.empty() && on_reasoning_delta) {
+                            Error callback_error = on_reasoning_delta(tail.trace);
+                            if (!callback_error.ok()) return callback_error;
+                        }
+                        if (!tail.visible.empty() && on_content_delta) {
+                            Error callback_error = on_content_delta(tail.visible);
+                            if (!callback_error.ok()) return callback_error;
+                        }
+                    }
+                    continue;
+                }
                 json::ParseResult parsed = json::parse(data);
                 if (!parsed.error.ok()) continue;  // Final parser reports malformed SSE.
                 std::string delta;
+                std::string content_delta;
                 bool starts_work = false;
                 if (context.api_kind == ApiKind::Responses) {
                     const json::Value* type = parsed.value.get("type");
@@ -4043,6 +4059,11 @@ Error send_tool_round(const RequestContext& context,
                         if (const json::Value* value = parsed.value.get("delta");
                             value != nullptr && value->is_string())
                             delta = value->string;
+                    }
+                    if (event == "response.output_text.delta") {
+                        if (const json::Value* value = parsed.value.get("delta");
+                            value != nullptr && value->is_string())
+                            content_delta = value->string;
                     }
                     starts_work = responses_event_starts_work(parsed.value);
                 } else {
@@ -4057,6 +4078,7 @@ Error send_tool_round(const RequestContext& context,
                                 !content->string.empty()) {
                                 output::ThinkingChunk thinking =
                                     thinking_splitter.feed(content->string);
+                                content_delta = thinking.visible;
                                 if (delta.empty()) {
                                     delta = thinking.trace;
                                     for (const std::string& tag :
@@ -4079,6 +4101,10 @@ Error send_tool_round(const RequestContext& context,
                 }
                 if (!delta.empty() && on_reasoning_delta) {
                     Error callback_error = on_reasoning_delta(delta);
+                    if (!callback_error.ok()) return callback_error;
+                }
+                if (!content_delta.empty() && on_content_delta) {
+                    Error callback_error = on_content_delta(content_delta);
                     if (!callback_error.ok()) return callback_error;
                 }
                 if (starts_work) {

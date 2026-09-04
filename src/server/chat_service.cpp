@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -181,17 +182,30 @@ Error parse_create(const std::string& input, chat::Session& session) {
 
 Error parse_append(const std::string& input,
                    long long& revision,
-                   std::vector<provider::Message>& messages) {
+                   std::vector<provider::Message>& messages,
+                   std::optional<std::string>& provider_name,
+                   std::optional<std::string>& model) {
     const json::ParseResult parsed = json::parse(input);
     if (!parsed.error.ok() || !parsed.value.is_object()) {
         return invalid("message append body must be one JSON object");
     }
     std::string unknown;
-    if (!known_fields(parsed.value, {"revision", "messages"}, unknown)) {
+    if (!known_fields(parsed.value, {"revision", "messages", "provider", "model"}, unknown)) {
         return invalid("unknown message append field: " + unknown);
     }
     if (!integer_value(parsed.value.get("revision"), revision) || revision <= 0) {
         return invalid("revision must be a positive integer");
+    }
+    for (const auto& field : {std::pair<const char*, std::optional<std::string>*>(
+                                  "provider", &provider_name),
+                              std::pair<const char*, std::optional<std::string>*>(
+                                  "model", &model)}) {
+        const json::Value* value = parsed.value.get(field.first);
+        if (value == nullptr) continue;
+        if (!value->is_string()) return invalid(std::string(field.first) + " must be a string");
+        if (value->string.size() > kMaxMetadataBytes)
+            return invalid(std::string(field.first) + " is too long");
+        *field.second = value->string;
     }
     const json::Value* array = parsed.value.get("messages");
     if (array == nullptr || !array->is_array() || array->array.empty() ||
@@ -216,6 +230,21 @@ Error parse_append(const std::string& input,
             return invalid("message content must be a string no larger than 1 MiB");
         }
         messages.push_back({role->string, content->string});
+    }
+    return ok_error();
+}
+
+Error parse_revision(const std::string& input, long long& revision) {
+    const json::ParseResult parsed = json::parse(input);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return invalid("chat rewind body must be one JSON object");
+    }
+    std::string unknown;
+    if (!known_fields(parsed.value, {"revision"}, unknown)) {
+        return invalid("unknown chat rewind field: " + unknown);
+    }
+    if (!integer_value(parsed.value.get("revision"), revision) || revision <= 0) {
+        return invalid("revision must be a positive integer");
     }
     return ok_error();
 }
@@ -288,8 +317,11 @@ Error ChatService::append(long long thread_id,
                           std::string& body,
                           long long& current_revision) {
     std::vector<provider::Message> messages;
+    std::optional<std::string> provider_name;
+    std::optional<std::string> model;
     long long expected_revision = 0;
-    Error error = parse_append(request_body, expected_revision, messages);
+    Error error = parse_append(request_body, expected_revision, messages,
+                               provider_name, model);
     if (!error.ok()) return error;
     std::lock_guard<std::mutex> lock(mutex_);
     body.clear();
@@ -298,11 +330,65 @@ Error ChatService::append(long long thread_id,
     if (!error.ok()) return error;
     long long message_count = 0;
     error = store_.append_messages(thread_id, expected_revision, messages,
+                                   provider_name, model,
                                    current_revision, message_count);
     if (!error.ok()) return safe_store_error(error, "append chat messages");
     body = "{\"thread\":{\"id\":" + std::to_string(thread_id) +
            ",\"revision\":" + std::to_string(current_revision) +
-           ",\"message_count\":" + std::to_string(message_count) + "}}";
+           ",\"message_count\":" + std::to_string(message_count);
+    if (provider_name.has_value()) body += ",\"provider\":" + json::quote(*provider_name);
+    if (model.has_value()) body += ",\"model\":" + json::quote(*model);
+    body += "}}";
+    return ok_error();
+}
+
+Error ChatService::rewind_last_answer(long long thread_id,
+                                      const std::string& request_body,
+                                      std::string& body,
+                                      long long& current_revision) {
+    long long expected_revision = 0;
+    Error error = parse_revision(request_body, expected_revision);
+    if (!error.ok()) return error;
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.clear();
+    current_revision = 0;
+    error = ensure_open();
+    if (!error.ok()) return error;
+
+    chat::Session session;
+    chat::LoadSessionOptions options;
+    options.update_last_thread = false;
+    error = store_.load_session(thread_id, session, options);
+    if (!error.ok()) return safe_store_error(error, "load the chat thread");
+    current_revision = session.revision;
+    if (session.revision != expected_revision) {
+        return {ErrorCode::FileLock, "chat thread revision is stale"};
+    }
+    if (session.read_only) {
+        return {ErrorCode::FileWrite, "chat thread is read-only"};
+    }
+
+    std::size_t user_index = session.messages.size();
+    while (user_index > 0) {
+        --user_index;
+        if (session.messages[user_index].role == "user") break;
+    }
+    if (session.messages.empty() || session.messages[user_index].role != "user") {
+        return invalid("chat thread has no user prompt to regenerate");
+    }
+    const std::string prompt = session.messages[user_index].content;
+    if (user_index + 1U < session.messages.size()) {
+        session.messages.erase(session.messages.begin() +
+                                   static_cast<std::ptrdiff_t>(user_index + 1U),
+                               session.messages.end());
+        error = store_.save_session(session);
+        if (!error.ok()) return safe_store_error(error, "rewind the chat thread");
+        current_revision = session.revision;
+    }
+    body = "{\"thread\":{\"id\":" + std::to_string(thread_id) +
+           ",\"revision\":" + std::to_string(session.revision) +
+           ",\"message_count\":" + std::to_string(session.messages.size()) + "},"
+           "\"prompt\":" + json::quote(prompt) + "}";
     return ok_error();
 }
 
