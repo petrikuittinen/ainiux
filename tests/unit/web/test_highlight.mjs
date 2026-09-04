@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderMarkdown } from "../../../src/web/js/highlight-v1.js";
+import { renderMarkdown } from "../../../src/web/js/highlight-v2.js";
 
 class FakeNode {
   constructor(type, name = "", value = "") {
@@ -48,6 +48,12 @@ function descendants(node, tag = "") {
 
 function render(text) {
   return renderMarkdown(text, fakeDocument);
+}
+
+function syntaxText(root, role) {
+  return descendants(root)
+    .filter((node) => node.className === `syntax-${role}`)
+    .map((node) => node.textContent);
 }
 
 test("renders ATX and Setext headings as semantic heading elements", () => {
@@ -134,4 +140,94 @@ test("bounds adversarial delimiter scans and block nesting", () => {
   assert.equal(render(brackets).textContent, brackets);
   const nestedQuote = `${"> ".repeat(1000)}deep`;
   assert.match(render(nestedQuote).textContent, /deep$/);
+});
+
+test("highlights JavaScript and TypeScript fences with TUI semantic roles", () => {
+  const javascript = render("```js\nconst answer = greet(\"hi\", 42); // note\nconst ready = true;\n```");
+  assert.ok(syntaxText(javascript, "keyword").includes("const"));
+  assert.ok(syntaxText(javascript, "function").includes("greet"));
+  assert.ok(syntaxText(javascript, "string").includes("\"hi\""));
+  assert.ok(syntaxText(javascript, "number").includes("42"));
+  assert.ok(syntaxText(javascript, "literal").includes("true"));
+  assert.ok(syntaxText(javascript, "comment").includes("// note"));
+
+  const typescript = render("```typescript\ninterface User { active: boolean; }\nconst value: User = true;\n```");
+  assert.ok(syntaxText(typescript, "keyword").includes("interface"));
+  assert.ok(syntaxText(typescript, "type").includes("User"));
+  assert.ok(syntaxText(typescript, "type").includes("boolean"));
+  assert.ok(syntaxText(typescript, "literal").includes("true"));
+});
+
+test("highlights Python, C, and C++ fences", () => {
+  const python = render("```py\ndef greet(name: str):\n    return f\"Hi {name}\" # note\nvalue = None\n```");
+  assert.ok(syntaxText(python, "keyword").includes("def"));
+  assert.ok(syntaxText(python, "function").includes("greet"));
+  assert.ok(syntaxText(python, "type").includes("str"));
+  assert.ok(syntaxText(python, "string").includes("f\"Hi {name}\""));
+  assert.ok(syntaxText(python, "literal").includes("None"));
+  assert.ok(syntaxText(python, "comment").includes("# note"));
+
+  const c = render("```c\n#include <stdio.h>\nint main(void) { return 0; } // ok\n```");
+  assert.deepEqual(syntaxText(c, "preprocessor"), ["#include <stdio.h>"]);
+  assert.ok(syntaxText(c, "type").includes("int"));
+  assert.ok(syntaxText(c, "function").includes("main"));
+  assert.ok(syntaxText(c, "keyword").includes("return"));
+  assert.ok(syntaxText(c, "comment").includes("// ok"));
+
+  const cpp = render("```c++\nclass Box { public: constexpr int size() { return 2; } };\nauto empty = nullptr;\n```");
+  assert.ok(syntaxText(cpp, "type").includes("Box"));
+  assert.ok(syntaxText(cpp, "keyword").includes("constexpr"));
+  assert.ok(syntaxText(cpp, "function").includes("size"));
+  assert.ok(syntaxText(cpp, "literal").includes("nullptr"));
+});
+
+test("highlights CSS and Bash fences", () => {
+  const css = render("```css\n@media screen {\n  color: #fff;\n  margin: 1rem; /* note */\n}\n```");
+  assert.ok(syntaxText(css, "keyword").includes("@media"));
+  assert.ok(syntaxText(css, "property").includes("color"));
+  assert.ok(syntaxText(css, "literal").includes("#fff"));
+  assert.ok(syntaxText(css, "number").includes("1rem"));
+  assert.ok(syntaxText(css, "comment").includes("/* note */"));
+
+  const bash = render("```bash\n#!/usr/bin/env bash\nfor file in *.txt; do\n  echo \"$file\" # note\ndone\n```");
+  assert.deepEqual(syntaxText(bash, "preprocessor"), ["#!/usr/bin/env bash"]);
+  assert.ok(syntaxText(bash, "keyword").includes("for"));
+  assert.ok(syntaxText(bash, "function").includes("echo"));
+  assert.ok(syntaxText(bash, "string").includes("\"$file\""));
+  assert.ok(syntaxText(bash, "comment").includes("# note"));
+});
+
+test("HTML fences highlight markup plus embedded CSS and JavaScript", () => {
+  const source = "<style>body { color: #fff; }</style>\n" +
+    "<script>const count = 3; // embedded\nalert(count);</script>\n" +
+    "<button style=\"margin: 1rem\" onclick=\"run()\">Go</button>";
+  const root = render(`\`\`\`html\n${source}\n\`\`\``);
+  assert.equal(root.textContent, source);
+  assert.ok(syntaxText(root, "tag").includes("style"));
+  assert.ok(syntaxText(root, "attribute").includes("onclick"));
+  assert.ok(syntaxText(root, "property").includes("color"));
+  assert.ok(syntaxText(root, "literal").includes("#fff"));
+  assert.ok(syntaxText(root, "keyword").includes("const"));
+  assert.ok(syntaxText(root, "number").includes("3"));
+  assert.ok(syntaxText(root, "comment").includes("// embedded"));
+  assert.ok(syntaxText(root, "function").includes("run"));
+  assert.equal(descendants(root, "STYLE").length, 0);
+  assert.equal(descendants(root, "SCRIPT").length, 0);
+  assert.equal(descendants(root, "BUTTON").length, 0);
+
+  const multilineTag = render("```html\n<script\n type=\"module\">\nconst ready = true;\n</script>\n```");
+  assert.ok(syntaxText(multilineTag, "attribute").includes("type"));
+  assert.ok(syntaxText(multilineTag, "keyword").includes("const"));
+  assert.ok(syntaxText(multilineTag, "literal").includes("true"));
+});
+
+test("unknown fences remain literal and supported multiline states are preserved", () => {
+  const unknown = render("```brainfuck\n++[>++<-]\n```");
+  assert.equal(syntaxText(unknown, "operator").length, 0);
+  assert.equal(unknown.textContent, "++[>++<-]");
+
+  const multiline = render("```js\n/* first\nstill comment */\nconst value = `two\nlines`;\n```");
+  assert.deepEqual(syntaxText(multiline, "comment"), ["/* first", "still comment */"]);
+  assert.deepEqual(syntaxText(multiline, "string"), ["`two", "lines`"]);
+  assert.ok(syntaxText(multiline, "keyword").includes("const"));
 });

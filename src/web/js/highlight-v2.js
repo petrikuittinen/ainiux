@@ -1,3 +1,5 @@
+import { appendHighlightedCode, canonicalLanguage } from "./syntax-v1.js";
+
 const MAX_INLINE_DEPTH = 32;
 const SAFE_SCHEMES = new Set(["http:", "https:"]);
 
@@ -512,7 +514,8 @@ function appendBlocks(documentRef, parent, lines, depth = 0) {
       const code = createElement(documentRef, "code");
       const safeLanguage = /^[a-z0-9_+#.-]{1,32}$/.test(fence.language) ? fence.language : "";
       if (safeLanguage) code.setAttribute("data-language", safeLanguage);
-      appendText(documentRef, code, codeLines.join("\n"));
+      const source = codeLines.join("\n");
+      appendHighlightedCode(documentRef, code, source, canonicalLanguage(safeLanguage));
       pre.append(code);
       parent.append(pre);
       continue;

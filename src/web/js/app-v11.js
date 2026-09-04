@@ -1,4 +1,4 @@
-import { renderMarkdown } from "./highlight-v1.js";
+import { renderMarkdown } from "./highlight-v2.js";
 
 const API_ROOT = "/ainiux/v1";
 const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";

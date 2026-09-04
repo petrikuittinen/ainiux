@@ -596,6 +596,17 @@ same-origin boundary. Responsive grid/flex breakpoints, semantic controls,
 visible focus, live regions, reduced motion, and TUI-derived light/dark colors
 are part of the shipped source rather than runtime dependencies.
 
+The next WebUI highlighting slice keeps programming-language lexing in a
+separate vanilla-JavaScript module rather than growing the controller or
+Markdown parser. It maps JavaScript/TypeScript, Python, C/C++, HTML, CSS, and
+Bash fence labels to the same semantic token roles and built-in light/dark color
+codes used by the terminal highlighter. HTML delegates script/style bodies and
+inline event/style attributes to the JavaScript/CSS lexers. Highlight output is
+constructed exclusively from text nodes and role-named spans; unknown fences
+remain literal, and bounded source, line, and token work prevents pathological
+model output from monopolizing rendering. Versioned asset URLs are advanced for
+the immutable-cache contract. No runtime or build dependency is added.
+
 Browser-oriented startup is explicit through `ainiux webserver` or
 `ainiux server --webui`. It reuses the same listener/router, selects wildcard
 IPv4 only when no bind was supplied, prints concrete local interface links, and

@@ -69,9 +69,10 @@ COMMON_CONFIG_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/config.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
 WEB_INDEX := src/web/index.html
-WEB_STYLESHEET := src/web/css/app-v10.css
-WEB_JAVASCRIPT := src/web/js/app-v10.js
-WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v1.js
+WEB_STYLESHEET := src/web/css/app-v11.css
+WEB_JAVASCRIPT := src/web/js/app-v11.js
+WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v2.js
+WEB_SYNTAX_JAVASCRIPT := src/web/js/syntax-v1.js
 WEB_ASSET_HEADER := $(GENERATED_DIR)/embedded_web_assets.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
@@ -211,13 +212,14 @@ $(IMAGES_CONFIG_HEADER): $(IMAGES_CONFIG)
 
 $(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(IMAGES_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
 
-$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGHLIGHT_JAVASCRIPT)
+$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGHLIGHT_JAVASCRIPT) $(WEB_SYNTAX_JAVASCRIPT)
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
-			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v10.css";' \
-			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v10.js";' \
-			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v1.js";' \
+			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v11.css";' \
+			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v11.js";' \
+			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v2.js";' \
+			'inline constexpr std::string_view kSyntaxJavascriptPath = "/ui/assets/syntax-v1.js";' \
 			'inline constexpr char kIndexHtml[] = R"AINIUX_WEB_HTML('; \
 		cat $(WEB_INDEX); \
 		printf '%s\n' ')AINIUX_WEB_HTML";' \
@@ -229,7 +231,10 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGH
 		printf '%s\n' ')AINIUX_WEB_JS";' \
 			'inline constexpr char kHighlightJavascript[] = R"AINIUX_HL('; \
 		cat $(WEB_HIGHLIGHT_JAVASCRIPT); \
-		printf '%s\n' ')AINIUX_HL";' '}  // namespace ainiux::server::web'; \
+		printf '%s\n' ')AINIUX_HL";' \
+			'inline constexpr char kSyntaxJavascript[] = R"AINIUX_SYNTAX('; \
+		cat $(WEB_SYNTAX_JAVASCRIPT); \
+		printf '%s\n' ')AINIUX_SYNTAX";' '}  // namespace ainiux::server::web'; \
 	} >$@.tmp
 	@mv $@.tmp $@
 
@@ -289,6 +294,7 @@ test-web-js:
 	@if command -v node >/dev/null 2>&1; then \
 		node --experimental-default-type=module --check $(WEB_JAVASCRIPT); \
 		node --experimental-default-type=module --check $(WEB_HIGHLIGHT_JAVASCRIPT); \
+		node --experimental-default-type=module --check $(WEB_SYNTAX_JAVASCRIPT); \
 		node --experimental-default-type=module --test tests/unit/web/test_highlight.mjs; \
 	else \
 		echo "SKIP: Node.js is unavailable; browser JavaScript tests were not run"; \

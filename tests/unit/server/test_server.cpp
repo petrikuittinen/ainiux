@@ -140,8 +140,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v10.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v10.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v11.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v11.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -173,7 +173,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v10.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v11.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -192,6 +192,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find(".markdown-table-scroll") != std::string::npos &&
               stylesheet.body.find("--syntax-heading: #f9a8d4") != std::string::npos &&
               stylesheet.body.find("--syntax-link: #0451a5") != std::string::npos &&
+              stylesheet.body.find("--syntax-keyword: #c4b5fd") != std::string::npos &&
+              stylesheet.body.find(".syntax-comment") != std::string::npos &&
+              stylesheet.body.find(".syntax-property") != std::string::npos &&
               stylesheet.body.find("scrollbar-gutter: stable") != std::string::npos &&
               stylesheet.body.find("ui-monospace") != std::string::npos &&
               stylesheet.body.find("@import") == std::string::npos &&
@@ -200,7 +203,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v10.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v11.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -222,7 +225,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("control || event.altKey") != std::string::npos &&
               javascript.body.find("function toggleChatThinking") != std::string::npos &&
               javascript.body.find("function handleThemeCommand") != std::string::npos &&
-              javascript.body.find("import { renderMarkdown } from \"./highlight-v1.js\"") != std::string::npos &&
+              javascript.body.find("import { renderMarkdown } from \"./highlight-v2.js\"") != std::string::npos &&
               javascript.body.find("function renderChatContent") != std::string::npos &&
               javascript.body.find("function scheduleAgentRender") != std::string::npos &&
               javascript.body.find("async function ensureWorkspaceAgent") != std::string::npos &&
@@ -253,7 +256,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript_headers.find("X-Frame-Options: DENY") != std::string::npos,
           "embedded WUI JavaScript uses authenticated fetch/replay and hardened same-origin headers");
 
-    Response highlighter = route_request(public_get("/ui/assets/highlight-v1.js"), config, status);
+    Response highlighter = route_request(public_get("/ui/assets/highlight-v2.js"), config, status);
     const std::string highlighter_headers = serialize_response(highlighter, true);
     check(highlighter.status == 200 &&
               highlighter.content_type == "text/javascript; charset=utf-8" &&
@@ -271,6 +274,23 @@ void test_embedded_web_ui_assets_and_browser_security() {
               highlighter_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos &&
               highlighter_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI Markdown module builds safe semantic DOM under immutable CSP headers");
+
+    Response syntax = route_request(public_get("/ui/assets/syntax-v1.js"), config, status);
+    const std::string syntax_headers = serialize_response(syntax, true);
+    check(syntax.status == 200 &&
+              syntax.content_type == "text/javascript; charset=utf-8" &&
+              syntax.body.find("export function appendHighlightedCode") != std::string::npos &&
+              syntax.body.find("function scanHtml") != std::string::npos &&
+              syntax.body.find("javascript: \"javascript\"") != std::string::npos &&
+              syntax.body.find("typescript: \"typescript\"") != std::string::npos &&
+              syntax.body.find("python: \"python\"") != std::string::npos &&
+              syntax.body.find("innerHTML") == std::string::npos &&
+              syntax.body.find("outerHTML") == std::string::npos &&
+              syntax.body.find("DOMParser") == std::string::npos &&
+              syntax.body.find("fetch(") == std::string::npos &&
+              syntax_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos &&
+              syntax_headers.find("script-src 'self'") != std::string::npos,
+          "embedded WUI syntax module is dependency-free, DOM-safe, and immutable");
 
     const std::size_t chat_submit_start = javascript.body.find("async function sendChatMessage");
     const std::size_t chat_submit_end = javascript.body.find("async function finishChatJob");
@@ -300,6 +320,10 @@ void test_embedded_web_ui_assets_and_browser_security() {
     check(route_request(public_get("/ui/assets/app-v9.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v9.css"), config, status).status == 404,
           "the previous immutable WUI assets are superseded after Markdown rendering");
+    check(route_request(public_get("/ui/assets/app-v10.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v10.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/highlight-v1.js"), config, status).status == 404,
+          "the Markdown-only WUI assets are superseded after fenced-code highlighting");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");
     check(route_request(post, config, status).status == 405,

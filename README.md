@@ -336,8 +336,10 @@ and mutations, revision-safe file editing/assist, and non-secret server status.
 It follows the system light/dark preference and also has an explicit theme
 selector. Chat and Agent prose is rendered as safe client-side Markdown with
 semantic headings, responsive tables, TUI-derived syntax colors, and explicit
-clickable HTTP(S) links; tool, thinking, approval, error, and job output remains
-literal.
+clickable HTTP(S) links. Fenced JavaScript, TypeScript, Python, C, C++, HTML,
+CSS, and Bash use client-side token highlighting; HTML fences also highlight
+embedded script/style bodies and inline event/style attributes. Tool, thinking,
+approval, error, and job output remains literal.
 
 For script-oriented API use, configure a known token and use plain server mode
 in one terminal:

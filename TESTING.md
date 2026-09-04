@@ -25,7 +25,7 @@ Useful targets:
 | `make test` | In-process units plus the small mock smoke |
 | `make test-full` | Units, fault tests, and comprehensive integration; Windows also runs native SQLite/ConPTY parity paths |
 | `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
-| `make test-web-js` | Optional dependency-free WebUI Markdown DOM and JavaScript syntax tests when Node.js is installed |
+| `make test-web-js` | Optional dependency-free WebUI Markdown DOM and fenced-language syntax tests when Node.js is installed |
 | `make test-unit-faults` | Fault tests only |
 | `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
@@ -104,7 +104,8 @@ transport, filesystem, or PTY boundary is involved.
 - Control-server WUI exact asset routing, API-auth separation, immutable/no-store
   caching, CSP and browser hardening headers, TUI-derived light/dark palettes,
   responsive/reduced-motion markers, safe semantic Markdown DOM construction,
-  headings/tables/links, inert raw HTML, strict browser query-path decoding, and
+  headings/tables/links, inert raw HTML, first-batch fenced-code languages and
+  HTML-embedded CSS/JavaScript, strict browser query-path decoding, and
   managed-secret stability/private permissions, browser-server CLI aliases and
   URL reporting, persistent `localStorage` authentication, reconnect markers,
   and static rejection of external URLs, raw-HTML sinks, cookies, and URL tokens
