@@ -287,7 +287,7 @@ void AgentSessionRuntime::clear_in_flight_generation_tokens() {
 Error AgentSessionRuntime::update_project_settings(
     const provider::RequestContext& context) {
     if (!prepared_) return {ErrorCode::Internal, "agent runtime is not prepared"};
-    if (!session_store_.is_open() || context.profile.offline) return ok_error();
+    if (!session_store_.is_open()) return ok_error();
 
     // Provider selection may change before the first turn. No conversation has
     // been encoded yet, so it is safe to select the matching tool protocol.
@@ -306,8 +306,10 @@ Error AgentSessionRuntime::update_project_settings(
     project.api = context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
     project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
     project.base_url = context.base_url;
+    error = merge_project_model_settings(project.settings_json, context.options, project.settings_json);
+    if (!error.ok()) return error;
     error = settings_json_with_permission_mode(
-        chat::settings_json_from_options(context.options), permission_mode_,
+        project.settings_json, permission_mode_,
         project.settings_json);
     if (!error.ok()) return error;
     error = write_session_settings(project);
@@ -416,7 +418,10 @@ void AgentSessionRuntime::apply_context_reset_filter(
 }
 
 Error AgentSessionRuntime::write_session_settings(AgentProjectRecord& project) const {
-    Error error = settings_json_with_permission_mode(
+    Error error = options_.interactive ? settings_with_task_mode(project.settings_json,
+        task_mode_ == AgentTaskMode::Plan, project.settings_json) : ok_error();
+    if (!error.ok()) return error;
+    error = settings_json_with_permission_mode(
         project.settings_json, permission_mode_, project.settings_json);
     if (!error.ok()) return error;
     error = settings_json_with_goal(project.settings_json, goal_, project.settings_json);
@@ -1436,6 +1441,15 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             }
             options_.permission_mode = permission_mode_;
             tools_.set_permission_mode(permission_mode_);
+            if (options_.restore_task_mode && json::parse(project.settings_json).value.get("task_mode")) {
+                bool plan = false;
+                error = saved_task_mode(project.settings_json, plan);
+                if (!error.ok()) { reset(); return error; }
+                task_mode_ = plan ? AgentTaskMode::Plan : AgentTaskMode::Act;
+                options_.task_mode = task_mode_;
+                tools_.set_mutation_policy(plan ? MutationPolicy::PlanningDocuments : MutationPolicy::Full);
+                known_tools_ = known_tool_names(tools_);
+            }
             error = goal_from_settings_json(project.settings_json, goal_);
             if (!error.ok()) {
                 reset();
@@ -1738,10 +1752,20 @@ Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
     AgentsMdBundle refreshed;
     Error error = load_root_agents_md(options_.workspace, kDefaultAgentsMdMaxBytes, refreshed);
     if (!error.ok()) return error;
+    if (conversation_seeded_ &&
+        (conversation_.messages.empty() || conversation_.messages.front().role != "system"))
+        return {ErrorCode::Internal, "agent conversation has no trusted system prompt"};
+    if (session_store_.is_open()) {
+        AgentProjectRecord project;
+        error = session_store_.open_project(project);
+        if (!error.ok()) return error;
+        error = settings_with_task_mode(project.settings_json, mode == AgentTaskMode::Plan,
+                                        project.settings_json);
+        if (!error.ok()) return error;
+        error = session_store_.update_project_meta(project);
+        if (!error.ok()) return error;
+    }
     if (conversation_seeded_) {
-        if (conversation_.messages.empty() || conversation_.messages.front().role != "system")
-            return {ErrorCode::Internal,
-                    "agent conversation has no trusted system prompt"};
         // Preserve the serialized prefix. Refreshed project instructions and
         // mode controls are appended for later rounds.
         if (refreshed.injection_text != agents_md_.injection_text) {
@@ -1804,8 +1828,10 @@ Error AgentSessionRuntime::switch_permission_mode(
         project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
         project.base_url = context.base_url;
         project.workspace = options_.workspace;
+        error = merge_project_model_settings(project.settings_json, context.options, project.settings_json);
+        if (!error.ok()) { permission_mode_ = previous; return error; }
         error = settings_json_with_permission_mode(
-            chat::settings_json_from_options(context.options), mode,
+            project.settings_json, mode,
             project.settings_json);
         if (!error.ok()) {
             permission_mode_ = previous;
@@ -2206,8 +2232,11 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
             project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
             project.base_url = context.base_url;
-            Error settings_error = settings_json_with_permission_mode(
-                chat::settings_json_from_options(context.options), permission_mode_,
+            Error settings_error = merge_project_model_settings(
+                project.settings_json, context.options, project.settings_json);
+            if (!settings_error.ok()) { result.error = settings_error; return result; }
+            settings_error = settings_json_with_permission_mode(
+                project.settings_json, permission_mode_,
                 project.settings_json);
             if (!settings_error.ok()) {
                 result.error = settings_error;

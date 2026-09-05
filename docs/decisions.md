@@ -619,3 +619,21 @@ file, environment, then an atomically created private 256-bit per-user secret;
 only browser mode may print the managed value. The Windows interface enumerator
 uses the existing operating-system API (`iphlpapi`) rather than adding a runtime
 library.
+
+### Browser model/settings parity
+
+The browser uses one dependency-free selector with TUI-style next-match search,
+stable alphabetical/original ordering, and keyboard/pointer controls. Model
+catalogs remain runtime jobs; manual names are retained. Request fields and
+validation come from the existing C++ settings specifications rather than a
+second browser schema. Chat settings use a metadata-only optimistic SQLite
+update; agent/editor settings merge into the existing project row. No new
+database schema or provider transport is introduced. Chat and workspace options
+remain separate during native mode cycling as well as in the browser.
+
+Interactive task policy persists alongside existing project settings. Browser
+history is a bounded chronological projection with a live-turn boundary and an
+SSE cursor, not a replay of old tool execution. Request-only summaries stay
+hidden; restarting always leaves the agent idle. Browser regression coverage
+uses an optional installed Chromium through its DevTools pipe and adds no
+application dependency.

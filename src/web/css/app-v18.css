@@ -1,4 +1,4 @@
-/* Versioned embedded compact controller stylesheet. */
+/* Versioned embedded compact controller stylesheet, revision 18. */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
@@ -230,6 +230,7 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .agent-console { height: 100%; max-height: 100%; overflow: hidden; }
 .agent-toolbar, .agent-composer { flex: 0 0 auto; }
 .conversation-bar { flex: 0 0 auto; }
+.conversation-bar .pane-title { flex: 1 1 24rem; width: 100%; }
 .message-list, .event-list { flex: 1; min-height: 0; overflow: auto; background: var(--code); }
 .event-list { overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
 .message, .event-card {
@@ -348,8 +349,14 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .thinking-trace { color: var(--muted); }
 .composer { flex: 0 0 auto; display: grid; gap: 0.34rem; padding: 0.42rem 0.55rem 0.5rem; border-top: 1px solid var(--border); background: var(--panel); }
 .composer textarea { max-height: 10rem; resize: none; }
-.compact-controls { display: grid; grid-template-columns: minmax(8rem, 0.7fr) minmax(10rem, 1.2fr) minmax(8rem, 0.7fr) auto; align-items: end; gap: 0.35rem; }
-.compact-controls button { min-width: 5rem; }
+.chat-composer { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+.chat-composer textarea { grid-column: 1; }
+.chat-composer #chat-send { grid-column: 2; min-width: 5rem; }
+.model-identity { display: flex; align-items: center; gap: 0.75rem; min-width: 0; padding-block: 0.35rem; font-size: 0.89rem; }
+.model-identity a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-underline-offset: 0.2em; }
+.model-identity a:first-child { flex: 0 1 auto; max-width: 42%; }
+.model-identity a:last-child { flex: 1 1 auto; }
+.conversation-routing { flex: 1 1 26rem; max-width: 100%; }
 .tool-button { min-height: 1.75rem; padding: 0.16rem 0.38rem; border-color: var(--soft-border); color: var(--text) !important; font-size: 0.68rem; }
 .tool-button:hover:not(:disabled), .tool-button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent) !important; }
 kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0.14rem; background: var(--code); color: var(--muted); font: inherit; font-size: 0.63rem; white-space: nowrap; }
@@ -369,7 +376,8 @@ kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0
 .job-state.failed, .job-state.cancelled { color: var(--danger); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.4rem; }
 
-.agent-toolbar { display: grid; grid-template-columns: minmax(7rem, 0.7fr) minmax(9rem, 1fr) minmax(7rem, 0.7fr) auto auto minmax(12rem, 1.4fr) auto; align-items: end; gap: 0.35rem; padding: 0.38rem 0.5rem; border-bottom: 1px solid var(--border); background: var(--panel); }
+.agent-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(9rem, 20rem) auto auto auto; align-items: end; gap: 0.55rem; padding: 0.38rem 0.5rem; border-bottom: 1px solid var(--border); background: var(--panel); }
+.agent-toolbar .agent-state { grid-column: 1 / -1; }
 .agent-state { align-self: center; display: grid; min-width: 0; }
 .agent-state > span { overflow-wrap: anywhere; }
 .agent-composer { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
@@ -442,6 +450,24 @@ kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0
 .settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; }
 .settings-grid .control-pane { border: 1px solid var(--soft-border); background: var(--panel); }
 .settings-grid h2 { margin-bottom: 0.6rem; }
+.settings-card { align-content: start; }
+.model-settings-card { grid-template-rows: auto auto auto auto auto; }
+.settings-routing-controls { align-items: start; }
+.settings-routing-controls > label { align-content: start; min-width: 0; }
+.settings-routing-controls .picker-trigger,
+#appearance-settings-card select {
+  width: 100%;
+  min-height: 2.05rem;
+  padding: 0.32rem 0.46rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--field);
+  color: var(--text);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .details-list { display: grid; grid-template-columns: minmax(7rem, 0.4fr) minmax(0, 1fr); gap: 0.35rem 0.7rem; margin: 0.5rem 0 0; }
 .details-list dt { color: var(--muted); font-weight: 700; }
 .details-list dd { margin: 0; overflow-wrap: anywhere; }
@@ -462,8 +488,8 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
 .toast.error { border-color: var(--danger); }
 
 @media (max-width: 68rem) {
-  .agent-toolbar { grid-template-columns: repeat(5, minmax(7rem, 1fr)); }
-  .agent-state { grid-column: 1 / -2; }
+  .agent-toolbar { grid-template-columns: minmax(0, 1fr) auto auto auto; }
+  .agent-toolbar .model-identity { grid-column: 1 / -1; }
   .settings-grid { grid-template-columns: 1fr 1fr; }
 }
 
@@ -472,8 +498,6 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
   .utility-layout, .image-layout { grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr); }
   .workspace-layout { grid-template-columns: 1fr; grid-template-rows: minmax(8rem, 36%) minmax(0, 1fr); }
   .dired-panel { border-right: 0; border-bottom: 1px solid var(--border); }
-  .compact-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .compact-controls button { grid-column: 1 / -1; }
   .chat-actions kbd { display: none; }
 }
 
@@ -485,11 +509,11 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
   .thread-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   .conversation-bar { align-items: flex-start; flex-direction: column; gap: 0.25rem; }
   .chat-actions { width: 100%; overflow-x: auto; }
-  .compact-controls { grid-template-columns: 1fr 1fr; }
-  .compact-controls button { grid-column: auto; }
   .utility-layout, .image-layout { grid-template-columns: 1fr; grid-template-rows: minmax(14rem, 44%) minmax(0, 1fr); }
   .control-pane { border-right: 0; border-bottom: 1px solid var(--border); }
-  .agent-toolbar { grid-template-columns: 1fr 1fr; max-height: 12.5rem; overflow: auto; }
+  .agent-toolbar { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .agent-toolbar > label { min-width: 0; }
+  .agent-toolbar > button { grid-column: 1 / -1; }
   .agent-state { grid-column: 1 / -1; }
   .agent-composer { grid-template-columns: 1fr; }
   .agent-composer button { width: 100%; }
@@ -510,3 +534,16 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
 @media (forced-colors: active) {
   button, input, select, textarea, .message, .event-card, .job-card, .control-pane { forced-color-adjust: auto; }
 }
+:root { --picker-row-height: 2.5rem; }
+.model-picker { width: min(48rem, calc(100vw - 1rem)); max-height: calc(100dvh - 1rem); }
+.model-picker .dialog-card { width: 100%; max-width: none; }
+.picker-list { height: min(48vh, 26rem); overflow-y: auto; overscroll-behavior: contain; border: 1px solid currentColor; border-radius: .4rem; }
+.picker-option { min-height: var(--picker-row-height); padding: .5rem .75rem; overflow-wrap: anywhere; cursor: pointer; }
+.picker-option[aria-selected="true"] { background: Highlight; color: HighlightText; }
+.picker-list:focus-visible, .picker-trigger:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.picker-trigger { max-width: 100%; overflow-wrap: anywhere; }
+.model-picker form { display: flex; gap: .5rem; }
+.model-picker form[hidden] { display: none; }
+.model-picker input { min-width: 0; flex: 1; }
+.model-settings-fields { align-items: start; }
+@media (max-width: 480px) { .model-picker .dialog-card { padding: .75rem; } .picker-option { min-height: 2.75rem; } }

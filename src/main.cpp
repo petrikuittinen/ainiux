@@ -137,7 +137,7 @@ int ainiux_main(int argc, char** argv) {
                       << open_error.message << "\n";
         }
     }
-    if (parsed.options.agent) {
+    if (parsed.options.agent || parsed.options.editor) {
         bool restored = false;
         const ainiux::Error restore_error =
             ainiux::agent::restore_project_settings(".", configured.options, restored);

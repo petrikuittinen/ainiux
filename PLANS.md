@@ -642,6 +642,14 @@ workspace root or arbitrary host path.
 
 ## Embedded vanilla-JavaScript WUI
 
+Model/settings parity follow-up is implemented: shared keyboard/search/sort
+provider/model picker; immediately persisted per-thread request settings;
+workspace-shared agent/editor configuration; persisted interactive Act/Plan
+policy; and paged durable agent history on restart. Acceptance coverage includes
+350-model navigation, stale/read-only writes, preserved transcripts, idle
+restart, and desktop/narrow-browser workflows. No general agent session manager
+or automatic interrupted-turn execution is added.
+
 The final v1.30 PR adds a same-origin browser application at `/ui/`. It is a
 full remote controller for the stable API, not an alternate implementation of
 Ainiux logic.

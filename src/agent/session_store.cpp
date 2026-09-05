@@ -1,6 +1,7 @@
 #include "agent/session_store.hpp"
 
 #include <sqlite3.h>
+#include <algorithm>
 
 #include <chrono>
 #include <cstring>
@@ -625,6 +626,42 @@ Error AgentSessionStore::load_messages(std::vector<AgentMessageRecord>& messages
         row.args_preview = statement.column_text(7);
         messages.push_back(std::move(row));
     }
+    return ok_error();
+}
+
+Error AgentSessionStore::load_message_page(std::vector<AgentMessageRecord>& messages,
+                                          long long before, int limit, long long after) const {
+    messages.clear();
+    Statement statement;
+    Error error = statement.prepare(db_, path_,
+        "SELECT id, seq, created_at, role, "
+        "CASE WHEN length(CAST(content AS BLOB))<=4194304 THEN content ELSE NULL END, "
+        "tool_name, tool_ok, '', length(CAST(content AS BLOB)) "
+        "FROM messages WHERE (?1=0 OR seq<?1) AND seq>?3 AND role!='summary' ORDER BY seq DESC LIMIT ?2;");
+    if (!error.ok()) return error;
+    error = statement.bind_int64(db_, path_, 1, before);
+    if (!error.ok()) return error;
+    error = statement.bind_int(db_, path_, 2, std::max(1, std::min(100, limit)));
+    if (!error.ok()) return error;
+    error = statement.bind_int64(db_, path_, 3, after);
+    if (!error.ok()) return error;
+    std::size_t bytes = 0;
+    int rc;
+    while ((rc = statement.step()) == SQLITE_ROW) {
+        if (statement.column_int64(8) > 4194304) {
+            if (!messages.empty()) break;
+            return {ErrorCode::UnsupportedFeature, "agent history row exceeds the 4 MiB browser page limit"};
+        }
+        AgentMessageRecord row;
+        row.id = statement.column_int64(0); row.seq = statement.column_int64(1);
+        row.created_at = statement.column_int64(2); row.role = statement.column_text(3);
+        row.content = statement.column_text(4); row.tool_name = statement.column_text(5);
+        row.tool_ok = statement.column_int(6) != 0; row.args_preview = statement.column_text(7);
+        if (!messages.empty() && bytes + row.content.size() > 4U * 1024U * 1024U) break;
+        bytes += row.content.size(); messages.push_back(std::move(row));
+    }
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) return sqlite_error(db_, "could not load history", path_);
+    std::reverse(messages.begin(), messages.end());
     return ok_error();
 }
 

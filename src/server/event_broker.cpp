@@ -6,6 +6,10 @@
 #include <utility>
 
 namespace ainiux::server {
+std::uint64_t EventBroker::latest_id() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return next_id_ - 1;
+}
 
 std::string server_timestamp() {
     const std::time_t now = std::time(nullptr);

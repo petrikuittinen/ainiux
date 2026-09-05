@@ -187,6 +187,7 @@ POST /ainiux/v1/chat/threads
 GET  /ainiux/v1/chat/threads/:thread_id
 POST /ainiux/v1/chat/threads/:thread_id/messages
 POST /ainiux/v1/chat/threads/:thread_id/regenerate
+POST /ainiux/v1/chat/threads/:thread_id/abandon
 ```
 
 Listing returns at most 200 newest summaries with `id`, `revision`, `name`,
@@ -229,6 +230,14 @@ Successful appends return the new revision and message count. Existing TUI
 saves advance the same SQLite revision, so a stale API append returns
 `revision_conflict` (409) with `details.current_revision`; no stale messages are
 written. Read-only threads return `thread_read_only` (409).
+
+Browser clients may conditionally abandon a newly created thread with
+`{"revision":1}`. The `abandon` operation atomically soft-deletes only a
+revision-matching, writable thread with no `user` or `assistant` messages;
+system-prompt-only threads count as empty. Success returns
+`{"id":N,"deleted":true}`. A thread containing conversation content is
+preserved and returns `deleted:false` with `reason:"not_empty"`; stale,
+missing, and read-only targets use the existing thread error responses.
 
 Thread responses expose at most 64 attachments per message, with kind, MIME
 type, display name, and byte size only; `attachments_truncated` reports an
@@ -437,6 +446,32 @@ Clients must use the authenticated capabilities endpoint rather than infer
 support from this contract document. The WUI follows that rule and disables
 controls for operations absent from an older or reduced server.
 
+## Model/request settings
+
+`GET /ainiux/v1/workspace/settings` returns the workspace `provider`, `model`,
+`settings`, `settings_fields`, and opaque `revision`. `POST` accepts the revision
+plus optional provider, model, and a partial settings object. Values are strings
+using the TUI field syntax; empty optional values clear an override. For example:
+
+```json
+{"revision":"REVISION_FROM_GET","settings":{"temperature":"0.7","max_tokens":"4096"}}
+```
+
+Only model/request fields listed in `settings_fields` are accepted; paths,
+credentials, and arbitrary configuration are never accepted or returned. Changes
+persist in the existing workspace project row, do not start tools, and require
+an idle agent. Stale revisions return `409`. If multiple API sessions exist,
+close the extra sessions before using the singleton workspace configuration.
+Editor-assist jobs default to this configuration, not the selected chat thread.
+Chat, run, plan, and editor-assist job bodies also accept a partial `settings`
+object with the same validation.
+
+`GET /ainiux/v1/chat/threads/:thread_id/settings` returns the existing thread
+projection, including settings and field metadata. `POST` accepts its numeric
+thread revision plus optional provider, model, and partial settings. This updates
+only thread metadata, advances the existing revision, and preserves messages,
+attachments, and unrecognized stored settings. Read-only threads reject writes.
+
 ## Interactive agent sessions
 
 Create and inspect a persistent project-local agent session:
@@ -446,6 +481,7 @@ POST   /ainiux/v1/sessions/agent
 GET    /ainiux/v1/sessions
 GET    /ainiux/v1/sessions/:session_id
 GET    /ainiux/v1/sessions/:session_id/events
+GET    /ainiux/v1/sessions/:session_id/history?before=SEQUENCE
 POST   /ainiux/v1/sessions/:session_id/reasoning
 POST   /ainiux/v1/sessions/:session_id/settings
 POST   /ainiux/v1/sessions/:session_id/turns
@@ -466,11 +502,22 @@ An idle session's reasoning selector can be changed with
 `{"reasoning":"auto|off|VALUE|TOKENS"}`. Snapshots include the effective
 `reasoning` value and catalog-derived `reasoning_options`.
 
-The settings route accepts exactly one of `provider`, `model`, `task_mode`, or
+The settings route accepts either the revision-checked model-settings object
+above or exactly one of `provider`, `model`, `task_mode`, or
 `permission_mode` per request and only while the session is idle. It returns
 the updated snapshot and emits `settings_changed`. Provider changes use that
 profile's configured API default; the browser does not choose Chat Completions
 or Responses itself.
+
+History returns chronological `messages` (`seq`, `role`, `content`), a `before`
+cursor for older pages, and the active `turn_id` (empty when idle). Omit `before`
+for the newest page; an empty page ends pagination. Pages contain at most 100
+rows and 4 MiB of content. Oversized individual rows fail without modifying the
+transcript. Request-only summaries and rows before an explicit context reset
+are excluded. During a turn, history ends before that turn's live events.
+Snapshots include `event_cursor` for joining durable history to SSE without
+replaying completed turns. Restart restores interactive Act/Plan policy and
+history but does not execute pending work.
 
 Session SSE events use the same bounded ordered replay contract as jobs and
 include the session and turn IDs. Streaming agent rounds publish `activity`

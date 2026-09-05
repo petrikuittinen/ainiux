@@ -346,7 +346,7 @@ Error Listener::start(ListenerConfig config) {
                                                    loopback_bind_address(impl_->config.bind_address) ||
                                                        impl_->config.allow_remote_yolo);
     impl_->workspace = std::make_unique<WorkspaceService>(impl_->config.workspace);
-    impl_->chat_threads = std::make_unique<ChatService>();
+    impl_->chat_threads = std::make_unique<ChatService>(std::string{}, impl_->config.base_options);
     impl_->stopping.store(false, std::memory_order_release);
     OwnedSocket socket(::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
     if (socket.get() == kInvalidSocket) return {ErrorCode::Connect, "could not create the control listener socket"};

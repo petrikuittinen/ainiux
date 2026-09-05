@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v15.css">
-  <script type="module" src="/ui/assets/app-v16.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v18.css">
+  <script type="module" src="/ui/assets/app-v20.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -47,23 +47,24 @@
                 <h2 id="conversation-heading">Select a thread</h2>
                 <span id="thread-meta" class="muted"></span>
                 <span id="chat-metrics" class="metrics-strip" aria-live="polite"></span>
+                <div class="model-identity conversation-routing" aria-label="Chat model settings"><a id="chat-provider-link" href="#settings-panel">Provider: —</a><a id="chat-model-link" href="#settings-panel">Model: —</a></div>
               </div>
               <div class="button-row chat-actions" aria-label="Chat actions">
-                <button id="chat-regenerate-button" class="tool-button" type="button" disabled>Regenerate <kbd>Ctrl+R</kbd></button>
-                <button id="chat-cycle-reasoning-button" class="tool-button" type="button">Reasoning <kbd>Alt+T</kbd></button>
-                <button id="chat-thinking-button" class="tool-button" type="button" aria-pressed="false">Thinking hidden <kbd>Alt+W</kbd></button>
+                <button id="chat-regenerate-button" class="tool-button" type="button" disabled aria-keyshortcuts="Control+R" title="Regenerate · Ctrl+R">Regenerate</button>
+                <button id="chat-cycle-reasoning-button" class="tool-button" type="button" aria-keyshortcuts="Alt+T" title="Change reasoning · Alt+T">Reasoning: auto</button>
+                <button id="chat-thinking-button" class="tool-button" type="button" aria-pressed="false" aria-keyshortcuts="Alt+W" title="Show or hide thinking · Alt+W">Thinking hidden</button>
               </div>
             </div>
             <div id="chat-messages" class="message-list empty-state" aria-live="polite">Choose or create a thread.</div>
             <form id="chat-form" class="composer chat-composer">
               <label class="sr-only" for="chat-input">Message</label>
-              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" required disabled aria-keyshortcuts="Control+R Alt+T Alt+W Escape"></textarea>
-              <div class="compact-controls">
+              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" required disabled aria-keyshortcuts="Alt+P Alt+M Control+R Alt+T Alt+W Escape"></textarea>
+              <div id="chat-model-controls" hidden>
                 <label>Provider <select id="chat-provider" class="provider-select"></select></label>
                 <label>Model <input id="chat-model" type="text" list="chat-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="chat-model-list"></datalist><small id="chat-model-status" class="field-hint" aria-live="polite"></small></label>
-                <label>Reasoning <select id="chat-reasoning"><option value="">Server default</option></select></label>
-                <button id="chat-send" type="submit" disabled>Send</button>
               </div>
+              <select id="chat-reasoning" hidden aria-hidden="true"><option value="">Server default</option></select>
+              <button id="chat-send" type="submit" disabled>Send</button>
             </form>
           </section>
         </div>
@@ -88,19 +89,23 @@
 
       <section id="agent-panel" class="panel" aria-label="Agent" hidden>
         <section class="agent-console">
-          <div class="agent-toolbar">
+          <div hidden>
             <label>Provider <select id="agent-provider" class="provider-select"></select></label>
             <label>Model <input id="agent-model" list="agent-model-list" maxlength="512" autocomplete="off"><datalist id="agent-model-list"></datalist><small id="agent-model-status" class="field-hint" aria-live="polite"></small></label>
-            <label>Reasoning <select id="agent-reasoning"><option value="">Auto</option></select></label>
+          </div>
+          <div class="agent-toolbar">
+            <div class="model-identity" aria-label="Agent model settings"><a id="agent-provider-link" href="#settings-panel">Provider: —</a><a id="agent-model-link" href="#settings-panel">Model: —</a></div>
+            <select id="agent-reasoning" hidden aria-hidden="true"><option value="">Auto</option></select>
+            <button id="agent-cycle-reasoning-button" class="tool-button" type="button" aria-keyshortcuts="Alt+T" title="Change reasoning · Alt+T">Reasoning: auto</button>
             <label>Mode <select id="agent-task-mode"><option value="act">Act</option><option value="plan">Plan</option></select></label>
             <label>Permissions <select id="agent-permission"><option value="smart">Smart</option><option value="confirm">Confirm</option><option value="yolo">Yolo</option></select></label>
-            <div class="agent-state"><span id="agent-meta" class="muted">Open Agent to initialize this workspace.</span><span id="agent-metrics" class="metrics-strip" aria-live="polite"></span></div>
             <button id="cancel-turn-button" class="danger" type="button" hidden>Cancel <kbd>Esc</kbd></button>
+            <div class="agent-state"><span id="agent-meta" class="muted">Open Agent to initialize this workspace.</span><span id="agent-metrics" class="metrics-strip" aria-live="polite"></span></div>
           </div>
           <div id="agent-events" class="event-list empty-state" aria-live="polite">Open Agent to initialize this workspace.</div>
           <form id="agent-turn-form" class="composer agent-composer">
             <label class="sr-only" for="agent-turn-input">Agent instruction</label>
-            <textarea id="agent-turn-input" rows="4" maxlength="262144" required disabled placeholder="Describe the task…" aria-keyshortcuts="Alt+T Escape"></textarea>
+            <textarea id="agent-turn-input" rows="4" maxlength="262144" required disabled placeholder="Describe the task…" aria-keyshortcuts="Alt+P Alt+M Alt+T Escape"></textarea>
             <button id="agent-turn-submit" type="submit" disabled>Send</button>
           </form>
         </section>
@@ -159,9 +164,9 @@
 
       <section id="settings-panel" class="panel settings-panel" aria-label="Settings" hidden>
         <div class="settings-grid">
-          <section class="control-pane"><h2>Appearance</h2><label>Theme <select id="theme-select"><option value="auto">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><p class="muted">In Chat or Agent, use <code>/theme light</code> or <code>/theme dark</code>.</p></section>
-          <section class="control-pane"><div class="pane-bar"><h2>Status</h2><button id="refresh-settings-button" class="ghost" type="button">Refresh</button></div><dl id="status-details" class="details-list"></dl></section>
-          <section class="control-pane"><h2>Capabilities</h2><dl id="capability-details" class="details-list"></dl></section>
+          <section id="appearance-settings-card" class="control-pane stack settings-card"><h2>Appearance</h2><label>Theme <select id="theme-select"><option value="auto">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><p class="muted">In Chat or Agent, use <code>/theme light</code> or <code>/theme dark</code>.</p></section>
+          <section class="control-pane settings-card"><div class="pane-bar"><h2>Status</h2><button id="refresh-settings-button" class="ghost" type="button">Refresh</button></div><dl id="status-details" class="details-list"></dl></section>
+          <section class="control-pane settings-card"><h2>Capabilities</h2><dl id="capability-details" class="details-list"></dl></section>
         </div>
         <p class="callout">Provider and controller credentials, environment variables, database paths, TLS material, and hidden project state are never requested by this view.</p>
       </section>

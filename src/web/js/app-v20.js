@@ -1,4 +1,5 @@
 import { renderMarkdown } from "./highlight-v4.js";
+import { createSelector } from "./selector-v3.js";
 import { appendHighlightedCode, languageForPath } from "./syntax-v3.js";
 import {
   normalizeImageCatalog, selectImageModel, imageFileError, customDimensionError,
@@ -23,6 +24,8 @@ const state = {
   streams: new Map(),
   threads: [],
   thread: null,
+  chatInitialized: false,
+  startingNewChat: false,
   chatPending: false,
   chatPendingJobId: "",
   chatStreams: new Map(),
@@ -39,6 +42,8 @@ const state = {
   agentClock: null,
   agentClockTimer: null,
   modelCatalogs: new Map(),
+  workspaceSettings: null,
+  agentHistory: new Map(),
   imageJobId: "",
   imageSubmitting: false,
   imageResult: null,
@@ -53,6 +58,14 @@ const state = {
 };
 
 const byId = (id) => document.getElementById(id);
+const picker = createSelector(document);
+const pickerButtons = new Map();
+const threadSettingsSaves = new Map();
+const threadSettingsSnapshots = new Map();
+const newUnusedThreadIds = new Set();
+let threadLoadSequence = 0;
+let workspaceSavePending = false;
+let workspaceModelPickerQueued = "";
 let chatRenderFrame = null;
 let pendingChatStream = null;
 let agentRenderFrame = null;
@@ -452,12 +465,12 @@ function stopAllStreams() {
   state.streams.clear();
 }
 
-function startStream(key, path, onMessage, onExpired, isDone) {
+function startStream(key, path, onMessage, onExpired, isDone, after = 0) {
   stopStream(key);
   const controller = new AbortController();
   state.streams.set(key, controller);
   void (async () => {
-    let cursor = 0;
+    let cursor = after;
     while (state.connected && !controller.signal.aborted && !isDone()) {
       try {
         const headers = new Headers({
@@ -473,8 +486,8 @@ function startStream(key, path, onMessage, onExpired, isDone) {
           referrerPolicy: "no-referrer",
         });
         if (response.status === 410) {
-          await onExpired();
-          cursor = 0;
+          const resumed = await onExpired();
+          cursor = Number.isSafeInteger(resumed) && resumed >= 0 ? resumed : 0;
           if (isDone()) return;
           continue;
         }
@@ -519,6 +532,7 @@ function modelControls() {
     { providerId: "goal-provider", modelId: "goal-model", listId: "goal-model-list", statusId: "goal-model-status" },
     { providerId: "thread-provider", modelId: "thread-model", listId: "thread-model-list", statusId: "thread-model-status" },
     { providerId: "agent-provider", modelId: "agent-model", listId: "agent-model-list", statusId: "agent-model-status", reasoningId: "agent-reasoning" },
+    { providerId: "workspace-provider", modelId: "workspace-model", listId: "workspace-model-list", statusId: "workspace-model-status" },
   ];
 }
 
@@ -572,13 +586,289 @@ function renderModelControl(control) {
   const status = byId(control.statusId);
   if (!supports("models")) status.textContent = state.connected ? "Enter a model manually." : "";
   else if (!catalog || catalog.state === "loading") status.textContent = "Loading models…";
-  else if (catalog.state === "ready") status.textContent = `${models.length} model${models.length === 1 ? "" : "s"}`;
+  else if (catalog.state === "ready") status.textContent = "";
   else status.textContent = "Model list unavailable; enter one manually.";
   const input = byId(control.modelId);
-  if (catalog && catalog.state === "ready" && models.length === 1 && !input.value.trim()) {
+  if (["goal-model", "thread-model"].includes(control.modelId) && catalog && catalog.state === "ready" && models.length === 1 && !input.value.trim()) {
     input.value = models[0];
   }
   renderReasoningControl(control, catalog);
+  picker.update(`${control.modelId}:${key}`, models, status.textContent);
+  syncPickerButtons();
+}
+
+function openModelPicker(control, kind) {
+  const source = byId(kind === "provider" ? control.providerId : control.modelId);
+  if (source.disabled || (control.providerId === "agent-provider" && workspaceSavePending)) return;
+  const catalogKey = modelCatalogKey(control);
+  const providerItems = [...byId(control.providerId).options]
+    .filter((item) => item.value && item.value !== "none")
+    .map((item) => ({ value: item.value, label: item.textContent }));
+  picker.open({
+    key: kind === "provider" ? control.providerId : `${control.modelId}:${catalogKey}`,
+    title: kind === "provider" ? "Choose provider" : `Choose a ${catalogKey || "provider"} model`,
+    items: kind === "provider" ? providerItems : state.modelCatalogs.get(catalogKey)?.models || [],
+    value: source.value, manual: kind === "model", autoSelectOnly: kind === "model",
+    status: byId(control.statusId).textContent,
+    onReload: kind === "model" ? () => void requestModelCatalog(catalogKey, control) : null,
+    onSelect: (value) => {
+      if (source.disabled || (kind === "model" && modelCatalogKey(control) !== catalogKey)) return;
+      if (kind === "provider") {
+        byId(control.modelId).value = "";
+        if (["workspace-provider", "agent-provider"].includes(control.providerId)) {
+          workspaceModelPickerQueued = control.providerId;
+        }
+      }
+      source.value = value;
+      source.dispatchEvent(new Event("change", { bubbles: true }));
+      syncPickerButtons();
+      if (kind === "provider" &&
+          !["workspace-provider", "agent-provider"].includes(control.providerId)) {
+        window.setTimeout(() => openModelPicker(control, "model"), 0);
+      }
+    },
+  });
+}
+
+function syncPickerButtons() {
+  for (const [id, button] of pickerButtons) {
+    const source = byId(id);
+    button.disabled = source.disabled;
+    button.textContent = source.tagName === "SELECT"
+      ? source.selectedOptions[0]?.textContent || source.value || "Server default"
+      : source.value.trim() || "Default model";
+  }
+  for (const scope of ["chat", "agent"]) {
+    const configuration = scope === "chat" ? state.thread : state.session;
+    for (const kind of ["provider", "model"]) {
+      const link = byId(`${scope}-${kind}-link`);
+      const fallback = state.startingNewChat && scope === "chat" ? "Starting new chat…" : "—";
+      const value = configuration && typeof configuration[kind] === "string"
+        ? configuration[kind] || (kind === "provider" ? "none" : "Default model") : fallback;
+      const label = kind === "provider" ? "Provider" : "Model";
+      link.textContent = `${label}: ${value}`;
+      link.setAttribute("aria-label", `Change ${kind} in Settings: ${value}`);
+      link.setAttribute("aria-keyshortcuts", kind === "provider" ? "Alt+P" : "Alt+M");
+      link.title = `${label}: ${value} · Change in Settings · Alt+${kind === "provider" ? "P" : "M"} opens selector`;
+    }
+  }
+}
+
+function installPickerControls() {
+  for (const control of modelControls()) {
+    if (control.providerId === "agent-provider") continue;
+    for (const kind of ["provider", "model"]) {
+      const id = kind === "provider" ? control.providerId : control.modelId;
+      const source = byId(id);
+      const button = element("button", "picker-trigger", kind === "model" ? "Choose…" : "Server default");
+      button.type = "button"; button.setAttribute("aria-label", `Choose ${kind}`);
+      button.setAttribute("aria-haspopup", "dialog");
+      button.setAttribute("aria-keyshortcuts", kind === "provider" ? "Alt+P" : "Alt+M");
+      button.title = `Choose ${kind} · Alt+${kind === "provider" ? "P" : "M"}`;
+      source.after(button); pickerButtons.set(id, button);
+      source.hidden = true;
+      if (kind === "model") source.removeAttribute("list");
+      button.addEventListener("click", () => openModelPicker(control, kind));
+      source.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown" && event.altKey) { event.preventDefault(); openModelPicker(control, kind); }
+      });
+    }
+  }
+  syncPickerButtons();
+}
+
+function setupModelSettings() {
+  const grid = byId("settings-panel").querySelector(".settings-grid");
+  const appearance = byId("appearance-settings-card");
+  for (const [scope, title] of [["chat", "Current chat"], ["workspace", "Workspace agent & editor"]]) {
+    const section = element("section", "control-pane stack settings-card model-settings-card");
+    section.dataset.settingsScope = scope;
+    section.addEventListener("focusin", () => { modelSettingsScope = scope; });
+    section.append(element("h2", "", title));
+    const targets = element("div", "form-grid settings-routing-controls");
+    if (scope === "workspace") {
+      let modelLabel = null;
+      for (const kind of ["provider", "model"]) {
+        const label = element("label", "", kind === "provider" ? "Provider " : "Model ");
+        const input = element(kind === "provider" ? "select" : "input"); input.id = `workspace-${kind}`;
+        if (kind === "provider") input.className = "provider-select";
+        else { input.maxLength = 512; input.autocomplete = "off"; modelLabel = label; }
+        label.append(input); targets.append(label);
+      }
+      const list = element("datalist"); list.id = "workspace-model-list";
+      const status = element("small", "field-hint"); status.id = "workspace-model-status";
+      modelLabel.append(list, status);
+    } else {
+      targets.append(...byId("chat-model-controls").children);
+      byId("chat-model-controls").remove();
+    }
+    const summary = element("p", "field-hint"); summary.id = `${scope}-settings-summary`;
+    const fields = element("div", "form-grid model-settings-fields"); fields.id = `${scope}-settings-fields`;
+    const status = element("p", "field-hint"); status.id = `${scope}-settings-save-status`; status.setAttribute("role", "status");
+    section.append(targets, summary, fields, status);
+    grid.insertBefore(section, appearance);
+  }
+  for (const scope of ["chat", "agent"]) {
+    for (const kind of ["provider", "model"]) {
+      byId(`${scope}-${kind}-link`).addEventListener("click", (event) => {
+        event.preventDefault();
+        showModelSettings(scope === "chat" ? "chat" : "workspace", kind);
+      });
+    }
+  }
+  for (const [container, scope] of [["assist-dialog", "workspace"]]) {
+    const button = element("button", "ghost", "Model settings"); button.type = "button";
+    button.addEventListener("click", () => {
+      if (container === "assist-dialog") closeDialog(byId(container));
+      showModelSettings(scope);
+    });
+    const target = container === "agent-panel" ? byId(container).querySelector(".agent-toolbar")
+      : byId(container).querySelector(".dialog-actions");
+    target.append(button);
+  }
+}
+
+let modelSettingsScope = "chat";
+function showModelSettings(scope, kind = "provider") {
+  switchPanel("settings-panel");
+  modelSettingsScope = scope;
+  const target = pickerButtons.get(`${scope}-${kind}`);
+  byId(`${scope}-settings-summary`).scrollIntoView({ block: "nearest" });
+  if (target && !target.disabled) target.focus();
+}
+
+function modelShortcutControl(modal) {
+  if (document.querySelector(".model-picker[open]")) return null;
+  if (modal) {
+    if (modal.id === "new-thread-dialog") return modelControls().find((control) => control.providerId === "thread-provider");
+    return null;
+  }
+  const panel = activePanelId();
+  let scope;
+  if (panel === "chat-panel") scope = "chat";
+  else if (panel === "agent-panel") scope = "agent";
+  else if (panel === "workspace-panel") scope = "workspace";
+  else if (panel === "jobs-panel") scope = "goal";
+  else if (panel === "settings-panel") scope = document.activeElement.closest("[data-settings-scope]")?.dataset.settingsScope || modelSettingsScope;
+  return modelControls().find((control) => control.providerId === `${scope}-provider`);
+}
+
+function renderModelSettings(scope) {
+  const configuration = scope === "chat" ? state.thread : state.workspaceSettings;
+  const fields = byId(`${scope}-settings-fields`);
+  byId(`${scope}-settings-summary`).textContent = configuration
+    ? `${scope === "chat" ? configuration.name || "Chat" : "Shared workspace settings"} · ${configuration.provider || "Server default"} / ${configuration.model || "default"}`
+    : scope === "chat" ? "Select a chat thread." : "Connect to load workspace settings.";
+  const signature = JSON.stringify([configuration?.settings, configuration?.settings_fields]);
+  if (fields.dataset.signature === signature) return;
+  fields.dataset.signature = signature; fields.replaceChildren();
+  for (const field of configuration?.settings_fields || []) {
+    const label = element("label", "", `${field.id.replaceAll("_", " ")} `);
+    const choices = field.choices || [];
+    const input = element(choices.length ? "select" : "input");
+    if (choices.length) {
+      if (field.optional) { const option = element("option", "", "Default"); option.value = ""; input.append(option); }
+      for (const value of choices) { const option = element("option", "", value); option.value = value; input.append(option); }
+      const value = configuration.settings[field.id] || "";
+      if (value && ![...input.options].some((option) => option.value === value)) {
+        const option = element("option", "", value); option.value = value; input.append(option);
+      }
+    } else { input.maxLength = 128; input.autocomplete = "off"; input.placeholder = field.optional ? "Default" : ""; }
+    input.value = configuration.settings[field.id] || "";
+    input.addEventListener("change", () => {
+      const save = scope === "chat" ? saveChatSettings : saveWorkspaceSettings;
+      void save({ settings: { [field.id]: input.value } });
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); input.blur(); }
+    });
+    label.append(input, element("small", "field-hint", field.hint || "")); fields.append(label);
+  }
+}
+
+async function saveChatSettings(patch) {
+  const selected = state.thread;
+  if (!selected || selected.read_only || state.chatStreams.has(selected.id)) return;
+  const id = selected.id;
+  if (!threadSettingsSnapshots.has(id)) threadSettingsSnapshots.set(id, selected);
+  const save = (threadSettingsSaves.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
+    const snapshot = threadSettingsSnapshots.get(id);
+    byId("chat-settings-save-status").textContent = "Saving…";
+    const response = await api(`${API_ROOT}/chat/threads/${encodeURIComponent(id)}/settings`, {
+      method: "POST", body: { revision: snapshot.revision, ...patch },
+    });
+    const updated = { ...snapshot, ...response.thread };
+    threadSettingsSnapshots.set(id, updated);
+    if (state.thread?.id === id) {
+      state.thread = { ...state.thread, ...response.thread }; applyThreadModelSettings(state.thread);
+      byId("chat-settings-save-status").textContent = "Saved";
+    }
+    await loadThreads();
+  });
+  threadSettingsSaves.set(id, save);
+  try { await save; }
+  catch (error) {
+    if (state.thread?.id === id) {
+      byId("chat-settings-save-status").textContent = errorMessage(error);
+      if (patch.provider !== undefined || patch.model !== undefined) applyThreadModelSettings(state.thread);
+    }
+    toast(errorMessage(error), "error");
+  } finally {
+    if (threadSettingsSaves.get(id) === save) threadSettingsSaves.delete(id);
+  }
+}
+
+async function refreshWorkspaceSettings() {
+  state.workspaceSettings = await api(`${API_ROOT}/workspace/settings`);
+  applyWorkspaceSettings();
+}
+
+function applyWorkspaceSettings() {
+  const saved = state.workspaceSettings;
+  if (!saved) return;
+  byId("workspace-provider").value = saved.provider || "";
+  byId("workspace-model").value = saved.model || "";
+  refreshModelControl(modelControls().find((control) => control.providerId === "workspace-provider"));
+  renderModelSettings("workspace");
+}
+
+async function saveWorkspaceSettings(patch) {
+  if (workspaceSavePending || !state.workspaceSettings) return;
+  workspaceSavePending = true; updateSettingsAvailability();
+  byId("workspace-settings-save-status").textContent = "Saving…";
+  let saved = false;
+  try {
+    state.workspaceSettings = await api(`${API_ROOT}/workspace/settings`, {
+      method: "POST", body: { revision: state.workspaceSettings.revision, ...patch },
+    });
+    applyWorkspaceSettings();
+    saved = true;
+    if (state.session) await refreshSelectedSession();
+    byId("workspace-settings-save-status").textContent = "Saved";
+  } catch (error) {
+    byId("workspace-settings-save-status").textContent = errorMessage(error); toast(errorMessage(error), "error");
+    if (patch.provider !== undefined || patch.model !== undefined) applyWorkspaceSettings();
+  } finally {
+    workspaceSavePending = false; updateSettingsAvailability();
+    if (workspaceModelPickerQueued) {
+      const providerId = workspaceModelPickerQueued;
+      workspaceModelPickerQueued = "";
+      if (saved) {
+        const control = modelControls().find((item) => item.providerId === providerId);
+        window.setTimeout(() => openModelPicker(control, "model"), 0);
+      }
+    }
+  }
+}
+
+function updateSettingsAvailability() {
+  const chatDisabled = !state.connected || !state.thread || state.thread.read_only || state.chatPending;
+  for (const id of ["chat-provider", "chat-model", "chat-reasoning"]) byId(id).disabled = chatDisabled;
+  for (const input of document.querySelectorAll("#chat-settings-fields input, #chat-settings-fields select, [data-chat-setting]")) input.disabled = chatDisabled;
+  const workspaceDisabled = !state.connected || workspaceSavePending || Boolean(state.session && state.session.status !== "ready");
+  for (const id of ["workspace-provider", "workspace-model"]) byId(id).disabled = workspaceDisabled;
+  for (const input of document.querySelectorAll("#workspace-settings-fields input, #workspace-settings-fields select")) input.disabled = workspaceDisabled;
+  syncPickerButtons();
 }
 
 function renderMatchingModelControls(key) {
@@ -698,7 +988,7 @@ function populateProviders() {
     clear(select);
     const automatic = element("option", "", "Server default");
     automatic.value = "";
-    select.append(automatic);
+    if (["goal-provider", "thread-provider"].includes(select.id)) select.append(automatic);
     for (const provider of providers) {
       const option = element("option", "", provider);
       option.value = provider;
@@ -894,6 +1184,7 @@ function applyCapabilities() {
   for (const control of byId("goal-job-form").elements) control.disabled = !supports("run") && !supports("plan");
   for (const control of byId("image-job-form").elements) control.disabled = !supports("image");
   renderImageOptions();
+  updateSettingsAvailability();
 }
 
 function renderSettings() {
@@ -919,16 +1210,19 @@ function renderSettings() {
 }
 
 async function refreshSettings() {
-  const [capabilities, status, imageCatalog] = await Promise.all([
+  const [capabilities, status, imageCatalog, workspaceSettings] = await Promise.all([
     api(`${API_ROOT}/capabilities`),
     api(`${API_ROOT}/status`),
     api(`${API_ROOT}/images/catalog`),
+    api(`${API_ROOT}/workspace/settings`),
   ]);
   state.capabilities = capabilities;
   state.status = status;
   state.imageCatalog = normalizeImageCatalog(imageCatalog);
+  state.workspaceSettings = workspaceSettings;
   renderSettings();
   applyCapabilities();
+  applyWorkspaceSettings();
 }
 
 function setConnectionStatus(label, className) {
@@ -978,6 +1272,7 @@ async function restoreBrowserState() {
     tasks.push((async () => {
       await loadThreads();
       if (threadId) await loadThread(threadId);
+      else if (!state.chatInitialized) await createNewChat({ provider: "none" }, true);
     })());
   }
   if (supports("sessions")) {
@@ -985,8 +1280,11 @@ async function restoreBrowserState() {
       await loadSessions();
       if (sessionId && state.sessions.some((item) => item.id === sessionId)) {
         await selectSession(sessionId);
-      } else if (activePanelId() === "agent-panel") {
-        await ensureWorkspaceAgent();
+      } else {
+        state.session = null;
+        state.agentHistory.clear(); state.agentLogs.clear(); state.agentActivities.clear(); state.agentSeenEvents.clear();
+        renderAgent();
+        if (activePanelId() === "agent-panel") await ensureWorkspaceAgent();
       }
     })());
   }
@@ -1013,6 +1311,7 @@ async function markConnected(reconnected) {
   closeDialog(byId("auth-dialog"));
   applyCapabilities();
   await restoreBrowserState();
+  state.chatInitialized = true;
   toast(reconnected ? "Reconnected to the Ainiux control server" :
     "Connected to the Ainiux control server");
 }
@@ -1054,6 +1353,10 @@ async function connect(token, previouslyValidated = false) {
 }
 
 function forgetAuthentication(message = "") {
+  picker.close();
+  state.workspaceSettings = null;
+  state.agentHistory.clear();
+  threadSettingsSnapshots.clear();
   cancelReconnect();
   stopAllStreams();
   stopAgentClock();
@@ -1066,6 +1369,9 @@ function forgetAuthentication(message = "") {
   state.status = null;
   state.imageCatalog = null;
   state.thread = null;
+  state.chatInitialized = false;
+  state.startingNewChat = false;
+  newUnusedThreadIds.clear();
   state.chatMetrics.clear();
   state.session = null;
   state.modelCatalogs.clear();
@@ -1093,6 +1399,11 @@ function invalidateAuthentication() {
 }
 
 function switchPanel(panelId) {
+  if (panelId === "settings-panel") {
+    const previous = activePanelId();
+    if (previous === "chat-panel") modelSettingsScope = "chat";
+    else if (previous === "agent-panel" || previous === "workspace-panel") modelSettingsScope = "workspace";
+  }
   for (const panel of document.querySelectorAll("main > .panel")) {
     const active = panel.id === panelId;
     panel.hidden = !active;
@@ -1403,12 +1714,14 @@ function updateVisibleChatStream(context) {
 }
 
 function renderChat() {
+  updateSettingsAvailability();
   const messages = byId("chat-messages");
   if (!state.thread) {
-    byId("conversation-heading").textContent = "Select a thread";
+    byId("conversation-heading").textContent = state.startingNewChat
+      ? "Starting new chat…" : "Select a thread";
     byId("thread-meta").textContent = "";
     byId("chat-metrics").textContent = "";
-    setEmpty(messages, "Choose or create a thread.");
+    setEmpty(messages, state.startingNewChat ? "Starting new chat…" : "Choose or create a thread.");
     byId("chat-input").disabled = true;
     byId("chat-send").disabled = true;
     renderChatToolbar();
@@ -1447,13 +1760,72 @@ async function loadThreads() {
 }
 
 async function loadThread(threadId) {
+  const previous = state.thread;
+  const sequence = ++threadLoadSequence;
   try {
+    await threadSettingsSaves.get(threadId);
     const response = await api(`${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}`);
+    if (sequence !== threadLoadSequence) return;
     state.thread = response.thread;
+    threadSettingsSnapshots.set(threadId, state.thread);
     applyThreadModelSettings(state.thread);
     renderChat();
+    if (previous && previous.id !== threadId) void abandonUnusedThread(previous);
   } catch (error) {
     toast(errorMessage(error), "error");
+  }
+}
+
+async function abandonUnusedThread(thread) {
+  if (!thread || !newUnusedThreadIds.has(thread.id)) return;
+  newUnusedThreadIds.delete(thread.id);
+  try {
+    await threadSettingsSaves.get(thread.id);
+    const snapshot = threadSettingsSnapshots.get(thread.id) || thread;
+    const result = await api(`${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/abandon`, {
+      method: "POST", body: { revision: snapshot.revision },
+    });
+    if (result.deleted) await loadThreads();
+  } catch (error) {
+    if (!(error instanceof ApiError) || ![404, 409].includes(error.status)) {
+      toast(`Could not clean up the unused chat: ${errorMessage(error)}`, "error");
+    }
+  }
+}
+
+async function createNewChat(values = {}, promptForRouting = false) {
+  const previous = state.thread;
+  state.startingNewChat = true;
+  state.thread = null;
+  renderChat();
+  try {
+    const response = await api(`${API_ROOT}/chat/threads`, {
+      method: "POST",
+      body: optionalPayload({ revision: 0, ...values }),
+    });
+    state.thread = response.thread;
+    state.startingNewChat = false;
+    newUnusedThreadIds.add(state.thread.id);
+    threadSettingsSnapshots.set(state.thread.id, state.thread);
+    applyThreadModelSettings(state.thread);
+    await loadThreads();
+    renderChat();
+    if (previous) void abandonUnusedThread(previous);
+    const control = modelControls().find((item) => item.providerId === "chat-provider");
+    if (promptForRouting) {
+      // First-run setup deliberately starts unconfigured. Let the user choose
+      // the provider first; the provider callback opens its model catalog.
+      openModelPicker(control, "provider");
+    } else if (values.provider !== undefined || values.model !== undefined) {
+      if (state.thread.provider === "none") openModelPicker(control, "provider");
+      else if (!state.thread.model) openModelPicker(control, "model");
+    }
+    return state.thread;
+  } catch (error) {
+    state.startingNewChat = false;
+    state.thread = previous;
+    renderChat();
+    throw error;
   }
 }
 
@@ -1461,11 +1833,20 @@ function applyThreadModelSettings(thread) {
   if (!thread) return;
   const provider = byId("chat-provider");
   const storedProvider = typeof thread.provider === "string" ? thread.provider : "";
-  provider.value = [...provider.options].some((option) => option.value === storedProvider)
-    ? storedProvider : "";
+  if (storedProvider && ![...provider.options].some((option) => option.value === storedProvider)) {
+    const option = element("option", "", storedProvider); option.value = storedProvider; provider.append(option);
+  }
+  provider.value = storedProvider;
   byId("chat-model").value = typeof thread.model === "string" ? thread.model : "";
   const control = modelControls().find((item) => item.providerId === "chat-provider");
   if (control) refreshModelControl(control);
+  const reasoning = byId("chat-reasoning");
+  const value = thread.settings?.reasoning || "auto";
+  if (![...reasoning.options].some((option) => option.value === value)) {
+    const option = element("option", "", value); option.value = value; reasoning.append(option);
+  }
+  reasoning.value = value;
+  renderChatToolbar(); renderModelSettings("chat"); updateSettingsAvailability();
 }
 
 async function appendThreadMessages(threadId, revision, messages, metadata = null) {
@@ -1488,45 +1869,50 @@ function showConflict(message, action) {
 
 async function sendChatMessage(text) {
   if (!state.thread || state.chatPending) return;
+  const requestedId = state.thread.id;
+  try { await threadSettingsSaves.get(requestedId); } catch (_) { return; }
+  if (state.thread?.id !== requestedId) return;
   state.chatPending = true;
   renderChat();
   const threadId = state.thread.id;
+  let sendingThread = state.thread;
   try {
     const selected = {
-      provider: byId("chat-provider").value,
-      model: byId("chat-model").value.trim(),
+      provider: sendingThread.provider || "",
+      model: sendingThread.model || "",
     };
-    const appended = await appendThreadMessages(threadId, state.thread.revision,
+    const appended = await appendThreadMessages(threadId, sendingThread.revision,
       [{ role: "user", content: text }], selected);
-    const messages = state.thread.messages;
-    state.thread = { ...state.thread, ...appended.thread, messages };
-    state.thread.messages.push({ role: "user", content: text });
-    if (!state.thread.name || state.thread.name === "New chat") {
+    sendingThread = { ...sendingThread, ...appended.thread,
+      messages: [...sendingThread.messages, { role: "user", content: text }] };
+    if (!sendingThread.name || sendingThread.name === "New chat") {
       const firstLine = text.split(/\r?\n/, 1)[0].trim();
-      state.thread.name = [...firstLine].slice(0, 40).join("") || "New chat";
+      sendingThread.name = [...firstLine].slice(0, 40).join("") || "New chat";
     }
-    const transcript = state.thread.messages.slice(-64).map((message) => ({
+    if (state.thread?.id === threadId) state.thread = sendingThread;
+    threadSettingsSnapshots.set(threadId, sendingThread);
+    const transcript = sendingThread.messages.slice(-64).map((message) => ({
       role: message.role,
       content: message.content,
     }));
     const payload = optionalPayload({
-      provider: byId("chat-provider").value,
-      model: byId("chat-model").value.trim(),
-      reasoning: byId("chat-reasoning").value,
+      ...selected,
+      settings: sendingThread.settings || {},
       messages: transcript,
     });
     const context = {
       type: "chat",
       threadId,
-      revision: state.thread.revision,
+      revision: sendingThread.revision,
       streamText: "",
       jobId: "",
     };
+    newUnusedThreadIds.delete(threadId);
     state.chatStreams.set(threadId, context);
     renderChat();
     const job = await submitJob("chat", payload, context);
     state.chatPendingJobId = job.id;
-    byId("chat-input").value = "";
+    if (state.thread?.id === threadId) byId("chat-input").value = "";
     renderChat();
   } catch (error) {
     state.chatPending = false;
@@ -1555,12 +1941,16 @@ async function regenerateChat() {
 
   const threadId = state.thread.id;
   try {
+    await threadSettingsSaves.get(threadId);
+    if (state.thread?.id !== threadId) return;
+    const original = state.thread;
     const response = await api(
       `${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}/regenerate`, {
         method: "POST",
         body: { revision: state.thread.revision },
       });
-    const messages = Array.isArray(state.thread.messages) ? state.thread.messages : [];
+    if (state.thread?.id !== threadId) return;
+    const messages = Array.isArray(original.messages) ? original.messages : [];
     let userIndex = messages.length - 1;
     while (userIndex >= 0 && messages[userIndex].role !== "user") userIndex -= 1;
     if (userIndex < 0) throw new Error("This thread has no user prompt to regenerate");
@@ -1569,6 +1959,7 @@ async function regenerateChat() {
       ...response.thread,
       messages: messages.slice(0, userIndex + 1),
     };
+    threadSettingsSnapshots.set(threadId, state.thread);
     renderChat();
     await sendChatMessageFromTranscript(response.prompt);
     toast("Regenerating the previous answer");
@@ -1592,6 +1983,7 @@ async function sendChatMessageFromTranscript(prompt) {
     provider: byId("chat-provider").value,
     model: byId("chat-model").value.trim(),
     reasoning: byId("chat-reasoning").value,
+    settings: state.thread.settings || {},
     messages: transcript,
   });
   const context = {
@@ -1756,6 +2148,7 @@ function applyAgentActivity(sessionId, event, logs) {
   }
   const entry = {
     id: event.id,
+    turn_id: event.turn_id,
     type: data.kind || "activity",
     data: { text: data.text || "" },
   };
@@ -1775,6 +2168,7 @@ function applyAgentActivity(sessionId, event, logs) {
 }
 
 function renderAgent() {
+  updateSettingsAvailability();
   const events = byId("agent-events");
   const followTail = events.classList.contains("empty-state") ||
     events.scrollHeight - events.scrollTop - events.clientHeight <= 40;
@@ -1788,13 +2182,16 @@ function renderAgent() {
     byId("agent-turn-input").disabled = true;
     byId("agent-turn-submit").disabled = true;
     byId("cancel-turn-button").hidden = true;
+    byId("agent-cycle-reasoning-button").textContent = "Reasoning: auto";
+    byId("agent-cycle-reasoning-button").disabled = true;
     for (const id of ["agent-provider", "agent-model", "agent-reasoning",
       "agent-task-mode", "agent-permission"]) byId(id).disabled = true;
+    syncPickerButtons();
     stopAgentClock();
     return;
   }
   const session = state.session;
-  byId("agent-meta").textContent = `${session.status} · ${session.permission_mode} · ${session.provider || "provider"} / ${session.model || "default"} · reasoning ${session.reasoning || "auto"}`;
+  byId("agent-meta").textContent = session.status;
   const provider = byId("agent-provider");
   if ([...provider.options].some((option) => option.value === session.provider)) {
     provider.value = session.provider;
@@ -1816,15 +2213,23 @@ function renderAgent() {
     reasoning.prepend(option);
   }
   reasoning.value = session.reasoning || "auto";
+  byId("agent-cycle-reasoning-button").textContent =
+    `Reasoning: ${session.reasoning || "auto"}`;
   byId("agent-task-mode").value = session.task_mode || "act";
   byId("agent-permission").value = session.permission_mode || "smart";
   const logs = state.agentLogs.get(session.id) || [];
+  const history = state.agentHistory.get(session.id);
   const activities = state.agentActivities.get(session.id);
-  if (!logs.length && (!activities || activities.size === 0)) {
+  if (!history?.messages?.length && !logs.length && (!activities || activities.size === 0)) {
     setEmpty(events, "Waiting for session events…");
   }
   else {
     clear(events);
+    if (history?.before) {
+      const older = element("button", "ghost", "Load older messages"); older.type = "button";
+      older.addEventListener("click", () => void loadAgentHistory(session.id, history.before)); events.append(older);
+    }
+    for (const message of history?.messages || []) appendAgentEvent(events, { type: message.role, data: { content: message.content } });
     for (const entry of logs) {
       appendAgentEvent(events, entry);
     }
@@ -1839,8 +2244,29 @@ function renderAgent() {
     "agent-task-mode", "agent-permission"]) {
     byId(id).disabled = !ready || state.agentSettingsPending;
   }
+  byId("agent-cycle-reasoning-button").disabled = !ready || state.agentSettingsPending;
   syncAgentClock();
   renderAgentMetrics();
+  syncPickerButtons();
+}
+
+async function loadAgentHistory(sessionId, before = 0) {
+  try {
+    const response = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/history${before ? `?before=${before}` : ""}`);
+    if (state.session?.id !== sessionId || (state.session.turn_id || "") !== response.turn_id) return;
+    const previous = state.agentHistory.get(sessionId);
+    const rows = before ? [...response.messages, ...(previous?.messages || [])] : response.messages;
+    const bySeq = new Map(rows.map((row) => [row.seq, row]));
+    state.agentHistory.set(sessionId, {
+      messages: [...bySeq.values()].sort((a, b) => a.seq - b.seq), before: response.before,
+    });
+    if (!before) {
+      const live = (state.agentLogs.get(sessionId) || []).filter((event) => response.turn_id && event.turn_id === response.turn_id);
+      state.agentLogs.set(sessionId, live);
+      if (!response.turn_id) state.agentActivities.set(sessionId, new Map());
+    }
+    renderAgent();
+  } catch (error) { if (error.status !== 409) toast(errorMessage(error), "error"); }
 }
 
 function scheduleAgentRender() {
@@ -1915,6 +2341,7 @@ async function selectSession(sessionId) {
     if (!state.agentActivities.has(sessionId)) state.agentActivities.set(sessionId, new Map());
     if (!state.agentSeenEvents.has(sessionId)) state.agentSeenEvents.set(sessionId, new Set());
     renderAgent();
+    if (state.session.status !== "preparing") await loadAgentHistory(sessionId);
     if (state.session.approval) showGuard(sessionId, {
       ...state.session.approval,
       review_file: state.session.approval.review_file,
@@ -1963,6 +2390,10 @@ function watchSession(sessionId) {
             event.type === "session_closed" || event.type === "reasoning_changed" ||
             event.type === "settings_changed") {
           state.session = event.data;
+          if (["ready", "settings_changed", "reasoning_changed"].includes(event.type)) {
+            void loadAgentHistory(sessionId);
+            void refreshWorkspaceSettings().catch((error) => toast(errorMessage(error), "error"));
+          }
         }
         if (["turn_completed", "turn_failed", "approval_resolved"].includes(event.type)) {
           if (["turn_completed", "turn_failed"].includes(event.type)) {
@@ -1982,8 +2413,10 @@ function watchSession(sessionId) {
     async () => {
       if (state.session && state.session.id === sessionId) await refreshSelectedSession();
       toast("Agent event replay expired; loaded the current session state.");
+      return state.session?.id === sessionId ? state.session.event_cursor || 0 : 0;
     },
-    () => !state.connected || !state.sessions.some((session) => session.id === sessionId));
+    () => !state.connected || !state.sessions.some((session) => session.id === sessionId),
+    state.session?.id === sessionId ? state.session.event_cursor || 0 : 0);
 }
 
 async function refreshSelectedSession() {
@@ -1991,6 +2424,7 @@ async function refreshSelectedSession() {
   try {
     state.session = await api(`${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}`);
     await loadSessions();
+    await loadAgentHistory(state.session.id);
     renderAgent();
   } catch (error) {
     toast(errorMessage(error), "error");
@@ -2024,12 +2458,10 @@ function renderChatToolbar() {
   const regenerate = byId("chat-regenerate-button");
   regenerate.disabled = !state.thread || state.thread.read_only === true;
   const selected = byId("chat-reasoning");
-  const option = selected.options[selected.selectedIndex];
-  byId("chat-cycle-reasoning-button").childNodes[0].textContent =
-    `Reasoning: ${option ? option.textContent : "default"} `;
+  byId("chat-cycle-reasoning-button").textContent =
+    `Reasoning: ${selected.value || "auto"}`;
   const thinking = byId("chat-thinking-button");
-  thinking.childNodes[0].textContent =
-    `Thinking ${state.showThinkingTraces ? "shown" : "hidden"} `;
+  thinking.textContent = `Thinking ${state.showThinkingTraces ? "shown" : "hidden"}`;
   thinking.setAttribute("aria-pressed", state.showThinkingTraces ? "true" : "false");
 }
 
@@ -2480,8 +2912,6 @@ async function requestAssist(instruction, selectionOnly) {
     path: state.file.path,
     revision: state.file.revision,
     instruction,
-    provider: byId("chat-provider").value,
-    model: byId("chat-model").value.trim(),
   });
   if (selectionOnly) {
     if (editor.selectionStart === editor.selectionEnd) throw new Error("Select a non-empty editor range first");
@@ -2519,9 +2949,23 @@ function finishAssistJob(job, context) {
 }
 
 function bindEvents() {
+  setupModelSettings();
+  installPickerControls();
   window.addEventListener("keydown", (event) => {
     if (event.isComposing) return;
     const modal = document.querySelector("dialog[open]");
+    // Use physical keys as well as key values for Option layouts; never catch AltGr.
+    const pickerKind = event.code === "KeyP" || event.key.toLowerCase() === "p" ? "provider" :
+      event.code === "KeyM" || event.key.toLowerCase() === "m" ? "model" : null;
+    if (pickerKind && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
+        !event.getModifierState("AltGraph")) {
+      const target = modelShortcutControl(modal);
+      if (target) {
+        event.preventDefault();
+        if (!event.repeat) openModelPicker(target, pickerKind);
+      }
+      return;
+    }
     if (modal && event.key !== "Escape") return;
     const key = event.key.toLowerCase();
     const control = event.ctrlKey && !event.altKey && !event.metaKey;
@@ -2568,7 +3012,17 @@ function bindEvents() {
       });
     }
   }
-  byId("chat-reasoning").addEventListener("change", renderChatToolbar);
+  byId("chat-provider").addEventListener("change", () => void saveChatSettings({
+    provider: byId("chat-provider").value, model: byId("chat-model").value.trim(),
+  }));
+  byId("chat-model").addEventListener("change", () => void saveChatSettings({ model: byId("chat-model").value.trim() }));
+  byId("chat-reasoning").addEventListener("change", () => {
+    renderChatToolbar(); void saveChatSettings({ settings: { reasoning: byId("chat-reasoning").value || "auto" } });
+  });
+  byId("workspace-provider").addEventListener("change", () => void saveWorkspaceSettings({
+    provider: byId("workspace-provider").value, model: byId("workspace-model").value.trim(),
+  }));
+  byId("workspace-model").addEventListener("change", () => void saveWorkspaceSettings({ model: byId("workspace-model").value.trim() }));
 
   byId("theme-select").addEventListener("change", (event) => {
     applyTheme(event.target.value);
@@ -2597,7 +3051,10 @@ function bindEvents() {
     if (state.authenticated && !state.connected) scheduleReconnect(true);
   });
 
-  byId("refresh-settings-button").addEventListener("click", () => void refreshSettings().catch((error) => toast(errorMessage(error), "error")));
+  byId("refresh-settings-button").addEventListener("click", () => {
+    void refreshSettings().catch((error) => toast(errorMessage(error), "error"));
+    if (state.thread) void loadThread(state.thread.id);
+  });
   byId("refresh-jobs-button").addEventListener("click", () => void refreshKnownJobs());
   byId("clear-finished-button").addEventListener("click", () => {
     for (const [id, job] of state.jobs) {
@@ -2705,23 +3162,18 @@ function bindEvents() {
   byId("refresh-threads-button").addEventListener("click", () => void loadThreads());
   byId("new-thread-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    closeDialog(byId("new-thread-dialog"));
     try {
-      const response = await api(`${API_ROOT}/chat/threads`, {
-        method: "POST",
-        body: optionalPayload({
-          revision: 0,
-          name: byId("thread-name-input").value.trim(),
-          provider: byId("thread-provider").value,
-          model: byId("thread-model").value.trim(),
-        }),
-      });
-      closeDialog(byId("new-thread-dialog"));
+      await createNewChat(optionalPayload({
+        name: byId("thread-name-input").value.trim(),
+        provider: byId("thread-provider").value,
+        model: byId("thread-model").value.trim(),
+      }), true);
       byId("thread-name-input").value = "";
-      state.thread = response.thread;
-      applyThreadModelSettings(state.thread);
-      await loadThreads();
-      renderChat();
-    } catch (error) { toast(errorMessage(error), "error"); }
+    } catch (error) {
+      toast(errorMessage(error), "error");
+      openDialog(byId("new-thread-dialog"));
+    }
   });
   byId("chat-form").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2740,12 +3192,15 @@ function bindEvents() {
   });
 
   byId("agent-provider").addEventListener("change", (event) =>
-    void setAgentSetting("provider", event.target.value));
+    void saveWorkspaceSettings({ provider: event.target.value,
+      model: byId("agent-model").value.trim() }));
   byId("agent-model").addEventListener("change", (event) =>
-    void setAgentSetting("model", event.target.value.trim()));
+    void saveWorkspaceSettings({ model: event.target.value.trim() }));
   byId("agent-reasoning").addEventListener("change", (event) =>
     void setAgentReasoning(event.target.value,
       event.target.options[event.target.selectedIndex]?.textContent || event.target.value));
+  byId("agent-cycle-reasoning-button").addEventListener("click", () =>
+    void cycleAgentReasoning());
   byId("agent-task-mode").addEventListener("change", (event) =>
     void setAgentSetting("task_mode", event.target.value));
   byId("agent-permission").addEventListener("change", (event) =>

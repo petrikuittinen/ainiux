@@ -4,6 +4,7 @@ This compact timeline moves release material out of the landing page. It describ
 
 | Version | Main result |
 | --- | --- |
+| Unreleased | WebUI TUI-style model pickers with Alt+P/Alt+M shortcuts and compact Settings-linked toolbars, immediate per-thread request settings, shared persistent agent/editor model configuration, and idle agent history/Act–Plan restoration |
 | v0.0 | Repository, C++17/Makefile build, tests, sanitizer, and leak-check foundation |
 | v0.1 | Script-friendly OpenAI-compatible CLI, streaming, and LM Studio profile; its early browser-mode note was planning only and is superseded by the shipped [browser controller](web-mode.md) |
 | v0.2 | Line-oriented REPL and JSON chat persistence foundations |

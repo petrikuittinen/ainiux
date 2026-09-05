@@ -1286,6 +1286,37 @@ Error SqliteStore::save_session(Session& session) {
     return set_last_thread_id(session.thread_id);
 }
 
+Error SqliteStore::update_settings(const Session& session, long long expected_revision,
+                                  long long& revision) {
+    if (!db_) return {ErrorCode::Internal, "SQLite database is not open"};
+    Transaction tx(db_, path_);
+    Error error = tx.begin();
+    if (!error.ok()) return error;
+    Statement current(db_, path_);
+    error = current.prepare("SELECT revision, read_only FROM threads WHERE id=?1 AND deleted_at IS NULL;");
+    if (!error.ok()) return error;
+    error = BindChain(current).int64(1, session.thread_id).error();
+    if (!error.ok()) return error;
+    const int rc = current.step();
+    if (rc == SQLITE_DONE) return {ErrorCode::FileRead, "chat thread not found"};
+    if (rc != SQLITE_ROW) return sqlite_error(db_, path_, "could not read settings revision", rc);
+    revision = current.column_int64(0);
+    if (current.column_int64(1)) return {ErrorCode::FileWrite, "chat thread is read-only"};
+    if (revision != expected_revision) return {ErrorCode::FileLock, "chat thread revision is stale"};
+    Statement update(db_, path_);
+    error = update.prepare("UPDATE threads SET last_provider=?1, last_model=?2, last_base_url=?3, "
+                           "settings_json=?4, modified_at=?5, revision=revision+1 WHERE id=?6 AND revision=?7;");
+    if (!error.ok()) return error;
+    error = BindChain(update).text(1, session.provider).text(2, session.model)
+        .text(3, session.base_url).text(4, session.settings_json)
+        .text(5, current_timestamp_utc()).int64(6, session.thread_id).int64(7, expected_revision)
+        .step_done("could not save chat settings");
+    if (!error.ok()) return error;
+    error = tx.commit();
+    if (error.ok()) ++revision;
+    return error;
+}
+
 Error SqliteStore::append_messages(long long thread_id,
                                    long long expected_revision,
                                    const std::vector<provider::Message>& messages,
@@ -1417,6 +1448,57 @@ Error SqliteStore::append_messages(long long thread_id,
     ++revision;
     message_count += static_cast<long long>(messages.size());
     return ok_error();
+}
+
+Error SqliteStore::abandon_empty_thread(long long thread_id,
+                                        long long expected_revision,
+                                        bool& deleted,
+                                        long long& current_revision) {
+    deleted = false;
+    current_revision = 0;
+    if (db_ == nullptr) return {ErrorCode::Internal, "SQLite database is not open"};
+    if (thread_id <= 0 || expected_revision <= 0) {
+        return {ErrorCode::BadArgs, "thread id and expected revision must be positive"};
+    }
+
+    Transaction tx(db_, path_);
+    Error error = tx.begin();
+    if (!error.ok()) return error;
+    Statement current(db_, path_);
+    error = current.prepare(
+        "SELECT revision, read_only, EXISTS("
+        "SELECT 1 FROM messages WHERE thread_id=?1 AND role IN ('user','assistant')"
+        ") FROM threads WHERE id=?1 AND deleted_at IS NULL;");
+    if (!error.ok()) return error;
+    error = BindChain(current).int64(1, thread_id).error();
+    if (!error.ok()) return error;
+    const int rc = current.step();
+    if (rc == SQLITE_DONE) return {ErrorCode::FileRead, "chat thread not found"};
+    if (rc != SQLITE_ROW) {
+        return sqlite_error(db_, path_, "could not inspect abandoned SQLite thread", rc);
+    }
+    current_revision = current.column_int64(0);
+    if (current.column_int64(1) != 0) {
+        return {ErrorCode::FileWrite, "chat thread is read-only"};
+    }
+    if (current_revision != expected_revision) {
+        return {ErrorCode::FileLock, "chat thread revision is stale"};
+    }
+    if (current.column_int64(2) != 0) return tx.commit();
+
+    Statement update(db_, path_);
+    error = update.prepare(
+        "UPDATE threads SET deleted_at=?1, modified_at=?1 "
+        "WHERE id=?2 AND revision=?3 AND deleted_at IS NULL AND read_only=0 "
+        "AND NOT EXISTS(SELECT 1 FROM messages "
+        "WHERE thread_id=?2 AND role IN ('user','assistant'));");
+    if (!error.ok()) return error;
+    error = BindChain(update).text(1, current_timestamp_utc()).int64(2, thread_id)
+                .int64(3, expected_revision).step_done("could not abandon empty SQLite thread");
+    if (!error.ok()) return error;
+    deleted = sqlite3_changes(db_) == 1;
+    if (!deleted) return {ErrorCode::FileLock, "chat thread changed while being abandoned"};
+    return tx.commit();
 }
 
 Error SqliteStore::load_session(long long thread_id,

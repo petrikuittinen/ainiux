@@ -38,6 +38,7 @@ class EventBroker {
     ReplayBatch wait_after(std::uint64_t event_id, std::chrono::milliseconds timeout) const;
     void close();
     bool closed() const;
+    std::uint64_t latest_id() const;
 
    private:
     ReplayBatch replay_locked(std::uint64_t event_id) const;

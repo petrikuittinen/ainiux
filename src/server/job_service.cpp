@@ -18,6 +18,8 @@
 #include "server/metrics.hpp"
 #include "server/image_catalog_api.hpp"
 #include "server/workspace_service.hpp"
+#include "server/model_settings.hpp"
+#include "agent/project_settings.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -216,6 +218,10 @@ Error JobService::validate_common(const json::Value& root,
     options.image = operation == "image";
     options.agent_run = operation == "run" || operation == "plan";
     options.agent_plan = operation == "plan";
+    if (const auto* settings = root.get("settings")) {
+        error = apply_public_model_settings(*settings, options);
+        if (!error.ok()) return error;
+    }
     return ok_error();
 }
 
@@ -426,6 +432,11 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
         return {{}, {ErrorCode::JsonParse, "request body is not valid JSON: " + parsed.error.message}};
     }
     cli::Options options = base_options_;
+    if (operation == "editor-assist") {
+        bool restored = false;
+        const Error restore_error = agent::restore_project_settings(workspace_, options, restored);
+        if (!restore_error.ok()) return {{}, public_operation_error(restore_error)};
+    }
     Error error = validate_common(parsed.value, operation, options);
     if (!error.ok()) return {{}, error};
     const std::string canonical = json::stringify(parsed.value);
@@ -442,7 +453,7 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
 
     if (operation == "chat") {
         error = reject_unknown(parsed.value,
-                               {"provider", "model", "api", "reasoning", "messages"});
+                               {"provider", "model", "api", "reasoning", "messages", "settings"});
         if (!error.ok()) return {{}, error};
         const json::Value* messages_value = parsed.value.get("messages");
         if (messages_value == nullptr || !messages_value->is_array() || messages_value->array.empty()) {
@@ -473,7 +484,7 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
     }
 
     if (operation == "run" || operation == "plan") {
-        error = reject_unknown(parsed.value, {"provider", "model", "api", "goal"});
+        error = reject_unknown(parsed.value, {"provider", "model", "api", "goal", "settings"});
         if (!error.ok()) return {{}, error};
         std::string goal;
         error = required_string(parsed.value, "goal", goal);
@@ -555,7 +566,7 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
 
     if (operation == "editor-assist") {
         error = reject_unknown(parsed.value,
-                               {"provider", "model", "api", "path", "revision",
+                               {"provider", "model", "api", "settings", "path", "revision",
                                 "instruction", "selection_start", "selection_end"});
         if (!error.ok()) return {{}, error};
         std::string path;

@@ -1,5 +1,6 @@
 #include "app/interactive_mode.hpp"
 #include "app/user_shell.hpp"
+#include "agent/project_settings.hpp"
 #include "chat/settings.hpp"
 #include "chat/generation_settings.hpp"
 #include "chat/sqlite_store.hpp"
@@ -328,6 +329,7 @@ app::EditorRunResult run_editor(const std::string& path,
     runtime::EventQueue<EditorSelectionSaveEvent> selection_save_events;
     runtime::JobHandle selection_save_job;
     std::string pending_selection_save;
+    std::optional<cli::Options> pending_project_settings;
     bool pending_close_confirm = false;
     size_t pending_close_index = static_cast<size_t>(-1);
     TerminalSize last_size = terminal_size();
@@ -1325,10 +1327,26 @@ app::EditorRunResult run_editor(const std::string& path,
         if (selection_save_job.running() || pending_selection_save.empty()) return;
         std::string value = std::move(pending_selection_save);
         pending_selection_save.clear();
-        selection_save_job.start([value = std::move(value), &selection_save_events](runtime::CancellationToken) {
+        auto project_options = std::move(pending_project_settings);
+        pending_project_settings.reset();
+        const auto controller = interactive ? interactive->agent_controller : nullptr;
+        selection_save_job.start([value = std::move(value), project_options = std::move(project_options),
+                                   controller, &selection_save_events](runtime::CancellationToken token) {
             EditorSelectionSaveEvent event;
+            if (token.cancelled()) { event.error = {ErrorCode::Cancelled, "settings save cancelled"}; }
+            else if (controller && controller->turn_running()) {
+                event.error = {ErrorCode::FileLock, "agent is running; settings were not saved"};
+            } else if (project_options) {
+                if (controller && controller->prepared()) {
+                    auto built = provider::build_context(*project_options);
+                    event.error = built.error;
+                    if (event.error.ok()) event.error = controller->runtime()->update_project_settings(built.context);
+                } else {
+                    event.error = agent::save_project_model_settings(".", *project_options);
+                }
+            }
             chat::SqliteStore store;
-            event.error = store.open_default();
+            if (event.error.ok()) event.error = store.open_default();
             if (event.error.ok()) {
                 event.error = store.set_app_state("editor_model_selection", value);
             }
@@ -1339,12 +1357,17 @@ app::EditorRunResult run_editor(const std::string& path,
     auto schedule_selection_save = [&]() {
         const cli::Options* options = active_model_options();
         if (options == nullptr) return;
+        pending_project_settings = *options;
         pending_selection_save = provider::serialize_model_selection(
             provider::model_selection_from_options(*options));
         start_pending_selection_save();
     };
 
     auto open_editor_settings = [&]() {
+        if (agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Wait for the agent turn before changing workspace settings");
+            return;
+        }
         if (help_view.active) {
             exit_help_view();
         }
@@ -1409,6 +1432,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto open_provider_picker = [&]() {
+        if (agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing provider");
+            return;
+        }
         if (assist_session.active) {
             minibuffer_message(minibuffer, "Finish or cancel AI assist before changing provider");
             return;
@@ -1439,6 +1466,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto open_model_picker = [&](std::vector<std::string> models) {
+        if (agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing model");
+            return;
+        }
         if (assist_session.active) {
             minibuffer_message(minibuffer, "Finish or cancel AI assist before changing model");
             return;
@@ -1454,6 +1485,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto open_reasoning_picker = [&]() {
+        if (agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing reasoning");
+            return;
+        }
         if (!editor_ai_ready(ai_continue)) {
             minibuffer_message(minibuffer,
                                editor_ai_has_provider(ai_continue)
@@ -1486,6 +1521,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto commit_reasoning_selection = [&](const std::string& value) {
+        if (agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing reasoning");
+            return;
+        }
         if (!editor_ai_ready(ai_continue)) {
             minibuffer_message(minibuffer,
                                editor_ai_has_provider(ai_continue)
@@ -1600,6 +1639,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto apply_provider_selection = [&](const std::string& target) {
+        if (agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing provider");
+            return;
+        }
         Error apply_error =
             apply_editor_provider_target(ai_continue, assist_config, target, editor_options_seed());
         if (!apply_error.ok()) {
@@ -1623,6 +1666,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto handle_model_command = [&](const std::string& model_name) {
+        if (agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing model");
+            return;
+        }
         if (model_name.empty()) {
             if (!editor_ai_has_provider(ai_continue)) {
                 minibuffer_message(minibuffer, editor_no_provider_message());
@@ -1644,6 +1691,10 @@ app::EditorRunResult run_editor(const std::string& path,
     };
 
     auto handle_context_command = [&](const std::string& requested) {
+        if (!requested.empty() && agent_controller() && agent_controller()->turn_running()) {
+            minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing context");
+            return;
+        }
         if (requested.empty()) {
             if (ai_continue.has_value() &&
                 ai_continue->request.options.context_tokens > 0) {
@@ -3161,6 +3212,10 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         if (command_line == "/setting" || command_line.rfind("/setting ", 0) == 0) {
+            if (agent_controller() && agent_controller()->turn_running()) {
+                minibuffer_message(minibuffer, "Finish or cancel the agent turn before changing settings");
+                return;
+            }
             pending_assist = PendingAssist{};
             exit_assist_command_mode(minibuffer, assist_completer);
             const std::string requested = command_line.size() <= 8
@@ -3211,6 +3266,7 @@ app::EditorRunResult run_editor(const std::string& path,
             if (interactive != nullptr) interactive->highlight_enabled = highlight_enabled;
             refresh_settings_view();
             minibuffer_message(minibuffer, "Updated " + name);
+            schedule_selection_save();
             return;
         }
         if (command_line == "/provider" || command_line.rfind("/provider ", 0) == 0) {
@@ -4871,7 +4927,7 @@ app::EditorRunResult run_editor(const std::string& path,
             render_editor();
         }
     }
-    schedule_selection_save();
+    if (!agent_controller() || !agent_controller()->turn_running()) schedule_selection_save();
 
     auto handle_mouse_input = [&](const MouseInputEvent& mouse) {
         if (picker.active || buffer_list_active || pending_close_confirm) return;

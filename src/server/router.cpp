@@ -642,6 +642,21 @@ Response route_request(const http::Request& request,
         return response;
     }
 
+    if (request.path == "/ainiux/v1/workspace/settings") {
+        if (!status.sessions) return error_response(503, "sessions_unavailable", "session hub is unavailable");
+        if (!request.query.empty()) return error_response(400, "invalid_request", "settings do not accept a query");
+        if (request.method != "GET" && request.method != "POST") {
+            response = error_response(405, "method_not_allowed", "settings accept GET and POST");
+            response.allow = "GET, POST"; return response;
+        }
+        if (request.method == "GET" && !request.body.empty()) return error_response(400, "invalid_request", "GET does not accept a body");
+        if (request.method == "POST" && (!json_content_type(request) || request.body.empty()))
+            return error_response(415, "unsupported_media_type", "settings require a JSON body");
+        Error error = status.sessions->workspace_settings(request.method == "POST" ? request.body : "", response.body);
+        if (!error.ok()) return session_error(error);
+        return response;
+    }
+
     const std::string chat_threads_prefix = "/ainiux/v1/chat/threads";
     if (request.path == chat_threads_prefix) {
         if (status.chat_threads == nullptr) {
@@ -691,10 +706,11 @@ Response route_request(const http::Request& request,
         long long thread_id = 0;
         if (!positive_decimal_id(id_text, thread_id) ||
             (slash != std::string::npos && action.empty()) ||
-            (!action.empty() && action != "messages" && action != "regenerate")) {
+            (!action.empty() && action != "messages" && action != "regenerate" &&
+             action != "settings" && action != "abandon")) {
             return error_response(404, "thread_route_not_found", "no chat thread route matches this path");
         }
-        if (action.empty()) {
+        if (action.empty() || (action == "settings" && request.method == "GET")) {
             if (request.method != "GET") {
                 response = error_response(405, "method_not_allowed", "chat thread loading accepts GET only");
                 response.allow = "GET";
@@ -713,7 +729,8 @@ Response route_request(const http::Request& request,
             response = error_response(
                 405, "method_not_allowed",
                 action == "regenerate" ? "chat regeneration accepts POST only"
-                                       : "message append accepts POST only");
+                : action == "abandon" ? "chat abandonment accepts POST only"
+                                      : "message append accepts POST only");
             response.allow = "POST";
             return response;
         }
@@ -721,11 +738,18 @@ Response route_request(const http::Request& request,
             return error_response(415, "unsupported_media_type",
                                   action == "regenerate"
                                       ? "chat regeneration requires Content-Type: application/json"
+                                  : action == "abandon"
+                                      ? "chat abandonment requires Content-Type: application/json"
                                       : "message append requires Content-Type: application/json");
         }
         std::string body;
         long long current_revision = 0;
-        const Error error = action == "regenerate"
+        const Error error = action == "settings"
+                                ? status.chat_threads->settings(thread_id, request.body, body, current_revision)
+                                : action == "abandon"
+                                ? status.chat_threads->abandon(
+                                      thread_id, request.body, body, current_revision)
+                                : action == "regenerate"
                                 ? status.chat_threads->rewind_last_answer(
                                       thread_id, request.body, body, current_revision)
                                 : status.chat_threads->append(
@@ -781,6 +805,20 @@ Response route_request(const http::Request& request,
             if (!request.body.empty()) return error_response(400, "invalid_request", "session close does not accept a body");
             if (!status.sessions->erase(session_id)) return session_not_found();
             response.body = "{\"deleted\":true,\"id\":" + json::quote(session_id) + "}";
+            return response;
+        }
+        if (action == "history") {
+            if (request.method != "GET") {
+                response = error_response(405, "method_not_allowed", "history accepts GET only");
+                response.allow = "GET"; return response;
+            }
+            if (!request.body.empty()) return error_response(400, "invalid_request", "history does not accept a body");
+            long long before = 0;
+            if (!request.query.empty() &&
+                (request.query.rfind("before=", 0) != 0 || !positive_decimal_id(request.query.substr(7), before)))
+                return error_response(400, "invalid_request", "history query must be before=SEQUENCE");
+            const Error error = session->history(before, response.body);
+            if (!error.ok()) return session_error(error);
             return response;
         }
         if (action == "events") {

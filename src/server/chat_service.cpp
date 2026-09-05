@@ -11,6 +11,8 @@
 
 #include "json/json.hpp"
 #include "provider/provider.hpp"
+#include "chat/settings.hpp"
+#include "server/model_settings.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -138,7 +140,10 @@ std::string summary_json(const chat::ThreadSummary& thread) {
            ",\"read_only\":" + std::string(thread.read_only ? "true" : "false") + "}";
 }
 
-std::string session_json(const chat::Session& session) {
+std::string session_json(const chat::Session& session, cli::Options options = {}) {
+    (void)chat::apply_settings_json(options, session.settings_json);
+    options.provider = session.provider;
+    options.model = session.model;
     const long long message_count = session.persisted_message_count > 0
                                         ? session.persisted_message_count
                                         : static_cast<long long>(session.messages.size());
@@ -151,6 +156,8 @@ std::string session_json(const chat::Session& session) {
            ",\"modified_at\":" + json::quote(session.updated_at) +
            ",\"provider\":" + json::quote(session.provider) +
            ",\"model\":" + json::quote(session.model) +
+           ",\"settings\":" + public_model_settings(options) +
+           ",\"settings_fields\":" + public_model_fields(options) +
            ",\"message_count\":" + std::to_string(message_count) +
            ",\"read_only\":" + std::string(session.read_only ? "true" : "false") +
            ",\"messages\":" + messages_json(session.messages, first_ordinal) +
@@ -166,7 +173,7 @@ Error parse_create(const std::string& input, chat::Session& session) {
         return invalid("thread creation body must be one JSON object");
     }
     std::string unknown;
-    if (!known_fields(parsed.value, {"revision", "name", "provider", "model"}, unknown)) {
+    if (!known_fields(parsed.value, {"revision", "name", "provider", "model", "settings"}, unknown)) {
         return invalid("unknown thread creation field: " + unknown);
     }
     long long revision = -1;
@@ -234,14 +241,15 @@ Error parse_append(const std::string& input,
     return ok_error();
 }
 
-Error parse_revision(const std::string& input, long long& revision) {
+Error parse_revision(const std::string& input, long long& revision,
+                     const char* operation = "rewind") {
     const json::ParseResult parsed = json::parse(input);
     if (!parsed.error.ok() || !parsed.value.is_object()) {
-        return invalid("chat rewind body must be one JSON object");
+        return invalid(std::string("chat ") + operation + " body must be one JSON object");
     }
     std::string unknown;
     if (!known_fields(parsed.value, {"revision"}, unknown)) {
-        return invalid("unknown chat rewind field: " + unknown);
+        return invalid(std::string("unknown chat ") + operation + " field: " + unknown);
     }
     if (!integer_value(parsed.value.get("revision"), revision) || revision <= 0) {
         return invalid("revision must be a positive integer");
@@ -251,8 +259,8 @@ Error parse_revision(const std::string& input, long long& revision) {
 
 }  // namespace
 
-ChatService::ChatService(std::string database_path)
-    : database_path_(std::move(database_path)) {}
+ChatService::ChatService(std::string database_path, cli::Options defaults)
+    : database_path_(std::move(database_path)), defaults_(std::move(defaults)) {}
 
 Error ChatService::ensure_open() {
     if (store_.is_open()) return ok_error();
@@ -294,7 +302,7 @@ Error ChatService::load(long long thread_id, std::string& body) {
     options.update_last_thread = false;
     error = store_.load_session(thread_id, session, options);
     if (!error.ok()) return safe_store_error(error, "load the chat thread");
-    body = "{\"thread\":" + session_json(session) + "}";
+    body = "{\"thread\":" + session_json(session, defaults_) + "}";
     return ok_error();
 }
 
@@ -302,13 +310,65 @@ Error ChatService::create(const std::string& request_body, std::string& body) {
     chat::Session session;
     Error error = parse_create(request_body, session);
     if (!error.ok()) return error;
+    cli::Options options = defaults_;
+    error = apply_public_model_target(json::parse(request_body).value, options);
+    if (!error.ok()) return error;
+    session.provider = options.provider;
+    session.model = options.model;
+    session.base_url = options.base_url;
+    session.settings_json = chat::settings_json_from_options(options);
     std::lock_guard<std::mutex> lock(mutex_);
     body.clear();
     error = ensure_open();
     if (!error.ok()) return error;
     error = store_.save_session(session);
     if (!error.ok()) return safe_store_error(error, "create the chat thread");
-    body = "{\"thread\":" + session_json(session) + "}";
+    body = "{\"thread\":" + session_json(session, defaults_) + "}";
+    return ok_error();
+}
+
+Error ChatService::settings(long long thread_id, const std::string& request_body,
+                            std::string& body, long long& current_revision) {
+    const auto parsed = json::parse(request_body);
+    if (!parsed.error.ok() || !parsed.value.is_object()) return invalid("settings body must be an object");
+    std::string unknown;
+    if (!known_fields(parsed.value, {"revision", "provider", "model", "settings"}, unknown))
+        return invalid("unknown settings field: " + unknown);
+    long long expected = 0;
+    if (!integer_value(parsed.value.get("revision"), expected) || expected <= 0)
+        return invalid("revision must be a positive integer");
+    std::lock_guard<std::mutex> lock(mutex_);
+    Error error = ensure_open();
+    if (!error.ok()) return error;
+    chat::Session session;
+    chat::LoadSessionOptions load;
+    load.max_messages = 1; load.max_content_bytes = 1;
+    load.metadata_only_attachments = true; load.load_compactions = false; load.update_last_thread = false;
+    error = store_.load_session(thread_id, session, load);
+    if (!error.ok()) return safe_store_error(error, "load settings");
+    current_revision = session.revision;
+    if (expected != current_revision) return {ErrorCode::FileLock, "chat thread revision is stale"};
+    cli::Options options = defaults_;
+    error = chat::apply_settings_json(options, session.settings_json);
+    if (!error.ok()) return invalid("stored model settings could not be loaded");
+    options.provider = session.provider; options.model = session.model; options.base_url = session.base_url;
+    error = apply_public_model_target(parsed.value, options);
+    if (!error.ok()) return error;
+    session.provider = options.provider; session.model = options.model; session.base_url = options.base_url;
+    // Merge known options into the existing object, preserving future/local fields.
+    auto stored = json::parse(session.settings_json);
+    const auto updated = json::parse(chat::settings_json_from_options(options));
+    if (!stored.error.ok() || !stored.value.is_object()) return invalid("stored settings are invalid");
+    for (const auto& entry : updated.value.object) stored.value.object[entry.first] = entry.second;
+    session.settings_json = json::stringify(stored.value);
+    error = store_.update_settings(session, expected, current_revision);
+    if (!error.ok()) return safe_store_error(error, "save settings");
+    body = "{\"thread\":{\"id\":" + std::to_string(thread_id) +
+           ",\"revision\":" + std::to_string(current_revision) +
+           ",\"provider\":" + json::quote(session.provider) +
+           ",\"model\":" + json::quote(session.model) +
+           ",\"settings\":" + public_model_settings(options) +
+           ",\"settings_fields\":" + public_model_fields(options) + "}}";
     return ok_error();
 }
 
@@ -339,6 +399,29 @@ Error ChatService::append(long long thread_id,
     if (provider_name.has_value()) body += ",\"provider\":" + json::quote(*provider_name);
     if (model.has_value()) body += ",\"model\":" + json::quote(*model);
     body += "}}";
+    return ok_error();
+}
+
+Error ChatService::abandon(long long thread_id,
+                           const std::string& request_body,
+                           std::string& body,
+                           long long& current_revision) {
+    long long expected_revision = 0;
+    Error error = parse_revision(request_body, expected_revision, "abandon");
+    if (!error.ok()) return error;
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.clear();
+    current_revision = 0;
+    error = ensure_open();
+    if (!error.ok()) return error;
+    bool deleted = false;
+    error = store_.abandon_empty_thread(thread_id, expected_revision, deleted,
+                                        current_revision);
+    if (!error.ok()) return safe_store_error(error, "abandon the chat thread");
+    body = "{\"id\":" + std::to_string(thread_id) +
+           ",\"deleted\":" + std::string(deleted ? "true" : "false");
+    if (!deleted) body += ",\"reason\":\"not_empty\"";
+    body += "}";
     return ok_error();
 }
 

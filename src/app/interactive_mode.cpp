@@ -1,6 +1,7 @@
 #include "app/interactive_mode.hpp"
 
 #include "app/app.hpp"
+#include "agent/project_settings.hpp"
 #include "chat/session.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/editor.hpp"
@@ -61,6 +62,32 @@ InteractiveUiTarget editor_toggle_target(const InteractiveSession& session) {
 
 int run_interactive(InteractiveSession session) {
     InteractiveMode mode = session.start_mode;
+    std::optional<provider::RequestContext> chat_context;
+    std::optional<provider::RequestContext> workspace_context;
+    if (mode == InteractiveMode::Chat) chat_context = session.context;
+    else workspace_context = session.context;
+    auto enter_workspace_context = [&](InteractiveMode target) -> Error {
+        chat_context = session.context;
+        if (workspace_context) session.context = *workspace_context;
+        else {
+            cli::Options options = session.context.options;
+            bool restored = false;
+            Error error = agent::restore_project_settings(".", options, restored);
+            if (!error.ok()) return error;
+            options.agent = target == InteractiveMode::Agent;
+            options.editor = target == InteractiveMode::Editor;
+            options.tui = false;
+            auto built = provider::build_context(options);
+            if (!built.error.ok()) return built.error;
+            session.context = std::move(built.context);
+        }
+        workspace_context = session.context;
+        return ok_error();
+    };
+    auto enter_chat_context = [&]() {
+        workspace_context = session.context;
+        if (chat_context) session.context = *chat_context;
+    };
     // Keep options.agent aligned with the active product mode.
     session.context.options.agent = (mode == InteractiveMode::Agent);
     session.context.options.tui = (mode == InteractiveMode::Chat);
@@ -91,6 +118,7 @@ int run_interactive(InteractiveSession session) {
                 return result.exit_code;
             }
             sync_editor_provider_to_shared(session, session.ai_continue);
+            enter_chat_context();
             ensure_chat_session_initialized(session);
             // Chat is a separate product surface: tear down the agent controller.
             if (session.agent_controller) {
@@ -126,6 +154,10 @@ int run_interactive(InteractiveSession session) {
 
         if (result.next == InteractiveUiTarget::Editor) {
             session.editor_return_mode = mode;
+            if (mode == InteractiveMode::Chat) {
+                const Error error = enter_workspace_context(InteractiveMode::Editor);
+                if (!error.ok()) { print_error(error); return exit_code_for(error.code); }
+            }
             sync_shared_provider_to_editor(session);
             rebind_editor_theme_settings(session);
             session.context.options.agent = false;
@@ -134,12 +166,17 @@ int run_interactive(InteractiveSession session) {
             continue;
         }
         if (result.next == InteractiveUiTarget::Agent) {
+            if (mode == InteractiveMode::Chat) {
+                const Error error = enter_workspace_context(InteractiveMode::Agent);
+                if (!error.ok()) { print_error(error); return exit_code_for(error.code); }
+            }
             session.context.options.agent = true;
             session.context.options.tui = false;
             mode = InteractiveMode::Agent;
             continue;
         }
         if (result.next == InteractiveUiTarget::Chat) {
+            enter_chat_context();
             if (session.agent_controller) {
                 session.agent_controller->shutdown(true, "left agent for chat");
                 session.agent_controller.reset();

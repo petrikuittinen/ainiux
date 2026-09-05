@@ -5,6 +5,7 @@
 
 #include "chat/sqlite_store.hpp"
 #include "common.hpp"
+#include "cli/args.hpp"
 
 namespace ainiux::server {
 
@@ -13,7 +14,7 @@ namespace ainiux::server {
 // paths.
 class ChatService {
    public:
-    explicit ChatService(std::string database_path = {});
+    explicit ChatService(std::string database_path = {}, cli::Options defaults = {});
 
     ChatService(const ChatService&) = delete;
     ChatService& operator=(const ChatService&) = delete;
@@ -21,6 +22,8 @@ class ChatService {
     Error list(std::string& body);
     Error load(long long thread_id, std::string& body);
     Error create(const std::string& request_body, std::string& body);
+    Error settings(long long thread_id, const std::string& request_body,
+                   std::string& body, long long& current_revision);
     Error append(long long thread_id,
                  const std::string& request_body,
                  std::string& body,
@@ -29,6 +32,10 @@ class ChatService {
                              const std::string& request_body,
                              std::string& body,
                              long long& current_revision);
+    Error abandon(long long thread_id,
+                  const std::string& request_body,
+                  std::string& body,
+                  long long& current_revision);
 
    private:
     Error ensure_open();
@@ -36,6 +43,7 @@ class ChatService {
     std::mutex mutex_;
     std::string database_path_;
     chat::SqliteStore store_;
+    cli::Options defaults_;
 };
 
 }  // namespace ainiux::server

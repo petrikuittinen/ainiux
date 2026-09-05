@@ -25,7 +25,7 @@ Useful targets:
 | `make test` | In-process units plus the small mock smoke |
 | `make test-full` | Units, fault tests, and comprehensive integration; Windows also runs native SQLite/ConPTY parity paths |
 | `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
-| `make test-web-js` | Optional dependency-free WebUI Markdown DOM and fenced-language syntax tests when Node.js is installed |
+| `make test-web-js` | Optional dependency-free WebUI Markdown, syntax, image, and selector tests when Node.js is installed; real-browser test when `AINIUX_TEST_BROWSER` is set |
 | `make test-unit-faults` | Fault tests only |
 | `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
@@ -44,6 +44,31 @@ Valgrind gate. Its UCRT64 jobs build native Windows, run unit/process-tree and
 fault tests, smoke and comprehensive mock-provider/index integration, native SQLite
 integration, the ConPTY harness, a Clang ASan/UBSan unit pass, and portable ZIP
 packaging.
+
+## Browser model/settings regression
+
+`make test-web-js` includes dependency-free tests for 350-model navigation,
+stable sorting, wrapping/repeated search, manual names, focus restoration, and
+catalog refresh. Server unit tests cover settings-only chat persistence,
+revision conflicts, read-only/invalid writes, preserved metadata/transcripts,
+workspace saves before agent creation, restart into saved Plan mode, and bounded
+history pagination, including oversized-row failures.
+
+To include the real-browser controller regression, point to an existing Chromium
+executable (no npm packages or browser download is required):
+
+```sh
+AINIUX_TEST_BROWSER=/path/to/chromium make test-web-js
+```
+
+The headless test uses an isolated temporary profile and a local mock control
+API. It checks the actual embedded HTML/JS, keyboard selection, per-thread
+autosaves, workspace/editor separation, restored agent history, and narrow-mobile
+dialog layout. It also checks Alt+P/Alt+M scope and focus restoration, Option-key
+layouts, composition/AltGr exclusion, compact provider/model Settings links, and
+non-overlapping Chat/Agent toolbars. Without that variable this optional test
+reports a skip. Set `AINIUX_TEST_SCREENSHOTS` to an existing temporary directory
+to capture the test's desktop and mobile views for visual inspection.
 
 ## Layout
 

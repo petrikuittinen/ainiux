@@ -88,9 +88,74 @@ whether to keep the draft or reload the current server copy.
 An unnamed thread initially appears as “New chat”; its first non-empty user
 prompt supplies the stored title. Thread rows show the locally formatted
 modified date and message count rather than internal concurrency values.
+On the first authenticated browser load, the controller creates and selects a
+new thread even when older threads exist. It immediately prompts for a provider
+when the effective provider is `none`, or for a model when only the model is
+missing. A browser-created thread left without user or assistant content is
+revision-safely abandoned when another thread is selected; reconnection reloads
+the active thread instead of creating another one.
 Completed chat and agent turns show compact context, input/output token, elapsed,
 TTFT, cache, and decode-rate measurements when the provider/runtime supplies
 them. A `~` marker identifies estimated token values.
+
+## Model selection and remembered settings
+
+Chat and Agent show compact provider/model names that link to the relevant
+section of Settings. Choosing a provider immediately starts its `/models`
+lookup and continues into the returned model choices, matching the terminal
+flow; `none` is not presented as a usable provider, and a sole returned model
+is selected automatically. Manual model entry is available through the
+explicit **Enter model manually** fallback, never as an empty primary action.
+There are no catalog counts or extra picker buttons in either conversation toolbar.
+Reasoning stays directly adjustable; Agent also retains Act/Plan and permissions.
+
+**Alt+P** opens the provider picker and **Alt+M** opens the model picker for the
+current Chat, Agent, workspace editor, or run/plan job, including from the message
+composer. In Settings the shortcuts use the focused section, or the last active
+chat/workspace scope; they also work in the new-thread dialog. Other open dialogs,
+text composition, and AltGr combinations are left alone. Visible controls remain
+available if a browser or operating system reserves a shortcut.
+
+Provider and model buttons in Settings, new threads, and run/plan jobs open the
+same picker. Use Up/Down, PageUp/PageDown, or Home/End to move;
+Enter selects and Esc cancels. Press `.` or **Sort A–Z** to toggle alphabetical
+and original provider order without changing the highlighted model. Press `/`,
+type a search term, and Enter to jump to the next case-insensitive substring
+match. `/` then Enter repeats the previous search for that list and wraps at
+the end. **Search** and **Find next** provide the same pointer/touch actions.
+Search navigates the complete list rather than filtering it. Model names may
+still be entered manually, including when a provider cannot list models, by
+opening **Enter model manually**; its submit action remains disabled until a
+non-empty name is entered.
+The search, sort, and navigation keys apply inside the picker list, not while
+typing a model or message.
+
+Settings begins with **Current chat**, **Workspace agent & editor**, and
+**Appearance**, followed by status and capability details. The first two cards
+provide one input-like provider picker and one model picker; manual model entry
+remains inside the model dialog.
+
+Model settings use two separate scopes: **Current chat** and
+**Workspace agent & editor**. Fields use the same request-setting validation as
+the TUI: temperature, top_p, top_k, min_p, repeat_penalty, presence_penalty,
+max_tokens, reasoning, stream, context_tokens, and auto_convert_html_to_md.
+Empty optional fields restore their automatic/unset behavior. Terminal layout
+and editor formatting settings are not model settings.
+
+Chat changes save on selection or field commit (Enter or leaving the field),
+without waiting for a message. Choosing another thread restores its own values
+from the existing chat database. Saves are revision-checked; read-only threads
+and stale writes are rejected. Chat model controls are locked during generation.
+
+Agent and editor assist share the workspace configuration, independent of the
+selected chat thread. Changes are saved in the existing project database, even
+before opening Agent, and are locked while an agent turn runs. Opening Agent
+after a restart restores its provider, model, request settings, Act/Plan policy,
+and saved transcript, ready for the next instruction. It does not automatically
+execute or replay interrupted work. **Load older history** pages backward through
+the transcript; request-only compaction summaries are excluded, and explicit
+context-reset boundaries are respected. Each page is limited to 100 rows and
+4 MiB; a larger individual row reports an error without altering stored history.
 
 ## Responsive and accessible behavior
 

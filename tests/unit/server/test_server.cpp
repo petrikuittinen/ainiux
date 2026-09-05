@@ -24,8 +24,12 @@
 #include <vector>
 
 #include <curl/curl.h>
+#include <sqlite3.h>
 
 #include "cli/args.hpp"
+#include "agent/project_settings.hpp"
+#include "chat/settings.hpp"
+#include "server/model_settings.hpp"
 #include "json/json.hpp"
 #include "platform/filesystem.hpp"
 #include "server/auth.hpp"
@@ -148,18 +152,23 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v15.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v16.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v18.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v20.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
               index.body.find("list=\"chat-model-list\"") != std::string::npos &&
               index.body.find("id=\"chat-reasoning\"") != std::string::npos &&
               index.body.find("id=\"agent-reasoning\"") != std::string::npos &&
-              index.body.find("aria-keyshortcuts=\"Control+R Alt+T Alt+W Escape\"") != std::string::npos &&
+              index.body.find("aria-keyshortcuts=\"Alt+P Alt+M Control+R Alt+T Alt+W Escape\"") != std::string::npos &&
+              index.body.find("id=\"chat-provider-link\" href=\"#settings-panel\"") != std::string::npos &&
+              index.body.find("id=\"agent-model-link\" href=\"#settings-panel\"") != std::string::npos &&
               index.body.find("id=\"chat-regenerate-button\"") != std::string::npos &&
               index.body.find("id=\"chat-cycle-reasoning-button\"") != std::string::npos &&
               index.body.find("id=\"chat-thinking-button\"") != std::string::npos &&
+              index.body.find("<kbd>Ctrl+R</kbd>") == std::string::npos &&
+              index.body.find("<kbd>Alt+T</kbd>") == std::string::npos &&
+              index.body.find("id=\"chat-form\" class=\"composer chat-composer\"") != std::string::npos &&
               index.body.find("id=\"agent-list\"") == std::string::npos &&
               index.body.find("id=\"new-agent-dialog\"") == std::string::npos &&
               index.body.find("id=\"image-output\"") != std::string::npos &&
@@ -186,7 +195,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v15.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v18.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -224,7 +233,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v16.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v20.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -234,11 +243,14 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("Last-Event-ID") != std::string::npos &&
               javascript.body.find("/jobs/models") != std::string::npos &&
               javascript.body.find("reasoning_options") != std::string::npos &&
+              javascript.body.find("./selector-v3.js") != std::string::npos &&
               javascript.body.find("chat-reasoning") != std::string::npos &&
               javascript.body.find("event.type === \"delta\"") != std::string::npos &&
               javascript.body.find("updateVisibleChatStream") != std::string::npos &&
               javascript.body.find("data.action === \"append\"") != std::string::npos &&
               javascript.body.find("async function regenerateChat") != std::string::npos &&
+              javascript.body.find("async function abandonUnusedThread") != std::string::npos &&
+              javascript.body.find("async function createNewChat") != std::string::npos &&
               javascript.body.find("async function cancelActiveAgentTurn") != std::string::npos &&
               javascript.body.find("key === \"r\"") != std::string::npos &&
               javascript.body.find("key === \"t\"") != std::string::npos &&
@@ -324,6 +336,15 @@ void test_embedded_web_ui_assets_and_browser_security() {
               syntax_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI syntax module is dependency-free, DOM-safe, and immutable");
 
+    Response selector = route_request(public_get("/ui/assets/selector-v3.js"), config, status);
+    check(selector.status == 200 &&
+              selector.content_type == "text/javascript; charset=utf-8" &&
+              selector.body.find("Enter model manually") != std::string::npos &&
+              selector.body.find("use.disabled = !manual.value.trim()") != std::string::npos &&
+              selector.body.find("options.autoSelectOnly") != std::string::npos &&
+              selector.body.find("innerHTML") == std::string::npos,
+          "embedded selector uses explicit guarded manual entry and sole-model selection");
+
     Response image_options = route_request(public_get("/ui/assets/image-options-v1.js"), config, status);
     check(image_options.status == 200 &&
               image_options.body.find("export function normalizeImageCatalog") != std::string::npos &&
@@ -373,6 +394,10 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/app-v14.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v14.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v15.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v17.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v18.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v19.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/selector-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v3.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/syntax-v1.js"), config, status).status == 404 &&
@@ -1248,6 +1273,148 @@ void test_revision_safe_workspace_mutations_and_editor_assist() {
     fs::remove_all(outside, cleanup_error);
 }
 
+void test_model_settings_persistence_and_resume() {
+    namespace fs = std::filesystem;
+    const fs::path directory = fs::temp_directory_path() / "ainiux-model-settings-parity-test";
+    std::error_code ec;
+    fs::remove_all(directory, ec);
+    fs::create_directories(directory, ec);
+    const auto database = (directory / "chat.sqlite").u8string();
+    long long thread_id = 0;
+    {
+        chat::SqliteStore store;
+        check(store.open(database).ok(), "settings fixture opens chat store");
+        chat::Session thread;
+        thread.provider = "none"; thread.model = "before";
+        thread.settings_json = "{\"temperature\":0.2,\"purpose\":\"write\",\"future_field\":\"retain\"}";
+        thread.messages.push_back({"user", "keep this transcript"});
+        check(store.save_session(thread).ok(), "settings fixture saves a native chat thread");
+        thread_id = thread.thread_id;
+    }
+    {
+        ChatService service(database);
+        std::string output;
+        long long revision = 0;
+        check(service.settings(thread_id,
+            "{\"revision\":1,\"model\":\"after\",\"settings\":{\"temperature\":\"0.7\",\"reasoning\":\"high\",\"stream\":\"off\"}}",
+            output, revision).ok() && revision == 2,
+            "chat settings save without a message and advance the existing revision");
+        check(output.find("retain") == std::string::npos && output.find("\"temperature\":\"0.7\"") != std::string::npos,
+            "public settings expose only the allowlisted fields");
+        check(service.settings(thread_id, "{\"revision\":1,\"model\":\"stale\"}", output, revision).code == ErrorCode::FileLock,
+            "settings reject a stale revision");
+        check(service.settings(thread_id, "{\"revision\":2,\"settings\":{\"temperature\":\"wrong\"}}", output, revision).code == ErrorCode::BadArgs,
+            "settings reject invalid numeric input");
+        check(service.settings(thread_id, "{\"revision\":2,\"settings\":{\"key\":\"secret\"}}", output, revision).code == ErrorCode::BadArgs,
+            "settings cannot modify credentials");
+        check(service.load(thread_id, output).ok() && output.find("keep this transcript") != std::string::npos,
+            "settings-only save leaves the chat transcript intact");
+    }
+    {
+        chat::SqliteStore store;
+        chat::Session thread;
+        check(store.open(database).ok() && store.load_session(thread_id, thread).ok(), "native client reopens changed settings");
+        cli::Options options;
+        check(chat::apply_settings_json(options, thread.settings_json).ok() && options.temperature == 0.7 && !options.stream,
+            "native settings restore the web client's values");
+        check(thread.model == "after" && thread.messages.size() == 1 && thread.settings_json.find("retain") != std::string::npos,
+            "settings updates preserve future fields and messages");
+        thread.read_only = true;
+        check(store.save_session(thread).ok(), "settings fixture marks a thread read-only");
+        sqlite3* raw = nullptr;
+        check(sqlite3_open(database.c_str(), &raw) == SQLITE_OK, "open read-only fixture metadata");
+        std::unique_ptr<sqlite3, decltype(&sqlite3_close)> metadata(raw, sqlite3_close);
+        check(sqlite3_exec(raw, "UPDATE threads SET read_only=1", nullptr, nullptr, nullptr) == SQLITE_OK,
+              "set store-managed read-only metadata");
+        ChatService service(database);
+        std::string output;
+        long long revision = 0;
+        check(service.settings(thread_id, "{\"revision\":3,\"model\":\"denied\"}", output, revision).code == ErrorCode::FileWrite,
+            "read-only chat settings cannot be mutated");
+    }
+    cli::Options options;
+    options.provider = "none"; options.model = "workspace-model"; options.quiet = true;
+    options.agent = true;
+    options.agent_log_enabled = false;
+    {
+        SessionHub hub(options, directory.u8string(), 1);
+        std::string output;
+        check(hub.workspace_settings("", output).ok() && !fs::exists(directory / ".ainiux-pr"),
+            "reading workspace settings does not initialize project tools or state");
+        const auto parsed = json::parse(output);
+        const auto* revision = parsed.value.get("revision");
+        if (revision && revision->is_string()) {
+            const std::string patch = "{\"revision\":" + json::quote(revision->string) +
+                ",\"model\":\"remembered\",\"settings\":{\"temperature\":\"0.4\",\"reasoning\":\"low\"}}";
+            check(hub.workspace_settings(patch, output).ok(), "workspace settings save before any agent session exists");
+            check(hub.workspace_settings(patch, output).code == ErrorCode::FileLock,
+                "workspace settings detect a stale client");
+        } else check(false, "workspace settings expose a revision");
+    }
+    {
+        agent::AgentSessionStore store;
+        agent::AgentProjectRecord project;
+        check(store.open(directory.u8string()).ok() && store.open_project(project).ok(), "open saved workspace");
+        check(agent::settings_with_task_mode(project.settings_json, true, project.settings_json).ok() &&
+              store.update_project_meta(project).ok(), "save Plan mode in the existing project row");
+        for (int i = 0; i < 130; ++i) check(store.append_message("user", "history " + std::to_string(i)).ok(), "seed saved history");
+        check(store.append_message("summary", "private checkpoint").ok(), "seed request-only summary");
+        std::vector<agent::AgentMessageRecord> page, older;
+        check(store.load_message_page(page, 0).ok() && page.size() == 100,
+            "history pagination loads the newest bounded page");
+        check(!page.empty() && store.load_message_page(older, page.front().seq).ok() && older.size() == 30 &&
+              older.back().seq < page.front().seq, "older history pages do not overlap");
+        check(store.load_message_page(page, 0, 100, 50).ok() && page.size() == 80 && page.front().seq == 51,
+              "history respects the persisted context reset display boundary");
+    }
+    {
+        SessionHub hub(options, directory.u8string(), 1);
+        auto created = hub.create("{\"kind\":\"agent\"}");
+        check(created.error.ok(), "server reopens the saved workspace");
+        if (created.session) {
+            for (int i = 0; i < 200 && created.session->snapshot_json().find("\"status\":\"ready\"") == std::string::npos; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            const std::string snapshot = created.session->snapshot_json();
+            check(snapshot.find("\"model\":\"remembered\"") != std::string::npos &&
+                  snapshot.find("\"task_mode\":\"plan\"") != std::string::npos &&
+                  snapshot.find("\"temperature\":\"0.4\"") != std::string::npos &&
+                  snapshot.find("\"turn_id\":null") != std::string::npos,
+                  "restart restores configuration and Plan mode, idle without executing work");
+            std::string history;
+            check(created.session->history(0, history).ok() && history.find("history 129") != std::string::npos &&
+                  history.find("private checkpoint") == std::string::npos,
+                  "server restores display history without exposing compaction checkpoints");
+        }
+        hub.shutdown();
+    }
+    {
+        auto built = provider::build_context(options);
+        agent::AgentSessionRuntime runtime;
+        agent::SessionRuntimeOptions runtime_options;
+        runtime_options.workspace = directory.u8string(); runtime_options.interactive = true;
+        runtime_options.enable_agent_log = false;
+        const Error preparation = built.error.ok() ? runtime.prepare(built.context, {}, {}, runtime_options) : built.error;
+        check(preparation.ok() && runtime.task_mode() == agent::AgentTaskMode::Plan,
+              "native agent restores the same saved Plan mode: " + preparation.message);
+        const Error switched = runtime.switch_task_mode(agent::AgentTaskMode::Act);
+        check(switched.ok(), "native agent can save a new task mode: " + switched.message);
+        runtime.reset();
+    }
+    {
+        std::string merged;
+        check(agent::merge_project_model_settings("{\"future_field\":\"retain\",\"task_mode\":\"plan\"}", options, merged).ok() &&
+              merged.find("retain") != std::string::npos && merged.find("plan") != std::string::npos,
+              "workspace request edits preserve agent-only and future settings");
+        agent::AgentSessionStore store;
+        std::vector<agent::AgentMessageRecord> page;
+        check(store.open(directory.u8string()).ok() && store.append_message("assistant", std::string(4194305, 'x')).ok(),
+              "seed oversized history row");
+        check(store.load_message_page(page, 0).code == ErrorCode::UnsupportedFeature && page.empty(),
+              "oversized history has a bounded explicit error without deleting the transcript");
+    }
+    fs::remove_all(directory, ec);
+}
+
 void test_revision_safe_chat_thread_routes() {
     namespace fs = std::filesystem;
     const fs::path directory = fs::temp_directory_path() / "ainiux-chat-service-test";
@@ -1432,6 +1599,78 @@ void test_revision_safe_chat_thread_routes() {
               bounded.body.find("bounded-message-519") != std::string::npos &&
               bounded.body.find("bounded-message-0\"") == std::string::npos,
           "remote thread loads retain the newest 512 messages and report truncation");
+
+    auto create_abandon_fixture = [&]() {
+        const Response result = route_request(session_request(
+            "POST", "/ainiux/v1/chat/threads", "{\"revision\":0}"), auth, status);
+        const json::ParseResult parsed = json::parse(result.body);
+        const json::Value* thread = parsed.value.get("thread");
+        const json::Value* id = thread == nullptr ? nullptr : thread->get("id");
+        return id != nullptr && id->type == json::Value::Type::Number
+                   ? static_cast<long long>(id->number) : 0LL;
+    };
+    const long long empty_id = create_abandon_fixture();
+    Response abandoned = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(empty_id) + "/abandon",
+        "{\"revision\":1}"), auth, status);
+    check(abandoned.status == 200 &&
+              abandoned.body == "{\"id\":" + std::to_string(empty_id) +
+                                    ",\"deleted\":true}",
+          "empty chat abandonment returns the stable deletion result");
+
+    const long long system_id = create_abandon_fixture();
+    Response system_added = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(system_id) + "/messages",
+        "{\"revision\":1,\"messages\":[{\"role\":\"system\",\"content\":\"rules\"}]}"),
+        auth, status);
+    abandoned = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(system_id) + "/abandon",
+        "{\"revision\":2}"), auth, status);
+    check(system_added.status == 200 && abandoned.status == 200 &&
+              abandoned.body.find("\"deleted\":true") != std::string::npos,
+          "system-only chat abandonment treats the thread as empty");
+
+    const long long content_id = create_abandon_fixture();
+    Response content_added = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(content_id) + "/messages",
+        "{\"revision\":1,\"messages\":[{\"role\":\"assistant\",\"content\":\"keep\"}]}"),
+        auth, status);
+    abandoned = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(content_id) + "/abandon",
+        "{\"revision\":2}"), auth, status);
+    check(content_added.status == 200 && abandoned.status == 200 &&
+              abandoned.body.find("\"deleted\":false") != std::string::npos &&
+              abandoned.body.find("\"reason\":\"not_empty\"") != std::string::npos,
+          "conversation content is preserved with an explicit abandonment reason");
+    Response stale_abandon = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(content_id) + "/abandon",
+        "{\"revision\":1}"), auth, status);
+    check(stale_abandon.status == 409 &&
+              stale_abandon.body.find("\"current_revision\":2") != std::string::npos,
+          "stale chat abandonment returns the current revision");
+    Response missing_abandon = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/999999/abandon", "{\"revision\":1}"),
+        auth, status);
+    check(missing_abandon.status == 404,
+          "missing chat abandonment target remains missing");
+
+    const long long read_only_id = create_abandon_fixture();
+    sqlite3* raw = nullptr;
+    check(sqlite3_open(database.u8string().c_str(), &raw) == SQLITE_OK,
+          "read-only abandonment fixture database opens");
+    if (raw != nullptr) {
+        const std::string sql = "UPDATE threads SET read_only=1 WHERE id=" +
+                                std::to_string(read_only_id);
+        check(sqlite3_exec(raw, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK,
+              "read-only abandonment fixture is marked");
+        sqlite3_close(raw);
+    }
+    Response read_only_abandon = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(read_only_id) + "/abandon",
+        "{\"revision\":1}"), auth, status);
+    check(read_only_abandon.status == 409 &&
+              read_only_abandon.body.find("thread_read_only") != std::string::npos,
+          "read-only chat abandonment preserves the thread");
 
     const fs::path blocked_parent = directory / "not-a-directory";
     std::ofstream(blocked_parent, std::ios::binary) << "file";
@@ -1779,6 +2018,7 @@ void test_loopback_listener_lifecycle() {
 }  // namespace
 
 void run_all() {
+    test_model_settings_persistence_and_resume();
     test_fragmented_parser_and_pipeline();
     test_strict_framing_and_limits();
     test_embedded_web_ui_assets_and_browser_security();

@@ -18,6 +18,7 @@
 #include "search/search.hpp"
 #include "security/redact.hpp"
 #include "server/metrics.hpp"
+#include "server/model_settings.hpp"
 
 namespace ainiux::server {
 namespace {
@@ -211,6 +212,7 @@ void InteractiveSession::start_preparation() {
                                           runtime::CancellationToken cancellation) {
                 return gate->request(request, cancellation);
             };
+            options.restore_task_mode = false;
             error = controller_->runtime()->prepare(context, token, {}, std::move(options));
             if (error.ok()) {
                 (void)controller_->runtime()->update_project_settings(context);
@@ -326,6 +328,10 @@ std::string InteractiveSession::snapshot_json() const {
                          ",\"permission_mode\":" + json::quote(agent::permission_mode_name(permission_mode_));
     result += ",\"reasoning\":" +
               json::quote(config::reasoning_selection_value(context_.options.reasoning));
+    result += ",\"settings\":" + public_model_settings(context_.options) +
+              ",\"settings_fields\":" + public_model_fields(context_.options) +
+              ",\"settings_revision\":" + json::quote(model_settings_revision(context_.options));
+    result += ",\"event_cursor\":" + std::to_string(active_turn_id_.empty() ? events_.latest_id() : turn_event_cursor_);
     const config::ReasoningSelectorData reasoning = config::reasoning_selector_data(
         context_.options.model_catalog, context_.profile.name,
         context_.api_kind == provider::ApiKind::Responses ? "responses" : "chat",
@@ -384,6 +390,14 @@ Error InteractiveSession::start_turn(const std::string& body, std::string& turn_
         if (!active_turn_id_.empty() || controller_->turn_running())
             return {ErrorCode::FileLock, "an interactive turn is already active"};
         if (!controller_->prepared()) return {ErrorCode::FileLock, "session is not ready"};
+        agent::AgentSessionStore store;
+        Error history_error = store.open(workspace_);
+        agent::AgentMessageRecord last;
+        bool found = false;
+        if (history_error.ok()) history_error = store.peek_last_message(last, found);
+        if (!history_error.ok()) return {history_error.code, "could not read project history"};
+        turn_history_before_ = found ? last.seq + 1 : 1;
+        turn_event_cursor_ = events_.latest_id();
         turn_id = id_ + "_turn_" + std::to_string(next_turn_++);
         active_turn_id_ = turn_id;
         active_turn_started_ = std::chrono::steady_clock::now();
@@ -459,6 +473,65 @@ Error InteractiveSession::cancel_turn(const std::string& turn_id) {
     return ok_error();
 }
 
+Error InteractiveSession::history(long long before, std::string& output) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (status_ == "preparing") return {ErrorCode::FileLock, "agent history is preparing"};
+    agent::AgentSessionStore store;
+    Error error = store.open(workspace_);
+    if (!error.ok()) return {error.code, "could not open project history"};
+    const long long boundary = active_turn_id_.empty() ? before :
+        before > 0 ? std::min(before, turn_history_before_) : turn_history_before_;
+    std::vector<agent::AgentMessageRecord> rows;
+    agent::AgentProjectRecord project;
+    error = store.open_project(project);
+    if (!error.ok()) return {error.code, "could not read project history metadata"};
+    long long after = 0;
+    error = agent::context_reset_after_seq_from_settings_json(project.settings_json, after);
+    if (!error.ok()) return {error.code, "invalid project history boundary"};
+    error = store.load_message_page(rows, boundary, 100, after);
+    if (!error.ok()) return {error.code, "could not read project history (pages are limited to 4 MiB)"};
+    output = "{\"turn_id\":" + json::quote(active_turn_id_) + ",\"messages\":[";
+    bool first = true;
+    for (const auto& row : rows) {
+        if (!first) output += ',';
+        first = false;
+        output += "{\"seq\":" + std::to_string(row.seq) +
+            ",\"role\":" + json::quote(row.role) +
+            ",\"content\":" + json::quote(redact_secrets(row.content, {context_.api_key})) + "}";
+    }
+    output += "],\"before\":" + std::to_string(rows.empty() ? 0 : rows.front().seq) + "}";
+    return ok_error();
+}
+
+Error InteractiveSession::model_settings(const std::string& body, std::string& output) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (body.empty()) { output = public_model_configuration(context_.options); return ok_error(); }
+        if (closed_ || status_ != "ready" || controller_->turn_running())
+            return {ErrorCode::FileLock, "workspace settings can be changed only while the agent is idle"};
+        auto parsed = json::parse(body);
+        if (!parsed.error.ok() || !parsed.value.is_object()) return {ErrorCode::BadArgs, "settings body must be an object"};
+        Error error = reject_unknown(parsed.value, {"revision", "provider", "model", "settings"});
+        if (!error.ok()) return error;
+        const auto* revision = parsed.value.get("revision");
+        if (!revision || !revision->is_string()) return {ErrorCode::BadArgs, "settings revision is required"};
+        if (revision->string != model_settings_revision(context_.options))
+            return {ErrorCode::FileLock, "workspace settings changed; reload before saving"};
+        cli::Options options = context_.options;
+        error = apply_public_model_target(parsed.value, options);
+        if (!error.ok()) return error;
+        auto built = provider::build_context(options);
+        if (!built.error.ok()) return public_context_error(built.error);
+        built.context.routing_session_id = context_.routing_session_id;
+        error = controller_->runtime()->update_project_settings(built.context);
+        if (!error.ok()) return {error.code, "could not save workspace settings"};
+        context_ = std::move(built.context);
+        output = public_model_configuration(context_.options);
+    }
+    publish("settings_changed", snapshot_json());
+    return ok_error();
+}
+
 Error InteractiveSession::set_reasoning(const std::string& body) {
     const json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok() || !parsed.value.is_object()) {
@@ -499,6 +572,10 @@ Error InteractiveSession::set_settings(const std::string& body) {
     const json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok() || !parsed.value.is_object()) {
         return {ErrorCode::JsonParse, "agent settings body must be one JSON object"};
+    }
+    if (parsed.value.get("settings") || parsed.value.get("revision")) {
+        std::string output;
+        return model_settings(body, output);
     }
     Error error = reject_unknown(parsed.value,
                                  {"provider", "model", "task_mode", "permission_mode"});
@@ -662,6 +739,32 @@ SessionHub::SessionHub(cli::Options base_options,
 
 SessionHub::~SessionHub() { shutdown(); }
 
+Error SessionHub::workspace_settings(const std::string& body, std::string& output) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopping_) return {ErrorCode::Cancelled, "server is stopping"};
+    if (sessions_.size() > 1) return {ErrorCode::FileLock, "close additional agent sessions before editing workspace settings"};
+    if (!sessions_.empty()) return sessions_.begin()->second->model_settings(body, output);
+    cli::Options options = base_options_;
+    bool restored = false;
+    Error error = agent::restore_project_settings(workspace_, options, restored);
+    if (!error.ok()) return {error.code, "could not restore workspace settings"};
+    if (body.empty()) { output = public_model_configuration(options); return ok_error(); }
+    const auto parsed = json::parse(body);
+    if (!parsed.error.ok() || !parsed.value.is_object()) return {ErrorCode::BadArgs, "settings body must be an object"};
+    error = reject_unknown(parsed.value, {"revision", "provider", "model", "settings"});
+    if (!error.ok()) return error;
+    const auto* revision = parsed.value.get("revision");
+    if (!revision || !revision->is_string()) return {ErrorCode::BadArgs, "settings revision is required"};
+    if (revision->string != model_settings_revision(options))
+        return {ErrorCode::FileLock, "workspace settings changed; reload before saving"};
+    error = apply_public_model_target(parsed.value, options);
+    if (!error.ok()) return error;
+    error = agent::save_project_model_settings(workspace_, options);
+    if (!error.ok()) return {error.code, "could not save workspace settings"};
+    output = public_model_configuration(options);
+    return ok_error();
+}
+
 SessionCreateResult SessionHub::create(const std::string& body) {
     const json::ParseResult parsed = json::parse(body);
     if (!parsed.error.ok()) return {{}, {ErrorCode::JsonParse, "session body is not valid JSON"}};
@@ -708,6 +811,16 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     error = agent::restore_project_settings(workspace_, options, restored,
                                             &permission_mode);
     if (!error.ok()) return {{}, public_context_error(std::move(error))};
+    if (restored && !parsed.value.get("task_mode")) {
+        agent::AgentSessionStore store;
+        error = store.open(workspace_);
+        agent::AgentProjectRecord project;
+        if (error.ok()) error = store.open_project(project);
+        bool plan = false;
+        if (error.ok()) error = agent::saved_task_mode(project.settings_json, plan);
+        if (!error.ok()) return {{}, public_context_error(std::move(error))};
+        task_mode = plan ? agent::AgentTaskMode::Plan : agent::AgentTaskMode::Act;
+    }
     if (!permission_text.empty()) {
         if (!agent::parse_permission_mode(ascii_lower(ascii_trim(permission_text)),
                                           permission_mode))

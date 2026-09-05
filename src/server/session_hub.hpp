@@ -30,6 +30,8 @@ class InteractiveSession {
     Error cancel_turn(const std::string& turn_id);
     Error set_reasoning(const std::string& body);
     Error set_settings(const std::string& body);
+    Error model_settings(const std::string& body, std::string& output);
+    Error history(long long before, std::string& output) const;
     Error resolve_approval(const std::string& approval_id,
                            const std::string& decision);
     Error review_file(const std::string& approval_id, std::string& body) const;
@@ -73,6 +75,8 @@ class InteractiveSession {
     std::string pending_message_;
     std::size_t next_turn_ = 1;
     std::size_t next_approval_ = 1;
+    long long turn_history_before_ = 0;
+    std::uint64_t turn_event_cursor_ = 0;
     bool closed_ = false;
     std::shared_ptr<agent::AgentController> controller_;
     runtime::JobHandle preparation_job_;
@@ -96,6 +100,7 @@ class SessionHub {
     SessionHub& operator=(const SessionHub&) = delete;
 
     SessionCreateResult create(const std::string& body);
+    Error workspace_settings(const std::string& body, std::string& output);
     std::shared_ptr<InteractiveSession> find(const std::string& id) const;
     std::string list_json() const;
     bool erase(const std::string& id);

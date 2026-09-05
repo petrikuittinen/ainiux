@@ -327,6 +327,66 @@ void test_chat_managed_media_cleanup_and_read_only_threads() {
           "a manually missing media file locks its thread without hiding the transcript");
 }
 
+void test_chat_sqlite_conditional_abandonment() {
+    const std::string path = "build/unit-chat-abandon.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+    ainiux::chat::SqliteStore store;
+    ainiux::Error error = store.open(path);
+    check(error.ok(), "conditional abandonment store opens");
+
+    auto save = [&](std::vector<ainiux::provider::Message> messages) {
+        ainiux::chat::Session session;
+        session.messages = std::move(messages);
+        const ainiux::Error saved = store.save_session(session);
+        check(saved.ok(), "conditional abandonment fixture saves");
+        return session;
+    };
+    bool deleted = false;
+    long long revision = 0;
+    auto empty = save({});
+    error = store.abandon_empty_thread(empty.thread_id, empty.revision, deleted, revision);
+    check(error.ok() && deleted && revision == empty.revision,
+          "revision-matching empty thread is abandoned");
+
+    auto system_only = save({{"system", "Be concise"}});
+    error = store.abandon_empty_thread(system_only.thread_id, system_only.revision,
+                                       deleted, revision);
+    check(error.ok() && deleted,
+          "system-prompt-only thread counts as empty for abandonment");
+
+    auto non_empty = save({{"user", "keep me"}});
+    error = store.abandon_empty_thread(non_empty.thread_id, non_empty.revision,
+                                       deleted, revision);
+    check(error.ok() && !deleted,
+          "conversation content preserves a thread during abandonment");
+    error = store.abandon_empty_thread(non_empty.thread_id, non_empty.revision + 1,
+                                       deleted, revision);
+    check(error.code == ainiux::ErrorCode::FileLock &&
+              revision == non_empty.revision,
+          "stale abandonment reports the current revision without deleting");
+    error = store.abandon_empty_thread(999999, 1, deleted, revision);
+    check(error.code == ainiux::ErrorCode::FileRead,
+          "missing abandonment target is reported without creating state");
+
+    auto read_only = save({});
+    sqlite3* raw = nullptr;
+    check(sqlite3_open(path.c_str(), &raw) == SQLITE_OK,
+          "read-only abandonment fixture opens directly");
+    if (raw != nullptr) {
+        const std::string sql = "UPDATE threads SET read_only=1 WHERE id=" +
+                                std::to_string(read_only.thread_id);
+        check(sqlite3_exec(raw, sql.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK,
+              "read-only abandonment fixture is marked");
+        sqlite3_close(raw);
+    }
+    error = store.abandon_empty_thread(read_only.thread_id, read_only.revision,
+                                       deleted, revision);
+    check(error.code == ainiux::ErrorCode::FileWrite && !deleted,
+          "read-only empty thread is preserved");
+}
+
 void test_chat_markdown_attachment_storage_tiers() {
     const std::string directory = "build/unit-markdown-attachments";
     const std::string path = directory + "/ainiux.db";
@@ -942,6 +1002,7 @@ void run_all() {
     test_chat_session_file_failures_and_unicode();
     test_chat_session_has_chat_messages();
     test_chat_sqlite_store_round_trip_and_listing();
+    test_chat_sqlite_conditional_abandonment();
     test_chat_managed_media_cleanup_and_read_only_threads();
     test_chat_markdown_attachment_storage_tiers();
     test_chat_sqlite_v4_markdown_migration();

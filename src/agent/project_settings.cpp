@@ -9,6 +9,52 @@
 
 namespace ainiux::agent {
 
+Error saved_task_mode(const std::string& settings_json, bool& plan) {
+    plan = false;
+    const auto parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object()) return {ErrorCode::Config, "invalid project settings"};
+    const auto* mode = parsed.value.get("task_mode");
+    if (!mode) return ok_error();
+    if (!mode->is_string() || (mode->string != "act" && mode->string != "plan"))
+        return {ErrorCode::Config, "saved task_mode must be act or plan"};
+    plan = mode->string == "plan";
+    return ok_error();
+}
+
+Error settings_with_task_mode(const std::string& settings_json, bool plan, std::string& updated) {
+    auto parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object()) return {ErrorCode::Config, "invalid project settings"};
+    json::Value mode;
+    mode.type = json::Value::Type::String; mode.string = plan ? "plan" : "act";
+    parsed.value.object["task_mode"] = std::move(mode);
+    updated = json::stringify(parsed.value);
+    return ok_error();
+}
+
+Error merge_project_model_settings(const std::string& settings_json,
+                                   const cli::Options& options, std::string& updated) {
+    auto stored = json::parse(settings_json.empty() ? "{}" : settings_json);
+    const auto next = json::parse(chat::settings_json_from_options(options));
+    if (!stored.error.ok() || !stored.value.is_object()) return {ErrorCode::Config, "invalid project settings"};
+    for (const auto& entry : next.value.object) stored.value.object[entry.first] = entry.second;
+    updated = json::stringify(stored.value);
+    return ok_error();
+}
+
+Error save_project_model_settings(const std::string& workspace, const cli::Options& options) {
+    AgentSessionStore store;
+    Error error = store.open(workspace);
+    if (!error.ok()) return error;
+    AgentProjectRecord project;
+    error = store.open_project(project);
+    if (!error.ok()) return error;
+    error = merge_project_model_settings(project.settings_json, options, project.settings_json);
+    if (!error.ok()) return error;
+    project.provider = options.provider; project.model = options.model;
+    project.api = options.api; project.base_url = options.base_url;
+    return store.update_project_meta(project);
+}
+
 Error permission_mode_from_settings_json(const std::string& settings_json,
                                          PermissionMode& mode) {
     mode = PermissionMode::Smart;
@@ -122,7 +168,7 @@ Error restore_project_settings(const std::string& workspace,
                         error.message};
         }
     }
-    if (!project.provider.empty() && project.provider != "none") {
+    if (!project.provider.empty()) {
         options.provider = project.provider;
         options.base_url = project.base_url;
         options.chat_url.clear();

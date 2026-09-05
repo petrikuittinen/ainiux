@@ -10,6 +10,14 @@ ainiux plan "design a migration" --provider openai -m MODEL
 
 ## Project state
 
+The workspace remembers its provider, model, request settings, and interactive
+Act/Plan policy across restarts. The Web UI restores the saved transcript when
+Agent opens, idle and ready for another instruction; restarting never resumes
+tool execution automatically. Editor AI assist shares the workspace model
+configuration, while ordinary chat threads retain their own settings. Native
+editor model selections also persist in the project database. Model changes are
+blocked during a running agent turn, including temporary editor visits.
+
 Agent state belongs to the current project under `.ainiux-pr/`, including `agent.sqlite`, the optional index, history backups, and diagnostic logs. It never uses the user chat database under `~/.ainiux/`. Interactive sessions are multi-turn. Temporary hops to the editor or dired keep the project session open; leaving for chat or quitting finishes the open session and disarms tools.
 
 Native tool-calling LLM rounds buffer the full HTTP response (including SSE framing) up to `agent.max_response_bytes` (default `32M`; CLI `--max-agent-response-bytes`). Long max-reasoning streams can hit this cap even when the useful text is much smaller. Set `0` to disable the cap.

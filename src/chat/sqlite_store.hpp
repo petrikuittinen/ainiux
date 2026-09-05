@@ -65,6 +65,8 @@ class SqliteStore {
     const std::string& path() const { return path_; }
 
     Error save_session(Session& session);
+    Error update_settings(const Session& session, long long expected_revision,
+                          long long& revision);
     Error append_messages(long long thread_id,
                           long long expected_revision,
                           const std::vector<provider::Message>& messages,
@@ -72,6 +74,12 @@ class SqliteStore {
                           const std::optional<std::string>& model,
                           long long& revision,
                           long long& message_count);
+    // Soft-delete a writable thread only when its revision still matches and
+    // it has no conversation content. System-prompt-only threads are empty.
+    Error abandon_empty_thread(long long thread_id,
+                               long long expected_revision,
+                               bool& deleted,
+                               long long& current_revision);
     Error load_session(long long thread_id,
                        Session& session,
                        const LoadSessionOptions& options = LoadSessionOptions());
