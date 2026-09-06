@@ -70,12 +70,14 @@ MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
 WEB_INDEX := src/web/index.html
 WEB_STYLESHEET := src/web/css/app-v18.css
-WEB_JAVASCRIPT := src/web/js/app-v20.js
+WEB_JAVASCRIPT := src/web/js/app-v22.js
 WEB_SELECTOR_JAVASCRIPT := src/web/js/selector-v3.js
 WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v4.js
 WEB_SYNTAX_JAVASCRIPT := src/web/js/syntax-v3.js
 WEB_IMAGE_OPTIONS_JAVASCRIPT := src/web/js/image-options-v1.js
+WEB_EDITOR_HISTORY_JAVASCRIPT := src/web/js/editor-history-v2.js
 WEB_ASSET_HEADER := $(GENERATED_DIR)/embedded_web_assets.hpp
+WEB_EDITOR_HISTORY_HEADER := $(GENERATED_DIR)/embedded_web_editor_history.hpp
 EDITOR_COMMANDS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_editor_commands.hpp
 EDITOR_COMMANDS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/editor-commands.conf
 THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/themes.conf
@@ -214,16 +216,17 @@ $(IMAGES_CONFIG_HEADER): $(IMAGES_CONFIG)
 
 $(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(IMAGES_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
 
-$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGHLIGHT_JAVASCRIPT) $(WEB_SYNTAX_JAVASCRIPT) $(WEB_IMAGE_OPTIONS_JAVASCRIPT) $(WEB_SELECTOR_JAVASCRIPT)
+$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGHLIGHT_JAVASCRIPT) $(WEB_SYNTAX_JAVASCRIPT) $(WEB_IMAGE_OPTIONS_JAVASCRIPT) $(WEB_EDITOR_HISTORY_JAVASCRIPT) $(WEB_SELECTOR_JAVASCRIPT)
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
 			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v18.css";' \
-			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v20.js";' \
+			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v22.js";' \
 			'inline constexpr std::string_view kSelectorJavascriptPath = "/ui/assets/selector-v3.js";' \
 			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v4.js";' \
 			'inline constexpr std::string_view kSyntaxJavascriptPath = "/ui/assets/syntax-v3.js";' \
 			'inline constexpr std::string_view kImageOptionsJavascriptPath = "/ui/assets/image-options-v1.js";' \
+			'inline constexpr std::string_view kEditorHistoryJavascriptPath = "/ui/assets/editor-history-v2.js";' \
 			'inline constexpr char kIndexHtml[] = R"AINIUX_WEB_HTML('; \
 		cat $(WEB_INDEX); \
 		printf '%s\n' ')AINIUX_WEB_HTML";' \
@@ -247,7 +250,17 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGH
 	} >$@.tmp
 	@mv $@.tmp $@
 
-$(OBJ_DIR)/src/server/embedded_assets.o: $(WEB_ASSET_HEADER)
+$(WEB_EDITOR_HISTORY_HEADER): $(WEB_EDITOR_HISTORY_JAVASCRIPT)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web_history {' \
+			'inline constexpr char kJavascript[] = R"AINIUX_EDHIST('; \
+		cat $<; \
+		printf '%s\n' ')AINIUX_EDHIST";' '}  // namespace ainiux::server::web_history'; \
+	} >$@.tmp
+	@mv $@.tmp $@
+
+$(OBJ_DIR)/src/server/embedded_assets.o: $(WEB_ASSET_HEADER) $(WEB_EDITOR_HISTORY_HEADER)
 
 $(EDITOR_HELP_HEADER): $(EDITOR_HELP_SRC)
 	@mkdir -p $(dir $@)
@@ -305,8 +318,10 @@ test-web-js:
 		node --experimental-default-type=module --check $(WEB_HIGHLIGHT_JAVASCRIPT); \
 		node --experimental-default-type=module --check $(WEB_SYNTAX_JAVASCRIPT); \
 		node --experimental-default-type=module --check $(WEB_IMAGE_OPTIONS_JAVASCRIPT); \
+		node --experimental-default-type=module --check $(WEB_EDITOR_HISTORY_JAVASCRIPT); \
 		node --experimental-default-type=module --test tests/unit/web/test_highlight.mjs; \
 		node --experimental-default-type=module --test tests/unit/web/test_image_options.mjs; \
+		node --experimental-default-type=module --test tests/unit/web/test_editor_history.mjs; \
 		node --experimental-default-type=module --test tests/unit/web/test_selector.mjs; \
 		node --test tests/unit/web/test_controller_browser.mjs; \
 	else \

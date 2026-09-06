@@ -153,7 +153,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
               index.body.find("/ui/assets/app-v18.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v20.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v22.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -187,6 +187,10 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("id=\"agent-metrics\"") != std::string::npos &&
               index.body.find("id=\"file-edit-layer\"") != std::string::npos &&
               index.body.find("id=\"file-edit-highlight\"") != std::string::npos &&
+              index.body.find("id=\"undo-file-button\"") != std::string::npos &&
+              index.body.find("id=\"redo-file-button\"") != std::string::npos &&
+              index.body.find("Control+U Control+Z") != std::string::npos &&
+              index.body.find("Alt+U Alt+Z") != std::string::npos &&
               index.body.find("wrap=\"off\"") != std::string::npos &&
               index.body.find("Revision-safe files") == std::string::npos &&
               index.body.find("Revision conflict") == std::string::npos &&
@@ -233,7 +237,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v20.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v22.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -273,6 +277,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("uploadImageInputs") != std::string::npos &&
               javascript.body.find("function resetImageForm") != std::string::npos &&
               javascript.body.find("./image-options-v1.js") != std::string::npos &&
+              javascript.body.find("./editor-history-v2.js") != std::string::npos &&
+              javascript.body.find("editorHistoryDirection(event)") != std::string::npos &&
+              javascript.body.find("event.inputType === \"historyUndo\"") != std::string::npos &&
               javascript.body.find("server_path") != std::string::npos &&
               javascript.body.find("function agentEventVisible") != std::string::npos &&
               javascript.body.find("apiId") == std::string::npos &&
@@ -296,6 +303,19 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript_headers.find("Permissions-Policy:") != std::string::npos &&
               javascript_headers.find("X-Frame-Options: DENY") != std::string::npos,
           "embedded WUI JavaScript uses authenticated fetch/replay and hardened same-origin headers");
+
+    Response editor_history = route_request(public_get("/ui/assets/editor-history-v2.js"), config, status);
+    const std::string editor_history_headers = serialize_response(editor_history, true);
+    check(editor_history.status == 200 &&
+              editor_history.content_type == "text/javascript; charset=utf-8" &&
+              editor_history.body.find("export function undoEditorChange") != std::string::npos &&
+              editor_history.body.find("export function redoEditorChange") != std::string::npos &&
+              editor_history.body.find("export function editorHistoryDirection") != std::string::npos &&
+              editor_history.body.find("innerHTML") == std::string::npos &&
+              editor_history.body.find("fetch(") == std::string::npos &&
+              editor_history_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos &&
+              editor_history_headers.find("script-src 'self'") != std::string::npos,
+          "embedded WUI editor history provides bounded undo, redo, and shortcut handling");
 
     Response highlighter = route_request(public_get("/ui/assets/highlight-v4.js"), config, status);
     const std::string highlighter_headers = serialize_response(highlighter, true);

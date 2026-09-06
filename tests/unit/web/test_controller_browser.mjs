@@ -28,7 +28,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v20.js", "selector-v3.js", "highlight-v4.js", "syntax-v3.js", "image-options-v1.js", "app-v18.css"]) {
+  for (const name of ["app-v22.js", "selector-v3.js", "highlight-v4.js", "syntax-v3.js", "image-options-v1.js", "editor-history-v2.js", "app-v18.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -87,7 +87,8 @@ test("web controller selectors, per-thread saves, workspace settings and history
       }
       if (path.endsWith("/jobs/editor-assist")) {
         assistRequest = body;
-        const job = { id: "assist", operation: "editor-assist", state: "succeeded", result: {} };
+        const job = { id: "assist", operation: "editor-assist", state: "succeeded",
+          result: { edit: { start: 0, length: 5, replacement: "HELLO" } } };
         jobs.set(job.id, job); return send({ job });
       }
       if (path.includes("/jobs/")) return send(jobs.get(path.split("/").at(-1)) || {});
@@ -271,12 +272,38 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await evaluate('const model = document.querySelector("#workspace-model"); model.value = "editor/agent-v2"; model.dispatchEvent(new Event("change"));');
     await wait('document.querySelector("#workspace-settings-save-status").textContent === "Saved"');
     assert.equal(workspace.model, "editor/agent-v2");
-    await click('[data-panel="workspace-panel"]'); await click(".file-main button");
+    await click('[data-panel="workspace-panel"]');
+    await evaluate(`{ const editor = document.querySelector("#file-editor");
+      editor.value = "old line\\n".repeat(200); editor.disabled = false;
+      editor.setSelectionRange(editor.value.length, editor.value.length);
+      editor.scrollTop = editor.scrollHeight; editor.scrollLeft = 40; editor.disabled = true; }`);
+    await click(".file-main button");
     await wait('!document.querySelector("#editor-assist-button").disabled');
+    await click("#edit-file-button");
+    assert.deepEqual(await evaluate(`(() => { const editor = document.querySelector("#file-editor");
+      return { start: editor.selectionStart, end: editor.selectionEnd,
+        scrollTop: editor.scrollTop, scrollLeft: editor.scrollLeft }; })()`),
+      { start: 0, end: 0, scrollTop: 0, scrollLeft: 0 });
+    await evaluate('document.querySelector("#file-editor").setSelectionRange(5, 5)');
+    await command("Input.insertText", { text: "!" }, sid);
+    await wait('document.querySelector("#file-editor").value === "hello!" && !document.querySelector("#undo-file-button").disabled');
+    await key("u", 2, "KeyU");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello");
+    await key("y", 2, "KeyY");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello!");
+    await key("z", 1, "KeyZ");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello");
+    await key("y", 1, "KeyY");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello!");
+    await click("#undo-file-button");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello");
     await click("#editor-assist-button");
     await evaluate('document.querySelector("#assist-instruction").value = "Improve this"; document.querySelector("#assist-form").requestSubmit()');
     await wait('!document.querySelector("#assist-dialog").open');
     assert.ok(assistRequest); assert.equal(assistRequest.provider, undefined); assert.equal(assistRequest.model, undefined);
+    await wait('document.querySelector("#file-editor").value === "HELLO"');
+    await click("#undo-file-button");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello");
     // Physical-key fallback on Option layouts, and no Ctrl/AltGr or composing interception.
     await click('[data-panel="workspace-panel"]');
     assert.equal(await evaluate('document.querySelector("dialog[open]")?.id || ""'), "");

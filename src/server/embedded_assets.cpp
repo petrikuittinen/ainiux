@@ -1,6 +1,7 @@
 #include "server/embedded_assets.hpp"
 
 #include "embedded_web_assets.hpp"
+#include "embedded_web_editor_history.hpp"
 
 namespace ainiux::server {
 
@@ -31,6 +32,10 @@ bool find_embedded_asset(std::string_view path, EmbeddedAsset& asset) {
     }
     if (path == web::kImageOptionsJavascriptPath) {
         asset = {"text/javascript; charset=utf-8", web::kImageOptionsJavascript, true};
+        return true;
+    }
+    if (path == web::kEditorHistoryJavascriptPath) {
+        asset = {"text/javascript; charset=utf-8", web_history::kJavascript, true};
         return true;
     }
     if (path == web::kSelectorJavascriptPath) {

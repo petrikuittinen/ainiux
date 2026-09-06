@@ -5,6 +5,10 @@ import {
   normalizeImageCatalog, selectImageModel, imageFileError, customDimensionError,
   resetImageFormValues,
 } from "./image-options-v1.js";
+import {
+  createEditorHistory, editorHistoryDirection, recordEditorChange, redoEditorChange,
+  undoEditorChange, updateEditorHistorySelection,
+} from "./editor-history-v2.js";
 
 const API_ROOT = "/ainiux/v1";
 const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";
@@ -2603,6 +2607,69 @@ function openFileCoveredBy(entry) {
     (entry.type === "directory" && state.file.path.startsWith(`${entry.path}/`));
 }
 
+function editorSnapshot() {
+  const editor = byId("file-editor");
+  return {
+    value: editor.value,
+    selectionStart: editor.selectionStart,
+    selectionEnd: editor.selectionEnd,
+    selectionDirection: editor.selectionDirection,
+  };
+}
+
+function setEditorSnapshot(value) {
+  const editor = byId("file-editor");
+  editor.value = value.value;
+  editor.setSelectionRange(value.selectionStart, value.selectionEnd, value.selectionDirection);
+}
+
+function updateEditorHistoryButtons() {
+  const editing = Boolean(state.file) && !byId("file-editor").disabled;
+  const history = state.file && state.file.history;
+  byId("undo-file-button").hidden = !editing;
+  byId("redo-file-button").hidden = !editing;
+  byId("undo-file-button").disabled = !editing || !history || !history.undo.length;
+  byId("redo-file-button").disabled = !editing || !history || !history.redo.length;
+}
+
+function refreshEditorDraft() {
+  if (!state.file) return;
+  state.file.dirty = byId("file-editor").value !== state.file.content;
+  renderEditHighlight();
+  updateEditorMeta();
+}
+
+function applyEditorHistory(direction) {
+  if (!state.file || !state.file.history || byId("file-editor").disabled) return false;
+  byId("file-editor").focus({ preventScroll: true });
+  const changed = direction === "undo"
+    ? undoEditorChange(state.file.history, editorSnapshot())
+    : redoEditorChange(state.file.history, editorSnapshot());
+  if (!changed) {
+    updateEditorHistoryButtons();
+    return false;
+  }
+  state.file.pendingEditorInput = null;
+  setEditorSnapshot(changed);
+  refreshEditorDraft();
+  return true;
+}
+
+function replaceEditorDraft(value) {
+  if (!state.file) return;
+  const before = editorSnapshot();
+  const next = {
+    value,
+    selectionStart: value.length,
+    selectionEnd: value.length,
+    selectionDirection: "none",
+  };
+  setEditorSnapshot(next);
+  recordEditorChange(state.file.history, before, next);
+  state.file.pendingEditorInput = null;
+  refreshEditorDraft();
+}
+
 function clearEditor() {
   state.file = null;
   byId("file-editor").value = "";
@@ -2615,6 +2682,7 @@ function clearEditor() {
   byId("editor-heading").textContent = "Editor";
   byId("save-file-button").disabled = true;
   byId("editor-assist-button").disabled = true;
+  updateEditorHistoryButtons();
   updateEditorMeta();
 }
 
@@ -2705,6 +2773,7 @@ function updateEditorMeta() {
   byId("edit-file-button").hidden = !byId("file-edit-layer").hidden;
   byId("edit-file-button").disabled = !state.file;
   byId("editor-assist-button").disabled = state.file.dirty || !supports("editor_assist");
+  updateEditorHistoryButtons();
 }
 
 function renderFileHighlight() {
@@ -2735,12 +2804,21 @@ function renderEditHighlight() {
 
 function beginFileEdit() {
   if (!state.file) return;
+  const editor = byId("file-editor");
   byId("file-highlight").hidden = true;
   byId("file-edit-layer").hidden = false;
-  byId("file-editor").disabled = false;
+  editor.disabled = false;
+  editor.focus({ preventScroll: true });
+  if (state.file.initialEditorPositionPending) {
+    editor.setSelectionRange(0, 0, "none");
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    state.file.initialEditorPositionPending = false;
+    updateEditorHistorySelection(state.file.history, editorSnapshot());
+  }
   renderEditHighlight();
   byId("edit-file-button").hidden = true;
-  byId("file-editor").focus();
+  updateEditorHistoryButtons();
 }
 
 function showFileViewer() {
@@ -2749,6 +2827,7 @@ function showFileViewer() {
   byId("file-editor").disabled = true;
   renderFileHighlight();
   byId("edit-file-button").hidden = false;
+  updateEditorHistoryButtons();
 }
 
 async function loadFile(path) {
@@ -2756,9 +2835,15 @@ async function loadFile(path) {
       !window.confirm("Discard the unsaved editor draft and open another file?")) return;
   try {
     const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`);
-    state.file = { ...response, dirty: false };
-    byId("file-editor").value = response.content || "";
-    byId("file-editor").disabled = true;
+    state.file = { ...response, dirty: false, history: null, pendingEditorInput: null,
+      initialEditorPositionPending: true };
+    const editor = byId("file-editor");
+    editor.value = response.content || "";
+    editor.setSelectionRange(0, 0, "none");
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    state.file.history = createEditorHistory(editorSnapshot());
+    editor.disabled = true;
     byId("file-edit-layer").hidden = true;
     renderFileHighlight();
     byId("editor-heading").textContent = response.path;
@@ -2936,10 +3021,8 @@ function finishAssistJob(job, context) {
     return;
   }
   try {
-    byId("file-editor").value = applyByteEdit(byId("file-editor").value, job.result.edit);
     beginFileEdit();
-    state.file.dirty = true;
-    updateEditorMeta();
+    replaceEditorDraft(applyByteEdit(byId("file-editor").value, job.result.edit));
     switchPanel("workspace-panel");
     byId("file-editor").focus();
     toast("AI proposal applied to the draft. Review it, then save explicitly.");
@@ -3250,13 +3333,36 @@ function bindEvents() {
       } else toast(errorMessage(error), "error");
     });
   });
+  byId("file-editor").addEventListener("keydown", (event) => {
+    const direction = editorHistoryDirection(event);
+    if (!direction) return;
+    event.preventDefault();
+    applyEditorHistory(direction);
+  });
+  byId("file-editor").addEventListener("beforeinput", (event) => {
+    if (!state.file) return;
+    if (event.inputType === "historyUndo" || event.inputType === "historyRedo") {
+      event.preventDefault();
+      applyEditorHistory(event.inputType === "historyUndo" ? "undo" : "redo");
+      return;
+    }
+    state.file.pendingEditorInput = editorSnapshot();
+  });
   byId("file-editor").addEventListener("input", () => {
     if (!state.file) return;
-    state.file.dirty = byId("file-editor").value !== state.file.content;
-    renderEditHighlight();
-    updateEditorMeta();
+    const before = state.file.pendingEditorInput || state.file.history.current;
+    state.file.pendingEditorInput = null;
+    recordEditorChange(state.file.history, before, editorSnapshot());
+    refreshEditorDraft();
+  });
+  byId("file-editor").addEventListener("select", () => {
+    if (state.file && state.file.history) {
+      updateEditorHistorySelection(state.file.history, editorSnapshot());
+    }
   });
   byId("file-editor").addEventListener("scroll", syncEditorHighlightScroll);
+  byId("undo-file-button").addEventListener("click", () => applyEditorHistory("undo"));
+  byId("redo-file-button").addEventListener("click", () => applyEditorHistory("redo"));
   byId("save-file-button").addEventListener("click", () => void saveFile());
   byId("editor-assist-button").addEventListener("click", () => openDialog(byId("assist-dialog")));
   byId("assist-form").addEventListener("submit", (event) => {

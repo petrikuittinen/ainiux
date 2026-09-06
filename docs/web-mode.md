@@ -62,8 +62,10 @@ provides:
   image editing, including local thumbnails and per-model input limits;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
-- a bounded UTF-8 editor with optimistic saves, conflict recovery, and AI
-  proposals that modify only the browser draft until Save is selected;
+- a bounded UTF-8 editor with optimistic saves, conflict recovery, and bounded
+  undo/redo for typing, paste, and AI proposals. Use `Ctrl+U` or `Ctrl+Z` to
+  undo and `Ctrl+Y` to redo; `Alt+U`/`Alt+Z` and `Alt+Y` are browser-safe
+  fallbacks. AI proposals modify only the browser draft until Save is selected;
 - safe status and capability data already exposed by the control API.
 
 Provider selection uses the server/provider API default. The WUI does not carry
