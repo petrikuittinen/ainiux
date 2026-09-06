@@ -25,7 +25,7 @@ Useful targets:
 | `make test` | In-process units plus the small mock smoke |
 | `make test-full` | Units, fault tests, and comprehensive integration; Windows also runs native SQLite/ConPTY parity paths |
 | `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
-| `make test-web-js` | Optional dependency-free WebUI Markdown, syntax, image, and selector tests when Node.js is installed; real-browser test when `AINIUX_TEST_BROWSER` is set |
+| `make test-web-js` | Optional dependency-free WebUI Markdown, syntax, editor indentation/history, image, and selector tests when Node.js is installed; real-browser test when `AINIUX_TEST_BROWSER` is set |
 | `make test-unit-faults` | Fault tests only |
 | `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |

@@ -1,4 +1,4 @@
-/* Dependency-free syntax highlighting for Markdown, Agent, and workspace files. */
+/* Dependency-free syntax highlighting and structural line analysis. */
 const MAX_HIGHLIGHT_BYTES = 1024 * 1024;
 const MAX_LINE_BYTES = 64 * 1024;
 const MAX_TOKENS = 50000;
@@ -732,6 +732,32 @@ function scanPhp(line, previous = {}) {
 function scanPerlRuby(line, language, previous = {}) {
   const tokens = [];
   const state = { ...previous };
+  if (state.mode === "line-comment") {
+    token(tokens, 0, line.length, "comment");
+    const first = line.search(/\S/);
+    if (first >= 0 && line.startsWith(state.delimiter, first)) return { tokens, state: {} };
+    return { tokens, state };
+  }
+  if (state.mode === "heredoc") {
+    const candidate = state.stripIndent ? line.trimStart() : line;
+    if (candidate.trimEnd() === state.delimiter) {
+      const start = line.indexOf(state.delimiter);
+      token(tokens, start, start + state.delimiter.length, "preprocessor");
+      return { tokens, state: {} };
+    }
+    token(tokens, 0, line.length, "string");
+    return { tokens, state };
+  }
+  const first = line.search(/\S/);
+  if (language === "perl" && first >= 0 &&
+      /^(?:=pod|=head1|=begin)(?:\s|$)/.test(line.slice(first))) {
+    token(tokens, first, line.length, "comment");
+    return { tokens, state: { mode: "line-comment", delimiter: "=cut" } };
+  }
+  if (language === "ruby" && first >= 0 && /^=begin(?:\s|$)/.test(line.slice(first))) {
+    token(tokens, first, line.length, "comment");
+    return { tokens, state: { mode: "line-comment", delimiter: "=end" } };
+  }
   let position = 0;
   let declaration = "";
   while (position < line.length) {
@@ -744,6 +770,17 @@ function scanPerlRuby(line, language, previous = {}) {
       token(tokens, position, end, "string");
       position = end;
       continue;
+    }
+    if (line.startsWith("<<", position)) {
+      const match = line.slice(position).match(/^<<([-~]?)[\t ]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/);
+      if (match) {
+        token(tokens, position, position + match[0].length, "preprocessor");
+        state.mode = "heredoc";
+        state.delimiter = match[3];
+        state.stripIndent = Boolean(match[1]);
+        position += match[0].length;
+        continue;
+      }
     }
     if ((language === "perl" && /[$@%]/.test(line[position])) ||
         (language === "ruby" && /[$@]/.test(line[position]))) {
@@ -1128,8 +1165,49 @@ function scanAssembly(line) {
   return { tokens, state: {} };
 }
 
-function scanMarkdown(line) {
+function markdownFence(line) {
+  const match = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  if (!match) return null;
+  return { character: match[1][0], length: match[1].length, rest: match[2] };
+}
+
+function markdownFenceClose(line, state) {
+  const trimmed = line.trimEnd();
+  let start = trimmed.length;
+  while (start > 0 && trimmed[start - 1] === state.fenceCharacter) start -= 1;
+  if (trimmed.length - start < state.fenceLength) return null;
+  if (!trimmed.slice(start).split("").every((character) => character === state.fenceCharacter)) return null;
+  const prefix = trimmed.slice(0, start).trimEnd();
+  if (!prefix || /^ {0,3}$/.test(prefix)) return { code: "", fenceStart: start };
+  return { code: prefix, fenceStart: start };
+}
+
+function scanMarkdown(line, previous = {}) {
   const tokens = [];
+  const state = { ...previous, nested: { ...(previous.nested || {}) } };
+  if (state.mode === "fence") {
+    const close = markdownFenceClose(line, state);
+    const code = close ? close.code : line;
+    if (state.embeddedLanguage && code) {
+      const embedded = scanLine(code, state.embeddedLanguage, state.nested);
+      tokens.push(...embedded.tokens);
+      state.nested = embedded.state;
+    }
+    if (close) {
+      token(tokens, close.fenceStart, line.trimEnd().length, "preprocessor");
+      tokens.sort((left, right) => left.start - right.start || left.end - right.end);
+      return { tokens, state: {} };
+    }
+    return { tokens, state };
+  }
+  const fence = markdownFence(line);
+  if (fence) {
+    const start = line.search(/[`~]/);
+    token(tokens, start, line.length, "preprocessor");
+    const label = fence.rest.trim().split(/[\s{,]/, 1)[0];
+    return { tokens, state: { mode: "fence", fenceCharacter: fence.character,
+      fenceLength: fence.length, embeddedLanguage: canonicalLanguage(label), nested: {} } };
+  }
   const heading = line.match(/^ {0,3}#{1,6}(?:\s+|$)/);
   if (heading) {
     token(tokens, 0, line.length, "heading");
@@ -1308,6 +1386,17 @@ function scanHtml(line, previous = {}, embeddedLanguages = true) {
   const state = { mode: "html", nested: {}, ...previous };
   let position = 0;
   while (position < line.length) {
+    if (state.mode === "cdata") {
+      const close = line.indexOf("]]>", position);
+      if (close < 0) {
+        token(tokens, position, line.length, "string");
+        break;
+      }
+      token(tokens, position, close + 3, "string");
+      state.mode = "html";
+      position = close + 3;
+      continue;
+    }
     if (state.mode === "tag") {
       const end = tagEnd(line, -1);
       scanTag(line, 0, end, tokens, state.tagName, embeddedLanguages);
@@ -1364,6 +1453,17 @@ function scanHtml(line, previous = {}, embeddedLanguages = true) {
       position = close + 3;
       continue;
     }
+    if (line.startsWith("<![CDATA[", open)) {
+      const close = line.indexOf("]]>", open + 9);
+      if (close < 0) {
+        token(tokens, open, line.length, "string");
+        state.mode = "cdata";
+        break;
+      }
+      token(tokens, open, close + 3, "string");
+      position = close + 3;
+      continue;
+    }
     const end = tagEnd(line, open);
     if (line.startsWith("<!", open) || line.startsWith("<?", open)) {
       token(tokens, open, end, "preprocessor");
@@ -1391,7 +1491,7 @@ function scanHtml(line, previous = {}, embeddedLanguages = true) {
 
 function scanLine(line, language, state) {
   if (language === "text") return { tokens: [], state: {} };
-  if (language === "markdown") return scanMarkdown(line);
+  if (language === "markdown") return scanMarkdown(line, state);
   if (language === "python") return scanPython(line, state);
   if (language === "bash") return scanBash(line, state);
   if (language === "json") return scanJson(line, state);
@@ -1407,6 +1507,49 @@ function scanLine(line, language, state) {
   if (language === "html") return scanHtml(line, state);
   if (language === "htmlonly" || language === "xml") return scanHtml(line, state, false);
   return scanCLike(line, language, state);
+}
+
+function utf8Length(value) {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length &&
+        value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+    if (bytes > MAX_LINE_BYTES) return bytes;
+  }
+  return bytes;
+}
+
+const PROTECTED_MODES = new Set([
+  "fence", "block-comment", "triple", "template", "raw-string", "go-raw",
+  "text-block", "heredoc", "here-string", "html-comment", "cdata",
+  "dollar-string", "toml-string", "yaml-block", "line-comment",
+]);
+
+function protectedState(state) {
+  return PROTECTED_MODES.has(state && state.mode);
+}
+
+export function analyzeStructuralLine(source, languageLabel, opaqueState = {}) {
+  const line = String(source ?? "");
+  const language = canonicalLanguage(languageLabel);
+  const incoming = opaqueState && typeof opaqueState === "object" ? opaqueState : {};
+  const protectedRegion = protectedState(incoming);
+  const embeddedLanguage = incoming.mode === "script" ? "javascript" :
+    incoming.mode === "style" ? "css" : incoming.mode === "fence" ?
+      (incoming.embeddedLanguage || "text") : "";
+  if (!language || utf8Length(line) > MAX_LINE_BYTES) {
+    return { semanticSpans: [], nextState: incoming, protectedRegion,
+      embeddedLanguage, workLimited: true };
+  }
+  const result = scanLine(line, language, incoming);
+  return { semanticSpans: result.tokens, nextState: result.state, protectedRegion,
+    embeddedLanguage, workLimited: false };
 }
 
 function appendText(documentRef, parent, text) {
@@ -1438,9 +1581,8 @@ export function appendHighlightedCode(documentRef, parent, source, languageLabel
   let state = {};
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (line.length > MAX_LINE_BYTES) {
+    if (utf8Length(line) > MAX_LINE_BYTES) {
       appendText(documentRef, parent, line);
-      state = {};
     } else {
       const result = scanLine(line, language, state);
       appendLine(documentRef, parent, line, result.tokens);

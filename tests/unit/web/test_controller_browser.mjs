@@ -28,7 +28,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v22.js", "selector-v3.js", "highlight-v4.js", "syntax-v3.js", "image-options-v1.js", "editor-history-v2.js", "app-v18.css"]) {
+  for (const name of ["app-v23.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v19.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -99,8 +99,16 @@ test("web controller selectors, per-thread saves, workspace settings and history
       if (path.endsWith("/sessions")) return send(session ? [{ ...session, ...workspace }] : []);
       if (path.endsWith("/history")) return send({ turn_id: "", messages: [{ seq: 1, role: "assistant", content: "Earlier project work" }], before: 0 });
       if (path.includes("/sessions/")) return send({ ...session, ...workspace, reasoning: workspace.settings.reasoning });
-      if (path.endsWith("/dired")) return send({ path: ".", revision: "r1", entries: [{ type: "file", name: "notes.txt", path: "notes.txt", size: 5, revision: "r1" }] });
-      if (path.endsWith("/files")) return send({ path: "notes.txt", revision: "r1", content: "hello", editable: true });
+      if (path.endsWith("/dired")) return send({ path: ".", revision: "r1", entries: [
+        { type: "file", name: "notes.txt", path: "notes.txt", size: 5, revision: "r1" },
+        { type: "file", name: "sample.js", path: "sample.js", size: 27, revision: "r1" },
+      ] });
+      if (path.endsWith("/files")) {
+        const javascript = url.searchParams.get("path") === "sample.js";
+        return send(javascript
+          ? { path: "sample.js", revision: "r1", content: "if (ready) {\n  call();\n}\n", editable: true }
+          : { path: "notes.txt", revision: "r1", content: "hello", editable: true });
+      }
       res.statusCode = 404; send({ error: { message: `No mock route ${path}` } });
     } catch (error) { res.statusCode = 500; res.end(JSON.stringify({ error: { message: error.message } })); }
   });
@@ -297,6 +305,59 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello!");
     await click("#undo-file-button");
     assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello");
+    assert.equal(await evaluate('document.querySelector("#editor-reformat-button").disabled'), true);
+    await evaluate('[...document.querySelectorAll(".file-main button")].find(node => node.textContent.includes("sample.js")).click()');
+    await wait('document.querySelector("#editor-heading").textContent === "sample.js"');
+    assert.deepEqual(await evaluate(`(() => ({
+      width: document.querySelector("#editor-indent-width").value,
+      style: document.querySelector("#editor-indent-style").value,
+      editorTab: getComputedStyle(document.querySelector("#file-editor")).tabSize,
+      overlayTab: getComputedStyle(document.querySelector("#file-edit-highlight")).tabSize,
+      viewerTab: getComputedStyle(document.querySelector("#file-highlight")).tabSize,
+    }))()`), { width: "2", style: "spaces", editorTab: "2", overlayTab: "2", viewerTab: "2" });
+    await click("#edit-file-button");
+    await evaluate(`{ const width = document.querySelector("#editor-indent-width");
+      width.value = "4"; width.dispatchEvent(new Event("change"));
+      const style = document.querySelector("#editor-indent-style");
+      style.value = "tab"; style.dispatchEvent(new Event("change"));
+      const editor = document.querySelector("#file-editor"); editor.setSelectionRange(0, 0); }`);
+    await key("Tab", 0, "Tab");
+    assert.ok(await evaluate('document.querySelector("#file-editor").value.startsWith("\\t")'));
+    await click("#undo-file-button");
+    await evaluate(`{ const width = document.querySelector("#editor-indent-width");
+      width.value = "2"; width.dispatchEvent(new Event("change"));
+      const style = document.querySelector("#editor-indent-style");
+      style.value = "spaces"; style.dispatchEvent(new Event("change")); }`);
+    await evaluate(`{ const editor = document.querySelector("#file-editor");
+      const start = editor.value.indexOf("  call"); editor.setSelectionRange(start, start + 8, "forward"); }`);
+    assert.equal(await evaluate('document.querySelector("#editor-reformat-button").textContent'), "Reformat selection");
+    await key("Tab", 0, "Tab");
+    assert.ok(await evaluate('document.querySelector("#file-editor").value.includes("    call")'));
+    await key("Tab", 8, "Tab");
+    assert.ok(await evaluate('document.querySelector("#file-editor").value.includes("  call")'));
+    await evaluate(`{ const editor = document.querySelector("#file-editor"); editor.focus();
+      editor.setSelectionRange(0, editor.value.length); }`);
+    await command("Input.insertText", { text: "if (ready) {\ncall();\n}\nafter();" }, sid);
+    await evaluate(`{ const editor = document.querySelector("#file-editor");
+      editor.setSelectionRange(0, editor.value.indexOf("after"), "forward"); }`);
+    await wait('document.querySelector("#editor-reformat-button").textContent === "Reformat selection"');
+    await click("#editor-reformat-button");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "if (ready) {\n  call();\n}\nafter();");
+    assert.equal(await evaluate('document.querySelector("#file-edit-highlight").textContent'),
+      await evaluate('document.querySelector("#file-editor").value'));
+    await click("#undo-file-button");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "if (ready) {\ncall();\n}\nafter();");
+    await evaluate('const editor = document.querySelector("#file-editor"); editor.setSelectionRange(0, 0)');
+    await wait('document.querySelector("#editor-reformat-button").textContent === "Reformat file"');
+    await click("#editor-reformat-button");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "if (ready) {\n  call();\n}\nafter();");
+    const editorToolbar = await evaluate(`(() => { const bar = document.querySelector(".editor-toolbar");
+      const controls = [...bar.querySelectorAll("input, select, button")].filter(node => node.getClientRects().length);
+      const rectangles = controls.map(node => node.getBoundingClientRect());
+      return { within: rectangles.every(r => r.left >= 0 && r.right <= innerWidth),
+        overlaps: rectangles.some((a, i) => rectangles.slice(i + 1).some(b =>
+          a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
+    assert.equal(editorToolbar.within, true); assert.equal(editorToolbar.overlaps, false);
     await click("#editor-assist-button");
     await evaluate('document.querySelector("#assist-instruction").value = "Improve this"; document.querySelector("#assist-form").requestSubmit()');
     await wait('!document.querySelector("#assist-dialog").open');

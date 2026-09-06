@@ -54,7 +54,7 @@ The embedded browser controller completes the v1.30 control-server milestone.
 
 ## Current baseline
 
-Implementation status (2026-09-04): **v1.31**.
+Implementation status (2026-09-06): **v1.32**.
 
 The shipped product includes:
 
@@ -101,7 +101,7 @@ older Windows, and mintty full-screen operation are explicit non-goals.
 
 ## Release history
 
-The compact v0.0–v1.31 timeline lives in `docs/version-history.md`. Historical
+The compact v0.0–v1.32 timeline lives in `docs/version-history.md`. Historical
 implementation details remain available in Git history and `docs/decisions.md`.
 
 # v1.1 - Lightweight smarter agent indexing

@@ -1,6 +1,9 @@
-import { renderMarkdown } from "./highlight-v4.js";
+import { renderMarkdown } from "./highlight-v5.js";
 import { createSelector } from "./selector-v3.js";
-import { appendHighlightedCode, languageForPath } from "./syntax-v3.js";
+import { appendHighlightedCode, languageForPath } from "./syntax-v4.js";
+import {
+  detectIndentation, indentEditorSnapshot, outdentEditorSnapshot, reformatEditorSnapshot,
+} from "./editor-indentation-v1.js";
 import {
   normalizeImageCatalog, selectImageModel, imageFileError, customDimensionError,
   resetImageFormValues,
@@ -15,6 +18,7 @@ const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";
 const THEME_STORAGE_KEY = "ainiux.ui.theme.v1";
 const THINKING_STORAGE_KEY = "ainiux.chat.thinking.v1";
 const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
+const MAX_EDITOR_REFORMAT_BYTES = 1024 * 1024;
 
 const state = {
   token: "",
@@ -2623,6 +2627,27 @@ function setEditorSnapshot(value) {
   editor.setSelectionRange(value.selectionStart, value.selectionEnd, value.selectionDirection);
 }
 
+function setEditorTabSize(tabWidth) {
+  const value = String(Math.max(1, Math.min(32, Number(tabWidth) || 4)));
+  byId("file-editor").style.tabSize = value;
+  byId("file-edit-highlight").style.tabSize = value;
+  byId("file-highlight").style.tabSize = value;
+}
+
+function updateEditorIndentControls() {
+  const editor = byId("file-editor");
+  const loaded = Boolean(state.file);
+  const editing = loaded && !editor.disabled;
+  const selected = editing && editor.selectionStart !== editor.selectionEnd;
+  byId("editor-indent-width").disabled = !loaded;
+  byId("editor-indent-style").disabled = !loaded;
+  byId("editor-reformat-button").textContent = selected ? "Reformat selection" : "Reformat file";
+  byId("editor-reformat-button").disabled = !editing ||
+    languageForPath(state.file?.path || "") === "text";
+  byId("editor-reformat-button").title = loaded && languageForPath(state.file.path) === "text"
+    ? "Reformat is unavailable for plain text; Tab and Shift+Tab still work" : "";
+}
+
 function updateEditorHistoryButtons() {
   const editing = Boolean(state.file) && !byId("file-editor").disabled;
   const history = state.file && state.file.history;
@@ -2630,6 +2655,7 @@ function updateEditorHistoryButtons() {
   byId("redo-file-button").hidden = !editing;
   byId("undo-file-button").disabled = !editing || !history || !history.undo.length;
   byId("redo-file-button").disabled = !editing || !history || !history.redo.length;
+  updateEditorIndentControls();
 }
 
 function refreshEditorDraft() {
@@ -2670,6 +2696,41 @@ function replaceEditorDraft(value) {
   refreshEditorDraft();
 }
 
+function applyEditorTransformation(next) {
+  if (!state.file || !state.file.history || byId("file-editor").disabled) return false;
+  const before = editorSnapshot();
+  setEditorSnapshot(next);
+  if (!recordEditorChange(state.file.history, before, next)) {
+    updateEditorHistorySelection(state.file.history, next);
+  }
+  state.file.pendingEditorInput = null;
+  refreshEditorDraft();
+  byId("file-editor").focus({ preventScroll: true });
+  return before.value !== next.value;
+}
+
+function applyEditorIndentation(outdent) {
+  if (!state.file) return;
+  const next = outdent
+    ? outdentEditorSnapshot(editorSnapshot(), state.file.tabWidth)
+    : indentEditorSnapshot(editorSnapshot(), state.file.tabWidth, state.file.tabStyle);
+  applyEditorTransformation(next);
+}
+
+function reformatEditorDraft() {
+  if (!state.file || byId("file-editor").disabled) return;
+  const language = languageForPath(state.file.path);
+  if (language === "text") return;
+  if (new TextEncoder().encode(byId("file-editor").value).length > MAX_EDITOR_REFORMAT_BYTES) {
+    toast("This draft is too large to reformat safely (1 MiB limit).", "error");
+    return;
+  }
+  const next = reformatEditorSnapshot(editorSnapshot(), language,
+    state.file.tabWidth, state.file.tabStyle);
+  applyEditorTransformation(next);
+  if (next.warning) toast(next.warning);
+}
+
 function clearEditor() {
   state.file = null;
   byId("file-editor").value = "";
@@ -2682,6 +2743,9 @@ function clearEditor() {
   byId("editor-heading").textContent = "Editor";
   byId("save-file-button").disabled = true;
   byId("editor-assist-button").disabled = true;
+  byId("editor-indent-width").value = "4";
+  byId("editor-indent-style").value = "spaces";
+  setEditorTabSize(4);
   updateEditorHistoryButtons();
   updateEditorMeta();
 }
@@ -2784,6 +2848,7 @@ function renderFileHighlight() {
     return;
   }
   appendHighlightedSource(viewer, state.file.content || "", languageForPath(state.file.path));
+  setEditorTabSize(state.file.tabWidth);
   viewer.hidden = false;
 }
 
@@ -2799,6 +2864,7 @@ function renderEditHighlight() {
   highlight.replaceChildren();
   if (!state.file) return;
   appendHighlightedSource(highlight, byId("file-editor").value, languageForPath(state.file.path));
+  setEditorTabSize(state.file.tabWidth);
   syncEditorHighlightScroll();
 }
 
@@ -2835,14 +2901,19 @@ async function loadFile(path) {
       !window.confirm("Discard the unsaved editor draft and open another file?")) return;
   try {
     const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`);
+    const indentation = detectIndentation(response.content || "", 4, "spaces");
     state.file = { ...response, dirty: false, history: null, pendingEditorInput: null,
-      initialEditorPositionPending: true };
+      initialEditorPositionPending: true, tabWidth: indentation.tabWidth,
+      tabStyle: indentation.tabStyle };
     const editor = byId("file-editor");
     editor.value = response.content || "";
     editor.setSelectionRange(0, 0, "none");
     editor.scrollTop = 0;
     editor.scrollLeft = 0;
     state.file.history = createEditorHistory(editorSnapshot());
+    byId("editor-indent-width").value = String(state.file.tabWidth);
+    byId("editor-indent-style").value = state.file.tabStyle;
+    setEditorTabSize(state.file.tabWidth);
     editor.disabled = true;
     byId("file-edit-layer").hidden = true;
     renderFileHighlight();
@@ -3335,9 +3406,16 @@ function bindEvents() {
   });
   byId("file-editor").addEventListener("keydown", (event) => {
     const direction = editorHistoryDirection(event);
-    if (!direction) return;
-    event.preventDefault();
-    applyEditorHistory(direction);
+    if (direction) {
+      event.preventDefault();
+      applyEditorHistory(direction);
+      return;
+    }
+    if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey &&
+        !event.isComposing && event.keyCode !== 229) {
+      event.preventDefault();
+      applyEditorIndentation(event.shiftKey);
+    }
   });
   byId("file-editor").addEventListener("beforeinput", (event) => {
     if (!state.file) return;
@@ -3359,10 +3437,23 @@ function bindEvents() {
     if (state.file && state.file.history) {
       updateEditorHistorySelection(state.file.history, editorSnapshot());
     }
+    updateEditorIndentControls();
   });
   byId("file-editor").addEventListener("scroll", syncEditorHighlightScroll);
   byId("undo-file-button").addEventListener("click", () => applyEditorHistory("undo"));
   byId("redo-file-button").addEventListener("click", () => applyEditorHistory("redo"));
+  byId("editor-indent-width").addEventListener("change", () => {
+    if (!state.file) return;
+    const input = byId("editor-indent-width");
+    const parsed = Number(input.value);
+    state.file.tabWidth = Number.isInteger(parsed) ? Math.max(1, Math.min(32, parsed)) : state.file.tabWidth;
+    input.value = String(state.file.tabWidth);
+    setEditorTabSize(state.file.tabWidth);
+  });
+  byId("editor-indent-style").addEventListener("change", () => {
+    if (state.file) state.file.tabStyle = byId("editor-indent-style").value === "tab" ? "tab" : "spaces";
+  });
+  byId("editor-reformat-button").addEventListener("click", reformatEditorDraft);
   byId("save-file-button").addEventListener("click", () => void saveFile());
   byId("editor-assist-button").addEventListener("click", () => openDialog(byId("assist-dialog")));
   byId("assist-form").addEventListener("submit", (event) => {

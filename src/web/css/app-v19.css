@@ -408,6 +408,13 @@ kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0
 .workspace-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(16rem, 0.38fr) minmax(20rem, 0.62fr); }
 .dired-panel, .editor-panel { display: flex; flex-direction: column; }
 .dired-panel { border-right: 1px solid var(--border); }
+.editor-pane-bar { gap: 0.45rem; }
+.editor-toolbar, .editor-indent-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.3rem; }
+.editor-indent-controls { padding-right: 0.35rem; border-right: 1px solid var(--soft-border); }
+.editor-indent-controls label { display: flex; align-items: center; gap: 0.22rem; color: var(--muted); font-size: 0.72rem; }
+.editor-indent-controls input { width: 3.4rem; }
+.editor-indent-controls input, .editor-indent-controls select { min-height: 1.8rem; padding: 0.16rem 0.28rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--field); color: var(--text); font: inherit; }
+.editor-indent-controls button { min-height: 1.8rem; padding: 0.18rem 0.38rem; }
 .file-list { flex: 1; min-height: 0; overflow: auto; }
 .breadcrumbs { display: flex; flex-wrap: wrap; gap: 0.1rem; }
 .breadcrumbs button { min-height: 1.6rem; padding: 0.1rem 0.3rem; border: 0; background: transparent; color: var(--accent); }
@@ -498,6 +505,8 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
   .utility-layout, .image-layout { grid-template-columns: minmax(15rem, 18rem) minmax(0, 1fr); }
   .workspace-layout { grid-template-columns: 1fr; grid-template-rows: minmax(8rem, 36%) minmax(0, 1fr); }
   .dired-panel { border-right: 0; border-bottom: 1px solid var(--border); }
+  .editor-pane-bar { align-items: flex-start; flex-direction: column; }
+  .editor-toolbar { width: 100%; justify-content: space-between; }
   .chat-actions kbd { display: none; }
 }
 
@@ -508,6 +517,8 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
   .chat-layout { grid-template-columns: 1fr; grid-template-rows: minmax(5rem, 7rem) minmax(0, 1fr); }
   .thread-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   .conversation-bar { align-items: flex-start; flex-direction: column; gap: 0.25rem; }
+  .editor-toolbar { align-items: flex-start; }
+  .editor-indent-controls { justify-content: flex-start; padding-right: 0; border-right: 0; }
   .chat-actions { width: 100%; overflow-x: auto; }
   .utility-layout, .image-layout { grid-template-columns: 1fr; grid-template-rows: minmax(14rem, 44%) minmax(0, 1fr); }
   .control-pane { border-right: 0; border-bottom: 1px solid var(--border); }

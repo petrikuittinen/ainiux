@@ -1,6 +1,6 @@
 # Embedded browser controller
 
-Ainiux v1.31 serves a responsive browser controller from `/ui/` while
+Ainiux v1.32 serves a responsive browser controller from `/ui/` while
 `ainiux server` is running. It is embedded in the executable and uses only
 vanilla HTML, CSS, and JavaScript ES modules: there is no Node.js runtime,
 framework, npm bundle, CDN, hosted font, or external script.
@@ -62,8 +62,9 @@ provides:
   image editing, including local thumbnails and per-model input limits;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
-- a bounded UTF-8 editor with optimistic saves, conflict recovery, and bounded
-  undo/redo for typing, paste, and AI proposals. Use `Ctrl+U` or `Ctrl+Z` to
+- a bounded UTF-8 editor with optimistic saves, conflict recovery, detected
+  per-file indentation controls, Tab/Shift+Tab indent and outdent, adaptive
+  selection/file reformatting, and bounded undo/redo. Use `Ctrl+U` or `Ctrl+Z` to
   undo and `Ctrl+Y` to redo; `Alt+U`/`Alt+Z` and `Alt+Y` are browser-safe
   fallbacks. AI proposals modify only the browser draft until Save is selected;
 - safe status and capability data already exposed by the control API.
@@ -214,6 +215,27 @@ Workspace dired colors directories and executables distinctly, and the file
 viewer and live editor detect the native TUI language from its path. Editor
 highlighting follows each draft change and stays aligned while scrolling.
 Run/plan job output and unstructured activity remain safely literal.
+
+When a file opens, the browser inspects its first 20 physical lines and fills
+the editor's **Width** (1–32) and **Indent** (Spaces/Tabs) controls, falling back
+to four spaces when the sample is inconclusive. These values belong to the
+loaded browser file only; changing them does not write Ainiux configuration.
+In edit mode, Tab inserts to the next visual stop (or inserts one literal tab),
+and Shift+Tab removes one indentation level. With a selection, both keys act on
+all touched physical lines and preserve forward or reverse selection direction.
+
+The reformat button reads **Reformat selection** while a range is selected and
+**Reformat file** otherwise. It changes leading whitespace only and uses the
+same brace, Ruby, Bash, markup, SQL, topology, and assembly profiles as the
+native editor. Comments, strings, heredocs, Markdown fences, YAML scalar bodies,
+and other protected multiline regions are ignored; HTML keeps embedded
+JavaScript/CSS structure. YAML reformat always emits spaces. Plain-text files
+retain manual Tab/Shift+Tab but disable reformat because there is no language
+structure to infer. Each operation is one browser undo step, and tab width is
+kept in sync across the textarea, live syntax overlay, and read-only viewer.
+Reformatting remains synchronous only within the 1 MiB editable-file boundary;
+lines beyond the 64 KiB analysis bound, and structurally uncertain content that
+follows them, are preserved.
 
 Markdown and bare absolute HTTP(S) links are underlined and open in a new tab
 with `noopener`, `noreferrer`, and no referrer. Relative links, URL credentials,

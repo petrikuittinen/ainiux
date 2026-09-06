@@ -608,7 +608,19 @@ markup-only. Highlight output is constructed exclusively from text nodes and
 role-named spans; unknown fences remain literal, and bounded source, line, and
 token work prevents pathological model output from monopolizing rendering.
 Versioned asset URLs advance with each immutable-cache change. No runtime or
-build dependency is added.
+package dependency is introduced.
+
+Browser indentation is a separate pure ES module rather than controller logic.
+It mirrors native first-20-line detection, selection expansion and UTF-16
+textarea mapping, and consumes a bounded structural-line export from the shared
+syntax lexer for native-equivalent reformat profiles. Lexer state makes
+comments, strings, heredocs, Markdown fences, YAML scalars, CDATA, and other
+multiline regions safe to preserve, including JavaScript/CSS embedded in HTML.
+All transforms return complete snapshots and enter the existing custom history
+as one operation. Width/style are per-loaded-file browser state: no control API,
+project schema, or user configuration is added. Reformat work is limited to the
+existing 1 MiB remote-editor boundary and stops guessing after a 64 KiB
+pathological line; manual Tab/Shift+Tab remains available for plain text.
 
 Browser-oriented startup is explicit through `ainiux webserver` or
 `ainiux server --webui`. It reuses the same listener/router, selects wildcard

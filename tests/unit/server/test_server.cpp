@@ -152,8 +152,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v18.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v22.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v19.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v23.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -189,6 +189,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("id=\"file-edit-highlight\"") != std::string::npos &&
               index.body.find("id=\"undo-file-button\"") != std::string::npos &&
               index.body.find("id=\"redo-file-button\"") != std::string::npos &&
+              index.body.find("id=\"editor-indent-width\"") != std::string::npos &&
+              index.body.find("id=\"editor-indent-style\"") != std::string::npos &&
+              index.body.find("id=\"editor-reformat-button\"") != std::string::npos &&
               index.body.find("Control+U Control+Z") != std::string::npos &&
               index.body.find("Alt+U Alt+Z") != std::string::npos &&
               index.body.find("wrap=\"off\"") != std::string::npos &&
@@ -199,7 +202,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v18.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v19.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -225,6 +228,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find(".event-card.notice") != std::string::npos &&
               stylesheet.body.find(".file-highlight") != std::string::npos &&
               stylesheet.body.find(".file-edit-layer") != std::string::npos &&
+              stylesheet.body.find(".editor-indent-controls") != std::string::npos &&
               stylesheet.body.find(".directory-entry") != std::string::npos &&
               stylesheet.body.find(".executable-entry") != std::string::npos &&
               stylesheet.body.find(".syntax-comment") != std::string::npos &&
@@ -237,7 +241,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v22.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v23.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -262,7 +266,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("control || event.altKey") != std::string::npos &&
               javascript.body.find("function toggleChatThinking") != std::string::npos &&
               javascript.body.find("function handleThemeCommand") != std::string::npos &&
-              javascript.body.find("import { renderMarkdown } from \"./highlight-v4.js\"") != std::string::npos &&
+              javascript.body.find("import { renderMarkdown } from \"./highlight-v5.js\"") != std::string::npos &&
               javascript.body.find("languageForPath") != std::string::npos &&
               javascript.body.find("event-card") != std::string::npos &&
               javascript.body.find("file-highlight") != std::string::npos &&
@@ -278,6 +282,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("function resetImageForm") != std::string::npos &&
               javascript.body.find("./image-options-v1.js") != std::string::npos &&
               javascript.body.find("./editor-history-v2.js") != std::string::npos &&
+              javascript.body.find("./editor-indentation-v1.js") != std::string::npos &&
+              javascript.body.find("reformatEditorSnapshot") != std::string::npos &&
               javascript.body.find("editorHistoryDirection(event)") != std::string::npos &&
               javascript.body.find("event.inputType === \"historyUndo\"") != std::string::npos &&
               javascript.body.find("server_path") != std::string::npos &&
@@ -317,7 +323,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               editor_history_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI editor history provides bounded undo, redo, and shortcut handling");
 
-    Response highlighter = route_request(public_get("/ui/assets/highlight-v4.js"), config, status);
+    Response highlighter = route_request(public_get("/ui/assets/highlight-v5.js"), config, status);
     const std::string highlighter_headers = serialize_response(highlighter, true);
     check(highlighter.status == 200 &&
               highlighter.content_type == "text/javascript; charset=utf-8" &&
@@ -336,12 +342,13 @@ void test_embedded_web_ui_assets_and_browser_security() {
               highlighter_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI Markdown module builds safe semantic DOM under immutable CSP headers");
 
-    Response syntax = route_request(public_get("/ui/assets/syntax-v3.js"), config, status);
+    Response syntax = route_request(public_get("/ui/assets/syntax-v4.js"), config, status);
     const std::string syntax_headers = serialize_response(syntax, true);
     check(syntax.status == 200 &&
               syntax.content_type == "text/javascript; charset=utf-8" &&
               syntax.body.find("export function appendHighlightedCode") != std::string::npos &&
               syntax.body.find("export function languageForPath") != std::string::npos &&
+              syntax.body.find("export function analyzeStructuralLine") != std::string::npos &&
               syntax.body.find("function scanHtml") != std::string::npos &&
               syntax.body.find("javascript: \"javascript\"") != std::string::npos &&
               syntax.body.find("typescript: \"typescript\"") != std::string::npos &&
@@ -355,6 +362,21 @@ void test_embedded_web_ui_assets_and_browser_security() {
               syntax_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos &&
               syntax_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI syntax module is dependency-free, DOM-safe, and immutable");
+
+    Response indentation =
+        route_request(public_get("/ui/assets/editor-indentation-v1.js"), config, status);
+    const std::string indentation_headers = serialize_response(indentation, true);
+    check(indentation.status == 200 &&
+              indentation.content_type == "text/javascript; charset=utf-8" &&
+              indentation.body.find("export function detectIndentation") != std::string::npos &&
+              indentation.body.find("export function indentEditorSnapshot") != std::string::npos &&
+              indentation.body.find("export function outdentEditorSnapshot") != std::string::npos &&
+              indentation.body.find("export function reformatEditorSnapshot") != std::string::npos &&
+              indentation.body.find("fetch(") == std::string::npos &&
+              indentation.body.find("innerHTML") == std::string::npos &&
+              indentation_headers.find("Cache-Control: public, max-age=31536000, immutable") !=
+                  std::string::npos,
+          "embedded WUI indentation module is pure and immutable-cacheable");
 
     Response selector = route_request(public_get("/ui/assets/selector-v3.js"), config, status);
     check(selector.status == 200 &&
@@ -421,7 +443,11 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/highlight-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v3.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/syntax-v1.js"), config, status).status == 404 &&
-              route_request(public_get("/ui/assets/syntax-v2.js"), config, status).status == 404,
+              route_request(public_get("/ui/assets/syntax-v2.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v22.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v18.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/highlight-v4.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/syntax-v3.js"), config, status).status == 404,
           "the first-batch WUI syntax assets are superseded after full language parity");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");

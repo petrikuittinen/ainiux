@@ -1,4 +1,4 @@
-import { appendHighlightedCode, canonicalLanguage } from "./syntax-v3.js";
+import { appendHighlightedCode, canonicalLanguage } from "./syntax-v4.js";
 
 const MAX_INLINE_DEPTH = 32;
 const SAFE_SCHEMES = new Set(["http:", "https:"]);

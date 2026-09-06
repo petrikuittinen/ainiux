@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderMarkdown } from "../../../src/web/js/highlight-v4.js";
+import { renderMarkdown } from "../../../src/web/js/highlight-v5.js";
 import {
   appendHighlightedCode,
   canonicalLanguage,
   languageForPath,
-} from "../../../src/web/js/syntax-v3.js";
+} from "../../../src/web/js/syntax-v4.js";
 
 class FakeNode {
   constructor(type, name = "", value = "") {
