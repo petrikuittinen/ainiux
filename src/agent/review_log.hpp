@@ -48,7 +48,6 @@ class ReviewLogger {
 
     const std::string& final_path() const { return final_path_; }
     const std::string& partial_path() const { return partial_path_; }
-    const std::string& run_id() const { return run_id_; }
     const std::string& run_kind() const { return run_kind_; }
     bool enabled() const;
 

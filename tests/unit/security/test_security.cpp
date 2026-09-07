@@ -1,6 +1,8 @@
 #include "security/test_security.hpp"
+#include "provider/provider.hpp"
 #include "support/test_support.hpp"
 #include "security/redact.hpp"
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -36,6 +38,31 @@ void test_sensitive_header_names() {
     check(!ainiux::is_sensitive_header_name(""), "empty header name is not sensitive");
 }
 
+void test_request_secrets_are_complete_and_overlap_safe() {
+    provider::RequestContext context;
+    context.api_key = "shared-secret";
+    context.options.key = "secret";
+    context.headers = {
+        "Authorization: Bearer shared-secret",
+        "X-API-Key: shared-secret",
+        "Content-Type: secret/plain",
+        "Cookie: session=cookie-secret",
+    };
+    const std::vector<std::string> secrets = request_secrets(context);
+    check(secrets.size() == 4,
+          "request secret collection deduplicates keys and ignores ordinary headers");
+    check(std::is_sorted(secrets.begin(), secrets.end(),
+                         [](const std::string& left, const std::string& right) {
+                             return left.size() > right.size();
+                         }) &&
+              std::find(secrets.begin(), secrets.end(), "Bearer shared-secret") != secrets.end() &&
+              secrets.back() == "secret",
+          "request secrets are ordered longest-first");
+    check(redact_secrets("Bearer shared-secret / secret", secrets) ==
+              "[REDACTED] / [REDACTED]",
+          "overlapping request credentials redact without exposing a suffix");
+}
+
 void test_sanitize_api_key_unwraps_line_continuations() {
     check(ainiux::sanitize_api_key("sk-abc") == "sk-abc", "clean API keys are unchanged");
     check(ainiux::sanitize_api_key("  sk-abc\n") == "sk-abc", "API keys trim surrounding whitespace");
@@ -53,6 +80,7 @@ void test_sanitize_api_key_unwraps_line_continuations() {
 void run_all() {
     test_redact_secrets_edge_cases();
     test_sensitive_header_names();
+    test_request_secrets_are_complete_and_overlap_safe();
     test_sanitize_api_key_unwraps_line_continuations();
 }
 

@@ -3,6 +3,7 @@
 /.ainiux/
 /.ainiux-pr/
 /results/
+/secret.txt
 *~
 __pycache__/
 *.py[cod]

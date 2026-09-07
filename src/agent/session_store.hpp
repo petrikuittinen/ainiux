@@ -86,9 +86,6 @@ class AgentSessionStore {
     // Open or create the singleton project row (id=1). Fills record.
     Error open_project(AgentProjectRecord& record);
 
-    // Legacy name: same as open_project (single thread).
-    Error create_session(AgentSessionRecord& record) { return open_project(record); }
-
     Error update_project_meta(const AgentProjectRecord& record);
 
     Error append_message(const std::string& role,
@@ -121,9 +118,6 @@ class AgentSessionStore {
     // Original transcript rows are retained. keep_recent describes the request
     // projection rebuilt by AgentSessionRuntime and is kept for API compatibility.
     Error compact_with_summary(const std::string& summary_text, int keep_recent = 12);
-
-    Error set_status(const std::string& status);
-    Error bump_counters(long long turns_delta, long long tool_calls_delta);
 
     // Legacy finish_session: mark idle and store final note in summary if provided.
     Error finish_session(long long /*session_id*/,

@@ -77,10 +77,6 @@ HostedWebSearch resolve_hosted_web_search(const RequestContext& context) {
     return search;
 }
 
-bool hosted_web_search_requires_responses(const HostedWebSearch& search) {
-    return family_requires_responses(search.catalog_id);
-}
-
 json::Value hosted_web_search_tool_json(const HostedWebSearch& search) {
     json::Value item = json_object();
     if (search.kind == HostedWebSearchKind::KimiBuiltin) {

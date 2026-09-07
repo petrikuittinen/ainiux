@@ -166,11 +166,6 @@ class Statement {
                    ? ok_error()
                    : sqlite_error(db.get(), "could not bind query integer", db.path());
     }
-    Error bind_double(Database& db, int index, double value) {
-        return sqlite3_bind_double(statement_, index, value) == SQLITE_OK
-                   ? ok_error()
-                   : sqlite_error(db.get(), "could not bind query number", db.path());
-    }
     Error bind_null(Database& db, int index) {
         return sqlite3_bind_null(statement_, index) == SQLITE_OK
                    ? ok_error()
@@ -178,7 +173,6 @@ class Statement {
     }
     int step() { return sqlite3_step(statement_); }
     sqlite3_int64 column_int64(int column) const { return sqlite3_column_int64(statement_, column); }
-    double column_double(int column) const { return sqlite3_column_double(statement_, column); }
     std::string column_text(int column) const {
         const unsigned char* value = sqlite3_column_text(statement_, column);
         return value == nullptr ? std::string{} : reinterpret_cast<const char*>(value);
@@ -1906,47 +1900,6 @@ bool contains_token(const std::vector<std::string>& components,
     for (const std::string& component : components)
         if (component_prefix_match(component, token)) return true;
     return false;
-}
-
-bool likely_test_path(const std::string& path) {
-    const std::string lower = ascii_lower(path);
-    return lower.rfind("test", 0) == 0 ||
-           lower.find("/test") != std::string::npos ||
-           lower.find("_test.") != std::string::npos ||
-           lower.find(".test.") != std::string::npos ||
-           lower.find("_spec.") != std::string::npos;
-}
-
-bool task_targets_any(const std::vector<std::string>& tokens,
-                      const std::set<std::string>& targets) {
-    for (const std::string& token : tokens)
-        if (targets.find(token) != targets.end()) return true;
-    return false;
-}
-
-bool auxiliary_path(const std::string& path) {
-    static const std::set<std::string> components = {
-        "doc", "docs", "documentation", "website", "site", "sites", "skill",
-        "skills", "packaging", "package", "packages", "homebrew", "brew",
-        "formula", "formulae"};
-    for (const std::string& component : identifier_components(path))
-        if (components.find(component) != components.end()) return true;
-    const std::string lower = ascii_lower(path);
-    return lower == "readme" || lower.rfind("readme.", 0) == 0;
-}
-
-std::string top_level_directory(const std::string& path) {
-    const std::size_t slash = path.find('/');
-    return slash == std::string::npos ? std::string(".")
-                                      : path.substr(0, slash);
-}
-
-std::string hint_field(std::string text) {
-    for (char& ch : text) {
-        const unsigned char byte = static_cast<unsigned char>(ch);
-        if (byte < 0x20 || byte == 0x7f) ch = ' ';
-    }
-    return text;
 }
 
 std::vector<RankedSymbol> rank_task_symbols(const Snapshot& snapshot,

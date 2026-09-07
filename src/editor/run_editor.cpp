@@ -2408,21 +2408,10 @@ app::EditorRunResult run_editor(const std::string& path,
         std::vector<std::string> secrets;
         auto take_context = [&](const provider::RequestContext* ctx) {
             if (ctx == nullptr) return;
-            if (!ctx->api_key.empty()) secrets.push_back(ctx->api_key);
-            if (!ctx->options.key.empty()) secrets.push_back(ctx->options.key);
-            for (const std::string& header : ctx->headers) {
-                const std::size_t colon = header.find(':');
-                if (colon == std::string::npos) continue;
-                if (is_sensitive_header_name(ascii_trim(header.substr(0, colon)))) {
-                    const std::string value = ascii_trim(header.substr(colon + 1));
-                    if (!value.empty()) secrets.push_back(value);
-                }
-            }
+            append_request_secrets(*ctx, secrets);
         };
         if (interactive != nullptr) take_context(&interactive->context);
         if (ai_continue.has_value()) take_context(&ai_continue->request);
-        std::sort(secrets.begin(), secrets.end());
-        secrets.erase(std::unique(secrets.begin(), secrets.end()), secrets.end());
         return secrets;
     };
 

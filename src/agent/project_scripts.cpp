@@ -42,11 +42,6 @@ bool project_script_path(const std::string& path, std::string* name) {
     return true;
 }
 
-bool project_scripts_directory(const std::string& path) {
-    const std::string generic = fs::u8path(path).generic_u8string();
-    return generic == kProjectScriptsDirectory || generic == "scripts/ainiux/";
-}
-
 bool retired_project_script_path(const std::string& path) {
     if (path.empty()) return false;
     std::string generic = fs::u8path(path).generic_u8string();

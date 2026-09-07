@@ -15,6 +15,12 @@ if [ "${OS:-}" = "Windows_NT" ]; then
 fi
 
 mkdir -p "$EMPTY_CONFIG_HOME" "$TEST_HOME"
+# Prior interrupted runs can leave nested project-state fixtures under build/.
+# Clear only this script's named workspaces before editor project discovery.
+rm -rf "$ROOT/build/security-review-workspace" \
+       "$ROOT/build/security-review-tolerant-workspace" \
+       "$ROOT/build/security-review-log-failure-workspace" \
+       "$ROOT/build/security-review-invalid-workspace"
 export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$EMPTY_CONFIG_HOME"
 

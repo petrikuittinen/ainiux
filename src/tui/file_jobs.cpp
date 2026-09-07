@@ -481,19 +481,7 @@ void TuiFileJobs::start_shell(const std::string& command, bool to_draft) {
         return;
     }
 
-    std::vector<std::string> secrets;
-    if (!context.api_key.empty()) secrets.push_back(context.api_key);
-    if (!context.options.key.empty()) secrets.push_back(context.options.key);
-    for (const std::string& header : context.headers) {
-        const std::size_t colon = header.find(':');
-        if (colon == std::string::npos) continue;
-        if (is_sensitive_header_name(ascii_trim(header.substr(0, colon)))) {
-            const std::string value = ascii_trim(header.substr(colon + 1));
-            if (!value.empty()) secrets.push_back(value);
-        }
-    }
-    std::sort(secrets.begin(), secrets.end());
-    secrets.erase(std::unique(secrets.begin(), secrets.end()), secrets.end());
+    std::vector<std::string> secrets = request_secrets(context);
 
     app::UserShellOptions options;
     if (context.options.timeout_seconds > 0) {

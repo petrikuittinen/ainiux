@@ -24,11 +24,7 @@ const std::vector<const char*>& chat_setting_names();
 std::string chat_setting_names_description();
 bool is_chat_setting_name(const std::string& name);
 
-const std::vector<const char*>& model_setting_keys();
-std::string model_setting_keys_description();
-
 const std::vector<const char*>& chat_purposes();
-std::vector<std::string> chat_purpose_strings();
 std::string chat_purpose_description();
 bool is_chat_purpose(const std::string& purpose);
 

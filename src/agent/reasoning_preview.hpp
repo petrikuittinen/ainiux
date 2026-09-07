@@ -67,9 +67,6 @@ std::string normalize_reasoning_preview_text(
 std::string flatten_reasoning_preview_text(
     const std::string& reasoning, const std::vector<std::string>& secrets);
 
-// Last complete sentence, else the newest incomplete tail.
-std::string last_reasoning_sentence(const std::string& flattened);
-
 // Word-boundary clips. If there is no whitespace (CJK / one token), keep the
 // grapheme window as-is.
 std::string clip_preview_prefix(const std::string& text, std::size_t max_chars);

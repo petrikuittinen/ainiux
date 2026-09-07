@@ -38,7 +38,6 @@ class TerminalSession {
 };
 
 TerminalDimensions terminal_dimensions();
-bool terminal_input_is_interactive();
 bool terminal_output_is_interactive();
 bool terminal_read_byte(unsigned char& byte, int timeout_ms);
 

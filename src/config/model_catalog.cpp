@@ -199,31 +199,6 @@ bool parse_reasoning_protocol(const std::string& text, ReasoningProtocol& protoc
     return false;
 }
 
-const char* reasoning_protocol_name(ReasoningProtocol protocol) {
-    switch (protocol) {
-        case ReasoningProtocol::None: return "none";
-        case ReasoningProtocol::GenericThinking: return "generic_thinking";
-        case ReasoningProtocol::OpenAiEffort: return "openai_effort";
-        case ReasoningProtocol::OpenRouter: return "openrouter";
-        case ReasoningProtocol::GeminiEffort: return "gemini_effort";
-        case ReasoningProtocol::GeminiThinkingLevel: return "gemini_thinking_level";
-        case ReasoningProtocol::GemmaThinkingLevel: return "gemma_thinking_level";
-        case ReasoningProtocol::AnthropicBudget: return "anthropic_budget";
-        case ReasoningProtocol::ThinkingToggle: return "thinking_toggle";
-        case ReasoningProtocol::QwenChat: return "qwen_chat";
-        case ReasoningProtocol::QwenChatEffort: return "qwen_chat_effort";
-        case ReasoningProtocol::QwenResponses: return "qwen_responses";
-        case ReasoningProtocol::DeepSeek: return "deepseek";
-        case ReasoningProtocol::KimiEffort: return "kimi_effort";
-        case ReasoningProtocol::Zai: return "zai";
-        case ReasoningProtocol::XaiEffort: return "xai_effort";
-        case ReasoningProtocol::MiniMaxResponses: return "minimax_responses";
-        case ReasoningProtocol::NemotronTemplate: return "nemotron_template";
-        case ReasoningProtocol::Hy3Template: return "hy3_template";
-    }
-    return "none";
-}
-
 std::string reasoning_protocol_names() {
     return "none, generic_thinking, openai_effort, openrouter, gemini_effort, "
            "gemini_thinking_level, gemma_thinking_level, anthropic_budget, thinking_toggle, "
@@ -239,16 +214,6 @@ bool parse_temperature_support(const std::string& text, TemperatureSupport& supp
     else if (value == "reasoning_none_only") support = TemperatureSupport::ReasoningNoneOnly;
     else return false;
     return true;
-}
-
-const char* temperature_support_name(TemperatureSupport support) {
-    switch (support) {
-        case TemperatureSupport::Unknown: return "unknown";
-        case TemperatureSupport::Supported: return "supported";
-        case TemperatureSupport::Unsupported: return "unsupported";
-        case TemperatureSupport::ReasoningNoneOnly: return "reasoning_none_only";
-    }
-    return "unknown";
 }
 
 bool model_regex_matches(const std::string& expression, const std::string& model) {

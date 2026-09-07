@@ -287,10 +287,6 @@ Error validate_windows_path_syntax(const std::string& path,
     return ok_error();
 }
 
-std::string generic_path(const std::string& utf8_path) {
-    return fs::u8path(utf8_path).lexically_normal().generic_u8string();
-}
-
 bool same_file_identity(const FileIdentity& left, const FileIdentity& right) {
     return left.valid && right.valid && left.volume == right.volume &&
            left.file_low == right.file_low && left.file_high == right.file_high;

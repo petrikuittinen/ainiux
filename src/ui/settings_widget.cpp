@@ -292,10 +292,6 @@ const chat::SettingsFieldSpec* selected_settings_field(const SettingsWidget& wid
     return field_at(widget, widget.selected);
 }
 
-std::vector<const chat::SettingsFieldSpec*> settings_widget_fields(const SettingsWidget& widget) {
-    return chat::visible_settings_fields(widget.surface);
-}
-
 SettingsWidgetAction handle_settings_widget_movement(SettingsWidget& widget,
                                                      editor::MovementKey key) {
     if (!widget.active) return SettingsWidgetAction::None;

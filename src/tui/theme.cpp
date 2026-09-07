@@ -289,20 +289,6 @@ bool parse_color_mode_preference(const std::string& text, ColorModePreference& o
     return false;
 }
 
-const char* color_mode_preference_name(ColorModePreference preference) {
-    switch (preference) {
-        case ColorModePreference::Auto:
-            return "auto";
-        case ColorModePreference::Truecolor:
-            return "truecolor";
-        case ColorModePreference::Ansi256:
-            return "256";
-        case ColorModePreference::Ansi16:
-            return "16";
-    }
-    return "auto";
-}
-
 namespace {
 
 bool colorterm_is_truecolor(const char* colorterm) {

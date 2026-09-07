@@ -28,6 +28,52 @@
 
 namespace ainiux::agent {
 
+SessionRuntimeOptions make_session_runtime_options(
+    const provider::RequestContext& context,
+    std::string workspace,
+    AgentTaskMode task_mode,
+    bool interactive) {
+    SessionRuntimeOptions options;
+    options.workspace = std::move(workspace);
+    options.task_mode = task_mode;
+    options.allow_network = true;
+    options.interactive = interactive;
+    options.enable_session_db = true;
+    options.enable_agent_log = context.options.agent_log_enabled;
+    options.security_review_log_keep_runs =
+        context.options.security_review_log_keep_runs;
+    options.trusted_prompt_dir = context.options.trusted_prompt_dir;
+    options.max_source_code_file_size =
+        context.options.max_source_code_file_size;
+    options.history_backup.enabled =
+        context.options.agent_history_backup_enabled;
+    options.history_backup.max_bytes =
+        context.options.agent_history_backup_max_bytes;
+    options.history_backup.ttl_days =
+        context.options.agent_history_backup_ttl_days;
+    options.auto_compact = context.options.agent_auto_compact;
+    options.compact_strategy = context.options.agent_compact_strategy;
+    options.compact_limit = context.options.agent_compact_limit;
+    options.max_agent_turns = context.options.agent_max_turns;
+    options.index_mode =
+        context.options.disable_indexing
+            ? SessionRuntimeOptions::IndexMode::Disabled
+            : SessionRuntimeOptions::IndexMode::UseExistingLazy;
+    options.show_command_output = context.options.agent_show_command_output;
+    options.fetch_options.connect_timeout_seconds =
+        context.options.connect_timeout_seconds;
+    options.fetch_options.timeout_seconds =
+        context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 30;
+    options.fetch_options.max_bytes = context.options.max_fetch_bytes;
+    options.fetch_options.proxy = context.options.proxy;
+    options.fetch_options.insecure_tls = context.options.insecure_tls;
+    options.fetch_options.trace_http = context.options.trace_http;
+    options.fetch_options.allow_private =
+        context.options.allow_private_url_fetch;
+    options.search_options = search::options_for(context.options);
+    return options;
+}
+
 const char* preparation_phase_name(PreparationPhase phase) {
     switch (phase) {
         case PreparationPhase::IndexProbe:
@@ -67,23 +113,6 @@ json::Value log_bool(bool boolean) {
     value.type = json::Value::Type::Bool;
     value.boolean = boolean;
     return value;
-}
-
-std::vector<std::string> configured_secrets(const provider::RequestContext& context) {
-    std::vector<std::string> secrets;
-    if (!context.api_key.empty()) secrets.push_back(context.api_key);
-    if (!context.options.key.empty()) secrets.push_back(context.options.key);
-    for (const std::string& header : context.headers) {
-        const std::size_t colon = header.find(':');
-        if (colon == std::string::npos) continue;
-        if (is_sensitive_header_name(ascii_trim(header.substr(0, colon)))) {
-            const std::string value = ascii_trim(header.substr(colon + 1));
-            if (!value.empty()) secrets.push_back(value);
-        }
-    }
-    std::sort(secrets.begin(), secrets.end());
-    secrets.erase(std::unique(secrets.begin(), secrets.end()), secrets.end());
-    return secrets;
 }
 
 std::vector<std::string> known_tool_names(const ReadToolRegistry& tools) {
@@ -1182,7 +1211,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         if (!root_error.ok()) return root_error;
         options_.workspace = absolute;
     }
-    secrets_ = configured_secrets(context);
+    secrets_ = request_secrets(context);
 
     // Capture cancellation/interrupted by value. index_options_ lives inside tools for
     // the whole session; a [&] lambda here used to dangle after prepare() returned and
@@ -2399,12 +2428,6 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             (void)session_store_.append_message(
                 "tool", line, name, compact_tool_status(body) == "ok",
                 compact_tool_args_preview(arguments_json));
-        }
-        if (options_.show_command_output && name == "run_command") {
-            // Best-effort: surface truncated stdout when enabled.
-            if (body.find("\"stdout\"") != std::string::npos) {
-                // Keep short; full body stays in tool_events via append_tool_event.
-            }
         }
         return body;
     };

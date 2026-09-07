@@ -30,14 +30,15 @@ clients the same high-risk Guard bypass documented for local Yolo.
 
 ## Control-API workspace boundary
 
-The authenticated PR 6 workspace routes are read-only and use the one canonical
-workspace selected when `ainiux server` starts. `workspace/review`, `dired`, and
+The read-only workspace routes use the one canonical workspace selected when
+`ainiux server` starts. `workspace/review`, `dired`, and
 `files` accept only slash-separated relative paths; the server never returns its
 native root or accepts a remote root. Traversal, drive paths, symlink/reparse
 components, special files, missing files, and files larger than 1 MiB are
 rejected. Directory listings and recursive review are bounded. `.ainiux-pr`,
 `.ainiux`, `.git`, environment/credential names, and bundled sensitive config
-files are omitted. No remote mutation exists until a later revision-safe PR.
+files are omitted. Revision-safe mutation routes use separate explicit-target
+operations and the stricter identity checks described below.
 
 ## Control-API chat boundary
 
@@ -216,7 +217,7 @@ existing target and creation parent must match the revision the controller
 reviewed. Deletes require an exact path confirmation. Recursive copy/delete and
 batch sizes are bounded. Text saves use the shared atomic replacement primitive,
 so failure retains the old file. Editor assist is proposal-only and must pass
-through a later revision-checked save.
+through a separate revision-checked save.
 
 ## Configuration Files
 

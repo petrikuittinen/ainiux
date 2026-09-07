@@ -301,6 +301,5 @@ Error validate_agent_interactive_arguments(int argc, char** argv, const Options&
 Error validate_disable_indexing_arguments(const Options& options);
 Error validate_image_mode_arguments(const Options& options);
 std::string help_text();
-const char* format_name(OutputFormat format);
 
 }  // namespace ainiux::cli

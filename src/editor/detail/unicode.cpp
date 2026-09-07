@@ -410,60 +410,6 @@ std::string display_range(const std::string& text,
     return out;
 }
 
-std::string display_range_highlighted(const std::string& text,
-                                      size_t start,
-                                      size_t end,
-                                      size_t width,
-                                      size_t global_line_start,
-                                      size_t sel_start,
-                                      size_t sel_end,
-                                      bool highlight_selection) {
-    std::string out;
-    size_t column = 0;
-    size_t visible = 0;
-    size_t pos = start;
-    const size_t limit = std::min(end, text.size());
-    bool highlight_on = false;
-    while (pos < limit && visible < width) {
-        const size_t global_offset = global_line_start + pos;
-        const bool selected = highlight_selection && sel_start < sel_end &&
-                              global_offset >= sel_start && global_offset < sel_end;
-        if (selected != highlight_on) {
-            out += selected ? "\x1b[7m" : "\x1b[0m";
-            highlight_on = selected;
-        }
-
-        const DecodedChar decoded = decode_utf8_at(text, pos);
-        const size_t next = std::min(next_grapheme_offset(text, pos), limit);
-        const size_t char_width = display_width_at(text, pos, column);
-        const size_t next_column = column + char_width;
-
-        if (decoded.valid && decoded.codepoint == '\t') {
-            for (size_t tab_col = column; tab_col < next_column && visible < width; ++tab_col) {
-                out.push_back(' ');
-                ++visible;
-            }
-        } else if (!decoded.valid || is_control_codepoint(decoded.codepoint)) {
-            out.push_back('?');
-            ++visible;
-        } else {
-            out.append(text, pos, next - pos);
-            visible += char_width;
-        }
-
-        column = next_column;
-        pos = next;
-    }
-    if (highlight_on) {
-        out += "\x1b[0m";
-    }
-    while (visible < width) {
-        out.push_back(' ');
-        ++visible;
-    }
-    return out;
-}
-
 size_t byte_offset_for_range_column(const std::string& text,
                                     size_t start,
                                     size_t end,

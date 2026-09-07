@@ -111,11 +111,6 @@ class AgentController {
     using TurnWork = std::function<AgentSurfaceEvent(runtime::CancellationToken)>;
     bool start_turn(TurnWork work);
 
-    // True when a temporary editor hop should keep the controller alive.
-    // Always true for this controller while prepared or running; chat leave
-    // still calls shutdown(true).
-    bool preserve_across_editor() const;
-
    private:
     std::shared_ptr<AgentSessionRuntime> runtime_;
     std::shared_ptr<ApprovalGate> gate_;

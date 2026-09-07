@@ -1,5 +1,6 @@
 #include "editor/editor_assist.hpp"
 
+#include "editor/detail/editor_common.hpp"
 #include "editor/editor_help.hpp"
 #include "editor/editor_prompts.hpp"
 #include "output/thinking.hpp"
@@ -136,23 +137,6 @@ char lower_ascii_char(char ch) {
 
 bool is_token_separator(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
-}
-
-std::string longest_common_prefix(const std::vector<std::string>& values) {
-    if (values.empty()) {
-        return "";
-    }
-    std::string prefix = values.front();
-    for (size_t i = 1; i < values.size(); ++i) {
-        size_t length = 0;
-        const size_t limit = std::min(prefix.size(), values[i].size());
-        while (length < limit &&
-               lower_ascii_char(prefix[length]) == lower_ascii_char(values[i][length])) {
-            ++length;
-        }
-        prefix.resize(length);
-    }
-    return prefix;
 }
 
 std::optional<AssistScope> parse_scope_token(const std::string& token) {
@@ -1131,7 +1115,7 @@ AssistCompletionResult complete_assist_command(std::string& input,
 
     const std::string completion = state.candidates.size() == 1
                                        ? state.candidates.front()
-                                       : longest_common_prefix(state.candidates);
+                                       : detail::longest_common_prefix(state.candidates, false);
     input = completion;
     result.value = completion;
     result.changed = completion != token;

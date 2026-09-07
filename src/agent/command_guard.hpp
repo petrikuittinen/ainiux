@@ -23,10 +23,6 @@ struct GuardResult {
 // Evaluate argv after shell-tokenization (no shell metacharacters expected).
 GuardResult evaluate_command_guard(const std::vector<std::string>& arguments);
 
-// Convenience for a single command line string (tokenizes lightly on spaces;
-// prefer the argv form when available).
-GuardResult evaluate_command_guard_line(const std::string& command_line);
-
 // Map Ask → Deny for headless one-shot agent (no approval UI).
 GuardResult finalize_guard_for_headless(GuardResult result);
 

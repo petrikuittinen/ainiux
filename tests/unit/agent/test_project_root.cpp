@@ -228,23 +228,24 @@ void test_compaction_strategies_timeline_and_partition() {
     }
     check(!saw_display && tool_items == 1,
           "timeline excludes display roles and keeps one full logical tool unit");
-    check(agent::is_reloadable_file_read_tool("read_file") &&
-              agent::is_reloadable_file_read_tool("read_many") &&
+    check(agent::is_reloadable_file_read_tool("read") &&
               agent::is_reloadable_file_read_tool("grep") &&
+              !agent::is_reloadable_file_read_tool("read_file") &&
+              !agent::is_reloadable_file_read_tool("read_many") &&
               !agent::is_reloadable_file_read_tool("run_command") &&
               !agent::is_reloadable_file_read_tool("edit_file"),
           "reloadable stub-tier tools are classified correctly");
     check(agent::tool_compaction_tier("list_directory") ==
-              agent::ToolCompactionTier::Prune &&
+              agent::ToolCompactionTier::Full &&
               agent::tool_compaction_tier("search_text") ==
-                  agent::ToolCompactionTier::Stub &&
+                  agent::ToolCompactionTier::Full &&
               agent::tool_compaction_tier("edit_file") ==
-                  agent::ToolCompactionTier::Digest &&
+                  agent::ToolCompactionTier::Full &&
               agent::tool_compaction_tier("run_command") ==
-                  agent::ToolCompactionTier::Semantic &&
+                  agent::ToolCompactionTier::Full &&
               agent::tool_compaction_tier("unknown_tool") ==
                   agent::ToolCompactionTier::Full,
-          "tool compaction tiers match the Fable policy table");
+          "obsolete and unknown tool names remain opaque during compaction");
     check(read_file_body.find("src/main.cpp") != std::string::npos &&
               read_file_body.find("reloadable") != std::string::npos &&
               read_file_body.find("\"content\":\"main\"") == std::string::npos &&

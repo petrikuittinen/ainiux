@@ -260,8 +260,6 @@ class Writer {
         return std::move(capture_buffer_);
     }
 
-    bool capturing() const { return capture_depth_ > 0; }
-
     void append_text(const std::string& raw) {
         const std::string decoded = decode_entities(raw);
         std::string normalized;

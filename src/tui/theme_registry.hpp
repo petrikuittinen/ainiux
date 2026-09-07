@@ -72,7 +72,6 @@ std::string format_theme_list(const ThemeRegistry& registry);
 
 // Color-mode preference parsing and env-based resolution.
 bool parse_color_mode_preference(const std::string& text, ColorModePreference& out);
-const char* color_mode_preference_name(ColorModePreference preference);
 // Resolve preferred mode + use_colors against COLORTERM/TERM (nullptr-safe).
 // COLORTERM truecolor/24bit → Truecolor; TERM *256color*|*-direct|xterm*|tmux*|screen*
 // → Ansi256; otherwise Truecolor (colon form degrades safely if ignored).

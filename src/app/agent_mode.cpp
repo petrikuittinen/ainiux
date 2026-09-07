@@ -50,28 +50,11 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
         return result;
     }
 
-    agent::SessionRuntimeOptions options;
-    options.workspace = std::move(workspace);
-    options.task_mode = context.options.agent_plan ? agent::AgentTaskMode::Plan
-                                                   : agent::AgentTaskMode::Act;
-    options.allow_network = true;
-    options.interactive = false;
-    options.enable_session_db = true;
-    options.enable_agent_log = context.options.agent_log_enabled;
-    options.security_review_log_keep_runs = context.options.security_review_log_keep_runs;
-    options.trusted_prompt_dir = context.options.trusted_prompt_dir;
-    options.max_source_code_file_size = context.options.max_source_code_file_size;
-    options.history_backup.enabled = context.options.agent_history_backup_enabled;
-    options.history_backup.max_bytes = context.options.agent_history_backup_max_bytes;
-    options.history_backup.ttl_days = context.options.agent_history_backup_ttl_days;
-    options.auto_compact = context.options.agent_auto_compact;
-    options.compact_strategy = context.options.agent_compact_strategy;
-    options.compact_limit = context.options.agent_compact_limit;
-    options.max_agent_turns = context.options.agent_max_turns;
-    options.index_mode =
-        context.options.disable_indexing
-            ? agent::SessionRuntimeOptions::IndexMode::Disabled
-            : agent::SessionRuntimeOptions::IndexMode::UseExistingLazy;
+    agent::SessionRuntimeOptions options = agent::make_session_runtime_options(
+        context, std::move(workspace),
+        context.options.agent_plan ? agent::AgentTaskMode::Plan
+                                   : agent::AgentTaskMode::Act,
+        false);
     IndexProgressPrinter index_progress(
         !context.options.quiet &&
         options.index_mode !=
@@ -80,16 +63,6 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
         [&index_progress](const agent::index::Progress& update) {
             index_progress.update(update);
         };
-    options.show_command_output = context.options.agent_show_command_output;
-    options.fetch_options.connect_timeout_seconds = context.options.connect_timeout_seconds;
-    options.fetch_options.timeout_seconds =
-        context.options.timeout_seconds > 0 ? context.options.timeout_seconds : 30;
-    options.fetch_options.max_bytes = context.options.max_fetch_bytes;
-    options.fetch_options.proxy = context.options.proxy;
-    options.fetch_options.insecure_tls = context.options.insecure_tls;
-    options.fetch_options.trace_http = context.options.trace_http;
-    options.fetch_options.allow_private = context.options.allow_private_url_fetch;
-    options.search_options = search::options_for(context.options);
     options.on_progress = std::move(on_progress);
 
     agent::AgentSessionRuntime runtime;

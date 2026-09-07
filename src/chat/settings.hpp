@@ -19,7 +19,6 @@ void reset_thread_setting_overrides(cli::Options& options);
 std::string settings_json_from_options(const cli::Options& options);
 Error apply_settings_json(cli::Options& options, const std::string& settings_json);
 std::string current_system_prompt(const Session& session);
-std::string format_settings_summary(const cli::Options& options);
 std::string format_settings_panel(const cli::Options& options,
                                   const std::string& advisory = {});
 

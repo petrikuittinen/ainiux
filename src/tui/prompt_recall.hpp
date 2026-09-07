@@ -23,7 +23,6 @@ class PromptRecall {
     bool recall_previous(std::string& current);
     bool recall_next(std::string& current);
     std::size_t size() const { return entries_.size(); }
-    bool at_live_draft() const { return index_ >= entries_.size(); }
 
    private:
     std::vector<std::string> entries_;

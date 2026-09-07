@@ -29,27 +29,6 @@ bool is_chat_setting_name(const std::string& name) {
     return name == kMaxOutputTokens;
 }
 
-const std::vector<const char*>& model_setting_keys() {
-    static const std::vector<const char*> kKeys = {
-        "model_id",
-        "purpose",
-        "default_system_prompt",
-        kTemperature,
-        kTopK,
-        kTopP,
-        kMinP,
-        kRepeatPenalty,
-        kPresencePenalty,
-        kReasoning,
-    };
-    return kKeys;
-}
-
-std::string model_setting_keys_description() {
-    return "model_id, purpose, default_system_prompt, temperature, top_k, top_p, min_p, repeat_penalty, "
-           "presence_penalty, or reasoning";
-}
-
 const std::vector<const char*>& chat_purposes() {
     static const std::vector<const char*> kPurposes = {
         kPurposeGeneral,
@@ -62,15 +41,6 @@ const std::vector<const char*>& chat_purposes() {
 
 std::string chat_purpose_description() {
     return "general, coding, instruct, or creative";
-}
-
-std::vector<std::string> chat_purpose_strings() {
-    std::vector<std::string> out;
-    out.reserve(chat_purposes().size());
-    for (const char* purpose : chat_purposes()) {
-        out.emplace_back(purpose);
-    }
-    return out;
 }
 
 bool is_chat_purpose(const std::string& purpose) {

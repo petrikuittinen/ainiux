@@ -125,19 +125,6 @@ int positive_int_from_env(const char* name, int default_value) {
     return static_cast<int>(parsed);
 }
 
-size_t positive_size_from_env(const char* name, size_t default_value) {
-    const char* raw = std::getenv(name);
-    if (raw == nullptr || raw[0] == '\0') {
-        return default_value;
-    }
-    char* end = nullptr;
-    const unsigned long long parsed = std::strtoull(raw, &end, 10);
-    if (end == raw || *end != '\0' || parsed == 0) {
-        return default_value;
-    }
-    return static_cast<size_t>(parsed);
-}
-
 size_t nonnegative_size_from_env(const char* name, size_t default_value) {
     const char* raw = std::getenv(name);
     if (raw == nullptr || raw[0] == '\0' || raw[0] == '-') {

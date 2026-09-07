@@ -261,7 +261,7 @@ Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw ba
 | `fal` | `fal_ai` | `FAL_API_KEY`, `FAL_KEY` (image generation; not a chat profile) |
 | `custom_openai_chat` | `custom` | `AINIUX_API_KEY` |
 
-The Anthropic profile uses its OpenAI compatibility layer; a native Anthropic Messages adapter is not implemented. OpenAI Responses support is text-only for ordinary chat. Capability metadata is a starting point, not live proof that a particular model supports every feature.
+The Anthropic profile uses its OpenAI compatibility layer; a native Anthropic Messages adapter is not implemented. OpenAI Responses produces text chat output and accepts image input for image-capable models. Capability metadata is a starting point, not live proof that a particular model supports every feature.
 
 For any provider, `--key-env NAME`, `--key-file PATH`, or `--key-stdin` selects another source. Avoid `-k`/`--key` because command-line arguments may be visible to other local users. Sensitive headers and configured keys are redacted from diagnostics and saved artifacts.
 

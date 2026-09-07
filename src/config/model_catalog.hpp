@@ -21,11 +21,9 @@ Error resolve_reasoning_off(const ModelCatalog& catalog,
                             ReasoningSelection& selection);
 
 bool parse_reasoning_protocol(const std::string& text, ReasoningProtocol& protocol);
-const char* reasoning_protocol_name(ReasoningProtocol protocol);
 std::string reasoning_protocol_names();
 
 bool parse_temperature_support(const std::string& text, TemperatureSupport& support);
-const char* temperature_support_name(TemperatureSupport support);
 
 bool model_regex_matches(const std::string& expression, const std::string& model);
 const ModelCapability* resolve_model_capability(const ModelCatalog& catalog,

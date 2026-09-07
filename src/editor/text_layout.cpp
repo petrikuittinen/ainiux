@@ -241,26 +241,6 @@ const char* text_align_mode_name(TextAlignMode mode) {
     return "left-align";
 }
 
-bool parse_text_align_mode(const std::string& name, TextAlignMode& out) {
-    if (name == "left-align" || name == "leftalign") {
-        out = TextAlignMode::Left;
-        return true;
-    }
-    if (name == "right-align" || name == "rightalign") {
-        out = TextAlignMode::Right;
-        return true;
-    }
-    if (name == "center-align" || name == "centeralign" || name == "centre-align") {
-        out = TextAlignMode::Center;
-        return true;
-    }
-    if (name == "justify" || name == "justify-align" || name == "justifyalign") {
-        out = TextAlignMode::Justify;
-        return true;
-    }
-    return false;
-}
-
 bool valid_text_align_width(size_t width) {
     return width > kMinTextAlignWidthExclusive && width <= kMaxTextAlignWidth;
 }

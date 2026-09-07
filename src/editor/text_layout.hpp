@@ -46,7 +46,6 @@ TextLayoutResult remove_duplicate_blank_lines(const std::string& text);
 TextLayoutResult remove_duplicate_lines(const std::string& text);
 
 const char* text_align_mode_name(TextAlignMode mode);
-bool parse_text_align_mode(const std::string& name, TextAlignMode& out);
 
 // True when width is a valid editor alignment width (21..1000).
 bool valid_text_align_width(size_t width);

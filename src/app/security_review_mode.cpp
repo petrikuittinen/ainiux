@@ -28,23 +28,6 @@ json::Value log_string(const std::string& text) { json::Value value; value.type 
 json::Value log_number(double number) { json::Value value; value.type = json::Value::Type::Number; value.number = number; return value; }
 json::Value log_bool(bool boolean) { json::Value value; value.type = json::Value::Type::Bool; value.boolean = boolean; return value; }
 
-std::vector<std::string> configured_secrets(const provider::RequestContext& context) {
-    std::vector<std::string> secrets;
-    if (!context.api_key.empty()) secrets.push_back(context.api_key);
-    if (!context.options.key.empty()) secrets.push_back(context.options.key);
-    for (const std::string& header : context.headers) {
-        const std::size_t colon = header.find(':');
-        if (colon == std::string::npos) continue;
-        if (is_sensitive_header_name(ascii_trim(header.substr(0, colon)))) {
-            const std::string value = ascii_trim(header.substr(colon + 1));
-            if (!value.empty()) secrets.push_back(value);
-        }
-    }
-    std::sort(secrets.begin(), secrets.end());
-    secrets.erase(std::unique(secrets.begin(), secrets.end()), secrets.end());
-    return secrets;
-}
-
 int render_failure_report(const provider::RequestContext& context,
                           const Error& error,
                           long long reviewed_at = 0) {
@@ -86,7 +69,7 @@ int run_security_review_mode(provider::RequestContext context) {
         ~MonitorJoin() { finished.store(true, std::memory_order_release); if (thread.joinable()) thread.join(); }
     } monitor_join{finished, interrupt_monitor};
 
-    const std::vector<std::string> secrets = configured_secrets(context);
+    const std::vector<std::string> secrets = request_secrets(context);
     const auto review_started = std::chrono::steady_clock::now();
     std::unique_ptr<agent::ReviewLogger> logger;
     if (context.options.security_review_log_enabled) {

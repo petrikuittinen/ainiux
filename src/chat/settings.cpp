@@ -655,23 +655,6 @@ std::string current_system_prompt(const Session& session) {
     return {};
 }
 
-std::string format_settings_summary(const cli::Options& options) {
-    std::ostringstream out;
-    out << "Settings";
-    out << " temperature=" << (options.has_temperature ? std::to_string(options.temperature) : "default");
-    out << " top_k=" << (options.has_top_k ? std::to_string(options.top_k) : "default");
-    out << " top_p=" << (options.has_top_p ? std::to_string(options.top_p) : "default");
-    out << " min_p=" << (options.has_min_p ? std::to_string(options.min_p) : "default");
-    out << " repeat_penalty="
-        << (options.has_repeat_penalty ? std::to_string(options.repeat_penalty) : "default");
-    out << " presence_penalty="
-        << (options.has_presence_penalty ? std::to_string(options.presence_penalty) : "default");
-    out << " max_tokens="
-        << (options.has_max_output_tokens ? std::to_string(options.max_output_tokens) : "default");
-    out << " reasoning=" << config::reasoning_selection_value(options.reasoning);
-    return out.str();
-}
-
 std::string format_settings_panel(const cli::Options& options,
                                   const std::string& advisory) {
     std::ostringstream out;

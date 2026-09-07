@@ -3401,15 +3401,6 @@ Error send_chat_messages(const RequestContext& context,
     return ok_error();
 }
 
-Error send_chat(const RequestContext& context, DeltaCallback on_delta, ChatResult& result, runtime::CancellationToken cancellation) {
-    std::vector<Message> messages;
-    if (!context.options.system.empty()) {
-        messages.push_back({"system", context.options.system});
-    }
-    messages.push_back({"user", context.options.prompt});
-    return send_chat_messages(context, messages, on_delta, result, cancellation);
-}
-
 namespace {
 
 json::Value json_string_value(const std::string& text) {

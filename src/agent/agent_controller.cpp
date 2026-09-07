@@ -136,10 +136,6 @@ bool AgentController::start_turn(TurnWork work) {
     return true;
 }
 
-bool AgentController::preserve_across_editor() const {
-    return prepared() || turn_running() || job_joinable();
-}
-
 std::shared_ptr<AgentController> ensure_agent_controller(
     std::shared_ptr<AgentController>& slot) {
     if (!slot) slot = std::make_shared<AgentController>();

@@ -2,598 +2,331 @@
 
 Project: `ainiux`
 
-Repository-level instructions for AI coding agents. Treat this as current project guidance. The user's latest explicit instruction always wins. For milestones use `PLANS.md`; for release history use `docs/version-history.md`; for user-facing usage start with `README.md` and `docs/README.md`; for design rationale use `docs/decisions.md`; for open work use `TODO.md`.
+Repository-level guidance for AI coding agents. The user's latest explicit
+instruction wins. Use `PLANS.md` for direction and milestone acceptance,
+`TODO.md` for open tasks, `docs/version-history.md` for releases,
+`docs/decisions.md` for rationale, and `README.md` / `docs/README.md` for
+current user-facing behavior.
 
 ## Mission
 
-Build and maintain `ainiux`: a fast, portable command-line and terminal chat client for OpenAI and OpenAI-compatible APIs, with a first-class standalone editor, document conversion, benchmarks, and judge grading.
+Build and maintain `ainiux`: a fast, portable command-line and terminal client
+for OpenAI and OpenAI-compatible APIs, with a standalone editor, document
+conversion, benchmarks and judge grading, local agent workflows, image
+generation, an authenticated control API, and an embedded browser controller.
 
-The program must stay excellent as a scriptable CLI. Keep the core engine independent from UI surfaces so the same request, provider, streaming, persistence, runtime/job, cancellation, memory-management, and error-handling code is reused by:
+Keep the program excellent as a scriptable CLI. Provider requests, streaming,
+persistence, jobs, cancellation, memory management, and errors belong in shared
+core modules rather than being reimplemented by each UI or protocol surface.
 
-- non-interactive CLI chat
-- document extraction / conversion
-- REPL
-- full-screen chat TUI
-- standalone editor (with optional AI assist)
-- benchmark runner
-- grade (judge) pass
-- local control-API server mode (`ainiux server`, v1.30; OpenAI `/v1` adapter later)
-- embedded same-origin browser controller
-- local agent mode with session-scoped Act/Plan task modes
-- one-shot CLI image generation (`ainiux image`)
+## Current baseline
 
-## Current product snapshot
+Current release: **v1.32**. Linux and other POSIX-like source builds are the
+primary supported path, Apple Silicon macOS source builds are supported, and a
+native Windows 10 1903+/Windows 11 x64 MSYS2 UCRT64 implementation is present.
+Windows remains unreleased until the parity gate in `docs/windows.md` passes.
 
-Status: **v1.30 plus an unreleased native Windows parity target** (see `README.md`, `docs/windows.md`, `docs/agent.md`, and `PLANS.md`). One-shot (`run` / `--run` / `-r`) and interactive (`agent` / `--agent` / `-a`) local agent modes are landed with workspace writes, multi-turn project sessions (`.ainiux-pr/`), compact live tool activity, provider-supplied reasoning previews in interactive agent history, three-strategy transcript-preserving compaction, retained row-diff terminal rendering, punctuation-aware Markdown highlighting, chat↔editor↔agent cycling, mid-turn editor/dired review without cancelling the agent turn (`AgentController`, Ctrl+G / F4), project-persisted Confirm/Smart/Yolo permissions, OpenRouter/OpenAI/DeepSeek credit display, interactive Guard approvals (answerable from the editor), and session-scoped Act/Plan task modes. Live tool rows update in place, while display-only `notice` and `thinking` rows remain outside provider context. Compact native tool schemas use short industry-aligned names; removed long names and aliases are unknown tools. Agent/run/plan can also load explicitly installed MCP tools. One-shot planning is available through `plan`, `--plan`, and `--plan-file`; Plan retains research tools but code-enforces planning-document-only writes. User profile stays `~/.ainiux/` (chat DB/media). The **v1.1** code index is a lightweight definitions-only index across all scanner languages, with static declaration importance and mutation-aware persistence. Apple Silicon macOS source builds are supported. The Windows target remains unreleased until its native parity gate passes. v1.30 completes the authenticated control server with revision-safe workspace mutations/editor assist and the embedded responsive vanilla-JavaScript WUI. CLI `ainiux image` is the first v1.2 slice; REPL/TUI image generation remains later.
+Implemented entry points include:
 
-### Implemented modes
+| Surface | Entry |
+| --- | --- |
+| One-shot chat | default plus `-p` / `--prompt-file` |
+| Conversion, fetch, and search | `--input`, `--fetch-url`, `--search` |
+| Model and MCP management | `--list-models`, `--list-mcp`, MCP install/enable/disable/remove options |
+| REPL | `-i` / `--repl` |
+| Chat TUI | `-c` / `--chat` (`--tui` alias) |
+| Standalone editor and dired | `-e` / `--editor`, `-d` / `--dired` |
+| Benchmark and judge | `benchmark` / `--benchmark`, `--grade` |
+| Code index and security review | `--index-code`, `--print-index`, `--clear-index`, `--security-review` |
+| Interactive agent | `agent` / `-a` / `--agent` |
+| One-shot Act and Plan | `run` / `-r` / `--run`, `plan` / `--plan` |
+| Image generation | `image` / `--image` |
+| Control API and browser | `server` / `--server`, `webserver`, `server --webui` |
 
-| Mode | Entry | Notes |
-| --- | --- | --- |
-| One-shot CLI chat | default + `-p` / `--prompt-file` | stdout = model output; stderr = status/errors |
-| Document extract | `--input` / `--fetch-url` without chat prompt | text/Markdown/HTML conversion; image input for chat path |
-| List models | `--list-models` | provider `/models` |
-| REPL | `--repl` / `-i` | line-oriented interactive |
-| Chat TUI | `--chat` (`--tui` alias) | non-blocking alternate-screen UI; SQLite threads |
-| Standalone editor | `--editor [path]` | multi-buffer piece-table editor; optional AI assist |
-| Benchmark | `benchmark` / `--benchmark` | concurrent JSONL dataset runner |
-| Grade | `--grade` | second-pass judge scoring of benchmark results (not combined with `--benchmark`) |
-| Interactive agent | `agent` / `--agent` / `-a` | **Separate mode from `--chat`**. Project-local `.ainiux-pr/`; Act by default; `/plan` and `/act` switch session task policy; `/goal` sets a persistent completion condition (`goal_met`); mid-turn Ctrl+G/F4 editor/dired review; shared TUI shell + selectors |
-| One-shot agent | `run` / `--run` / `-r` / `--run-file` | headless Act mode; compact tool lines on stderr; stdout = final answer |
-| One-shot plan | `plan` / `--plan` / `--plan-file` | headless Plan mode; read/research tools plus planning-document-only writes |
-| Security review | `--security-review` | headless read-only whole-project review |
-| Code index | `--index-code` / `--print-index` / `--clear-index` | project-local `.ainiux-pr/index.sqlite` |
-| One-shot image generation | `image` / `--image` | CLI-only; `images.conf` selects protocol/model (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); `--attach` PNG/JPEG references; one output image |
-| Control server | `server` / `--server` | v1.30 authenticated discovery, jobs, MCP, interactive agent sessions, revision-safe workspace/chat/editor operations, TLS/direct-access gates, and embedded browser controller at `/ui/` |
+The control server, revision-safe chat/workspace/editor operations, MCP server
+adapter, interactive remote Agent/Guard sessions, and embedded dependency-free
+WebUI are shipped. The WebUI includes chat, agent, image generation, dired/file
+review, live editing, syntax highlighting, undo/redo, and indentation controls.
+CLI and WebUI image generation use the layered `images.conf` catalog and the
+compiled `openai_images`, `replicate_predictions`, `fal_queue`, and
+`gemini_interactions` adapters.
 
-### Implemented capabilities agents must respect
+### Product boundaries
 
-- Built-in provider registry and aliases; Chat Completions; OpenAI Responses API (official `openai` defaults to Responses; `--api chat` / `openai_chat` keep Chat Completions)
-- Catalog-selected provider reasoning mapping (`--reasoning auto|VALUE|TOKENS`)
-- `--provider none` offline profile for conversion/editor without a model endpoint
-- Credential lookup from env / key file / stdin; redaction in logs and artifacts
-- JSON chat import/export (`--save-chat` / `--load-chat`); SQLite-backed TUI chat library at `~/.ainiux/ainiux.db`
-- Cancellable runtime jobs; libcurl HTTP + incremental SSE streaming
-- Request-only context policies; full transcript preserved on disk
-- Bounded text/HTML/Markdown attachments; JPEG/PNG/GIF image input (Chat Completions)
-- CLI `ainiux image` / `--image` for one-shot generation (`gpt-image-2`, Replicate, fal, or Gemini Nano Banana models from `images.conf`) and PNG/JPEG reference edits
-- Safe URL fetching; web search (`--search`, `/search`) with API providers and keyless fallbacks
-- Automatic system/user TOML-alike configuration (`config.conf`), plus `themes.conf`, `editor-commands.conf`, `benchmarks.conf`, `models.conf`, and `images.conf`
-- Shared syntax highlighting for editor and chat; grapheme-aware editor navigation
-- Editor AI assist (`Ctrl+Space`, slash commands); window splits; file locking sessions
-- Concurrent JSONL benchmarks and configurable judge grading with runtime prompts from `benchmarks.conf`
+- Ordinary chat never receives workspace tools. Agent mode is explicit and
+  separate, although chat, editor, and agent share terminal presentation.
+- Agent Act is the default task policy. Fresh projects use Smart permissions;
+  Confirm and Yolo are explicit choices. Plan permits research but limits writes
+  to planning documents. `/goal` and `goal_met` are implemented.
+- Project agent state stays under `.ainiux-pr/`; user chat data and installed MCP
+  configuration stay under `~/.ainiux/`.
+- The code index is an optional definitions-only navigation hint. Agent queries
+  use short-lived lazy read-only SQLite access; security review deliberately uses
+  an immutable loaded snapshot. Current source must still be verified before edits.
+- OpenAI Chat Completions and text Responses output are supported. Image-capable
+  Responses requests can carry user images. Provider capabilities still vary.
+- The control API is Ainiux-native under `/ainiux/v1/`; `/v1/` remains reserved
+  for a later OpenAI-compatible adapter.
 
-### Not implemented yet (do not pretend they exist)
-
-- OpenAI `/v1` proxy; it remains a later adapter separate from the control API.
-- Reference extraction beyond the landed Python/C/C++ v1.1 review slice; JavaScript/TypeScript, Java/C#, Go, Rust, and other languages still have definitions-only indexes
-- `/loop` and sub-agents. Their names are reserved for later; do not infer behavior. Interactive `/goal` + `goal_met` is implemented (see README agent section)
-- REPL `/image`, TUI image-generation jobs, batch `n>1`, streaming partials, and multi-turn image editing (CLI `ainiux image` / `--image` for OpenAI, Replicate, fal, and Gemini catalog models is landed)
-- Agent session resume/list UI and richer tool-call transcript chrome; Guard Ask y/n in interactive agent is landed (headless Ask still denies); one-shot `ainiux run` / `--run` and interactive `ainiux agent` / `--agent` with multi-turn tools + mode cycling are landed
-- PDF / DOCX conversion modules
-- Native Anthropic Messages adapter; full live capability probing for all models
-- ncurses-based TUI (current UI uses shared POSIX termios or native Win32 console ownership plus ANSI/VT)
+Do not pretend these exist: REPL/TUI image-generation jobs, batch or streaming
+image output, multi-turn image editing, PDF/DOCX conversion, `/loop`, sub-agents,
+a native Anthropic Messages adapter, multi-workspace server routing, or an
+ncurses UI. MCP tools do not imply MCP sub-agents or interactive MCP Guard
+chaining.
 
 ## Implementation stance
 
-- Default language: **C++17**.
-- Do not use Rust or Go.
-- Keep the code portable across Linux, BSD, macOS, other POSIX-like systems, and the official Windows 10 1903+/Windows 11 x64 MSYS2 UCRT64 target.
-- Use a `Makefile` as the primary build entry point.
-- Do not require C++20, C++23, C23, non-portable compiler extensions, or a package manager unless the user explicitly approves it.
-- Prefer stack objects, RAII, `std::string`, `std::vector`, and standard containers.
+- Default language: **C++17**. Do not use Rust or Go.
+- Use the `Makefile` as the primary build entry point.
+- Preserve portability across Linux, BSD, macOS, other POSIX-like systems, and
+  the official native Windows UCRT64 target.
+- Do not require C++20/23, C23, package managers, or non-portable extensions
+  without explicit approval.
+- Prefer stack objects, RAII, `std::string`, `std::vector`, standard containers,
+  and `std::unique_ptr`. Use shared ownership only when it is truly required and
+  documented. Do not introduce raw owning pointers.
+- Correctness, actionable errors, credential safety, robust streaming,
+  responsive UIs, and leak-free cleanup outrank cleverness or micro-optimization.
 
-Performance matters, but correctness, clear errors, safe credential handling, robust streaming, responsive UI behavior, zero memory leaks, and clean architecture matter more.
+### Resource ownership is non-negotiable
 
-## Non-negotiable: no memory leaks
+Every allocation and acquired resource must be released on success, error,
+cancellation, timeout, interrupted stream, parse failure, and early return.
+Wrap libcurl handles/header lists, SQLite handles/statements, files, descriptors,
+sockets, directories, terminal state, TLS objects, subprocesses, threads, and
+temporary data in RAII. At C API boundaries, document allocator, owner, and
+matching release function. Lifetime-sensitive changes require focused normal and
+failure-path tests.
 
-Every allocation and acquired resource must be released as soon as it is no longer needed, including on error, cancellation, timeout, interrupted stream, failed JSON parse, failed file processing, and early return paths.
+## Repository map
 
-Rules:
-
-- Prefer stack objects and RAII. Use `std::unique_ptr` for owned heap objects. Use `std::shared_ptr` only when shared ownership is truly required and documented.
-- Do not introduce raw owning pointers in new C++ code.
-- Wrap C resources in RAII: `CURL*`, `curl_slist*`, `sqlite3*`, `FILE*`, file descriptors, sockets, `DIR*`, terminal state, temporary files, and allocated buffers.
-- At C API boundaries, define who allocates, who frees, and which free function is used.
-- Changes that affect allocation, resource ownership, cancellation, or cleanup must add focused coverage for normal and important failure paths. Full sanitizer and Valgrind suites follow the slow-test policy below; they are not required after every minor change unless the user explicitly requests them.
-
-## Active priorities
-
-Work in this order unless the user explicitly changes priorities:
-
-1. Keep script-friendly CLI, provider, HTTP/SSE, and error behavior solid.
-2. Finish remaining v0.9 polish: benchmark cutoff/grade calibration, TUI/CLI polish, refactor hygiene, leak and cancellation hardening (see `TODO.md` / `PLANS.md`).
-3. Tune v1.1 lightweight definition importance, lexical ranking, and mutation-aware persistent refresh.
-4. `/goal` is landed for interactive agent; add `/loop` and sub-agents only after the user supplies detailed specifications; reuse Guard, workspace-containment, cancellation, and logging.
-5. Maintain the landed local control API and embedded WUI without weakening its authentication, containment, or same-origin boundaries.
-6. Continue image generation (v1.2) beyond the landed CLI slice only when asked.
-
-Do not infer `/loop` or sub-agent semantics from their names. Do not rewrite or expand the built-in agent system prompt as part of v1.1 indexing work; the user plans a separate prompt-optimization pass for small local models.
-
-## Repository layout
-
-This is the **authoritative** layout. Put new code in the matching module. Do not invent a parallel tree.
+Put code in the existing matching module; do not create a parallel architecture.
 
 ```text
 .
-├── AGENTS.md
-├── PLANS.md
-├── TODO.md
-├── README.md
-├── TESTING.md
-├── Makefile
-├── LICENSE
-├── scripts/                     # install-deps.sh, install.sh, uninstall.sh
-├── config/                      # bundled install templates
-│   ├── ainiux.conf
-│   ├── themes.conf
-│   ├── editor-commands.conf
-│   ├── benchmarks.conf
-│   ├── models.conf
-│   └── images.conf
-├── benchmarks/                  # JSONL datasets (builtin parts + long-context)
-├── include/ainiux/
-│   ├── version.hpp
-│   ├── model_setting.hpp
-│   └── image_setting.hpp
+├── README.md, PLANS.md, TODO.md, TESTING.md
+├── config/                  installed configuration templates
+├── benchmarks/              builtin JSONL datasets
+├── include/ainiux/          small public headers and version metadata
+├── scripts/                 install, test, and optional MCP helper scripts
 ├── src/
-│   ├── main.cpp                 # mode dispatch
-│   ├── common.{hpp,cpp}
-│   ├── app/                     # mode runners and session orchestration
-│   ├── cli/                     # argument parsing and option values
-│   ├── config/                  # TOML-alike config loading/schema
-│   ├── provider/                # registry, adapters, model list jobs
-│   ├── http/                    # libcurl transport + SSE
-│   ├── runtime/                 # jobs, cancellation, event queues
-│   ├── chat/                    # session, settings, SQLite, JSON chat I/O
-│   ├── context/                 # request context policies / estimates
-│   ├── editor/                  # piece table, buffers, AI assist, locks, splits
-│   ├── tui/                     # full-screen chat UI
-│   ├── ui/                      # shared confirmation / text selector
-│   ├── benchmark/               # dataset, run, scoring, grading, report
-│   ├── encoding/                # charset detect + convert to UTF-8
-│   ├── fetch/                   # safe URL fetch
-│   ├── search/                  # web search providers and fallbacks
-│   ├── mcp/                     # MCP client, registry, tool bridge (agent/run/plan)
-│   ├── input/                   # local text/image classification and read
-│   ├── html/                    # HTML → text/Markdown
-│   ├── markdown/                # Markdown → HTML/plaintext
-│   ├── highlight/               # shared syntax highlighter
-│   ├── json/                    # internal JSON facade
-│   ├── output/                  # thinking/trace helpers
-│   ├── security/                # credential redaction
-│   ├── server/                  # v1.30 control API, strict HTTP/auth, jobs/sessions, TLS, WUI assets
-│   ├── version/
-│   ├── web/                     # embedded vanilla HTML/CSS/JS controller sources
-│   ├── tools/                   # reserved / thin
-│   └── unicode/                 # reserved (Unicode data lives under editor/detail)
-├── tests/
-│   ├── unit/<module>/           # mirrors src modules; test_runner driver
-│   ├── integration/
-│   ├── mock_server/
-│   ├── mock/                    # LD_PRELOAD helpers (e.g. ENOSPC)
-│   ├── fixtures/
-│   ├── highlight/
-│   ├── image_files/
-│   └── text_files/
-├── tools/                       # generate_editor_unicode_data.py, run_enospc_test.sh
-└── docs/
-    ├── decisions.md
-    ├── api-compatibility.md
-    ├── security.md
-    ├── editor_help.md
-    ├── web-mode.md
-    └── unicode-license.txt
+│   ├── main.cpp             option validation and top-level dispatch
+│   ├── app/                 mode runners and surface-neutral operations
+│   ├── agent/               Agent/Guard/session/tools/index implementation
+│   ├── benchmark/           dataset, runner, scoring, grading, reports
+│   ├── chat/                sessions, settings, media, SQLite persistence
+│   ├── cli/                 argument parsing and option values
+│   ├── config/              TOML-like config and model/image catalogs
+│   ├── context/             request budgets and compaction policies
+│   ├── editor/              piece table, dired, assist, locks, reformat
+│   ├── encoding/            built-in and allowlisted iconv conversion
+│   ├── fetch/, search/      explicit network retrieval
+│   ├── highlight/           shared terminal syntax highlighter
+│   ├── html/, markdown/     conversion and display formatting
+│   ├── http/                libcurl transport and SSE
+│   ├── input/               bounded text/image classification and reads
+│   ├── json/                in-tree JSON facade
+│   ├── mcp/                 installed MCP client and tool bridge
+│   ├── platform/            portable filesystem/environment/Windows UTF
+│   ├── provider/            profiles and protocol adapters
+│   ├── runtime/             cancellable jobs, events, subprocesses
+│   ├── security/            credential redaction
+│   ├── server/              control API, auth, jobs, sessions, TLS, assets
+│   ├── tui/, ui/            terminal shell and shared widgets
+│   ├── version/             runtime version
+│   └── web/                 embedded vanilla HTML/CSS/JavaScript sources
+├── tests/                   unit, fault, integration, browser, fixtures
+├── tools/                   project maintenance helpers
+└── docs/                    current guides, decisions, history, audits
 ```
 
-Headers for a module usually live next to their `.cpp` files under `src/<module>/` (not only under `include/`). Keep dependencies isolated behind small wrapper modules so they can be replaced later.
+Headers normally live beside their implementation under `src/<module>/`.
+Keep replaceable dependencies behind small module boundaries.
 
 ## Dependencies
 
-Use as few external libraries as practical. Every new dependency must be justified in `docs/decisions.md` or next to the build configuration.
+Use as few external libraries as practical. New dependencies require an explicit
+decision in `docs/decisions.md` or next to the build configuration.
 
-Current baseline:
+- **libcurl**: HTTP/HTTPS, proxies, timeouts, streaming.
+- **libsqlite3**: chat, project agent state, and code indexes.
+- **OpenSSL (optional)**: direct TLS for the control server. Builds without it
+  retain loopback/plain-HTTP support subject to server policy.
+- **In-tree JSON facade**: request/response JSON boundaries.
+- **POSIX termios or native Win32 console plus ANSI/VT**: terminal ownership;
+  Windows Terminal and modern conhost are supported, not mintty full-screen use.
+- **Generated Unicode tables**: editor properties under `src/editor/detail/`.
 
-- **libcurl** — HTTP/HTTPS, proxies, timeouts, streaming callbacks (`src/http/`).
-- **libsqlite3** — TUI chat library (`src/chat/sqlite_store.*`, `~/.ainiux/ainiux.db`).
-- **OpenSSL (optional)** — TLS for direct non-loopback control-server access (`src/server/tls.*`); builds without it retain loopback/plain-HTTP support.
-- **In-tree JSON facade** (`src/json/`) — request escaping and response parsing; expand or vendor a reviewed library only with an explicit decision.
-- **POSIX termios / native Win32 console + ANSI VT** — shared TUI and editor terminal ownership. **No ncurses dependency** today. Windows full-screen modes support Windows Terminal and modern conhost, not mintty. The editor renderer is independent of the terminal harness.
-- **Generated Unicode tables** — editor word completion / properties under `src/editor/detail/` (see `tools/generate_editor_unicode_data.py`). Full `utf8proc` / `libgrapheme` integration is future work, not required for ordinary changes.
-
-Do not add a dependency only because it is convenient.
+Do not add a runtime WebUI framework, Node/npm dependency, CDN, hosted font, or
+external script. Optional browser tests may use an already installed Chromium.
 
 ## Architecture rules
 
-### Mode dispatch
-
-`src/main.cpp` validates option combinations and dispatches to `src/app/`:
-
-- `run_benchmark_mode`, `run_grade_mode`
-- document extract via document helpers
-- interactive session for `--editor`, `--chat` / `--tui`, and REPL
-
-UI code must not reimplement provider HTTP, SSE parsing, or credential resolution. Long-running work goes through `src/runtime/` and delivers events to the owning loop.
-
-### Provider adapters/profiles are mandatory
-
-Route model/API differences through `src/provider/`. Do not scatter provider-specific JSON shape or auth assumptions through TUI, editor, or CLI formatters.
-
-The registry is data-driven. Profiles include aliases, default base URLs, endpoint paths, key environment variables, local/remote flags, optional dummy keys, compatibility warnings, and capability flags. OpenAI-compatible providers share Chat Completions request code; Responses is a sibling adapter.
-
-Built-in profiles include at least:
-
-```text
-none / offline
-openai (aliases: openai_chat, openai_responses)
-openrouter
-deepseek, gemini, anthropic, xai (grok), moonshot (kimi)
-llamacpp, lm_studio (lmstudio), ollama, vllm, sglang
-groq, mistral, together, perplexity, cerebras, fireworks,
-deepinfra, nvidia_nim, zai, qwen, dashscope, replicate, fal
-custom_openai_chat (custom)
-```
-
-Treat LM Studio as a first-class local profile (default `http://localhost:1234/v1`, optional key via `LMSTUDIO_API_KEY` / `LM_STUDIO_API_KEY` / `AINIUX_API_KEY`). Keep `lm_studio` separate from `llamacpp` in profile names even if adapters share code.
-
-`--provider none` has no base URL or model transport. Use it for local conversion and editor workflows that must not invent a dummy endpoint. URL fetch and web search remain separate explicit network operations with their own safety rules.
-
-The UI must not hard-code the difference between OpenAI Chat Completions, Responses, OpenRouter, Ollama, vLLM, LM Studio, or a custom URL beyond selecting a profile and showing status.
-
-### Code index and v1.1 ranking
-
-The project-local code index lives at `.ainiux-pr/index.sqlite` and remains a fast hint source, never ground truth. It stores metadata, files, and definitions with a compact static importance score. It does not store references, evidence, edges, caller counts, graph scores, or automatic request-context hints.
-
-When extending v1.1:
-
-- Extend `src/agent/index/`; do not create a parallel index or use the user chat database.
-- Keep lightweight lexical definition scanners and avoid compiler-grade parsers or new language-server dependencies.
-- Keep full-name, exact-component, and component-prefix relevance ahead of importance; preserve deterministic ties and multi-token coverage.
-- Require the model and tools to verify indexed locations against current source before editing. Preserve `glob`, `grep`, `read`, compiler, and test fallbacks.
-- Native mutations must immediately update the live touched-file snapshot. Persist affected definitions through a cancellable coalescing job; potentially mutating commands trigger an incremental check; task completion performs a full-tree freshness pass that reparses only changed files.
-- Publish snapshots atomically. Cancellation or failure preserves the previous completed database state.
-- Full/multi-file discovery and scanning use `floor(online_cores × 0.80)`, bounded by available work and with at least one worker when work exists. Zero work uses zero workers, and a single-file scan runs inline without creating a scanner worker thread.
-- Do not rewrite the built-in agent system prompt during this milestone; prompt/tool-selection optimization is a separate user-directed pass.
-
-### HTTP and streaming
-
-`src/http/` owns transport and must remain usable without TUI or editor.
-
-Requirements:
-
-- Explicit connect and total timeouts.
-- Cancellation while a stream is active.
-- Proxy support where libcurl supports it.
-- Credential redaction in debug logs.
-- Real SSE parsing: never assume one network chunk equals one JSON object.
-- Handle `data: [DONE]`, comments, blank separators, partial chunks, malformed events, and UTF-8 split across chunks.
-- Release all libcurl handles, header lists, buffers, and callback state on success, failure, and cancellation.
-
-### Runtime/job layer
-
-Cancellable long-running work belongs in `src/runtime/` (cancellation token, thread-safe event queue, RAII job handle). Current model: one worker thread per active job; the owning UI loop alone mutates terminal/session state (see `docs/decisions.md`).
-
-Jobs include HTTP connect/request/stream, model list, URL fetch, attachment/document processing, chat save/load on slow filesystems, editor AI assist, reformat jobs, benchmark/grade work, and future server request handling.
-
-Rules:
-
-- UI threads must never block on network, DNS/TLS, endpoint waits, streaming callbacks, large file I/O, fetch, or compaction.
-- Workers must not mutate TUI, editor, or chat state directly; they send events.
-- All jobs must support cancellation; shutdown cancels or joins cleanly.
-- No leaks of workers, queues, tokens, mutexes, or per-job buffers.
-
-### CLI rules
-
-The CLI must remain useful in shell scripts.
-
-- `stdout` is reserved for model output (and intentional convert/list output).
-- `stderr` is for status, warnings, progress, and errors.
-- Exit codes distinguish success, bad arguments, network failure, API failure, config failure, cancellation, and internal failure via `ErrorCode` and `src/app/exit_codes.cpp`.
-- Support `--format text|json|ndjson` and `--no-stream` for scripted chat paths.
-
-Examples:
-
-```sh
-ainiux http://localhost:8000 -p "What is the capital of Norway?"
-ainiux --provider openai -m MODEL -p "Hello"
-ainiux --provider lmstudio --list-models
-ainiux --editor notes.md
-ainiux --chat
-ainiux benchmark --provider openai -m MODEL
-ainiux --grade --provider openai -m JUDGE_MODEL --grade-input results.jsonl
-ainiux --input page.html --output-format md
-```
-
-### Configuration
-
-Configuration is TOML-alike, not JSON.
-
-```text
-installed: $PREFIX/share/ainiux/config.conf (default /usr/local/share/...)
-user:      $XDG_CONFIG_HOME/ainiux/config.conf or ~/.config/ainiux/config.conf
-```
-
-Layering: installed defaults, then user file, then CLI (authoritative). There is no `/etc/xdg` layer. `--no-config` skips the user file only. Separate documents:
-
-- `themes.conf` — TUI/editor themes
-- `editor-commands.conf` — editor AI slash commands
-- `benchmarks.conf` — judge grading prompts (no compiled fallback grading prose)
-- `models.conf` — model capabilities, reasoning selector options, and optional purpose presets
-- `images.conf` — image-generation models and protocol (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`)
-
-Bundled templates live in `config/` and install via `make install`. See `docs/decisions.md`.
-
-### Persistence
-
-- **SQLite TUI library:** `~/.ainiux/ainiux.db` (WAL, per-message rows). Primary local chat library for `--chat`.
-- **JSON chat files:** explicit `--save-chat` / `--load-chat` import/export. Include schema version, timestamps, provider, base URL, model, settings, messages, attachments, usage, compaction events as applicable.
-- Atomic file saves where files are used: write temp → fsync where supported → rename → fsync parent where supported.
-- Native Windows private state uses current-user/SYSTEM protected DACLs, rejects
-  unexpected reparse points in sensitive paths, flushes with `FlushFileBuffers`,
-  and replaces with `ReplaceFileW` or write-through `MoveFileExW`.
-- Restrictive permissions for files that may contain prompts, history, URLs, or secrets.
-- Release every allocation, open DB handle, temporary file, and JSON object on success and failure.
-
-### Error handling
-
-Never emit vague errors such as `request failed` when more detail is available.
-
-Internal codes live in `ainiux::ErrorCode` (`src/common.hpp`), including:
-
-```text
-Ok, BadArgs, BadUrl, Dns, Connect, Tls, Timeout,
-HttpStatus, Auth, RateLimit, JsonParse, SseParse,
-ProviderSchema, UnsupportedFeature, FileRead, FileWrite,
-FileLock, Config, Cancelled, StreamComplete, Internal
-```
-
-Human-facing errors should include what failed, which URL/path/model/option was involved, HTTP status and safe provider body when available, what was tried, and a concrete next step when possible.
-
-### Credential handling
-
-Prefer environment variables, key files, or stdin. Do not encourage command-line API keys.
-
-Supported patterns include provider-specific env vars (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY`, …), `AINIUX_API_KEY`, `--key-env`, `--key-file`, `--key-stdin`, and `--header`.
-
-If `-k` / `--key` is used, warn that argv may be visible to other local users unless `--quiet`.
-
-Always redact from logs, errors, traces, saved chats, and debug output:
-
-```text
-Authorization, api-key, x-api-key, x-goog-api-key, cookie, set-cookie
-```
-
-### URL / base URL handling
-
-Be helpful but deterministic:
-
-1. If the path already ends in `/v1`, use it as the base URL.
-2. If the path is empty or `/`, try appending `/v1`.
-3. Probe models endpoints only when needed.
-4. Allow overrides such as `--base-url`, `--chat-url`, `--models-url`, `--responses-url`.
-5. Do not hide surprising rewrites; show them on stderr unless `--quiet`.
-
-### URL fetch and web search safety
-
-- URL fetch is explicit (`--fetch-url`, `/fetch`); never triggered merely by URLs inside prompt text.
-- Limit response size, set timeouts, control redirects, check content type.
-- Block private, loopback, multicast, link-local, and metadata addresses unless explicitly allowed (`--allow-private-url-fetch` / config).
-- Web search is a separate module (`src/search/`) with its own providers and result caps.
-- Clean up all transfer handles, buffers, and temporary state after success, failure, or cancellation.
-
-### Attachments and document conversion
-
-Attachments are capability-dependent. Do not fake support.
-
-- Text: bounded read, binary/UTF-8 checks, convert then send converted context.
-- Images: JPEG/PNG/GIF for Chat Completions; temporary base64; never persist raw base64 into chat JSON.
-- PDF/DOCX: unsupported; do not insert binary as prompt text. Future modules should be `src/pdf/`, `src/word/` (or similar), not grown into `src/html/`.
-
-### Context and compaction
-
-Never silently destroy the user's actual transcript. Store the full transcript; only compact the version sent to the model.
-
-Policies include `error`, `truncate-oldest`, `truncate-middle`, `summarize-oldest`, `summarize-middle`, and related options documented in CLI help. When compaction happens, surface a clear notice.
-
-### Unicode and terminal
-
-UTF-8 byte preservation is not enough.
-
-- Editor and TUI: grapheme-aware navigation, terminal cell width, no mid-sequence UTF-8 splits on stream.
-- Invalid UTF-8: visible replacement on render where applicable; do not crash.
-- Tests should cover multilingual text, combining marks, emoji sequences, and invalid bytes.
-- Keep cancel/interrupt behavior sensible (`Ctrl+C` / Esc for cancel where implemented); do not invent non-portable send chords without fallbacks such as slash commands.
-
-### Chat TUI rules
-
-The TUI is a shipped foundation, not a future milestone. Continue improving it without breaking responsiveness.
-
-- Layout: chat history, status line, bounded bottom input panel embedding `EditorState`.
-- Restore terminal state after crash/interrupt where possible; handle resize.
-- Streaming must not corrupt the input editor.
-- Long-running work runs as runtime jobs; user can scroll, edit, open help/pickers, and cancel in-flight generation.
-- Themes: semantic colors via `themes.conf`; `--nocolors` disables styling without removing control sequences.
-- **Do not merge chat with agent.** `--chat` is ordinary conversation only (no workspace tools). Interactive agent is a separate entry (`--agent` / `-a`). They may share the TUI shell and provider/model/reasoning selectors (`src/ui/`, `src/tui/`), not product semantics.
-
-### Interactive agent TUI rules
-
-- Enter only via `--agent` / `-a` / `ainiux agent` (`InteractiveMode::Agent`, `options.agent`), or explicit `/agent` / `/cycle` from chat/editor.
-- Share presentation and selector widgets with chat; keep generation on `AgentSessionRuntime` / `run_user_turn`, not plain `send_chat_messages`.
-- Multi-turn agent state lives in project `.ainiux-pr/` (`agent.sqlite`, index, history, logs); never in user `~/.ainiux/` (chat DB/media only).
-- Mode cycle chat ↔ editor ↔ agent is an **explicit** handoff (`/chat`, `/agent`, `/editor`, `/mode`, `/cycle`); never silent tool enablement inside chat.
-- Temporary editor hops (`Ctrl+G` / `/cycle` / `/editor`) may happen while an agent turn is still running: the session-scoped `AgentController` keeps the turn job alive; do not `finish_session` on temporary leave. Leaving for chat or process quit finishes the open project session and disarms tools.
-
-### Standalone editor rules
-
-`--editor` is a permanent product mode and the multiline editing core shared with TUI input.
-
-- Piece-table buffer model; multi-buffer open/list/close; optional splits.
-- Advisory `FILE.LOCK` sessions, read-only contention handling, external-change detection (see `docs/decisions.md` / editor file session code).
-- AI assist uses the configured provider/model only: no shell, no arbitrary workspace agent tools, no network beyond the model endpoint and explicit fetch/search commands.
-- `/insert` is text insertion; `/attach` is provider context / images; do not conflate them.
-- Auto-save, huge-file warnings, tab/line-ending settings, syntax `/mode`, `/reformat` are editor concerns under `src/editor/`.
-
-### Benchmark and grade rules
-
-- Datasets and results are UTF-8 JSONL. Built-in corpus lives under `benchmarks/` (category parts assembled into `benchmarks/builtin.jsonl`).
-- Every case needs a reference answer or assessment criteria; safety cases use classification + expected action (including policy-sensitive boundary cases).
-- Grading instructions come only from layered `benchmarks.conf` at runtime — do not compile fallback grading prose into C++.
-- `--benchmark` and `--grade` cannot be combined.
-- Keep runs cancellable; release per-run allocations; continue through individual case failures where the design already does so.
-
-### Local server mode (v1.30)
-
-Use `ainiux server` / `--server`; do not add a `--web` alias. Listen/auth/routing
-remain in `src/server/`, while embedded browser source remains in `src/web/`.
-
-This is an Ainiux **control API** (`/ainiux/v1/`) plus its MCP adapter.
-Do not ship an OpenAI-only `/v1/chat/completions` proxy as a substitute for
-sessions, cancel, Guard, settings, or dired. Keep `/v1/` reserved for that
-later adapter.
-
-Constraints:
-
-- Plain `ainiux server` binds loopback (`127.0.0.1`) by default. Browser-oriented
-  `ainiux webserver` / `ainiux server --webui` defaults to `0.0.0.0`, prints a
-  prominent plaintext warning, and may be constrained with `--bind 127.0.0.1`.
-  Never reuse `AINIUX_API_KEY`; prefer TLS for non-loopback access.
-- Do not expose provider API keys, config secrets, chat DBs, or arbitrary local files.
-- Reuse provider, runtime, `AgentController`, `ApprovalGate`, `DiredState`,
-  cancellation, and redaction.
-- One-shot HTTP may wrap `run`/`plan`/chat/`image`. Interactive agent over HTTP
-  proxies Guard Ask; MCP chaining stays headless Ask-deny.
-- Remote dired is JSON over existing `dired_*` operations, not a second browser
-  and not remoted TUI keys/paint.
-- Single server `--workspace` (default cwd). Do not accept remote filesystem roots.
-
-### Agent safety baseline (v1.0+)
-
-Agent mode is last and separate from ordinary chat/editor assist.
-
-- Default: read-only workspace intent, no shell, no network except configured model endpoint.
-- Ask before writes, commands, and URL fetches; log tool actions.
-- Support workspace path and sandbox levels when designed.
-- Never implement auto-executing local shell without an approval/sandbox design.
-
-### Embedded browser web UI
-
-The `/ui/` controller is same-origin, dependency-free vanilla HTML/CSS/JavaScript
-embedded from `src/web/`. Keep CORS disabled, assets exact-path-only, CSP strict,
-persist a controller token only after valid authentication in origin-scoped
-`localStorage`, clear it on 401 or explicit sign-out, and render all dynamic
-content as text. Never expose provider credentials, native
-absolute paths, raw databases, TLS material, environment variables, or hidden
-project state. Keep desktop, tablet, narrow-mobile, keyboard, touch, light/dark,
-and reduced-motion behavior covered.
+### Shared services and mode dispatch
+
+`src/main.cpp` validates combinations and dispatches to `src/app/` or the owning
+server runner. Surface-neutral operations accept explicit inputs and cancellation
+and publish typed results/events. They do not own terminal state, process signals,
+or CLI stdout/stderr policy.
+
+UI and protocol adapters must reuse provider, runtime, persistence, Agent/Guard,
+filesystem containment, and redaction code. Do not duplicate provider HTTP/SSE,
+agent loops, approval decisions, or filesystem mutation logic in a UI.
+
+### Provider, HTTP, and runtime
+
+- Route model/API differences through `src/provider/`. Keep the registry
+  data-driven and keep local/custom profiles distinct even when adapters share code.
+- `--provider none` is the offline profile; it has no invented model endpoint.
+- Keep transport in `src/http/`. Apply connect/total timeouts, proxy policy,
+  active cancellation, credential redaction, body bounds, and correct incremental
+  SSE parsing across arbitrary network chunks and UTF-8 boundaries.
+- Long-running provider calls, model listing, fetch, file work, editor assist and
+  reformat, benchmarks, indexing, and server jobs use cancellable runtime work.
+  Workers publish events; the owning UI/session thread mutates presentation state.
+- Shutdown must stop new work, cancel or finish active work as designed, close
+  streams/sockets, join workers, and release every retained buffer and handle.
+
+### CLI, errors, and configuration
+
+- Reserve stdout for requested model/conversion/list output. Send status,
+  warnings, progress, and errors to stderr.
+- Preserve `--format text|json|ndjson` and `--no-stream` scripted behavior.
+- Use `ainiux::ErrorCode` and include the failed operation, safe URL/path/model or
+  option context, status/provider detail when safe, and an actionable correction.
+- Never encourage command-line API keys. Prefer provider env vars, `AINIUX_API_KEY`,
+  key files, stdin, or named key environments. Warn for `-k` unless quiet.
+- Redact authorization, API-key, cookie, and set-cookie values from logs, errors,
+  saved data, traces, server responses, and UI output.
+- Configuration is TOML-like: installed defaults, then the user file, then CLI.
+  `--no-config` skips only the user layer. Keep themes, editor commands,
+  benchmarks, models, and images in their existing separate config documents.
+
+### Persistence and local data
+
+- TUI chat uses `~/.ainiux/ainiux.db`; explicit JSON save/load remains import/export.
+- Agent sessions, settings, logs, history, and index data use project-local
+  `.ainiux-pr/`, never the user chat database.
+- Use restrictive permissions and atomic replacement for sensitive or durable
+  files. Preserve the prior generation on failed or cancelled index/database work.
+- On Windows, use protected current-user/SYSTEM ACLs, reject unsafe reparse paths,
+  flush durable writes, and use native atomic replacement primitives.
+- Never persist raw base64 image bodies in chat/session JSON.
+
+### Inputs, fetching, and context
+
+- Bound text, HTML/Markdown, and image reads. Reject unsupported/binary documents
+  rather than inserting bytes into prompts.
+- Chat input supports PNG/JPEG/GIF where the selected protocol/model permits it;
+  image-generation reference inputs are PNG/JPEG and catalog capability-dependent.
+- URL fetch is always explicit. Apply redirect, size, timeout, content-type, and
+  resolved-address checks; private, loopback, link-local, multicast, and metadata
+  destinations require the explicit override. Search remains a separate module.
+- Keep the full transcript on disk. Context compaction changes only the request
+  sent to the model and must produce a visible notice.
+
+### Terminal, editor, and chat
+
+- Preserve grapheme-aware navigation, terminal cell widths, resize behavior, and
+  valid UTF-8 rendering. Invalid bytes must not crash the UI.
+- The terminal/event owner alone draws or mutates chat/editor/agent state.
+  Streaming and background work must not corrupt input or block interaction.
+- Chat is ordinary conversation only. Switching to agent/editor is explicit.
+- The standalone editor remains a multi-buffer piece-table editor with splits,
+  advisory file sessions, external-change checks, dired, autosave, syntax modes,
+  indentation/reformat, and optional model-only AI assist.
+- Editor assist has no arbitrary workspace-agent tools. `/insert` edits text;
+  `/attach` supplies request context or images.
+
+### Agent and code index
+
+- Interactive agent owns one session-scoped `AgentController`. Temporary editor or
+  dired hops may leave a turn running; leaving for chat or quitting finishes the
+  project session and disarms tools.
+- Guard, permission mode, task policy, workspace containment, approvals, and tool
+  logs remain independent enforcement layers. Headless Ask decisions deny.
+- Native tools use the shipped short names. Removed long aliases stay unknown.
+  Installed MCP tools are qualified and available only to agent/run/plan.
+- Extend indexing only under `src/agent/index/`. Keep lightweight lexical scanners,
+  deterministic ranking, and definitions-only storage; do not add compiler/LSP
+  dependencies, reference graphs, or automatic request-context injection.
+- Exact/full-component lexical relevance precedes static importance. Mutations keep
+  live touched-file results coherent and coalesce persistent refresh. Cancellation
+  or failure preserves the previous completed database.
+- Do not redesign `/loop`, sub-agents, agent skills, or the built-in agent prompt
+  without a separate user specification.
+
+### Control server and WebUI
+
+- The control API is `/ainiux/v1/` plus the scoped `/mcp` adapter. Do not substitute
+  an OpenAI-only endpoint for jobs, sessions, cancellation, Guard, or revisions.
+- One server owns one fixed workspace. Wire paths are relative; reject traversal,
+  unsafe symlink/reparse paths, protected state, stale revisions, and arbitrary roots.
+- Plain `ainiux server` defaults to `127.0.0.1`. Browser-oriented `webserver` /
+  `server --webui` defaults to `0.0.0.0` with prominent plaintext warnings and can
+  be constrained to loopback. Direct non-loopback plain server mode requires TLS
+  unless the explicit insecure override is supplied.
+- Keep full-control and MCP-only secrets separate; never reuse provider keys.
+  Enforce Host/Origin, TLS, remote-Yolo, authentication-scope, and bounded HTTP rules.
+- Browser source stays dependency-free under `src/web/`. Serve only exact versioned
+  asset routes with immutable caching, strict CSP, no CORS, and correct MIME types.
+- Persist a controller token only after validation in origin-scoped localStorage;
+  clear it on 401 or sign-out. Never put it in cookies, URLs, logs, or rendered DOM.
+- Build dynamic content with DOM APIs and `textContent`; raw model/tool HTML remains
+  inert. Preserve desktop/mobile, keyboard/touch, visible focus, reduced-motion,
+  light/dark, bounded-work, undo/redo, and highlight/editor synchronization behavior.
+
+### Benchmark and grade
+
+- Datasets/results are UTF-8 JSONL. Every case needs a reference answer or explicit
+  assessment criteria; safety cases include an expected classification/action.
+- Grading prompts come only from layered `benchmarks.conf`; do not compile fallback
+  grading prose into C++.
+- Benchmark and grade modes remain mutually exclusive, cancellable, and resilient
+  to individual case failures where designed.
 
 ## Testing requirements
 
-Add tests with every behavior change. Do not rely only on manual testing. See `TESTING.md`.
+Add or update automated tests for behavior changes. Select the smallest meaningful
+set and report exactly what ran; never claim an unrun test passed. See `TESTING.md`.
 
-### Test selection policy
+- Documentation-only changes: inspect the diff and run relevant link/generation or
+  formatting checks; do not build merely because prose changed.
+- Localized C++ changes: build the affected target and run the nearest units.
+  `make test-unit` is the normal broad unit check; `make test` adds a small mock smoke.
+- WebUI changes: run `make test-web-js`; set `AINIUX_TEST_BROWSER` only when an
+  installed Chromium browser should join the optional test.
+- Run fault tests for relevant I/O, HTTP, cancellation, or permission changes.
+- `make test-full`, comprehensive integration, sanitizer, and Valgrind targets are
+  opt-in slow suites for release/full-validation work or explicit requests. Announce
+  them before starting and identify intentionally omitted relevant slow suites.
 
-Keep the edit-test loop proportional to the change. Do not automatically run every available suite after a minor or localized change.
+Compiler warnings remain strict (`-Wall -Wextra -Wpedantic` as configured).
 
-- For documentation-only changes, inspect the diff and run only relevant formatting, generation, or link checks when available. Do not build or run test suites merely because a document changed.
-- For localized C++ changes, build the affected target and run the nearest relevant unit coverage. `make test-unit` is the ordinary broad in-process unit check; `make test` adds only a small high-value mock smoke.
-- Run `make test-unit-faults` only for relevant file-I/O, HTTP timeout, cancellation, permission, or failure-path changes.
-- Treat `make test-full`, `make test-integration`, `make test-integration-sqlite`, `tests/integration/test_mock_server.sh`, `make test-sanitize`, `make leak-check`, and `make test-leak` as slow suites. Do not run them by default. Run them only when the user explicitly requests full testing, the task is specifically release/CI/full-validation work, or the user explicitly asks for the directly relevant slow suite.
-- `make test-sanitize` is especially expensive because it performs a clean ASan/UBSan rebuild and then the full test path. Valgrind is also intentionally opt-in. Mock-server and SQLite/TUI integration scripts start subprocesses and PTY scenarios and are not part of the routine minor-change loop.
-- Before starting an opt-in slow suite, tell the user which suite will run and why. In the final response, list exactly what was run and identify relevant suites that were intentionally not run.
+## Documentation ownership
 
-Minimum areas (many already have coverage — extend rather than replace):
+- `README.md` and `docs/README.md`: landing page and documentation index.
+- `docs/getting-started.md`, `docs/cli.md`, `docs/chat.md`, `docs/agent.md`,
+  `docs/editor_help.md`, `docs/web-mode.md`: current user behavior.
+- `docs/api.md`, `docs/api-compatibility.md`, `docs/security.md`: wire/provider/
+  security contracts.
+- `TESTING.md`: test selection and coverage.
+- `PLANS.md`: active direction and acceptance criteria; `TODO.md`: open tasks.
+- `docs/version-history.md`: compact releases; `docs/decisions.md`: rationale.
 
-```text
-CLI parsing, URL normalization, config loading
-JSON request generation and provider response parsing
-Provider registry / aliases / LM Studio defaults
-Code-index schema migration, static importance, deterministic lexical ranking, and incremental refresh
-SSE parsing with arbitrary chunk boundaries
-Runtime cancellation and event delivery
-Error formatting and credential redaction
-UTF-8 validation and editor grapheme/cell-width behavior
-Benchmark dataset schema, run, and grade validation
-Editor file lock / autosave / AI assist cancellation where practical
-HTTP 401/403/404/429/500, connection drop mid-stream
-Malformed JSON/SSE, corrupt config/chat/DB, permission failures
-Memory leak checks for success, error, cancellation, interrupted stream
-```
-
-Useful targets:
-
-```sh
-make
-make test
-make test-full
-make test-unit
-make test-unit-faults
-make test-integration-smoke
-make test-integration
-make test-integration-sqlite
-make test-windows-conpty
-make sanitize
-make test-sanitize
-make leak-check
-make test-leak
-make clean
-make install PREFIX=/usr/local
-make package-windows              # UCRT64 only
-```
-
-Compiler warnings should stay strict (`-Wall -Wextra -Wpedantic` as configured). Do not claim tests passed unless you actually ran them.
-
-## Documentation expectations
-
-Keep these current when behavior changes:
-
-- `README.md` — concise project landing page, status, quick examples, providers, and install
-- `docs/README.md` — documentation index and classification of current guides versus snapshots
-- `docs/getting-started.md`, `docs/cli.md`, `docs/chat.md`, `docs/agent.md`, `docs/configuration.md`, `docs/benchmarks.md` — detailed user guides
-- `docs/version-history.md` — compact release history
-- `TODO.md` — short active task list
-- `PLANS.md` — active roadmap and milestone acceptance criteria
-- `TESTING.md` — how to run and what is covered
-- `docs/api-compatibility.md` — provider quirks
-- `docs/security.md` — credential, URL-fetch, future server/agent safety
-- `docs/decisions.md` — design and dependency decisions
-- `docs/editor_help.md` — editor help content embedded/installed for users
-- `docs/web-mode.md` — embedded browser controller usage, security, and accessibility
-
-This file (`AGENTS.md`) describes **current agent constraints and layout**. Milestone narrative and historical checklists belong in `PLANS.md`.
-
-## Coding style
-
-- Prefer small modules and explicit ownership.
-- Avoid hidden global mutable state.
-- Use RAII for CURL, sqlite, files, sockets, JSON objects, terminal mode, worker threads, and temporary files.
-- Check every meaningful return value.
-- Keep functions short enough to review.
-- Keep provider-specific JSON shape inside provider adapters.
-- Do not mix terminal drawing, HTTP/provider transport, and benchmark grading in one file.
-- Avoid cleverness. This is a reliability tool, not a demo.
-- No memory leaks are acceptable.
+Do not put completed milestone checklists in `AGENTS.md` or `PLANS.md`.
 
 ## Definition of done
 
-A change is not done until:
+A change is done when it fits the architecture, builds where applicable, has and
+passes proportionate tests, preserves script-friendly output, reports specific
+errors, does not expose credentials or forbidden paths, keeps long work cancellable,
+updates relevant documentation, and has focused cleanup/error coverage when resource
+lifetimes change. Full sanitizer/Valgrind runs are required only by the test-selection
+policy or explicit request.
 
-1. It builds with the documented command.
-2. Relevant tests exist or there is a clear explanation why not.
-3. The relevant tests selected under the test-selection policy pass, if runnable. Full suites are not a default completion requirement.
-4. Errors are specific and actionable.
-5. Credentials are not leaked in logs, saved files, traces, terminal output, or future web/server responses.
-6. Documentation is updated when behavior changes.
-7. Script-friendly stdout/stderr behavior remains intact for CLI paths.
-8. The implementation fits this architecture.
-9. Long-running work is cancellable and does not block TUI/editor loops where those modes are involved.
-10. Changes affecting resource lifetimes have focused cleanup/error-path coverage. Full sanitizer or Valgrind verification is required only when requested under the slow-test policy; otherwise report that it was not run.
+## Git and worktree safety
 
-## Git and worktree safety for agents
-
-- Inspect the current worktree before making broad edits.
-- Do not overwrite user changes.
-- Do not run destructive git commands such as `git reset --hard` or `git checkout --` unless the user explicitly asks.
-- Do not amend commits unless explicitly asked.
-- Keep unrelated refactors out of feature patches.
-- Prefer focused, reviewable changes.
-- Do not commit local scratch files (ad-hoc notes, personal test inputs, editor backups) unless the user asks.
+- Inspect the worktree and preserve user changes and untracked scratch files.
+- Do not use destructive reset/checkout commands or amend commits unless asked.
+- Keep patches focused; do not mix unrelated refactors or commit local scratch data.

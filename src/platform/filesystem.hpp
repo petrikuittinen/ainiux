@@ -26,10 +26,6 @@ struct PathSafetyOptions {
 Error validate_windows_path_syntax(const std::string& utf8_path,
                                    const PathSafetyOptions& options = {});
 
-// Converts an external UTF-8 path to the native filesystem representation and
-// returns project-relative storage using generic '/' separators.
-std::string generic_path(const std::string& utf8_path);
-
 Error file_identity(const std::string& utf8_path, FileIdentity& identity,
                     bool follow_links = true);
 bool same_file_identity(const FileIdentity& left, const FileIdentity& right);

@@ -80,42 +80,4 @@ provider::RequestContext continue_request_context(const AiContinueContext& conte
     return assist_request_context(context, true);
 }
 
-void start_continue_job(const AiContinueContext& context,
-                        const std::string& prefix,
-                        runtime::EventQueue<ContinueEvent>& events,
-                        runtime::JobHandle& job) {
-    EditorState continue_state = EditorState::from_text(prefix);
-    continue_state.cursor = continue_state.text.size();
-    const std::optional<size_t> command_index = assist_command_index(context.assist_config, "/continue");
-    if (!command_index.has_value()) {
-        ContinueEvent event;
-        event.type = ContinueEventType::Error;
-        event.error = {ErrorCode::Internal, "configured editor assist commands are missing /continue"};
-        events.push(std::move(event));
-        return;
-    }
-    AssistExecution execution = build_assist_execution(continue_state,
-                                                       context,
-                                                       AssistCommandKind::Configured,
-                                                       *command_index,
-                                                       AssistScope::Continue,
-                                                       "",
-                                                       std::nullopt);
-    if (!execution.ok) {
-        ContinueEvent event;
-        event.type = ContinueEventType::Error;
-        event.error = {ErrorCode::Internal, execution.error_message};
-        events.push(std::move(event));
-        return;
-    }
-    start_assist_job(context,
-                     execution.messages,
-                     true,
-                     execution.code_completion,
-                     execution.prose_completion,
-                     execution.completion_language,
-                     events,
-                     job);
-}
-
 }  // namespace ainiux::editor

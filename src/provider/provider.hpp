@@ -306,10 +306,6 @@ Error get_credit_balance(
     const RequestContext& context,
     CreditBalanceResult& result,
     runtime::CancellationToken cancellation = runtime::CancellationToken());
-Error send_chat(const RequestContext& context,
-                DeltaCallback on_delta,
-                ChatResult& result,
-                runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error send_chat_messages(const RequestContext& context,
                          const std::vector<Message>& messages,
                          DeltaCallback on_delta,

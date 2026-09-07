@@ -342,66 +342,6 @@ bool is_valid_utf8(const std::string& input, size_t* error_offset) {
     return true;
 }
 
-const char* encoding_display_name(Encoding encoding) {
-    switch (encoding) {
-        case Encoding::Utf8:
-            return "UTF-8";
-        case Encoding::Utf16Le:
-            return "UTF-16 LE";
-        case Encoding::Utf16Be:
-            return "UTF-16 BE";
-        case Encoding::Windows1250:
-            return "Windows-1250";
-        case Encoding::Windows1251:
-            return "Windows-1251";
-        case Encoding::Windows1252:
-            return "Windows-1252";
-        case Encoding::Iso88591:
-            return "ISO-8859-1";
-        case Encoding::Iso88592:
-            return "ISO-8859-2";
-        case Encoding::Koi8r:
-            return "KOI8-R";
-        case Encoding::Koi8u:
-            return "KOI8-U";
-        case Encoding::External:
-            return "external";
-        case Encoding::Unknown:
-            return "unknown";
-    }
-    return "unknown";
-}
-
-const char* encoding_canonical_name(Encoding encoding) {
-    switch (encoding) {
-        case Encoding::Utf8:
-            return "utf-8";
-        case Encoding::Utf16Le:
-            return "utf-16le";
-        case Encoding::Utf16Be:
-            return "utf-16be";
-        case Encoding::Windows1250:
-            return "windows-1250";
-        case Encoding::Windows1251:
-            return "windows-1251";
-        case Encoding::Windows1252:
-            return "windows-1252";
-        case Encoding::Iso88591:
-            return "iso-8859-1";
-        case Encoding::Iso88592:
-            return "iso-8859-2";
-        case Encoding::Koi8r:
-            return "koi8-r";
-        case Encoding::Koi8u:
-            return "koi8-u";
-        case Encoding::External:
-            return "";
-        case Encoding::Unknown:
-            return "";
-    }
-    return "";
-}
-
 Error parse_encoding_name(const std::string& name, Encoding& out, std::string& canonical) {
     out = Encoding::Unknown;
     canonical.clear();
@@ -746,28 +686,6 @@ std::vector<EncodingChoice> encoding_picker_choices() {
         {"EUC-KR", "euc-kr"},
         {"Open as-is", ""},
     };
-}
-
-std::vector<std::string> builtin_encoding_labels() {
-    std::vector<std::string> labels;
-    for (const EncodingChoice& choice : encoding_picker_choices()) {
-        if (choice.name.empty() || is_external_encoding_name(choice.name)) {
-            if (choice.name.empty()) {
-                labels.push_back(choice.label);
-            }
-            continue;
-        }
-        labels.push_back(choice.label);
-    }
-    return labels;
-}
-
-std::vector<std::string> all_encoding_labels() {
-    std::vector<std::string> labels;
-    for (const EncodingChoice& choice : encoding_picker_choices()) {
-        labels.push_back(choice.label);
-    }
-    return labels;
 }
 
 }  // namespace ainiux::encoding

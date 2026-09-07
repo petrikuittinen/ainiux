@@ -2452,6 +2452,13 @@ void test_editor_indentation_detection() {
           "editor detects a consistent four-space indentation step");
 
     detected = ainiux::editor::detect_indentation(
+        "root\n" + std::string(32, ' ') + "child\nroot_again", 4,
+        TabStyle::Tab);
+    check(detected.tab_width_detected && detected.tab_width == 32 &&
+              detected.tab_style_detected && detected.tab_style == TabStyle::Spaces,
+          "editor safely detects the maximum 32-space indentation step");
+
+    detected = ainiux::editor::detect_indentation(
         "if ready\n\tcall\nend", 8, TabStyle::Spaces);
     check(!detected.tab_width_detected && detected.tab_width == 8 &&
               detected.tab_style_detected && detected.tab_style == TabStyle::Tab,

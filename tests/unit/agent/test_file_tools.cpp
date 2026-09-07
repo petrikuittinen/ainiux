@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -468,9 +469,52 @@ void assert_schema_arrays_have_items(const json::Value& node, const std::string&
     }
 }
 
+void check_native_descriptor_invariants(const agent::ReadToolRegistry& tools,
+                                        std::size_t expected_count = 0) {
+    const std::vector<agent::ToolDescriptor> descriptors =
+        tools.native_descriptors();
+    const std::vector<provider::FunctionDefinition> definitions =
+        tools.definitions();
+    std::set<std::string> names;
+    std::set<int> handlers;
+    std::size_t exposed = 0;
+    for (const agent::ToolDescriptor& descriptor : descriptors) {
+        check(names.insert(descriptor.definition.name).second,
+              "native tool name has exactly one descriptor: " +
+                  descriptor.definition.name);
+        check(handlers.insert(static_cast<int>(descriptor.handler)).second,
+              "native tool handler is not shared or orphaned: " +
+                  descriptor.definition.name);
+        const auto definition = std::find_if(
+            definitions.begin(), definitions.end(),
+            [&](const provider::FunctionDefinition& candidate) {
+                return candidate.name == descriptor.definition.name;
+            });
+        check(descriptor.exposed == (definition != definitions.end()),
+              "native descriptor exposure matches advertised definitions: " +
+                  descriptor.definition.name);
+        if (descriptor.exposed) {
+            ++exposed;
+            check(definition->description == descriptor.definition.description &&
+                      definition->parameters_json ==
+                          descriptor.definition.parameters_json,
+                  "advertised native tool comes from its descriptor: " +
+                      descriptor.definition.name);
+        }
+    }
+    check(definitions.size() == exposed,
+          "registry has no advertised native tool without a handler");
+    if (expected_count != 0) {
+        check(descriptors.size() == expected_count && exposed == expected_count &&
+                  handlers.size() == expected_count,
+              "maximal registry exposes every native handler exactly once");
+    }
+}
+
 void test_tool_schemas_gemini_compatible() {
     const std::string workspace = write_temp_workspace("schema");
     agent::ReadToolRegistry tools = make_registry(workspace, true);
+    check_native_descriptor_invariants(tools);
     std::vector<std::string> failures;
     bool saw_edit = false;
     for (const provider::FunctionDefinition& definition : tools.definitions()) {
@@ -1848,6 +1892,9 @@ void test_git_and_network_tools_policy() {
     agent::ToolRegistryOptions net_options;
     net_options.mutation_policy = agent::MutationPolicy::Full;
     net_options.allow_network = true;
+    net_options.goal_hooks.has_active_goal = [] { return true; };
+    net_options.goal_hooks.mark_complete =
+        [](const std::string&) { return ok_error(); };
     {
         agent::index::Options options;
         options.workspace = workspace;
@@ -1861,6 +1908,7 @@ void test_git_and_network_tools_policy() {
                                               net_tools, net_options)
                   .ok(),
               "create network-enabled registry");
+        check_native_descriptor_invariants(net_tools, 18);
 
         const std::string status =
             net_tools.execute("run", R"JSON({"command":"git status --short --branch"})JSON");

@@ -709,23 +709,6 @@ Error AgentSessionStore::compact_with_summary(const std::string& summary_text, i
     return ok_error();
 }
 
-Error AgentSessionStore::set_status(const std::string& status) {
-    AgentProjectRecord project;
-    Error error = open_project(project);
-    if (!error.ok()) return error;
-    project.status = status;
-    return update_project_meta(project);
-}
-
-Error AgentSessionStore::bump_counters(long long turns_delta, long long tool_calls_delta) {
-    AgentProjectRecord project;
-    Error error = open_project(project);
-    if (!error.ok()) return error;
-    project.turns += turns_delta;
-    project.tool_calls += tool_calls_delta;
-    return update_project_meta(project);
-}
-
 Error AgentSessionStore::finish_session(long long /*session_id*/,
                                         const std::string& status,
                                         const std::string& final_text,

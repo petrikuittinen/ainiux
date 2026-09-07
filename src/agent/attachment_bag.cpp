@@ -1,7 +1,5 @@
 #include "agent/attachment_bag.hpp"
 
-#include <sstream>
-
 #include "input/input.hpp"
 
 namespace ainiux::agent {
@@ -66,13 +64,6 @@ AttachmentEntry* AttachmentBag::find_by_path_mut(const std::string& path_or_name
     return nullptr;
 }
 
-const AttachmentEntry* AttachmentBag::find_by_id(int id) const {
-    for (const AttachmentEntry& entry : entries_) {
-        if (entry.id == id) return &entry;
-    }
-    return nullptr;
-}
-
 Error AttachmentBag::ensure_base64(AttachmentEntry& entry,
                                    std::size_t max_bytes,
                                    runtime::CancellationToken cancellation) {
@@ -91,28 +82,6 @@ Error AttachmentBag::ensure_base64(AttachmentEntry& entry,
     entry.base64_data = std::move(loaded.base64_data);
     entry.byte_size = loaded.byte_size;
     return ok_error();
-}
-
-int AttachmentBag::image_count() const {
-    int n = 0;
-    for (const AttachmentEntry& entry : entries_) {
-        if (entry.kind == AttachmentKind::Image) ++n;
-    }
-    return n;
-}
-
-std::string AttachmentBag::summary_line() const {
-    if (entries_.empty()) return {};
-    std::ostringstream out;
-    out << "Turn attachments (" << entries_.size() << "):";
-    for (const AttachmentEntry& entry : entries_) {
-        out << " [#" << entry.id << " " << entry.display_name;
-        if (!entry.mime_type.empty()) out << " " << entry.mime_type;
-        if (entry.byte_size > 0) out << " " << entry.byte_size << "B";
-        if (entry.vision_queued) out << " vision";
-        out << "]";
-    }
-    return out.str();
 }
 
 }  // namespace ainiux::agent

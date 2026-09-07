@@ -9,84 +9,10 @@
 #include <vector>
 
 #include "common.hpp"
+#include "agent/index/scanner_common.hpp"
 
 namespace ainiux::agent::index {
 namespace {
-
-constexpr std::size_t kMaximumDocumentationBytes = 512;
-
-std::uint64_t fnv1a(const std::string& text) {
-    std::uint64_t hash = 1469598103934665603ULL;
-    for (unsigned char byte : text) {
-        hash ^= byte;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
-std::string trim(std::string text) {
-    return ascii_trim(std::move(text));
-}
-
-std::string collapse_space(const std::string& text) {
-    std::string output;
-    output.reserve(text.size());
-    bool spacing = false;
-    for (unsigned char byte : text) {
-        if (std::isspace(byte)) {
-            spacing = !output.empty();
-        } else {
-            if (spacing) output.push_back(' ');
-            output.push_back(static_cast<char>(byte));
-            spacing = false;
-        }
-    }
-    return trim(std::move(output));
-}
-
-std::string bounded_documentation(std::string text) {
-    text = collapse_space(text);
-    if (text.size() > kMaximumDocumentationBytes) {
-        text.resize(kMaximumDocumentationBytes - 3);
-        text += "...";
-    }
-    return text;
-}
-
-std::vector<std::string> source_lines(const std::string& source) {
-    return split_lines_crlf(source);
-}
-
-std::string line_range(const std::vector<std::string>& lines, int first, int last) {
-    std::string output;
-    for (int line = first; line <= last && line <= static_cast<int>(lines.size()); ++line) {
-        output += lines[static_cast<std::size_t>(line - 1)];
-        output.push_back('\n');
-    }
-    return output;
-}
-
-int indentation(const std::string& line) {
-    int value = 0;
-    for (char ch : line) {
-        if (ch == ' ') ++value;
-        else if (ch == '\t') value += 8 - value % 8;
-        else break;
-    }
-    return value;
-}
-
-std::string join_qualified(const std::vector<std::string>& parts, const std::string& name) {
-    std::string output;
-    for (const std::string& part : parts) {
-        if (part.empty()) continue;
-        if (!output.empty()) output += "::";
-        output += part;
-    }
-    if (!output.empty() && !name.empty()) output += "::";
-    output += name;
-    return output;
-}
 
 std::string preceding_line_comment(const std::vector<std::string>& lines,
                                    std::size_t line,
@@ -233,69 +159,55 @@ std::string mask_source(const std::string& source, const MaskOptions& options) {
     return masked;
 }
 
-int matching_brace_line(const std::vector<std::string>& masked,
-                        std::size_t start_line,
-                        std::size_t open_column) {
-    int depth = 0;
-    for (std::size_t row = start_line; row < masked.size(); ++row) {
-        const std::size_t begin = row == start_line ? open_column : 0;
-        for (std::size_t column = begin; column < masked[row].size(); ++column) {
-            if (masked[row][column] == '{') ++depth;
-            else if (masked[row][column] == '}' && depth > 0 && --depth == 0)
-                return static_cast<int>(row + 1);
-        }
-    }
-    return static_cast<int>(masked.size());
-}
+enum class LineMatch { Full, Search };
 
-struct LogicalStatement {
-    std::string masked;
-    std::string original;
-    std::size_t end_line = 0;
-    std::size_t delimiter_column = std::string::npos;
-    char delimiter = '\0';
+struct LineRule {
+    const std::regex* pattern = nullptr;
+    LineMatch match = LineMatch::Full;
+    std::size_t name_group = 1;
+    const char* kind = "key";
+    bool updates_scope = false;
+    bool qualifies_with_scope = false;
+    std::size_t alternate_group = 0;
+    const char* alternate_value = nullptr;
+    const char* alternate_kind = nullptr;
 };
 
-LogicalStatement collect_statement(const std::vector<std::string>& masked,
-                                   const std::vector<std::string>& original,
-                                   std::size_t start) {
-    LogicalStatement statement;
-    statement.end_line = start;
-    int grouping = 0;
-    for (; statement.end_line < masked.size() && statement.end_line - start < 64;
-         ++statement.end_line) {
-        const std::string& current = masked[statement.end_line];
-        for (std::size_t column = 0; column < current.size(); ++column) {
-            const char ch = current[column];
-            if (ch == '(' || ch == '[') ++grouping;
-            else if ((ch == ')' || ch == ']') && grouping > 0) --grouping;
-            else if (grouping == 0 && (ch == ';' || ch == '{')) {
-                statement.delimiter = ch;
-                statement.delimiter_column = column;
-                break;
+ScanResult scan_sectioned_lines(const std::string& source,
+                                Language language,
+                                const MaskOptions& mask_options,
+                                const std::vector<std::string>& comment_prefixes,
+                                const std::vector<LineRule>& rules) {
+    ScanResult result;
+    result.language = language;
+    const std::vector<std::string> original = source_lines(source);
+    const std::vector<std::string> masked =
+        source_lines(mask_source(source, mask_options));
+    std::string scope;
+    for (std::size_t line = 0; line < masked.size(); ++line) {
+        for (const LineRule& rule : rules) {
+            std::smatch match;
+            const bool matched = rule.match == LineMatch::Full
+                                     ? std::regex_match(masked[line], match, *rule.pattern)
+                                     : std::regex_search(masked[line], match, *rule.pattern);
+            if (!matched) continue;
+            const std::string name = trim(match[rule.name_group].str());
+            std::string kind = rule.kind;
+            if (rule.alternate_kind != nullptr &&
+                match[rule.alternate_group].str() == rule.alternate_value) {
+                kind = rule.alternate_kind;
             }
+            if (rule.updates_scope) scope = name;
+            const std::string qualified = rule.qualifies_with_scope && !scope.empty()
+                                              ? join_qualified({scope}, name)
+                                              : name;
+            append_symbol(result, original, kind, name, qualified, original[line],
+                          static_cast<int>(line + 1), static_cast<int>(line + 1),
+                          preceding_line_comment(original, line, comment_prefixes));
+            break;
         }
-        if (!statement.masked.empty()) {
-            statement.masked.push_back(' ');
-            statement.original.push_back(' ');
-        }
-        const std::size_t length = statement.delimiter == '\0'
-                                       ? current.size()
-                                       : statement.delimiter_column + 1;
-        statement.masked += trim(current.substr(0, length));
-        statement.original += trim(original[statement.end_line].substr(0, length));
-        if (statement.delimiter != '\0') break;
     }
-    if (statement.end_line >= masked.size()) statement.end_line = masked.empty() ? 0 : masked.size() - 1;
-    statement.masked = collapse_space(statement.masked);
-    statement.original = collapse_space(statement.original);
-    return statement;
-}
-
-int statement_end(const LogicalStatement& statement, const std::vector<std::string>& masked) {
-    return statement.delimiter == '{'
-               ? matching_brace_line(masked, statement.end_line, statement.delimiter_column)
-               : static_cast<int>(statement.end_line + 1);
+    return result;
 }
 
 ScanResult scan_markdown(const std::string& source) {
@@ -1288,35 +1200,18 @@ ScanResult scan_sql(const std::string& source) {
 }
 
 ScanResult scan_toml(const std::string& source) {
-    ScanResult result;
-    result.language = Language::Toml;
-    const std::vector<std::string> original = source_lines(source);
-    const std::vector<std::string> masked = source_lines(mask_source(
-        source, MaskOptions{false, false, true, false, false, false, false, false}));
-    std::string table;
     static const std::regex table_pattern(
         R"(^\s*(\[\[?)([A-Za-z0-9_.-]+)\]\]?\s*$)", std::regex::optimize);
     static const std::regex key_pattern(
         R"(^\s*([A-Za-z0-9_-]+)\s*=)", std::regex::optimize);
-    for (std::size_t line = 0; line < masked.size(); ++line) {
-        std::smatch match;
-        if (std::regex_match(masked[line], match, table_pattern)) {
-            table = match[2].str();
-            append_symbol(result, original, match[1].str() == "[[" ? "array-table" : "table",
-                          table, table, original[line], static_cast<int>(line + 1),
-                          static_cast<int>(line + 1),
-                          preceding_line_comment(original, line, {"#"}));
-        } else if (std::regex_search(masked[line], match, key_pattern)) {
-            const std::string name = match[1].str();
-            const std::vector<std::string> parts = table.empty()
-                                                       ? std::vector<std::string>{}
-                                                       : std::vector<std::string>{table};
-            append_symbol(result, original, "key", name, join_qualified(parts, name), original[line],
-                          static_cast<int>(line + 1), static_cast<int>(line + 1),
-                          preceding_line_comment(original, line, {"#"}));
-        }
-    }
-    return result;
+    const std::vector<LineRule> rules = {
+        {&table_pattern, LineMatch::Full, 2, "table", true, false, 1, "[[", "array-table"},
+        {&key_pattern, LineMatch::Search, 1, "key", false, true},
+    };
+    return scan_sectioned_lines(
+        source, Language::Toml,
+        MaskOptions{false, false, true, false, false, false, false, false},
+        {"#"}, rules);
 }
 
 ScanResult scan_yaml(const std::string& source) {
@@ -1365,34 +1260,18 @@ ScanResult scan_yaml(const std::string& source) {
 }
 
 ScanResult scan_ini(const std::string& source) {
-    ScanResult result;
-    result.language = Language::Ini;
-    const std::vector<std::string> original = source_lines(source);
-    const std::vector<std::string> masked = source_lines(mask_source(
-        source, MaskOptions{false, false, true, false, true, false, false, false}));
-    std::string section;
     static const std::regex section_pattern(
         R"(^\s*\[([^\]]+)\]\s*$)", std::regex::optimize);
     static const std::regex key_pattern(
         R"(^\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*[=:])", std::regex::optimize);
-    for (std::size_t line = 0; line < masked.size(); ++line) {
-        std::smatch match;
-        if (std::regex_match(masked[line], match, section_pattern)) {
-            section = trim(match[1].str());
-            append_symbol(result, original, "section", section, section, original[line],
-                          static_cast<int>(line + 1), static_cast<int>(line + 1),
-                          preceding_line_comment(original, line, {";", "#"}));
-        } else if (std::regex_search(masked[line], match, key_pattern)) {
-            const std::string name = match[1].str();
-            const std::vector<std::string> parts = section.empty()
-                                                       ? std::vector<std::string>{}
-                                                       : std::vector<std::string>{section};
-            append_symbol(result, original, "key", name, join_qualified(parts, name), original[line],
-                          static_cast<int>(line + 1), static_cast<int>(line + 1),
-                          preceding_line_comment(original, line, {";", "#"}));
-        }
-    }
-    return result;
+    const std::vector<LineRule> rules = {
+        {&section_pattern, LineMatch::Full, 1, "section", true, false},
+        {&key_pattern, LineMatch::Search, 1, "key", false, true},
+    };
+    return scan_sectioned_lines(
+        source, Language::Ini,
+        MaskOptions{false, false, true, false, true, false, false, false},
+        {";", "#"}, rules);
 }
 
 }  // namespace

@@ -12,7 +12,7 @@
 - Enrich `grep` with the enclosing indexed symbol where cheap.
 - Add command-generated/rename/removal stress coverage and tune coalescing/shutdown behavior on larger repositories.
 - Benchmark index startup, incremental refresh, memory use, model rounds, tool calls, full-file reads, time to first useful edit, and final correctness.
-- Benchmark and design lazy SQLite-backed Agent symbol queries before replacing the eager in-memory snapshot; preserve security-review snapshot authorization and atomic refresh publication.
+- Benchmark and tune the landed lazy SQLite-backed Agent symbol queries; preserve security-review snapshot authorization and atomic refresh publication.
 - Keep `glob`, `grep`, targeted reads, compiler output, and tests as verification/fallback paths. The index remains a hint.
 - Do not rewrite the built-in agent prompt in this milestone; the user will specify a separate prompt-optimization pass for small local models.
 - `/goal` (session completion condition + `goal_met`) is implemented for interactive agent. Still reserve `/loop` and sub-agents until separately specified.
@@ -24,7 +24,7 @@
 ## Deferred roadmap
 
 - Local control-API server (`ainiux server`) is complete through v1.30 PR 10, including the embedded dependency-free WUI. The OpenAI `/v1` proxy remains a later adapter, not a substitute. Foreign-agent bash usage is `docs/skills/ainiux-cli/SKILL.md`.
-- Image generation v1.2 CLI (`ainiux image`) is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Further provider image/video models should be `images.conf` records.
+- Image generation in the CLI (`ainiux image`) and WebUI is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Further provider image/video models should be `images.conf` records.
 
 ## Web search / fetch
 
@@ -37,8 +37,6 @@
 ## Syntax Highlighting
 
 - Add startup and `/theme` warnings for explicit low-contrast user syntax colors while preserving those overrides.
-- Extend the landed WebUI Markdown and full fenced-language highlighter to the
-  browser Editor; keep the client dependency-free and its raw-HTML boundary inert.
 
 ## Editor AI Commands
 
@@ -65,7 +63,6 @@
 - Add a native Anthropic Messages adapter for full Claude extended/adaptive thinking behavior, signatures, output configuration validation, and preserved reasoning state; the OpenAI-compatible Anthropic profile only maps request-side thinking controls.
 - Expand native-tool compatibility testing against real providers, especially DeepSeek reasoning content and future native Anthropic Messages thinking signatures; the Chat/OpenRouter and Responses review paths now preserve their opaque continuation items.
 - Add provider-reported context limits and improve token estimation.
-- Add Responses API image input support.
 - Expand JSON handling behind the existing facade or vendor a reviewed JSON library.
 - Add more credential-redaction and provider error-path tests.
 
@@ -83,7 +80,7 @@
 - Expand runtime cancellation tests to cover interrupted streaming HTTP and slow file jobs.
 - Add interrupted-stream cancellation tests for streaming parser/provider paths.
 - Add leak checks for more success, error, failure, interrupted-stream, and cancellation paths.
-- Continue safe URL-fetching hardening for future server/web callers.
+- Continue safe URL-fetching hardening for control-server and WebUI callers.
 - Harden the TUI foundation with interactive resize tests, model-output rendering tests, scrollback polish, better Unicode cell-width handling, and broader command coverage.
 
 ## Deferred Document Conversion

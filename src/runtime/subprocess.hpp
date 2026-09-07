@@ -73,6 +73,4 @@ Error run_subprocess(const SubprocessOptions& options, SubprocessResult& result)
 Error kill_background_process(std::int64_t pid);
 void kill_all_background_processes();
 
-const char* subprocess_termination_name(SubprocessTerminationReason reason);
-
 }  // namespace ainiux::runtime

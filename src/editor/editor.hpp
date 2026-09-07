@@ -157,7 +157,6 @@ class PieceTable {
     Error write_to(std::ostream& out) const;
     Error write_to(std::ostream& out, LineBreak linebreak) const;
 
-    char char_at(size_t pos) const;
     Error insert(size_t pos, const std::string& text);
     Error erase(size_t pos, size_t count);
 

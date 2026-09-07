@@ -13,7 +13,6 @@ inline constexpr const char kProjectScriptsDirectory[] = "scripts/ainiux";
 
 bool portable_project_script_name(const std::string& name);
 bool project_script_path(const std::string& path, std::string* name = nullptr);
-bool project_scripts_directory(const std::string& path);
 // True for the retired .ainiux-pr/scripts (and .ainiux-pr/script typo) location.
 bool retired_project_script_path(const std::string& path);
 const char* retired_project_script_message();

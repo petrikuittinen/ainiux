@@ -334,26 +334,6 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
     return {};
 }
 
-GuardResult evaluate_command_guard_line(const std::string& command_line) {
-    std::vector<std::string> args;
-    std::string current;
-    bool in_token = false;
-    for (char ch : command_line) {
-        if (ch == ' ' || ch == '\t') {
-            if (in_token) {
-                args.push_back(std::move(current));
-                current.clear();
-                in_token = false;
-            }
-            continue;
-        }
-        current.push_back(ch);
-        in_token = true;
-    }
-    if (in_token) args.push_back(std::move(current));
-    return evaluate_command_guard(args);
-}
-
 GuardResult finalize_guard_for_headless(GuardResult result) {
     if (result.decision == GuardDecision::Ask) {
         result.decision = GuardDecision::Deny;

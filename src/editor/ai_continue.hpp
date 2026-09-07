@@ -61,9 +61,5 @@ std::string continue_completion_status_message(const std::string& provider_name,
                                                long long context_tokens = 0);
 Error validate_continue_request(const AiContinueContext& context);
 provider::RequestContext continue_request_context(const AiContinueContext& context);
-void start_continue_job(const AiContinueContext& context,
-                        const std::string& prefix,
-                        runtime::EventQueue<ContinueEvent>& events,
-                        runtime::JobHandle& job);
 
 }  // namespace ainiux::editor

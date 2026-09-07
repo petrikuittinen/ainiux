@@ -9,19 +9,13 @@
 
 namespace ainiux::tui {
 
-// Compact history-navigation hint for the chat status row (not the input label).
-const char* history_navigation_help();
-// Append history_navigation_help() once when absent.
+// Append the compact history-navigation hint once when absent.
 std::string with_history_navigation_help(const std::string& status);
-
-// Legacy alias: history help formerly lived on the input label.
-const char* input_label_status_message();
 
 std::string input_label_text();
 std::string input_label_text_for_mode(bool agent_mode);
 // Chat input label: version + Chat + [model reasoning] + tokens + optional credits.
 std::string chat_input_label_text(const AgentChrome& chrome);
-std::vector<StyledSegment> input_label_segments();
 std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode);
 std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode, const AgentChrome& chrome);
 

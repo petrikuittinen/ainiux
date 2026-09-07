@@ -12,77 +12,11 @@
 
 #include "common.hpp"
 #include "highlight/highlight.hpp"
+#include "agent/index/scanner_common.hpp"
 #include "agent/index/scanner_extra.hpp"
 
 namespace ainiux::agent::index {
 namespace {
-
-constexpr std::size_t kMaximumDocumentationBytes = 512;
-
-std::uint64_t fnv1a(const std::string& text) {
-    std::uint64_t hash = 1469598103934665603ULL;
-    for (unsigned char byte : text) {
-        hash ^= byte;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
-std::string trim(std::string text) {
-    return ascii_trim(std::move(text));
-}
-
-std::string collapse_space(const std::string& text) {
-    std::string output;
-    output.reserve(text.size());
-    bool spacing = false;
-    for (unsigned char byte : text) {
-        if (std::isspace(byte)) {
-            spacing = !output.empty();
-        } else {
-            if (spacing) output.push_back(' ');
-            output.push_back(static_cast<char>(byte));
-            spacing = false;
-        }
-    }
-    return trim(std::move(output));
-}
-
-std::string bounded_documentation(std::string text) {
-    text = collapse_space(text);
-    if (text.size() > kMaximumDocumentationBytes) {
-        text.resize(kMaximumDocumentationBytes - 3);
-        text += "...";
-    }
-    return text;
-}
-
-std::vector<std::string> source_lines(const std::string& source) {
-    return split_lines_crlf(source);
-}
-
-std::string line_range(const std::vector<std::string>& lines, int first, int last) {
-    std::string output;
-    for (int line = first; line <= last && line <= static_cast<int>(lines.size()); ++line) {
-        output += lines[static_cast<std::size_t>(line - 1)];
-        output.push_back('\n');
-    }
-    return output;
-}
-
-int indentation(const std::string& line) {
-    int value = 0;
-    for (char ch : line) {
-        if (ch == ' ') {
-            ++value;
-        } else if (ch == '\t') {
-            value += 8 - value % 8;
-        } else {
-            break;
-        }
-    }
-    return value;
-}
 
 std::string preceding_python_comment(const std::vector<std::string>& lines, std::size_t line) {
     if (line == 0) return {};
@@ -206,18 +140,6 @@ int python_block_end(const std::vector<std::string>& masked_lines,
         last = static_cast<int>(pos + 1);
     }
     return last;
-}
-
-std::string join_qualified(const std::vector<std::string>& parts, const std::string& name) {
-    std::string result;
-    for (const std::string& part : parts) {
-        if (part.empty()) continue;
-        if (!result.empty()) result += "::";
-        result += part;
-    }
-    if (!result.empty() && !name.empty()) result += "::";
-    result += name;
-    return result;
 }
 
 ScanResult scan_python(const std::string& source) {
@@ -500,18 +422,6 @@ ScanResult scan_c_family(const std::string& path, const std::string& source, Lan
         }
         return parts;
     };
-    auto matching_brace_line = [&](std::size_t start_line, std::size_t open_column) {
-        int depth = 0;
-        for (std::size_t row = start_line; row < masked.size(); ++row) {
-            const std::size_t begin = row == start_line ? open_column : 0;
-            for (std::size_t column = begin; column < masked[row].size(); ++column) {
-                if (masked[row][column] == '{') ++depth;
-                else if (masked[row][column] == '}' && --depth == 0) return static_cast<int>(row + 1);
-            }
-        }
-        return static_cast<int>(masked.size());
-    };
-
     for (std::size_t line = 0; line < masked.size(); ++line) {
         while (!scopes.empty() && scopes.back().end_line < static_cast<int>(line + 1)) scopes.pop_back();
         std::string stripped = trim(masked[line]);
@@ -544,38 +454,13 @@ ScanResult scan_c_family(const std::string& path, const std::string& source, Lan
             continue;
         }
 
-        std::size_t end_line = line;
-        int parentheses = 0;
-        std::string statement_masked;
-        std::string statement_original;
-        std::size_t delimiter_column = std::string::npos;
-        char delimiter = '\0';
-        for (; end_line < masked.size() && end_line - line < 64; ++end_line) {
-            const std::string& current = masked[end_line];
-            for (std::size_t column = 0; column < current.size(); ++column) {
-                const char ch = current[column];
-                if (ch == '(' || ch == '[') ++parentheses;
-                else if ((ch == ')' || ch == ']') && parentheses > 0) --parentheses;
-                else if (parentheses == 0 && (ch == ';' || ch == '{')) {
-                    delimiter = ch;
-                    delimiter_column = column;
-                    break;
-                }
-            }
-            if (!statement_masked.empty()) {
-                statement_masked.push_back(' ');
-                statement_original.push_back(' ');
-            }
-            const std::size_t segment_size = delimiter == '\0' ? current.size() : delimiter_column + 1;
-            statement_masked += trim(current.substr(0, segment_size));
-            statement_original += trim(original[end_line].substr(0, segment_size));
-            if (delimiter != '\0') break;
-        }
-        if (delimiter == '\0') continue;
-        statement_masked = collapse_space(statement_masked);
-        statement_original = collapse_space(statement_original);
-        const int body_end = delimiter == '{' ? matching_brace_line(end_line, delimiter_column)
-                                              : static_cast<int>(end_line + 1);
+        const LogicalStatement statement = collect_statement(masked, original, line);
+        if (statement.delimiter == '\0') continue;
+        const std::size_t end_line = statement.end_line;
+        const char delimiter = statement.delimiter;
+        const std::string& statement_masked = statement.masked;
+        const std::string& statement_original = statement.original;
+        const int body_end = statement_end(statement, masked);
         std::smatch match;
         const std::vector<std::string> parts = qualified_parts();
 
@@ -817,17 +702,6 @@ ScanResult scan_ecmascript(const std::string& source, Language language) {
         }
         return parts;
     };
-    auto matching_brace_line = [&](std::size_t start_line, std::size_t open_column) {
-        int depth = 0;
-        for (std::size_t row = start_line; row < masked.size(); ++row) {
-            const std::size_t begin = row == start_line ? open_column : 0;
-            for (std::size_t column = begin; column < masked[row].size(); ++column) {
-                if (masked[row][column] == '{') ++depth;
-                else if (masked[row][column] == '}' && --depth == 0) return static_cast<int>(row + 1);
-            }
-        }
-        return static_cast<int>(masked.size());
-    };
     auto add_symbol = [&](const std::string& kind,
                           const std::string& name,
                           const std::string& signature,
@@ -866,38 +740,13 @@ ScanResult scan_ecmascript(const std::string& source, Language language) {
             continue;
         }
 
-        std::size_t end_line = line;
-        int grouping = 0;
-        std::size_t delimiter_column = std::string::npos;
-        char delimiter = '\0';
-        std::string statement_masked;
-        std::string statement_original;
-        for (; end_line < masked.size() && end_line - line < 64; ++end_line) {
-            const std::string& current = masked[end_line];
-            for (std::size_t column = 0; column < current.size(); ++column) {
-                const char ch = current[column];
-                if (ch == '(' || ch == '[') ++grouping;
-                else if ((ch == ')' || ch == ']') && grouping > 0) --grouping;
-                else if (grouping == 0 && (ch == ';' || ch == '{')) {
-                    delimiter = ch;
-                    delimiter_column = column;
-                    break;
-                }
-            }
-            if (!statement_masked.empty()) {
-                statement_masked.push_back(' ');
-                statement_original.push_back(' ');
-            }
-            const std::size_t segment_size = delimiter == '\0' ? current.size() : delimiter_column + 1;
-            statement_masked += trim(current.substr(0, segment_size));
-            statement_original += trim(original[end_line].substr(0, segment_size));
-            if (delimiter != '\0') break;
-        }
-        if (delimiter == '\0') continue;
-        statement_masked = collapse_space(statement_masked);
-        statement_original = collapse_space(statement_original);
-        const int body_end = delimiter == '{' ? matching_brace_line(end_line, delimiter_column)
-                                              : static_cast<int>(end_line + 1);
+        const LogicalStatement statement = collect_statement(masked, original, line);
+        if (statement.delimiter == '\0') continue;
+        const std::size_t end_line = statement.end_line;
+        const char delimiter = statement.delimiter;
+        const std::string& statement_masked = statement.masked;
+        const std::string& statement_original = statement.original;
+        const int body_end = statement_end(statement, masked);
         std::smatch match;
 
         if (language == Language::TypeScript && std::regex_match(statement_masked, match, namespace_pattern)) {

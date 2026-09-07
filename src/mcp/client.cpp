@@ -102,12 +102,6 @@ bool Client::connected() const { return impl_ && impl_->connected; }
 Dialect Client::dialect() const { return impl_ ? impl_->dialect : Dialect::Unknown; }
 const ServerConfig& Client::config() const { return impl_->config; }
 
-void Client::set_call_options(ConnectOptions options) {
-    if (!impl_) return;
-    // Keep transport identity; replace call-time options (cancellation/timeouts).
-    impl_->options = std::move(options);
-}
-
 Error Client::list_tools(ToolsListResult& out,
                          runtime::CancellationToken cancellation) {
     out = ToolsListResult{};

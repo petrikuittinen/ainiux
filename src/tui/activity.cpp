@@ -58,19 +58,11 @@ constexpr const char kChooseModelBracket[] = "[choose model /model]";
 
 }  // namespace
 
-const char* history_navigation_help() {
-    return kHistoryNavigationHelp;
-}
-
 std::string with_history_navigation_help(const std::string& status) {
     if (status.find("history Ctrl+B") != std::string::npos) {
         return status;
     }
     return status + kHistoryNavigationHelp;
-}
-
-const char* input_label_status_message() {
-    return kHistoryNavigationHelp;
 }
 
 std::string chat_model_reasoning_bracket(const std::string& model_name,
@@ -108,10 +100,6 @@ std::string input_label_text_for_mode(bool agent_mode) {
         return app_version_label() + kAgentModeTag;
     }
     return chat_input_label_text(AgentChrome{});
-}
-
-std::vector<StyledSegment> input_label_segments() {
-    return input_label_segments_for_mode(false);
 }
 
 std::vector<StyledSegment> input_label_segments_for_mode(bool agent_mode) {

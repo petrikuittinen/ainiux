@@ -25,7 +25,6 @@ struct HostedWebSearch {
 };
 
 HostedWebSearch resolve_hosted_web_search(const RequestContext& context);
-bool hosted_web_search_requires_responses(const HostedWebSearch& search);
 json::Value hosted_web_search_tool_json(const HostedWebSearch& search);
 void append_hosted_web_search_tool(json::Value& tools, const HostedWebSearch& search);
 void attach_hosted_web_search_tools(json::Value& root, const RequestContext& context);

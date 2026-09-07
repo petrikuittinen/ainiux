@@ -38,9 +38,6 @@ class Client {
     Dialect dialect() const;
     const ServerConfig& config() const;
 
-    // Update cancellation/timeouts for subsequent RPC without reconnecting.
-    void set_call_options(ConnectOptions options);
-
     Error list_tools(ToolsListResult& out,
                      runtime::CancellationToken cancellation = {});
     Error call_tool(const std::string& tool_name,

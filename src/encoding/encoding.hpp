@@ -47,9 +47,6 @@ struct EncodingChoice {
 bool is_valid_utf8(const std::string& input, size_t* error_offset = nullptr);
 void append_utf8_codepoint(std::string& out, std::uint32_t cp);
 
-const char* encoding_display_name(Encoding encoding);
-const char* encoding_canonical_name(Encoding encoding);
-
 Error parse_encoding_name(const std::string& name, Encoding& out, std::string& canonical);
 bool is_external_encoding_name(const std::string& canonical);
 
@@ -85,8 +82,6 @@ std::string charset_from_content_type(const std::string& content_type);
 std::string charset_from_html_meta(const std::string& body);
 
 std::vector<EncodingChoice> encoding_picker_choices();
-std::vector<std::string> builtin_encoding_labels();
-std::vector<std::string> all_encoding_labels();
 
 // Built-in SBCS and optional CJK helpers. Callers should use to_utf8.
 Error convert_sbcs(const std::string& bytes, Encoding encoding, std::string& utf8);

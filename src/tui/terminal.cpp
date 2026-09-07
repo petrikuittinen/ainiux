@@ -116,16 +116,6 @@ void TerminalSession::restore() {
     active_ = false;
 }
 
-bool terminal_input_is_interactive() {
-#if defined(_WIN32)
-    DWORD mode = 0;
-    const HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
-    return handle != nullptr && handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode);
-#else
-    return ::isatty(STDIN_FILENO) != 0;
-#endif
-}
-
 bool terminal_output_is_interactive() {
 #if defined(_WIN32)
     DWORD mode = 0;

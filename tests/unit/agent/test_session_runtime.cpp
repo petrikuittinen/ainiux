@@ -50,6 +50,61 @@ provider::RequestContext offline_context(const std::string& workspace) {
     return context;
 }
 
+void test_runtime_options_share_cli_projection() {
+    provider::RequestContext context;
+    context.options.agent_log_enabled = false;
+    context.options.security_review_log_keep_runs = 7;
+    context.options.trusted_prompt_dir = "trusted";
+    context.options.max_source_code_file_size = 123456;
+    context.options.agent_history_backup_enabled = false;
+    context.options.agent_history_backup_max_bytes = 654321;
+    context.options.agent_history_backup_ttl_days = 3;
+    context.options.agent_auto_compact = false;
+    context.options.agent_compact_strategy = CompactionStrategy::Summary;
+    context.options.agent_compact_limit = 42;
+    context.options.agent_max_turns = 17;
+    context.options.disable_indexing = true;
+    context.options.agent_show_command_output = true;
+    context.options.connect_timeout_seconds = 4;
+    context.options.timeout_seconds = 9;
+    context.options.max_fetch_bytes = 777;
+    context.options.proxy = "http://proxy.invalid";
+    context.options.insecure_tls = true;
+    context.options.trace_http = true;
+    context.options.allow_private_url_fetch = true;
+
+    const agent::SessionRuntimeOptions options =
+        agent::make_session_runtime_options(
+            context, "/workspace", agent::AgentTaskMode::Plan, true);
+    check(options.workspace == "/workspace" &&
+              options.task_mode == agent::AgentTaskMode::Plan &&
+              options.interactive && options.allow_network &&
+              options.enable_session_db,
+          "shared runtime options preserve caller-owned session identity");
+    check(!options.enable_agent_log &&
+              options.security_review_log_keep_runs == 7 &&
+              options.trusted_prompt_dir == "trusted" &&
+              options.max_source_code_file_size == 123456 &&
+              !options.history_backup.enabled &&
+              options.history_backup.max_bytes == 654321 &&
+              options.history_backup.ttl_days == 3,
+          "shared runtime options project persistence settings");
+    check(!options.auto_compact &&
+              options.compact_strategy == CompactionStrategy::Summary &&
+              options.compact_limit == 42 && options.max_agent_turns == 17 &&
+              options.index_mode == agent::SessionRuntimeOptions::IndexMode::Disabled &&
+              options.show_command_output,
+          "shared runtime options project agent policy settings");
+    check(options.fetch_options.connect_timeout_seconds == 4 &&
+              options.fetch_options.timeout_seconds == 9 &&
+              options.fetch_options.max_bytes == 777 &&
+              options.fetch_options.proxy == "http://proxy.invalid" &&
+              options.fetch_options.insecure_tls &&
+              options.fetch_options.trace_http &&
+              options.fetch_options.allow_private,
+          "shared runtime options project network settings");
+}
+
 void test_prepare_opens_session_db_and_tools() {
     const std::string workspace = temp_workspace("prepare");
     const std::string previous = fs::current_path().string();
@@ -1283,6 +1338,7 @@ void test_reset_model_context_and_visible_clear() {
 }  // namespace
 
 void run_all() {
+    test_runtime_options_share_cli_projection();
     test_prepare_opens_session_db_and_tools();
     test_empty_turn_rejected_when_unprepared();
     test_prepare_with_indexing_disabled_never_touches_index_database();

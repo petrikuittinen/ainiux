@@ -2076,90 +2076,6 @@ bool is_database_path(const std::string& relative_path) {
 
 }  // namespace
 
-Error ReadToolRegistry::str_replace_workspace_file(const std::string& relative_path,
-                                                   const std::string& old_text,
-                                                   const std::string& new_text,
-                                                   bool replace_all,
-                                                   bool allow_fuzzy,
-                                                   std::size_t hint_start_line,
-                                                   std::size_t hint_end_line,
-                                                   const std::string& expected_file_hash,
-                                                   std::string& history_path,
-                                                   std::size_t& matches_found,
-                                                   std::size_t& replacements_made,
-                                                   std::string& match_mode,
-                                                   std::string& old_hash,
-                                                   std::string& new_hash,
-                                                   std::vector<std::string>& candidate_lines) const {
-    history_path.clear();
-    matches_found = 0;
-    replacements_made = 0;
-    match_mode.clear();
-    old_hash.clear();
-    new_hash.clear();
-    candidate_lines.clear();
-    Error policy_error = validate_mutation_path(relative_path, false, false);
-    if (!policy_error.ok()) return policy_error;
-    if (old_text.empty()) return {ErrorCode::BadArgs, "old_text must not be empty"};
-    if (old_text.find('\0') != std::string::npos || new_text.find('\0') != std::string::npos)
-        return {ErrorCode::BadArgs, "str_replace text must not contain NUL bytes"};
-    if (!html::is_valid_utf8(old_text) || !html::is_valid_utf8(new_text))
-        return {ErrorCode::BadArgs, "str_replace text must be valid UTF-8"};
-
-    fs::path absolute;
-    Error error = resolve_writable_path(relative_path, absolute);
-    if (!error.ok()) return error;
-
-    std::error_code ec;
-    if (!fs::exists(absolute, ec) || ec)
-        return {ErrorCode::FileRead, "file does not exist: " + relative_path};
-    if (fs::is_directory(absolute, ec))
-        return {ErrorCode::FileWrite, "path is a directory: " + relative_path};
-
-    const std::string previous = read_all_bytes(absolute, error);
-    if (!error.ok()) return error;
-    if (previous.find('\0') != std::string::npos || !html::is_valid_utf8(previous))
-        return {ErrorCode::FileRead, "file is not valid UTF-8 text: " + relative_path};
-    old_hash = index::content_hash(previous);
-    if (!expected_file_hash.empty() && expected_file_hash != old_hash)
-        return {ErrorCode::FileWrite, "stale_file: expected_file_hash does not match current file content"};
-
-    std::size_t region_start = 0;
-    std::size_t region_end = previous.size();
-    error = region_from_line_hint(previous, hint_start_line, hint_end_line, region_start, region_end);
-    if (!error.ok()) return error;
-
-    const TextMatchResult found =
-        find_text_matches(previous, old_text, allow_fuzzy, region_start, region_end);
-    std::vector<TextSpan> chosen;
-    error = disambiguate_matches(found, replace_all, hint_start_line, hint_end_line, chosen,
-                                 candidate_lines, matches_found);
-    if (!error.ok()) {
-        if (matches_found == 0)
-            return {ErrorCode::FileWrite, "old_text not found in file: " + relative_path};
-        return error;
-    }
-    match_mode = found.mode;
-
-    const std::string updated =
-        apply_text_replacements(previous, chosen, new_text, replace_all, replacements_made);
-
-    if (updated.size() > index_options_.max_source_code_file_size)
-        return {ErrorCode::BadArgs,
-                "str_replace result exceeds max_source_code_file_size (" +
-                    std::to_string(index_options_.max_source_code_file_size) +
-                    " bytes)"};
-
-    error = save_history_copy(relative_path, previous, history_path);
-    if (!error.ok()) return error;
-    error = invalidate_managed_script_trust(relative_path);
-    if (!error.ok()) return error;
-    error = write_bytes_atomic(absolute, updated);
-    if (!error.ok()) return error;
-    new_hash = index::content_hash(updated);
-    note_written_file(relative_path, updated);
-    return ok_error();
-}
 
 namespace {
 
@@ -3390,7 +3306,7 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
     return ok_error();
 }
 
-std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const {
+std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
     const bool agent_session = mutation_policy_ != MutationPolicy::Disabled;
     const std::string path = "\"path\":{\"type\":\"string\"}";
     const std::string range = path + ",\"start_line\":{\"type\":\"integer\",\"minimum\":1},"
@@ -3447,30 +3363,48 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
         "\"context\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},"
         "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500},"
         "\"offset\":{\"type\":\"integer\",\"minimum\":0}";
-    std::vector<provider::FunctionDefinition> tools = {
+    std::vector<ToolDescriptor> tools;
+    tools.reserve(18);
+    auto add = [&](NativeToolHandler handler, ToolSafetyCategory safety,
+                   provider::FunctionDefinition definition,
+                   bool exposed = true) {
+        tools.push_back({std::move(definition), safety, handler, exposed});
+    };
+    add(NativeToolHandler::Index, ToolSafetyCategory::ReadOnly,
         {"index",
          "Summarize the code index (languages, file counts, freshness). Not a full "
          "filesystem listing—use ls for on-disk layout.",
-         schema("")},
+         schema("")}, indexing_enabled_);
+    add(NativeToolHandler::List, ToolSafetyCategory::ReadOnly,
         {"ls",
          "List real filesystem entries in a workspace-relative directory (literal names, "
          "including empty dirs and non-source files). Prefer before rm.",
-         schema(path + ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")},
+         schema(path +
+                ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")});
+    add(NativeToolHandler::Glob, ToolSafetyCategory::ReadOnly,
         {"glob",
          "Match eligible workspace source paths (*, ?, **, braces).",
-         schema("\"pattern\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}", "\"pattern\"")},
+         schema("\"pattern\":{\"type\":\"string\"},"
+                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}",
+                "\"pattern\"")});
+    add(NativeToolHandler::Grep, ToolSafetyCategory::ReadOnly,
         {"grep",
          "Search workspace UTF-8 sources (rg when available, else index/live scan). "
          "query is literal unless regex=true; unescaped | infers regex only when regex is "
          "omitted. path=one file or directory root; glob=name/type filter (*.ts, "
          "**/*.{cpp,hpp}); combine them to search a subtree. pattern aliases query.",
-         schema(search_fields, "\"query\"")},
+         schema(search_fields, "\"query\"")});
+    add(NativeToolHandler::Symbol, ToolSafetyCategory::ReadOnly,
         {"symbol",
          "Rank indexed symbols by lexical match, then static importance.",
-         schema("\"query\":{\"type\":\"string\"},\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}", "\"query\"")},
+         schema("\"query\":{\"type\":\"string\"},"
+                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200}",
+                "\"query\"")}, indexing_enabled_);
+    add(NativeToolHandler::Outline, ToolSafetyCategory::ReadOnly,
         {"outline",
          "Indexed declarations, signatures, ranges, and docs for one file.",
-         schema(path, "\"path\"")},
+         schema(path, "\"path\"")}, indexing_enabled_);
+    add(NativeToolHandler::Read, ToolSafetyCategory::ReadOnly,
         {"read",
          !agent_session
              ? "Read one indexed UTF-8 range (path) or batch 1–100 (items) with line "
@@ -3478,10 +3412,12 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
              : "Read one live UTF-8 file (path) or batch 1–100 (items) with line numbers "
                "and hashes. Use items when two or more paths/ranges are known. "
                "PNG/JPEG/GIF are not text—use attach.",
-         schema(range + ",\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,\"items\":" +
-                    schema(range, "\"path\"") +
-                    "}",
-                "")},
+         schema(range +
+                    ",\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
+                    "\"items\":" +
+                    schema(range, "\"path\"") + "}",
+                "")});
+    add(NativeToolHandler::Run, ToolSafetyCategory::Execution,
         {"run",
          agent_session
              ? "Run one workspace command without a real shell (argv exec). Bare PATH names "
@@ -3499,122 +3435,115 @@ std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const 
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":" +
                     std::string(agent_session ? "120000" : "10000") + "},"
                 "\"background\":{\"type\":\"boolean\"}",
-                "\"command\"")},
-    };
-    if (!indexing_enabled_) {
-        static const std::set<std::string> hidden = {
-            "index", "symbol", "outline"};
-        tools.erase(
-            std::remove_if(
-                tools.begin(), tools.end(),
-                [&](const provider::FunctionDefinition& definition) {
-                    return hidden.find(definition.name) != hidden.end();
-                }),
-            tools.end());
+                "\"command\"")});
+
+    add(NativeToolHandler::Fetch, ToolSafetyCategory::Network,
+        {"fetch",
+         "Fetch one http(s) URL as UTF-8 Markdown/text (never raw HTML). Private/"
+         "loopback blocked unless configured. Prefer top search hits only.",
+         schema("\"url\":{\"type\":\"string\"},"
+                "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8388608},"
+                "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000}",
+                "\"url\"")}, allow_network_);
+    add(NativeToolHandler::WebSearch, ToolSafetyCategory::Network,
+        {"web_search",
+         "Web search (configured API providers, else DuckDuckGo). At most 3 results "
+         "(title/URL/snippet). Returns web_search_unavailable when none can run.",
+         schema("\"term\":{\"type\":\"string\"},"
+                "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3},"
+                "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
+                "\"site\":{\"type\":\"string\"}",
+                "\"term\"")}, allow_network_ && !hosted_web_search_);
+    // Advertised only while /goal is Active. Always listing it in Act/Plan
+    // made small models treat goal_met as a generic "task done" signal.
+    add(NativeToolHandler::GoalMet, ToolSafetyCategory::Session,
+        {"goal_met",
+         "Call only when the active session /goal is verifiably satisfied. "
+         "Requires non-empty evidence. Not available in Act or Plan.",
+         schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")},
+        agent_session && goal_hooks_.has_active_goal &&
+            goal_hooks_.has_active_goal());
+    add(NativeToolHandler::Attach, ToolSafetyCategory::Vision,
+        {"attach",
+         "Attach one local PNG/JPEG/GIF for vision on the next model round of this turn "
+         "(request-local, not stored). Vision-capable Chat Completions model required; "
+         "per-turn limits apply.",
+         schema(path, "\"path\"")}, agent_session);
+    add(NativeToolHandler::Edit, ToolSafetyCategory::Mutation,
+        {"edit",
+         "Preferred in-file edit (not whole-file delete—use rm). Flat ops only—"
+         "set type/op on the op object (do not nest empty replace_range/… shells). "
+         "Ops: insert_at (e.g. {\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
+         "replace_range, delete_range, replace_text"
+         + std::string(indexing_enabled_ ? ", replace_symbol" : "") +
+         ", create_file (alone). Omit expected_hash unless from a fresh read. "
+         "Line ops apply bottom-to-top.",
+         schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
+                       "\"create_dirs\":{\"type\":\"boolean\"},"
+                       "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
+                       "\"items\":" +
+                       edit_op_item + "}",
+                "\"path\",\"ops\"")}, allow_mutations());
+    add(NativeToolHandler::Write, ToolSafetyCategory::Mutation,
+        {"write",
+         "Create or overwrite a UTF-8 file. Prefer edit for project edits.",
+         schema(path + ",\"content\":{\"type\":\"string\"},"
+                       "\"create_dirs\":{\"type\":\"boolean\"},"
+                       "\"expected_file_hash\":{\"type\":\"string\"},"
+                       "\"mode\":{\"type\":\"string\",\"enum\":[\"overwrite\",\"create_new\"]}",
+                "\"path\",\"content\"")}, allow_mutations());
+    add(NativeToolHandler::MakeDirectory, ToolSafetyCategory::Mutation,
+        {"mkdir",
+         "Act-only mkdir; parents=true creates missing parents. Plan: policy_denied.",
+         schema(path + ",\"parents\":{\"type\":\"boolean\"}", "\"path\"")},
+        allow_mutations());
+    add(NativeToolHandler::Move, ToolSafetyCategory::Mutation,
+        {"mv",
+         "Act-only rename; destination must not exist. Plan: policy_denied.",
+         schema("\"source\":{\"type\":\"string\"},"
+                "\"destination\":{\"type\":\"string\"}",
+                "\"source\",\"destination\"")}, allow_mutations());
+    add(NativeToolHandler::Remove, ToolSafetyCategory::Mutation,
+        {"rm",
+         "Act-only delete one regular file. Use exact name from ls. Directories: run "
+         "rmdir (empty) or run rm -r (non-empty asks in Smart). Plan: policy_denied.",
+         schema(path + ",\"confirm\":{\"type\":\"boolean\"},"
+                       "\"expected_file_hash\":{\"type\":\"string\"}",
+                "\"path\"")}, allow_mutations());
+    add(NativeToolHandler::ApplyPatch, ToolSafetyCategory::Mutation,
+        {"apply_patch",
+         "OpenAI/Codex multi-file patch (prefer edit for simple "
+         "single-file edits). Hunk context must match; @@ -line,count helps. "
+         "Args: patch|diff|input. fuzzy=true default. Preferred form:\n"
+         "*** Begin Patch\n"
+         "*** Update File: path\n"
+         "@@\n"
+         " context\n"
+         "-old\n"
+         "+new\n"
+         "*** End Patch\n"
+         "Bare *** Update/Add/Delete File sections without Begin/End are also accepted.",
+         schema("\"patch\":{\"type\":\"string\"},"
+                "\"input\":{\"type\":\"string\"},"
+                "\"diff\":{\"type\":\"string\"},"
+                "\"atomic\":{\"type\":\"boolean\"},"
+                "\"fuzzy\":{\"type\":\"boolean\"}",
+                "")}, allow_mutations());
+    return tools;
+}
+
+std::vector<provider::FunctionDefinition> ReadToolRegistry::definitions() const {
+    const std::vector<ToolDescriptor> descriptors = native_descriptors();
+    std::vector<provider::FunctionDefinition> tools;
+    tools.reserve(descriptors.size());
+    for (const ToolDescriptor& descriptor : descriptors) {
+        if (descriptor.exposed)
+            tools.push_back(descriptor.definition);
     }
-    if (allow_network_) {
-        tools.push_back(
-            {"fetch",
-             "Fetch one http(s) URL as UTF-8 Markdown/text (never raw HTML). Private/"
-             "loopback blocked unless configured. Prefer top search hits only.",
-             schema("\"url\":{\"type\":\"string\"},"
-                    "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":8388608},"
-                    "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000}",
-                    "\"url\"")});
-        if (!hosted_web_search_) {
-            tools.push_back(
-                {"web_search",
-                 "Web search (configured API providers, else DuckDuckGo). At most 3 results "
-                 "(title/URL/snippet). Returns web_search_unavailable when none can run.",
-                 schema("\"term\":{\"type\":\"string\"},"
-                        "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3},"
-                        "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
-                        "\"site\":{\"type\":\"string\"}",
-                        "\"term\"")});
-        }
-    }
-    if (agent_session) {
-        // Advertised only while /goal is Active. Always listing it in Act/Plan
-        // made small models treat goal_met as a generic "task done" signal.
-        if (goal_hooks_.has_active_goal && goal_hooks_.has_active_goal()) {
-            tools.push_back(
-                {"goal_met",
-                 "Call only when the active session /goal is verifiably satisfied. "
-                 "Requires non-empty evidence. Not available in Act or Plan.",
-                 schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")});
-        }
-        tools.push_back(
-            {"attach",
-             "Attach one local PNG/JPEG/GIF for vision on the next model round of this turn "
-             "(request-local, not stored). Vision-capable Chat Completions model required; "
-             "per-turn limits apply.",
-             schema(path, "\"path\"")});
-    }
-    if (allow_mutations()) {
-        tools.push_back(
-            {"edit",
-             "Preferred in-file edit (not whole-file delete—use rm). Flat ops only—"
-             "set type/op on the op object (do not nest empty replace_range/… shells). "
-             "Ops: insert_at (e.g. {\"type\":\"insert_at\",\"line\":2,\"new_text\":\"...\"}), "
-             "replace_range, delete_range, replace_text"
-             + std::string(indexing_enabled_ ? ", replace_symbol" : "") +
-             ", create_file (alone). Omit expected_hash unless from a fresh read. "
-             "Line ops apply bottom-to-top.",
-             schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
-                           "\"create_dirs\":{\"type\":\"boolean\"},"
-                           "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"
-                           "\"items\":" +
-                           edit_op_item + "}",
-                    "\"path\",\"ops\"")});
-        tools.push_back(
-            {"write",
-             "Create or overwrite a UTF-8 file. Prefer edit for project edits.",
-             schema(path + ",\"content\":{\"type\":\"string\"},"
-                           "\"create_dirs\":{\"type\":\"boolean\"},"
-                           "\"expected_file_hash\":{\"type\":\"string\"},"
-                           "\"mode\":{\"type\":\"string\",\"enum\":[\"overwrite\",\"create_new\"]}",
-                    "\"path\",\"content\"")});
-        tools.push_back(
-            {"mkdir",
-             "Act-only mkdir; parents=true creates missing parents. Plan: policy_denied.",
-             schema(path + ",\"parents\":{\"type\":\"boolean\"}", "\"path\"")});
-        tools.push_back(
-            {"mv",
-             "Act-only rename; destination must not exist. Plan: policy_denied.",
-             schema("\"source\":{\"type\":\"string\"},"
-                    "\"destination\":{\"type\":\"string\"}",
-                    "\"source\",\"destination\"")});
-        tools.push_back(
-            {"rm",
-             "Act-only delete one regular file. Use exact name from ls. Directories: run "
-             "rmdir (empty) or run rm -r (non-empty asks in Smart). Plan: policy_denied.",
-             schema(path + ",\"confirm\":{\"type\":\"boolean\"},"
-                           "\"expected_file_hash\":{\"type\":\"string\"}",
-                    "\"path\"")});
-        tools.push_back(
-            {"apply_patch",
-             "OpenAI/Codex multi-file patch (prefer edit for simple "
-             "single-file edits). Hunk context must match; @@ -line,count helps. "
-             "Args: patch|diff|input. fuzzy=true default. Preferred form:\n"
-             "*** Begin Patch\n"
-             "*** Update File: path\n"
-             "@@\n"
-             " context\n"
-             "-old\n"
-             "+new\n"
-             "*** End Patch\n"
-             "Bare *** Update/Add/Delete File sections without Begin/End are also accepted.",
-             schema("\"patch\":{\"type\":\"string\"},"
-                    "\"input\":{\"type\":\"string\"},"
-                    "\"diff\":{\"type\":\"string\"},"
-                    "\"atomic\":{\"type\":\"boolean\"},"
-                    "\"fuzzy\":{\"type\":\"boolean\"}",
-                    "")});
-    }
-        if (mcp_bridge_ != nullptr) {
-        for (const provider::FunctionDefinition& mcp_tool : mcp_bridge_->definitions()) {
-            tools.push_back(mcp_tool);
-        }
+    if (mcp_bridge_ != nullptr) {
+        const std::vector<provider::FunctionDefinition> mcp_tools =
+            mcp_bridge_->definitions();
+        tools.insert(tools.end(), mcp_tools.begin(), mcp_tools.end());
     }
     return tools;
 }
@@ -3961,12 +3890,15 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
 
     // Case/snake-camel repair against advertised names only. Old names are not
     // aliases and are not repair targets.
+    const std::vector<ToolDescriptor> descriptors = native_descriptors();
     std::string name = requested_name;
     {
         std::vector<std::string> known;
-        known.reserve(24);
-        for (const provider::FunctionDefinition& definition : definitions())
-            known.push_back(definition.name);
+        known.reserve(descriptors.size());
+        for (const ToolDescriptor& descriptor : descriptors) {
+            if (descriptor.exposed)
+                known.push_back(descriptor.definition.name);
+        }
         const std::string repaired = repair_tool_name(requested_name, known);
         if (!repaired.empty()) name = repaired;
     }
@@ -3978,6 +3910,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 "indexing_disabled",
                 name + " is unavailable because indexing is disabled for this session");
     }
+
+    const auto descriptor_it = std::find_if(
+        descriptors.begin(), descriptors.end(),
+        [&](const ToolDescriptor& descriptor) {
+            return descriptor.definition.name == name;
+        });
+    const ToolDescriptor* descriptor =
+        descriptor_it == descriptors.end() ? nullptr : &*descriptor_it;
 
     // Stages 1-5 of the shared argument pipeline (empty -> {}, fence strip,
     // strict JSON, single-object extraction, one-pass repair).
@@ -3991,25 +3931,29 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
     json::Value args = parsed.value;
     // Stage 6: schema-aware coercion for the resolved tool, when known.
-    {
-        const std::string schema_name = name;
-        for (const provider::FunctionDefinition& definition : definitions()) {
-            if (definition.name != schema_name) continue;
-            const json::ParseResult schema = json::parse(definition.parameters_json);
-            if (schema.error.ok() && schema.value.is_object()) {
-                const json::Value* properties = schema.value.get("properties");
-                if (properties != nullptr && properties->is_object())
-                    coerce_tool_arguments(args, *properties);
-            }
-            break;
+    if (descriptor != nullptr) {
+        const json::ParseResult schema =
+            json::parse(descriptor->definition.parameters_json);
+        if (schema.error.ok() && schema.value.is_object()) {
+            const json::Value* properties = schema.value.get("properties");
+            if (properties != nullptr && properties->is_object())
+                coerce_tool_arguments(args, *properties);
         }
     }
 
     std::string validation_error;
     bool lazy_live_fallback = false;
-    static const std::set<std::string> snapshot_tools = {
-        "index", "glob", "grep", "symbol", "outline", "edit"};
-    if (snapshot_tools.find(name) != snapshot_tools.end()) {
+    const auto is_handler = [&](NativeToolHandler handler) {
+        return descriptor != nullptr && descriptor->handler == handler;
+    };
+    const bool snapshot_tool =
+        is_handler(NativeToolHandler::Index) ||
+        is_handler(NativeToolHandler::Glob) ||
+        is_handler(NativeToolHandler::Grep) ||
+        is_handler(NativeToolHandler::Symbol) ||
+        is_handler(NativeToolHandler::Outline) ||
+        is_handler(NativeToolHandler::Edit);
+    if (snapshot_tool) {
         if (index_access_mode_ == IndexAccessMode::LazyHints &&
             index_refresh_) {
             const std::size_t completed = index_refresh_->completed();
@@ -4034,7 +3978,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
     if (index_access_mode_ == IndexAccessMode::LazyHints &&
         indexing_enabled_ &&
-        snapshot_tools.find(name) != snapshot_tools.end()) {
+        snapshot_tool) {
         index::Options query_options = index_options_;
         query_options.cancellation = cancellation;
         snapshot_.files.clear();
@@ -4042,14 +3986,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         snapshot_.language_totals.clear();
         snapshot_.updated_at = 0;
         const bool need_files =
-            name == "index" || name == "glob" || name == "grep" ||
-            name == "outline" || name == "edit";
+            is_handler(NativeToolHandler::Index) ||
+            is_handler(NativeToolHandler::Glob) ||
+            is_handler(NativeToolHandler::Grep) ||
+            is_handler(NativeToolHandler::Outline) ||
+            is_handler(NativeToolHandler::Edit);
         Error query_error = ok_error();
         if (need_files)
             query_error =
                 index::query_files(query_options, snapshot_.files);
-        if (query_error.ok() &&
-            name == "index") {
+        if (query_error.ok() && is_handler(NativeToolHandler::Index)) {
             index::QueryTotals totals;
             query_error = index::query_totals(query_options, totals);
             if (query_error.ok()) {
@@ -4057,14 +4003,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 snapshot_.language_totals = std::move(totals.languages);
             }
         }
-        if (query_error.ok() && name == "outline") {
+        if (query_error.ok() && is_handler(NativeToolHandler::Outline)) {
             std::string path;
             if (get_string(args, "path", path, true, validation_error))
                 query_error = index::query_symbols(
                     query_options,
                     {fs::u8path(path).generic_u8string()},
                     snapshot_.symbols);
-        } else if (query_error.ok() && name == "symbol") {
+        } else if (query_error.ok() && is_handler(NativeToolHandler::Symbol)) {
             std::string query;
             std::size_t maximum = 50;
             (void)get_string(args, "query", query, true,
@@ -4079,10 +4025,10 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 for (index::OwnedRankedSymbol& item : ranked)
                     snapshot_.symbols.push_back(std::move(item.symbol));
             }
-        } else if (query_error.ok() && name == "index") {
+        } else if (query_error.ok() && is_handler(NativeToolHandler::Index)) {
             query_error = index::query_symbols(
                 query_options, {}, snapshot_.symbols, 4096);
-        } else if (query_error.ok() && name == "edit") {
+        } else if (query_error.ok() && is_handler(NativeToolHandler::Edit)) {
             const json::Value* ops = args.get("ops");
             if (ops != nullptr && ops->is_array()) {
                 for (const json::Value& op : ops->array) {
@@ -4103,7 +4049,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
         }
         if (!query_error.ok() &&
-            (name == "glob" || name == "grep")) {
+            (is_handler(NativeToolHandler::Glob) ||
+             is_handler(NativeToolHandler::Grep))) {
             index::Options discovery_options = query_options;
             discovery_options.on_progress = {};
             std::vector<index::DiscoveredFile> discovered;
@@ -4132,7 +4079,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         rebuild_file_map();
     }
 
-    if (name == "index") {
+    if (is_handler(NativeToolHandler::Index)) {
         json::Value data = object_value();
         data.object["workspace"] = string_value(snapshot_.workspace);
         data.object["updated_at"] = number_value(static_cast<double>(snapshot_.updated_at));
@@ -4207,7 +4154,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "ls") {
+    if (is_handler(NativeToolHandler::List)) {
         std::string path;
         std::size_t maximum = 200;
         if (!get_string(args, "path", path, false, validation_error) ||
@@ -4362,7 +4309,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, truncated);
     }
 
-    if (name == "glob") {
+    if (is_handler(NativeToolHandler::Glob)) {
         std::string pattern;
         std::size_t maximum = 200;
         if (!get_string(args, "pattern", pattern, true, validation_error) ||
@@ -4407,7 +4354,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, truncated);
     }
 
-    if (name == "symbol") {
+    if (is_handler(NativeToolHandler::Symbol)) {
         std::string query;
         std::size_t maximum = 50;
         if (!get_string(args, "query", query, true, validation_error) ||
@@ -4429,7 +4376,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, truncated);
     }
 
-    if (name == "outline") {
+    if (is_handler(NativeToolHandler::Outline)) {
         std::string path;
         if (!get_string(args, "path", path, true, validation_error)) return tool_error_result("invalid_arguments", validation_error);
         const auto file = files_.find(fs::u8path(path).generic_u8string());
@@ -4446,7 +4393,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, false);
     }
 
-    if (name == "read") {
+    if (is_handler(NativeToolHandler::Read)) {
         const json::Value* items = args.get("items");
         if (items != nullptr && items->is_array() && !items->array.empty()) {
             // Batch form is handled below.
@@ -4533,7 +4480,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
     }
 
-    if (name == "read") {
+    if (is_handler(NativeToolHandler::Read)) {
         const json::Value* items = args.get("items");
         std::size_t maximum = 262144;
         if (items == nullptr || !items->is_array() || items->array.empty() ||
@@ -4650,7 +4597,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, truncated, std::move(metadata));
     }
 
-    if (name == "grep") {
+    if (is_handler(NativeToolHandler::Grep)) {
         std::string query, pattern, path, glob;
         bool regex_mode = false, case_sensitive = false, word = false;
         std::size_t context = 0, maximum = 50, offset = 0;
@@ -5091,7 +5038,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                                                   : "builtin_live");
     }
 
-    if (name == "run") {
+    if (is_handler(NativeToolHandler::Run)) {
         std::string command, cwd;
         const bool full = mutation_policy_ == MutationPolicy::Full;
         const bool agent_session =
@@ -5428,7 +5375,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         process.stdout_truncated || process.stderr_truncated);
     }
 
-    if (name == "edit") {
+    if (is_handler(NativeToolHandler::Edit)) {
         if (!allow_mutations())
             return tool_error_result("policy_denied", "edit is not enabled in this session");
         // Models (esp. under natural-language goals) often nest path inside ops[i]
@@ -5602,7 +5549,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "write") {
+    if (is_handler(NativeToolHandler::Write)) {
         if (!allow_mutations())
             return tool_error_result("policy_denied", "write is not enabled in this session");
         std::string path, content, mode, expected_hash;
@@ -5717,7 +5664,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "mkdir") {
+    if (is_handler(NativeToolHandler::MakeDirectory)) {
         if (!allow_mutations())
             return tool_error_result("policy_denied",
                                      "mkdir is not enabled in this session");
@@ -5794,7 +5741,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                               error.message, {}, false);
     }
 
-    if (name == "mv") {
+    if (is_handler(NativeToolHandler::Move)) {
         if (mutation_policy_ != MutationPolicy::Full)
             return tool_error_result("policy_denied",
                                      "mv is enabled only in Act mode");
@@ -5893,182 +5840,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                               error.message, {}, false);
     }
 
-    if (false && name == "str_replace") {
-        if (!allow_mutations())
-            return tool_error_result("policy_denied", "str_replace is not enabled in this session");
-        std::string path, old_text, new_text, expected_hash;
-        bool replace_all = false;
-        bool allow_fuzzy = true;
-        if (!get_string(args, "path", path, true, validation_error) ||
-            !get_string(args, "old_text", old_text, true, validation_error) ||
-            !get_string(args, "new_text", new_text, false, validation_error) ||
-            !get_bool(args, "replace_all", false, replace_all, validation_error) ||
-            !get_bool(args, "fuzzy", true, allow_fuzzy, validation_error) ||
-            !get_string(args, "expected_file_hash", expected_hash, false, validation_error))
-            return tool_error_result("invalid_arguments", validation_error);
-        std::string relative_path;
-        Error normalize_error = normalize_mutation_path(path, relative_path);
-        // new_text may be empty (delete match); require the key explicitly.
-        if (args.get("new_text") == nullptr || !args.get("new_text")->is_string())
-            return tool_error_result("invalid_arguments", "missing required string argument: new_text");
-        new_text = args.get("new_text")->string;
-        std::size_t hint_start = 0;
-        std::size_t hint_end = 0;
-        const json::Value* hint = args.get("line_range_hint");
-        if (hint != nullptr) {
-            if (!hint->is_object())
-                return tool_error_result("invalid_arguments", "line_range_hint must be an object");
-            if (!get_size(*hint, "start_line", 0, 100000000, hint_start, validation_error) ||
-                !get_size(*hint, "end_line", 0, 100000000, hint_end, validation_error))
-                return tool_error_result("invalid_arguments", validation_error);
-        }
-        std::string history_path, old_hash, new_hash, match_mode;
-        std::size_t matches_found = 0;
-        std::size_t replacements_made = 0;
-        std::vector<std::string> candidate_lines;
-        bool external = false;
-        fs::path external_path;
-        Error error;
-        if (normalize_error.ok()) {
-            path = std::move(relative_path);
-            const GuardApprovalDecision decision = request_permission(
-                "str_replace", "str_replace " + path, {path}, false, false, true,
-                false, {}, {}, cancellation);
-            if (decision == GuardApprovalDecision::Allow)
-                error = str_replace_workspace_file(
-                    path, old_text, new_text, replace_all, allow_fuzzy, hint_start,
-                    hint_end, expected_hash, history_path, matches_found,
-                    replacements_made, match_mode, old_hash, new_hash,
-                    candidate_lines);
-            else
-                error = {decision == GuardApprovalDecision::Cancelled
-                             ? ErrorCode::Cancelled
-                             : ErrorCode::UnsupportedFeature,
-                         decision == GuardApprovalDecision::Cancelled
-                             ? "str_replace approval cancelled"
-                             : "str_replace requires user approval"};
-        } else {
-            if (mutation_policy_ != MutationPolicy::Full)
-                return tool_error_result(
-                    "policy_denied",
-                    "Plan mode cannot edit files outside the project");
-            error = resolve_external_file_path(snapshot_.workspace, path, true,
-                                               external_path);
-            external = error.ok();
-            std::string previous;
-            if (error.ok()) {
-                previous = read_all_bytes(external_path, error);
-                if (error.ok() &&
-                    (previous.find('\0') != std::string::npos ||
-                     !html::is_valid_utf8(previous)))
-                    error = {ErrorCode::FileRead,
-                             "external str_replace requires a UTF-8 text file"};
-            }
-            old_hash = error.ok() ? index::content_hash(previous) : std::string();
-            if (error.ok() && !expected_hash.empty() && expected_hash != old_hash)
-                error = {ErrorCode::FileWrite,
-                         "stale_file: expected_file_hash does not match current file content"};
-            std::size_t region_start = 0, region_end = previous.size();
-            if (error.ok())
-                error = region_from_line_hint(previous, hint_start, hint_end,
-                                              region_start, region_end);
-            TextMatchResult found;
-            std::vector<TextSpan> chosen;
-            if (error.ok()) {
-                found = find_text_matches(previous, old_text, allow_fuzzy,
-                                          region_start, region_end);
-                error = disambiguate_matches(
-                    found, replace_all, hint_start, hint_end, chosen,
-                    candidate_lines, matches_found);
-                if (!error.ok() && matches_found == 0)
-                    error = {ErrorCode::FileWrite,
-                             "old_text not found in external file: " +
-                                 external_path.generic_u8string()};
-            }
-            std::string updated;
-            if (error.ok()) {
-                match_mode = found.mode;
-                updated = apply_text_replacements(previous, chosen, new_text,
-                                                  replace_all, replacements_made);
-                if (updated.size() > index_options_.max_source_code_file_size)
-                    error = {ErrorCode::BadArgs,
-                             "str_replace result exceeds max_source_code_file_size"};
-            }
-            if (error.ok()) {
-                const GuardApprovalDecision decision = request_permission(
-                    "str_replace",
-                    "str_replace " + external_path.generic_u8string(),
-                    {external_path.generic_u8string()}, true,
-                    resolved_path_is_under_system_temp(external_path), true, false,
-                    "ask_on_external_file_write",
-                    "Edit this validated UTF-8 file outside the active project? The edit has "
-                    "no project history backup or index entry.",
-                    cancellation);
-                if (decision != GuardApprovalDecision::Allow)
-                    error = {decision == GuardApprovalDecision::Cancelled
-                                 ? ErrorCode::Cancelled
-                                 : ErrorCode::UnsupportedFeature,
-                             decision == GuardApprovalDecision::Cancelled
-                                 ? "str_replace approval cancelled"
-                                 : "external str_replace requires user approval"};
-            }
-            if (error.ok()) {
-                Error stable = ensure_approved_external_path_unchanged(
-                    external_path, "edit", ErrorCode::FileWrite);
-                if (!stable.ok())
-                    error = stable;
-                else {
-                    Error reread_error;
-                    const std::string current =
-                        read_all_bytes(external_path, reread_error);
-                    if (!reread_error.ok())
-                        error = reread_error;
-                    else if (index::content_hash(current) != old_hash)
-                        error = {ErrorCode::FileWrite,
-                                 "stale_file: external file changed while awaiting approval"};
-                }
-            }
-            if (error.ok()) {
-                error = write_bytes_atomic(external_path, updated);
-                if (error.ok()) new_hash = index::content_hash(updated);
-            }
-        }
-        json::Value data = object_value();
-        data.object["path"] =
-            string_value(external ? external_path.generic_u8string()
-                                  : fs::u8path(path).generic_u8string());
-        data.object["matches_found"] = number_value(static_cast<double>(matches_found));
-        data.object["replacements_made"] = number_value(static_cast<double>(replacements_made));
-        data.object["match_mode"] = string_value(match_mode.empty() ? "exact" : match_mode);
-        data.object["old_file_hash"] = string_value(old_hash);
-        data.object["new_file_hash"] = string_value(new_hash);
-        data.object["history_path"] = string_value(history_path);
-        data.object["indexed_snapshot_updated"] = bool_value(error.ok() && !external);
-        data.object["external"] = bool_value(external);
-        if (!candidate_lines.empty()) {
-            json::Value candidates = array_value();
-            for (const std::string& line : candidate_lines)
-                candidates.array.push_back(string_value(line));
-            data.object["candidate_lines"] = std::move(candidates);
-        }
-        if (!error.ok()) {
-            const std::string code =
-                error.message.find("stale_file") != std::string::npos ? "stale_file"
-                : error.message.find("not found") != std::string::npos ? "not_found"
-                : error.message.find("matches ") != std::string::npos  ? "ambiguous_match"
-                : error.code == ErrorCode::BadArgs                     ? "invalid_arguments"
-                : error.code == ErrorCode::UnsupportedFeature          ? "policy_denied"
-                                                                       : error_code_string(error.code);
-            return envelope(false, std::move(data), code, error.message, {}, false);
-        }
-        std::vector<std::string> success_warnings;
-        if (external)
-            success_warnings.push_back(
-                "outside-project edit; no project history backup or index update was created");
-        return envelope(true, std::move(data), "", "", success_warnings, false);
-    }
 
-    if (name == "rm") {
+    if (is_handler(NativeToolHandler::Remove)) {
         if (mutation_policy_ != MutationPolicy::Full)
             return tool_error_result("policy_denied", "rm is not enabled in this session");
         std::string path, expected_hash;
@@ -6243,7 +6016,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (name == "apply_patch") {
+    if (is_handler(NativeToolHandler::ApplyPatch)) {
         if (!allow_mutations())
             return tool_error_result("policy_denied", "apply_patch is not enabled in this session");
         // Accept patch / input / diff aliases (OpenAI tool variants).
@@ -6305,100 +6078,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", warnings, false);
     }
 
-    if (false && name == "git_status") {
-        bool short_form = true;
-        bool include_branch = true;
-        if (!get_bool(args, "short", true, short_form, validation_error) ||
-            !get_bool(args, "include_branch", true, include_branch, validation_error))
-            return tool_error_result("invalid_arguments", validation_error);
-        std::string command = "git status";
-        if (short_form) command += " --short";
-        if (include_branch) command += " --branch";
-        ProcessOptions options;
-        options.workspace = snapshot_.workspace;
-        options.timeout_ms = allow_mutations() ? 30000 : 10000;
-        options.cancellation = cancellation;
-        options.stdout_limit = 65536;
-        options.stderr_limit = 16384;
-        ProcessResult process;
-        const CommandPolicy policy =
-            allow_mutations() ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
-        const Error error = run_command(command, options, process, policy);
-        json::Value data = object_value();
-        data.object["command"] = string_value(command);
-        data.object["cwd"] = string_value(process.cwd.empty() ? snapshot_.workspace : process.cwd);
-        data.object["exit_status"] = number_value(process.exit_status);
-        data.object["stdout"] = string_value(redact_secrets(process.stdout_text, secrets_));
-        data.object["stderr"] = string_value(redact_secrets(process.stderr_text, secrets_));
-        data.object["stdout_truncated"] = bool_value(process.stdout_truncated);
-        data.object["stderr_truncated"] = bool_value(process.stderr_truncated);
-        data.object["duration_ms"] = number_value(static_cast<double>(process.duration_ms));
-        if (!error.ok()) {
-            const std::string code =
-                error.message.find("not available") != std::string::npos ? "unavailable"
-                : error.code == ErrorCode::BadArgs                       ? "policy_denied"
-                                                                         : error_code_string(error.code);
-            return envelope(false, std::move(data), code, error.message, {},
-                            process.stdout_truncated || process.stderr_truncated);
-        }
-        return envelope(true, std::move(data), "", "", {},
-                        process.stdout_truncated || process.stderr_truncated);
-    }
 
-    if (false && name == "git_diff") {
-        std::string path;
-        bool cached = false;
-        bool stat_only = false;
-        std::size_t max_bytes = 65536;
-        if (!get_string(args, "path", path, false, validation_error) ||
-            !get_bool(args, "cached", false, cached, validation_error) ||
-            !get_bool(args, "stat", false, stat_only, validation_error) ||
-            !get_size(args, "max_bytes", 65536, 524288, max_bytes, validation_error) ||
-            max_bytes == 0)
-            return tool_error_result("invalid_arguments",
-                                    validation_error.empty() ? "max_bytes must be positive"
-                                                             : validation_error);
-        if (!path.empty() && !safe_relative_path(path))
-            return tool_error_result("policy_denied", unsafe_path_message(path, "diff"));
-        std::string command = "git diff --no-color --no-ext-diff";
-        if (cached) command += " --cached";
-        if (stat_only) command += " --stat";
-        if (!path.empty()) command += " -- " + path;
-        ProcessOptions options;
-        options.workspace = snapshot_.workspace;
-        options.timeout_ms = allow_mutations() ? 30000 : 10000;
-        options.cancellation = cancellation;
-        options.stdout_limit = max_bytes;
-        options.stderr_limit = 16384;
-        ProcessResult process;
-        const CommandPolicy policy =
-            allow_mutations() ? CommandPolicy::Agent : CommandPolicy::InspectionOnly;
-        const Error error = run_command(command, options, process, policy);
-        json::Value data = object_value();
-        data.object["command"] = string_value(command);
-        data.object["cwd"] = string_value(process.cwd.empty() ? snapshot_.workspace : process.cwd);
-        data.object["exit_status"] = number_value(process.exit_status);
-        data.object["stdout"] = string_value(redact_secrets(process.stdout_text, secrets_));
-        data.object["stderr"] = string_value(redact_secrets(process.stderr_text, secrets_));
-        data.object["stdout_truncated"] = bool_value(process.stdout_truncated);
-        data.object["stderr_truncated"] = bool_value(process.stderr_truncated);
-        data.object["duration_ms"] = number_value(static_cast<double>(process.duration_ms));
-        data.object["path"] = string_value(path);
-        data.object["cached"] = bool_value(cached);
-        data.object["stat"] = bool_value(stat_only);
-        if (!error.ok()) {
-            const std::string code =
-                error.message.find("not available") != std::string::npos ? "unavailable"
-                : error.code == ErrorCode::BadArgs                       ? "policy_denied"
-                                                                         : error_code_string(error.code);
-            return envelope(false, std::move(data), code, error.message, {},
-                            process.stdout_truncated || process.stderr_truncated);
-        }
-        return envelope(true, std::move(data), "", "", {},
-                        process.stdout_truncated || process.stderr_truncated);
-    }
-
-    if (name == "fetch") {
+    if (is_handler(NativeToolHandler::Fetch)) {
         if (!allow_network_)
             return tool_error_result("policy_denied", "fetch is not enabled in this session");
         std::string url;
@@ -6471,7 +6152,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return arguments_json.empty() ? std::string("{}") : arguments_json;
     }
 
-    if (name == "web_search") {
+    if (is_handler(NativeToolHandler::WebSearch)) {
         if (hosted_web_search_)
             return arguments_json.empty() ? std::string("{}") : arguments_json;
         if (!allow_network_)
@@ -6539,7 +6220,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, false);
     }
 
-    if (name == "goal_met") {
+    if (is_handler(NativeToolHandler::GoalMet)) {
         if (mutation_policy_ == MutationPolicy::Disabled)
             return tool_error_result("policy_denied",
                                     "goal_met is only available in agent sessions");
@@ -6574,7 +6255,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         return envelope(true, std::move(data), "", "", {}, false);
     }
 
-    if (name == "attach") {
+    if (is_handler(NativeToolHandler::Attach)) {
         if (mutation_policy_ == MutationPolicy::Disabled)
             return tool_error_result("policy_denied",
                                     "attach is only available in agent sessions");

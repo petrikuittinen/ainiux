@@ -254,13 +254,21 @@ def check_provider_model_picker(binary, base_url, model):
 
 def check_bare_editor_startup(binary):
     master, slave = open_color_pty()
+    state_home = tempfile.TemporaryDirectory(prefix="ainiux-editor-bare-home-")
+    env = color_capable_env()
+    # Other integration drivers intentionally persist editor and project model
+    # selections. A bare-startup check must inherit neither state source.
+    env["HOME"] = state_home.name
+    env["XDG_CONFIG_HOME"] = os.path.join(state_home.name, "config")
+    env["XDG_DATA_HOME"] = os.path.join(state_home.name, "data")
     process = subprocess.Popen(
         [binary, "--editor"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
-        env=color_capable_env(),
+        env=env,
+        cwd=state_home.name,
     )
     os.close(slave)
     output = bytearray()
@@ -278,6 +286,7 @@ def check_bare_editor_startup(binary):
             process.terminate()
             process.wait(timeout=2)
         os.close(master)
+        state_home.cleanup()
     if process.returncode != 0:
         raise RuntimeError(f"bare editor startup exited with status {process.returncode}")
 

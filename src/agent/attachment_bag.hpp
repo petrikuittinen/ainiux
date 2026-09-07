@@ -37,7 +37,6 @@ class AttachmentBag {
     void clear();
     bool empty() const { return entries_.empty(); }
     std::size_t size() const { return entries_.size(); }
-    const std::vector<AttachmentEntry>& entries() const { return entries_; }
 
     // Add or refresh an image entry (loads base64 if not already set).
     Error add_image(const std::string& absolute_path,
@@ -50,7 +49,6 @@ class AttachmentBag {
 
     // Find by absolute path or display name (exact).
     const AttachmentEntry* find_by_path(const std::string& path_or_name) const;
-    const AttachmentEntry* find_by_id(int id) const;
 
     // Ensure base64 is loaded for an existing entry (no-op if already set).
     Error ensure_base64(AttachmentEntry& entry,
@@ -59,9 +57,6 @@ class AttachmentBag {
 
     // Mutable access for ensure_base64 after find by path.
     AttachmentEntry* find_by_path_mut(const std::string& path_or_name);
-
-    std::string summary_line() const;
-    int image_count() const;
 
    private:
     std::vector<AttachmentEntry> entries_;

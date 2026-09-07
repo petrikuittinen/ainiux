@@ -16,6 +16,5 @@ struct AuthConfig {
 
 bool constant_time_equal(std::string_view left, std::string_view right);
 AuthScope authenticate(const http::Request& request, const AuthConfig& config);
-const char* auth_scope_name(AuthScope scope);
 
 }  // namespace ainiux::server

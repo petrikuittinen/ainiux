@@ -40,13 +40,4 @@ AuthScope authenticate(const http::Request& request, const AuthConfig& config) {
                : AuthScope::None;
 }
 
-const char* auth_scope_name(AuthScope scope) {
-    switch (scope) {
-        case AuthScope::None: return "none";
-        case AuthScope::FullControl: return "full_control";
-        case AuthScope::McpOnly: return "mcp_only";
-    }
-    return "none";
-}
-
 }  // namespace ainiux::server

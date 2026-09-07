@@ -47,6 +47,5 @@ void cancel_settings_widget_row(SettingsWidget& widget);
 std::vector<tui::StyledLine> render_settings_widget(const SettingsWidget& widget, int cols);
 
 const chat::SettingsFieldSpec* selected_settings_field(const SettingsWidget& widget);
-std::vector<const chat::SettingsFieldSpec*> settings_widget_fields(const SettingsWidget& widget);
 
 }  // namespace ainiux::ui

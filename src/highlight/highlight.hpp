@@ -131,7 +131,6 @@ class DocumentCache {
     void clear();
 
     size_t valid_line_count() const { return valid_line_count_; }
-    size_t source_line_count() const { return source_lines_.size(); }
 
    private:
     std::vector<std::string> source_lines_;

@@ -7,6 +7,7 @@ import struct
 import subprocess
 import sys
 import termios
+import tempfile
 import time
 
 
@@ -72,9 +73,15 @@ def wait_for_terminal(master, timeout=5.0):
         try:
             chunk = os.read(master, 65536)
         except OSError as error:
-            raise RuntimeError("terminal exited before initialization") from error
+            rendered = output.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"terminal exited before initialization; saw {rendered[-500:]!r}"
+            ) from error
         if not chunk:
-            raise RuntimeError("terminal exited before initialization")
+            rendered = output.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"terminal exited before initialization; saw {rendered[-500:]!r}"
+            )
         output.extend(chunk)
         if b"\x1b[2J" in output:
             return
@@ -90,6 +97,7 @@ def verify_editor_minibuffer(binary, target_path, save_path):
     if os.path.exists(save_path):
         os.remove(save_path)
     master, slave = pty.openpty()
+    workspace = tempfile.TemporaryDirectory(prefix="ainiux-editor-minibuffer-workspace-")
     set_winsize(slave)
     set_winsize(master)
     process = subprocess.Popen(
@@ -99,6 +107,7 @@ def verify_editor_minibuffer(binary, target_path, save_path):
         stderr=slave,
         close_fds=True,
         env=color_capable_env(),
+        cwd=workspace.name,
     )
     os.close(slave)
     try:
@@ -128,6 +137,7 @@ def verify_editor_minibuffer(binary, target_path, save_path):
             process.terminate()
             process.wait(timeout=2)
         os.close(master)
+        workspace.cleanup()
     if process.returncode != 0:
         raise RuntimeError(f"editor exited with status {process.returncode}")
     with open(save_path, "r", encoding="utf-8") as saved:
@@ -143,6 +153,7 @@ def verify_editor_insert(binary, target_path, fetch_url, save_path):
     if os.path.exists(save_path):
         os.remove(save_path)
     master, slave = pty.openpty()
+    workspace = tempfile.TemporaryDirectory(prefix="ainiux-editor-insert-workspace-")
     set_winsize(slave)
     set_winsize(master)
     process = subprocess.Popen(
@@ -152,6 +163,7 @@ def verify_editor_insert(binary, target_path, fetch_url, save_path):
         stderr=slave,
         close_fds=True,
         env=color_capable_env(),
+        cwd=workspace.name,
     )
     os.close(slave)
     try:
@@ -182,6 +194,7 @@ def verify_editor_insert(binary, target_path, fetch_url, save_path):
             process.terminate()
             process.wait(timeout=2)
         os.close(master)
+        workspace.cleanup()
     if process.returncode != 0:
         raise RuntimeError(f"editor /insert test exited with status {process.returncode}")
     with open(save_path, "r", encoding="utf-8") as saved:

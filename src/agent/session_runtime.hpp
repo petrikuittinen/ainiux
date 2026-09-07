@@ -165,6 +165,15 @@ struct SessionRuntimeOptions {
     GuardApprovalCallback on_guard_ask;
 };
 
+// Common provider/config projection used by headless, terminal, and control
+// server agent sessions. Callers add only their surface-owned callbacks and
+// permission constraints.
+SessionRuntimeOptions make_session_runtime_options(
+    const provider::RequestContext& context,
+    std::string workspace,
+    AgentTaskMode task_mode,
+    bool interactive);
+
 class AgentSessionRuntime {
    public:
     AgentSessionRuntime() = default;

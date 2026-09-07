@@ -30,7 +30,4 @@ Error resolve_new_project_target(const std::string& active_root,
                                  const std::string& requested_path,
                                  NewProjectTarget& target);
 
-// Backward-compatible alias used by older call sites/tests.
-inline bool has_ainiux_dir(const std::string& path) { return has_project_state_dir(path); }
-
 }  // namespace ainiux::agent

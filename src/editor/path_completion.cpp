@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 #include "editor/assist_runtime.hpp"
+#include "editor/detail/editor_common.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -173,22 +174,6 @@ ChatCompletionContext chat_completion_context(const EditorState& state) {
     return context;
 }
 
-std::string longest_common_prefix(const std::vector<std::string>& values) {
-    if (values.empty()) {
-        return "";
-    }
-    std::string prefix = values.front();
-    for (size_t i = 1; i < values.size(); ++i) {
-        size_t length = 0;
-        const size_t limit = std::min(prefix.size(), values[i].size());
-        while (length < limit && prefix[length] == values[i][length]) {
-            ++length;
-        }
-        prefix.resize(length);
-    }
-    return prefix;
-}
-
 std::filesystem::path expanded_scan_path(const std::string& path) {
     return std::filesystem::u8path(expand_user_path(path));
 }
@@ -338,7 +323,7 @@ PathCompletionResult PathCompleter::complete(EditorState& state,
     }
 
     const std::string completion = candidates_.size() == 1 ? candidates_.front()
-                                                            : longest_common_prefix(candidates_);
+                                                            : detail::longest_common_prefix(candidates_);
     result.error = replace_token(state, start, end - start, completion, result.changed);
     if (!result.error.ok()) {
         reset();
@@ -515,7 +500,7 @@ PathCompletionResult ContextualCompleter::complete_command(EditorState& state) {
 
     const std::string completion = command_candidates_.size() == 1
                                        ? command_candidates_.front()
-                                       : longest_common_prefix(command_candidates_);
+                                       : detail::longest_common_prefix(command_candidates_);
     result.error = replace_token(state, 0, command_end, completion, result.changed);
     if (!result.error.ok()) {
         reset();

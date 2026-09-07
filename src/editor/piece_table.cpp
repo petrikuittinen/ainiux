@@ -78,20 +78,6 @@ Error PieceTable::write_to(std::ostream& out, LineBreak linebreak) const {
     return ok_error();
 }
 
-char PieceTable::char_at(size_t pos) const {
-    if (pos >= total_size_) {
-        return '\0';
-    }
-    size_t offset = 0;
-    for (const Piece& piece : pieces_) {
-        if (pos < offset + piece.length) {
-            return source_for(piece)[piece.start + (pos - offset)];
-        }
-        offset += piece.length;
-    }
-    return '\0';
-}
-
 Error PieceTable::insert(size_t pos, const std::string& text) {
     if (pos > total_size_) {
         return {ErrorCode::BadArgs, "editor insert position is past the end of the buffer"};

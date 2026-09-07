@@ -125,7 +125,6 @@ class SplitLayout {
     void clamp_previous_leaf();
 
     Node* make_leaf(size_t buffer_index);
-    Node* make_split(SplitKind kind, Node* first, Node* second);
     void clear();
     void collect_leaves(const Node* node, std::vector<Node*>& out) const;
     Node* leaf_at(size_t index) const;

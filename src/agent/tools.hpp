@@ -67,15 +67,15 @@ struct GoalToolHooks {
     std::function<Error(const std::string& evidence)> mark_complete;
 };
 
-// Vision attach_image tool. Empty hooks ⇒ capability/session not ready.
+// Vision attach tool. Empty hooks ⇒ capability/session not ready.
 // The runtime queues images and injects them into the next model round only
 // (request-local; never persisted to agent.sqlite / project media).
 struct VisionAttachHooks {
     // Per-image byte cap (matches --max-image-bytes).
     std::size_t max_image_bytes = 20U * 1024U * 1024U;
-    // Max successful attach_image calls per user turn (bounds context growth).
+    // Max successful attach calls per user turn (bounds context growth).
     std::size_t max_images_per_turn = 4;
-    // When false, attach_image still loads into the turn attachment bag for MCP
+    // When false, attach still loads into the turn attachment bag for MCP
     // rewrite but does not queue pixels for the model (text-only models).
     bool vision_capable = true;
     // Optional turn-scoped bag for MCP path/base64 rewrite (not owned).
@@ -108,6 +108,43 @@ struct ToolRegistryOptions {
     bool indexing_enabled = true;
     IndexAccessMode index_access_mode =
         IndexAccessMode::SnapshotAuthorization;
+};
+
+enum class ToolSafetyCategory {
+    ReadOnly,
+    Execution,
+    Network,
+    Mutation,
+    Session,
+    Vision,
+};
+
+enum class NativeToolHandler {
+    Index,
+    List,
+    Glob,
+    Grep,
+    Symbol,
+    Outline,
+    Read,
+    Run,
+    Fetch,
+    WebSearch,
+    GoalMet,
+    Attach,
+    Edit,
+    Write,
+    MakeDirectory,
+    Move,
+    Remove,
+    ApplyPatch,
+};
+
+struct ToolDescriptor {
+    provider::FunctionDefinition definition;
+    ToolSafetyCategory safety = ToolSafetyCategory::ReadOnly;
+    NativeToolHandler handler = NativeToolHandler::Index;
+    bool exposed = true;
 };
 
 class ReadToolRegistry {
@@ -162,7 +199,7 @@ class ReadToolRegistry {
     }
     // Optional MCP tools (agent/run/plan only). Not owned; caller keeps Manager alive.
     void set_mcp_bridge(mcp::ToolBridge* bridge) { mcp_bridge_ = bridge; }
-    mcp::ToolBridge* mcp_bridge() const { return mcp_bridge_; }
+    std::vector<ToolDescriptor> native_descriptors() const;
     std::vector<provider::FunctionDefinition> definitions() const;
     // Mutating tools update the in-memory snapshot so later reads in the same
     // run see the new file hashes. Security-review never enables mutations.
@@ -189,21 +226,6 @@ class ReadToolRegistry {
                                bool& created,
                                std::string& old_hash,
                                std::string& new_hash) const;
-    Error str_replace_workspace_file(const std::string& relative_path,
-                                     const std::string& old_text,
-                                     const std::string& new_text,
-                                     bool replace_all,
-                                     bool allow_fuzzy,
-                                     std::size_t hint_start_line,
-                                     std::size_t hint_end_line,
-                                     const std::string& expected_file_hash,
-                                     std::string& history_path,
-                                     std::size_t& matches_found,
-                                     std::size_t& replacements_made,
-                                     std::string& match_mode,
-                                     std::string& old_hash,
-                                     std::string& new_hash,
-                                     std::vector<std::string>& candidate_lines) const;
     Error edit_workspace_file(const std::string& relative_path,
                               const std::string& expected_file_hash,
                               const json::Value& ops,

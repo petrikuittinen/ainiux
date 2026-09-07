@@ -267,18 +267,6 @@ Error parse_context_tokens(const std::string& text, long long& out) {
     return parse_context_tokens_impl(text, out);
 }
 
-const char* format_name(OutputFormat format) {
-    switch (format) {
-        case OutputFormat::Text:
-            return "text";
-        case OutputFormat::Json:
-            return "json";
-        case OutputFormat::Ndjson:
-            return "ndjson";
-    }
-    return "text";
-}
-
 ParseResult parse_args(int argc, char** argv, const Options& base_options) {
     Options opts = base_options;
     for (int i = 1; i < argc; ++i) {

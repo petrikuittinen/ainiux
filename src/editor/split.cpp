@@ -94,17 +94,6 @@ SplitLayout::Node* SplitLayout::make_leaf(size_t buffer_index) {
     return node;
 }
 
-SplitLayout::Node* SplitLayout::make_split(SplitKind kind, Node* first, Node* second) {
-    Node* node = new Node{};
-    node->is_leaf = false;
-    node->kind = kind;
-    node->ratio = 0.5;
-    node->first = first;
-    node->second = second;
-    nodes_.push_back(node);
-    return node;
-}
-
 void SplitLayout::reset(size_t buffer_index) {
     clear();
     root_ = make_leaf(buffer_index);
