@@ -1,6 +1,6 @@
 # Embedded browser controller
 
-Ainiux v1.32 serves a responsive browser controller from `/ui/` while
+Ainiux v1.33 serves a responsive browser controller from `/ui/` while
 `ainiux server` is running. It is embedded in the executable and uses only
 vanilla HTML, CSS, and JavaScript ES modules: there is no Node.js runtime,
 framework, npm bundle, CDN, hosted font, or external script.

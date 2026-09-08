@@ -869,6 +869,22 @@ void test_config_reads_models_template() {
     check(deepseek_vision_routed != nullptr &&
               deepseek_vision_routed->id == "deepseek-v4-flash-vision",
           "DeepSeek vision family rule covers routed OpenRouter-style ids");
+    const ainiux::ModelCapability* deepseek_v41 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "deepseek", "chat",
+            "deepseek-v4.1-flash-expires-on-0910");
+    const ainiux::ModelCapability* deepseek_v41_routed =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat",
+            "deepseek/deepseek-v4.1-flash-expires-on-0910");
+    check(deepseek_v41 != nullptr && deepseek_v41->id == "deepseek-v4.1-flash" &&
+              deepseek_v41->images.has_value() && *deepseek_v41->images &&
+              deepseek_v41->reasoning_protocol == ainiux::ReasoningProtocol::DeepSeek &&
+              deepseek_v4_flash != nullptr && deepseek_v41 != deepseek_v4_flash,
+          "DeepSeek V4.1 Flash expires-on ids are cataloged as text-image-to-text");
+    check(deepseek_v41_routed != nullptr &&
+              deepseek_v41_routed->id == "deepseek-v4.1-flash",
+          "DeepSeek V4.1 Flash family rule covers routed OpenRouter-style ids");
     ainiux::ReasoningSelection deepseek_next;
     check(ainiux::config::next_reasoning_selection(
               options.model_catalog, "openrouter", "chat",

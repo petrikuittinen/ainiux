@@ -33,7 +33,7 @@ approved specification says otherwise.
 
 ## Current foundation
 
-Implementation status (2026-09-06): **v1.32**.
+Implementation status (2026-09-08): **v1.33**.
 
 The main product surfaces are shipped. The current foundation includes
 Chat Completions and Responses, provider/model catalogs, cancellable streaming,
@@ -47,8 +47,9 @@ The v1.30 control-server milestone is complete: `/ainiux/v1/` jobs and replay,
 the MCP server adapter, interactive remote Agent/Guard sessions, revision-safe
 chat and workspace/editor operations, TLS/direct-access gates, and the embedded
 same-origin WebUI are implemented. Catalog-driven video generation is in the
-headless CLI and browser controller (`fal_queue` and `replicate_predictions`).
-v1.31–v1.32 added safe Markdown and full-language
+headless CLI and browser controller (`fal_queue`, `replicate_predictions`,
+`xai_imagine`, `gemini_interactions`, and `gemini_veo`).
+v1.31–v1.33 added safe Markdown and full-language
 syntax highlighting, model/settings parity, persisted idle agent history,
 catalog-driven browser image generation, editor undo/redo, and native-parity
 browser indentation/reformatting.
@@ -139,7 +140,7 @@ protocol should normally be `images.conf` records rather than new C++ code.
 
 ### Control API and WebUI maintenance
 
-Treat the shipped v1.30–v1.32 server/browser stack as a maintained compatibility
+Treat the shipped v1.30–v1.33 server/browser stack as a maintained compatibility
 surface, not an unfinished milestone:
 
 - keep `/ainiux/v1/` DTOs, jobs, replay, revisions, Guard correlation, cancellation,

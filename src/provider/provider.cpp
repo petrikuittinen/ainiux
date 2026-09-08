@@ -2481,7 +2481,8 @@ ContextResult build_context(const cli::Options& input_options) {
             api_kind == ApiKind::Responses ? "responses" : "chat", options.model);
         if (preview != nullptr && preview->web_search &&
             (preview->id == "xai-grok-4" || preview->id == "deepseek-v4" ||
-             preview->id == "deepseek-v4-flash-vision" || preview->id == "openai-gpt-5")) {
+             preview->id == "deepseek-v4-flash-vision" ||
+             preview->id == "deepseek-v4.1-flash" || preview->id == "openai-gpt-5")) {
             options.api = "responses";
             api_kind = ApiKind::Responses;
         }

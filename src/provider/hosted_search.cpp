@@ -44,7 +44,8 @@ HostedWebSearchKind kind_for(const ModelCapability& capability,
 
 bool family_requires_responses(const std::string& catalog_id) {
     return catalog_id == "openai-gpt-5" || catalog_id == "xai-grok-4" ||
-           catalog_id == "deepseek-v4" || catalog_id == "deepseek-v4-flash-vision";
+           catalog_id == "deepseek-v4" || catalog_id == "deepseek-v4-flash-vision" ||
+           catalog_id == "deepseek-v4.1-flash";
 }
 
 bool family_requires_responses(const ModelCapability& capability) {

@@ -21,7 +21,7 @@ core modules rather than being reimplemented by each UI or protocol surface.
 
 ## Current baseline
 
-Current release: **v1.32**. Linux and other POSIX-like source builds are the
+Current release: **v1.33**. Linux and other POSIX-like source builds are the
 primary supported path, Apple Silicon macOS source builds are supported, and a
 native Windows 10 1903+/Windows 11 x64 MSYS2 UCRT64 implementation is present.
 Windows remains unreleased until the parity gate in `docs/windows.md` passes.

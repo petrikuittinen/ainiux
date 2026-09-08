@@ -2248,6 +2248,11 @@ void test_xai_and_deepseek_accept_responses() {
     check(vision_ctx.error.ok() &&
               vision_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
           "DeepSeek V4 Flash Vision Exp auto-selects Responses like other V4 family ids");
+    vision_options.model = "deepseek-v4.1-flash-expires-on-0910";
+    ainiux::provider::ContextResult v41_ctx = ainiux::provider::build_context(vision_options);
+    check(v41_ctx.error.ok() &&
+              v41_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
+          "DeepSeek V4.1 Flash auto-selects Responses like other V4 family ids");
 }
 
 void test_hosted_web_search_serialization() {
