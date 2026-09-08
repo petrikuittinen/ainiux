@@ -3390,8 +3390,8 @@ void test_video_catalog_settings_and_request() {
     ainiux::cli::Options options;
     check(parsed.error.ok() && ainiux::config::apply_videos_document(parsed.document, options).ok(),
           "bundled video catalog parses");
-    check(options.video_catalog.models.size() == 27,
-          "video catalog includes fal, replicate, and xAI Imagine endpoints");
+    check(options.video_catalog.models.size() == 36,
+          "video catalog includes fal, replicate, xAI Imagine, and Gemini endpoints");
     options.video = true;
     options.provider = "fal";
     options.key = "test-key";
@@ -3410,6 +3410,12 @@ void test_video_catalog_settings_and_request() {
     check(ainiux::config::default_video_model(options.video_catalog, "xai") ==
               "grok-imagine-video-1.5",
           "xai video default is grok-imagine-video-1.5");
+    options.provider = "gemini";
+    check(ainiux::provider::build_context(options).error.ok(),
+          "gemini video mode reuses the chat Gemini profile");
+    check(ainiux::config::default_video_model(options.video_catalog, "gemini") ==
+              "gemini-omni-1.1-flash",
+          "gemini video default is gemini-omni-1.1-flash");
     options.provider = "fal";
     check(ainiux::config::default_video_model(options.video_catalog, "fal") ==
               "minimax/h3-max-turbo/text-to-video",
@@ -3630,6 +3636,162 @@ void test_video_catalog_settings_and_request() {
               status, request_id, output_url, error_text).ok() &&
               status == "failed" && error_text.find("bad prompt") != std::string::npos,
           "xAI failed poll surfaces the provider message");
+
+    const ainiux::VideoCapability* omni = ainiux::config::resolve_video_capability(
+        options.video_catalog, "gemini", "gemini-omni-1.1-flash");
+    const ainiux::VideoCapability* veo_text = ainiux::config::resolve_video_capability(
+        options.video_catalog, "gemini", "veo-3.1-generate-preview");
+    const ainiux::VideoCapability* veo_image = ainiux::config::resolve_video_capability(
+        options.video_catalog, "gemini", "veo-3.1-generate-preview/image-to-video");
+    const ainiux::VideoCapability* veo_ref = ainiux::config::resolve_video_capability(
+        options.video_catalog, "gemini", "veo-3.1-generate-preview/reference-to-video");
+    const ainiux::VideoCapability* veo_fast = ainiux::config::resolve_video_capability(
+        options.video_catalog, "gemini", "veo-3.1-fast-generate-preview");
+    const ainiux::VideoCapability* veo_lite_ref = ainiux::config::resolve_video_capability(
+        options.video_catalog, "gemini", "veo-3.1-lite-generate-preview/reference-to-video");
+    check(omni != nullptr && omni->protocol == ainiux::VideoProtocol::GeminiInteractions &&
+              omni->input_mode == ainiux::VideoInputMode::Mixed &&
+              veo_text != nullptr && veo_text->protocol == ainiux::VideoProtocol::GeminiVeo &&
+              veo_text->input_mode == ainiux::VideoInputMode::Text &&
+              veo_image != nullptr && veo_image->input_mode == ainiux::VideoInputMode::Image &&
+              veo_ref != nullptr && veo_ref->input_mode == ainiux::VideoInputMode::Reference &&
+              veo_fast != nullptr && veo_lite_ref == nullptr,
+          "Gemini Omni and Veo 3.1 catalog records stay distinct");
+    if (!omni || !veo_text || !veo_image || !veo_ref) return;
+
+    ainiux::provider::VideoGenerateRequest gemini_request;
+    gemini_request.prompt = "a red cube rotating";
+    gemini_request.capability = *omni;
+    gemini_request.settings["aspect_ratio"] = resolution;
+    gemini_request.settings["aspect_ratio"].string = "16:9";
+    gemini_request.settings["resolution"] = resolution;
+    gemini_request.settings["resolution"].string = "360p";
+    ainiux::json::Value omni_wire;
+    check(ainiux::provider::build_gemini_omni_video_request(gemini_request, omni_wire).ok() &&
+              field(omni_wire, "model") &&
+              field(omni_wire, "model")->string == "gemini-omni-1.1-flash" &&
+              field(omni_wire, "store") && field(omni_wire, "store")->boolean == true &&
+              field(omni_wire, "response_format") &&
+              field(field(omni_wire, "response_format"), "type") &&
+              field(field(omni_wire, "response_format"), "type")->string == "video" &&
+              field(field(omni_wire, "response_format"), "delivery") &&
+              field(field(omni_wire, "response_format"), "delivery")->string == "uri" &&
+              field(omni_wire, "instances") == nullptr,
+          "Gemini Omni video uses Interactions with URI delivery");
+
+    ainiux::provider::VideoInput gemini_still;
+    gemini_still.mime_type = "image/png";
+    gemini_still.bytes = std::make_shared<const std::string>(std::string("png"));
+    gemini_request.inputs = {gemini_still};
+    check(ainiux::provider::build_gemini_omni_video_request(gemini_request, omni_wire).ok() &&
+              field(omni_wire, "input") && field(omni_wire, "input")->is_array() &&
+              field(omni_wire, "input")->array.size() == 2 &&
+              field(omni_wire, "image") == nullptr &&
+              field(omni_wire, "referenceImages") == nullptr,
+          "Gemini Omni attachments are Interactions image parts");
+
+    gemini_request.capability = *veo_text;
+    gemini_request.inputs.clear();
+    gemini_request.settings.clear();
+    duration.type = ainiux::json::Value::Type::Number;
+    duration.number = 4;
+    gemini_request.settings["durationSeconds"] = duration;
+    gemini_request.settings["aspectRatio"] = resolution;
+    gemini_request.settings["aspectRatio"].string = "16:9";
+    gemini_request.settings["resolution"] = resolution;
+    gemini_request.settings["resolution"].string = "720p";
+    ainiux::json::Value veo_wire;
+    check(ainiux::provider::build_gemini_veo_video_input(gemini_request, veo_wire).ok() &&
+              field(veo_wire, "instances") && field(veo_wire, "instances")->is_array() &&
+              field(field(veo_wire, "instances")->at(0), "prompt") &&
+              field(field(veo_wire, "instances")->at(0), "image") == nullptr &&
+              field(veo_wire, "parameters") &&
+              field(field(veo_wire, "parameters"), "durationSeconds") &&
+              field(field(veo_wire, "parameters"), "durationSeconds")->type ==
+                  ainiux::json::Value::Type::Number &&
+              field(field(veo_wire, "parameters"), "durationSeconds")->number == 4 &&
+              field(field(veo_wire, "parameters"), "aspectRatio") &&
+              field(field(veo_wire, "parameters"), "aspectRatio")->is_string() &&
+              field(field(veo_wire, "parameters"), "personGeneration") == nullptr,
+          "Veo text-to-video uses instances and numeric durationSeconds");
+    std::map<std::string, ainiux::json::Value> veo_defaults;
+    check(ainiux::provider::normalize_video_settings(*veo_text, {}, veo_defaults).ok() &&
+              veo_defaults.count("personGeneration") == 0,
+          "Veo catalog omits personGeneration");
+    ainiux::json::Value duration_text;
+    duration_text.type = ainiux::json::Value::Type::String;
+    duration_text.string = "8";
+    gemini_request.settings["durationSeconds"] = duration_text;
+    check(ainiux::provider::build_gemini_veo_video_input(gemini_request, veo_wire).ok() &&
+              field(field(veo_wire, "parameters"), "durationSeconds") &&
+              field(field(veo_wire, "parameters"), "durationSeconds")->type ==
+                  ainiux::json::Value::Type::Number &&
+              field(field(veo_wire, "parameters"), "durationSeconds")->number == 8,
+          "Veo catalog string durationSeconds is sent as a number");
+
+    gemini_request.capability = *veo_image;
+    gemini_request.inputs = {gemini_still};
+    ainiux::provider::VideoInput gemini_last = gemini_still;
+    gemini_request.inputs.push_back(gemini_last);
+    check(ainiux::provider::build_gemini_veo_video_input(gemini_request, veo_wire).ok() &&
+              field(field(veo_wire, "instances")->at(0), "image") &&
+              field(field(field(veo_wire, "instances")->at(0), "image"), "inlineData") &&
+              field(field(veo_wire, "instances")->at(0), "lastFrame") &&
+              field(field(veo_wire, "instances")->at(0), "referenceImages") == nullptr,
+          "Veo image-to-video sends image and lastFrame inlineData");
+
+    gemini_request.capability = *veo_ref;
+    check(ainiux::provider::build_gemini_veo_video_input(gemini_request, veo_wire).ok() &&
+              field(field(veo_wire, "instances")->at(0), "referenceImages") &&
+              field(field(veo_wire, "instances")->at(0), "referenceImages")->is_array() &&
+              field(field(veo_wire, "instances")->at(0), "referenceImages")->array.size() == 2 &&
+              field(field(veo_wire, "instances")->at(0), "image") == nullptr,
+          "Veo reference-to-video sends referenceImages and omits image");
+
+    bool done = false;
+    std::string operation_name, output_uri, gemini_error;
+    check(ainiux::provider::parse_gemini_veo_operation(
+              "{\"name\":\"models/veo-3.1-generate-preview/operations/abc\"}",
+              done, operation_name, output_uri, gemini_error)
+              .ok() &&
+              operation_name.find("operations/abc") != std::string::npos && !done,
+          "Veo submit body exposes the operation name");
+    check(ainiux::provider::parse_gemini_veo_operation(
+              "{\"done\":false}", done, operation_name, output_uri, gemini_error)
+              .ok() &&
+              !done,
+          "Veo pending poll is not terminal");
+    check(ainiux::provider::parse_gemini_veo_operation(
+              "{\"done\":true,\"response\":{\"generateVideoResponse\":{\"generatedSamples\":"
+              "[{\"video\":{\"uri\":\"https://generativelanguage.googleapis.com/v1beta/files/"
+              "abc:download?alt=media\"}}]}}}",
+              done, operation_name, output_uri, gemini_error)
+              .ok() &&
+              done && output_uri.find("https://") == 0,
+          "Veo done poll exposes video.uri");
+    check(ainiux::provider::parse_gemini_veo_operation(
+              "{\"done\":true,\"error\":{\"message\":\"bad prompt\"}}", done, operation_name,
+              output_uri, gemini_error)
+              .ok() &&
+              done && gemini_error.find("bad prompt") != std::string::npos,
+          "Veo failed operation surfaces the provider message");
+
+    std::string omni_status, omni_uri, omni_b64, omni_error;
+    check(ainiux::provider::parse_gemini_omni_video_response(
+              "{\"status\":\"completed\",\"steps\":[{\"type\":\"model_output\",\"content\":"
+              "[{\"type\":\"video\",\"uri\":\"https://generativelanguage.googleapis.com/v1beta/"
+              "files/xyz:download?alt=media\"}]}]}",
+              omni_status, omni_uri, omni_b64, omni_error)
+              .ok() &&
+              omni_status == "completed" && omni_uri.find("files/xyz") != std::string::npos,
+          "Omni REST steps expose a video URI");
+    check(ainiux::provider::parse_gemini_omni_video_response(
+              "{\"status\":\"completed\",\"steps\":[{\"type\":\"model_output\",\"content\":"
+              "[{\"type\":\"video\",\"data\":\"AAAA\",\"mime_type\":\"video/mp4\"}]}]}",
+              omni_status, omni_uri, omni_b64, omni_error)
+              .ok() &&
+              omni_b64 == "AAAA",
+          "Omni REST steps expose inline video data");
 }
 
 }  // namespace

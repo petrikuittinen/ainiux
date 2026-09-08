@@ -178,7 +178,8 @@ selects the protocol, endpoint, accepted references, defaults, and scalar
 settings. FAL `minimax/h3-max-turbo/text-to-video` is the bundled default.
 Replicate models use `--provider replicate` and `REPLICATE_API_KEY` or
 `REPLICATE_API_TOKEN`. Native Grok Imagine uses `--provider xai` (or `grok`)
-and `XAI_API_KEY` or `GROK_API_KEY`.
+and `XAI_API_KEY` or `GROK_API_KEY`. Native Gemini Omni Flash and Veo 3.1 use
+`--provider gemini` and `GEMINI_API_KEY`.
 
 ```sh
 ainiux video -p "a paper boat drifting through rain" --duration 5 --resolution 768P
@@ -196,6 +197,10 @@ ainiux video --provider xai -m grok-imagine-video-1.5 \
   -p "a red cube rotating slowly" --duration 1 --resolution 480p
 ainiux video --provider xai -m grok-imagine-video-1.5/image-to-video \
   -p "slow push-in" --attach still.png --duration 1 --resolution 480p
+ainiux video --provider gemini -m gemini-omni-1.1-flash \
+  -p "a red cube rotating slowly" --resolution 360p --ar 16:9
+ainiux video --provider gemini -m veo-3.1-fast-generate-preview \
+  -p "a red cube rotating slowly" --duration 4 --resolution 720p
 ```
 
 The bundled catalog contains these FAL endpoint ids:
@@ -222,10 +227,19 @@ and these native xAI Imagine ids:
 - `grok-imagine-video-1.5/image-to-video`
 - `grok-imagine-video-1.5/reference-to-video`
 
+and these native Gemini ids:
+
+- `gemini-omni-1.1-flash` (Gemini default; text or optional images)
+- `veo-3.1-generate-preview`, `.../image-to-video`, `.../reference-to-video`
+- `veo-3.1-fast-generate-preview` with the same mode suffixes
+- `veo-3.1-lite-generate-preview` and `.../image-to-video` (no reference mode)
+
 Native xAI records keep a unique `-m` / WebUI id per mode
 (`grok-imagine-video-1.5`, `.../image-to-video`, `.../reference-to-video`) and
-send `grok-imagine-video-1.5` on the wire. FAL and Replicate records whose ids
-contain `xai/` still use FAL or Replicate credentials, not `XAI_API_KEY`.
+send `grok-imagine-video-1.5` on the wire. Veo mode suffixes work the same way
+and send `veo-3.1-*-generate-preview` on the wire. FAL and Replicate records
+whose ids contain `xai/` or `google/veo` still use FAL or Replicate credentials,
+not `XAI_API_KEY` or `GEMINI_API_KEY`.
 
 Common options are `--resolution`, `--duration`, `--ar`, `--seed`,
 `--negative-prompt`, and `--audio on|off`. Repeatable
@@ -251,4 +265,5 @@ Generation and downloads are cancellable. The generated download is capped at
 1 GiB and must have an MP4 `ftyp` signature. FAL credentials are `FAL_API_KEY`
 or `FAL_KEY`. Replicate credentials are `REPLICATE_API_KEY` or
 `REPLICATE_API_TOKEN`. Native xAI Imagine credentials are `XAI_API_KEY` or
-`GROK_API_KEY`. Do not put a key on the command line.
+`GROK_API_KEY`. Native Gemini Omni/Veo credentials are `GEMINI_API_KEY`.
+Do not put a key on the command line.

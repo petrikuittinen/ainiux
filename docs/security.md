@@ -313,6 +313,13 @@ hosts and to output downloads when Authorization is required. There is no
 documented video-cancel URL; cancellation stops polling. Credentials are
 `XAI_API_KEY` or `GROK_API_KEY`.
 
+Native Gemini Omni video jobs post to `{native}/interactions` with
+`x-goog-api-key` and `store: true` (required for URI video delivery). Veo jobs post to
+`{native}/models/{model}:predictLongRunning` and poll the operation. Image
+attachments are inline base64. Output downloads use `x-goog-api-key` rather
+than Bearer. There is no documented cancel URL; cancellation stops polling.
+Credentials are `GEMINI_API_KEY` or `AINIUX_API_KEY`.
+
 Generated videos stream into a random temporary file with a 1 GiB limit, require
 an MP4 `ftyp` signature, and move atomically to the selected destination.
 Cancellation or any HTTP, schema, or write failure removes the temporary file.

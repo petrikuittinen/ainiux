@@ -6,7 +6,13 @@
 
 namespace ainiux {
 
-enum class VideoProtocol { FalQueue, ReplicatePredictions, XaiImagine };
+enum class VideoProtocol {
+    FalQueue,
+    ReplicatePredictions,
+    XaiImagine,
+    GeminiInteractions,
+    GeminiVeo,
+};
 enum class VideoInputMode { Text, Image, Reference, Mixed };
 
 struct VideoCapability {

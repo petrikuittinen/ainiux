@@ -30,6 +30,8 @@ bool parse_video_protocol(const std::string& text, VideoProtocol& protocol) {
     if (value == "fal_queue") protocol = VideoProtocol::FalQueue;
     else if (value == "replicate_predictions") protocol = VideoProtocol::ReplicatePredictions;
     else if (value == "xai_imagine") protocol = VideoProtocol::XaiImagine;
+    else if (value == "gemini_interactions") protocol = VideoProtocol::GeminiInteractions;
+    else if (value == "gemini_veo") protocol = VideoProtocol::GeminiVeo;
     else return false;
     return true;
 }
@@ -37,6 +39,8 @@ const char* video_protocol_name(VideoProtocol protocol) {
     switch (protocol) {
         case VideoProtocol::ReplicatePredictions: return "replicate_predictions";
         case VideoProtocol::XaiImagine: return "xai_imagine";
+        case VideoProtocol::GeminiInteractions: return "gemini_interactions";
+        case VideoProtocol::GeminiVeo: return "gemini_veo";
         case VideoProtocol::FalQueue: return "fal_queue";
     }
     return "fal_queue";

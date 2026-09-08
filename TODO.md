@@ -24,7 +24,7 @@
 ## Deferred roadmap
 
 - Local control-API server (`ainiux server`) is complete through v1.30 PR 10, including the embedded dependency-free WUI. The OpenAI `/v1` proxy remains a later adapter, not a substitute. Foreign-agent bash usage is `docs/skills/ainiux-cli/SKILL.md`.
-- Image generation in the CLI (`ainiux image`) and WebUI is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Video generation is landed in the headless CLI and WebUI through layered `videos.conf` with `fal_queue`, `replicate_predictions`, and `xai_imagine`; REPL/TUI video jobs and nested Kling storyboard/element inputs remain. Add image models to `images.conf` and compatible video endpoints to `videos.conf`.
+- Image generation in the CLI (`ainiux image`) and WebUI is landed (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`); REPL `/image`, TUI jobs, batch, streaming, and multi-turn editing remain. Video generation is landed in the headless CLI and WebUI through layered `videos.conf` with `fal_queue`, `replicate_predictions`, `xai_imagine`, `gemini_interactions`, and `gemini_veo`; REPL/TUI video jobs, Omni multi-turn edit, Veo extension, and nested Kling storyboard/element inputs remain. Add image models to `images.conf` and compatible video endpoints to `videos.conf`.
 
 ## Web search / fetch
 

@@ -43,10 +43,17 @@ Error normalize_video_settings(const VideoCapability& capability,
 Error build_fal_video_input(const VideoGenerateRequest& request, json::Value& input);
 Error build_replicate_video_input(const VideoGenerateRequest& request, json::Value& input);
 Error build_xai_imagine_video_input(const VideoGenerateRequest& request, json::Value& input);
+Error build_gemini_omni_video_request(const VideoGenerateRequest& request, json::Value& body);
+Error build_gemini_veo_video_input(const VideoGenerateRequest& request, json::Value& body);
 Error parse_fal_video_result(const std::string& body, std::string& output_url);
 Error parse_xai_imagine_video_status(const std::string& body, std::string& status,
                                      std::string& request_id, std::string& output_url,
                                      std::string& error_text);
+Error parse_gemini_omni_video_response(const std::string& body, std::string& status,
+                                       std::string& output_uri, std::string& b64_data,
+                                       std::string& error_text);
+Error parse_gemini_veo_operation(const std::string& body, bool& done, std::string& operation_name,
+                                 std::string& output_uri, std::string& error_text);
 Error generate_video(const RequestContext& context,
                      const VideoGenerateRequest& request,
                      VideoGenerateResult& result,
@@ -59,12 +66,17 @@ Error generate_xai_imagine_video(const RequestContext& context,
                                  const VideoGenerateRequest& request,
                                  VideoGenerateResult& result,
                                  runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error generate_gemini_video(const RequestContext& context,
+                            const VideoGenerateRequest& request,
+                            VideoGenerateResult& result,
+                            runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error download_generated_video(const RequestContext& context,
                                const std::string& url,
                                const VideoGenerateRequest& request,
                                VideoGenerateResult& result,
                                runtime::CancellationToken cancellation,
-                               bool authorize);
+                               bool authorize,
+                               const std::string& extra_header = {});
 Error allocate_unused_video_path(const std::string& directory, std::string& path);
 
 }  // namespace ainiux::provider

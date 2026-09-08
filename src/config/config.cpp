@@ -2245,7 +2245,7 @@ Error apply_videos_document_impl(const Document& document, cli::Options& options
             else if (key == "protocol") {
                 VideoProtocol value;
                 if (!parse_video_protocol(entry.value.string, value))
-                    return schema_error(entry, "unknown video protocol; expected fal_queue, replicate_predictions, or xai_imagine");
+                    return schema_error(entry, "unknown video protocol; expected fal_queue, replicate_predictions, xai_imagine, gemini_interactions, or gemini_veo");
                 partial.protocol = value;
             } else if (key == "input_mode") {
                 if (!parse_video_input_mode(entry.value.string, partial.input_mode))

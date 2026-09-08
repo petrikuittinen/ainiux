@@ -132,7 +132,8 @@ std::string url_origin(const std::string& url) {
 
 Error download_generated_video(const RequestContext& context, const std::string& url,
                                const VideoGenerateRequest& request, VideoGenerateResult& result,
-                               runtime::CancellationToken cancellation, bool authorize) {
+                               runtime::CancellationToken cancellation, bool authorize,
+                               const std::string& extra_header) {
     if (!starts_with_https(url)) return {ErrorCode::BadUrl, "video output URL must use HTTPS"};
     std::string random;
     Error err = platform::secure_random_hex(8, random);
@@ -149,18 +150,22 @@ Error download_generated_video(const RequestContext& context, const std::string&
     get.proxy = context.options.proxy; get.insecure_tls = context.options.insecure_tls;
     get.trace = context.options.trace_http; get.cancellation = cancellation;
     get.max_body_bytes = kMaxVideoBytes; get.retain_body = false;
-    if (authorize) {
+    if (authorize || !extra_header.empty()) {
         get.headers = context.headers;
-        bool have_authorization = false;
-        for (const std::string& header : get.headers) {
-            const std::size_t colon = header.find(':');
-            if (colon != std::string::npos && ascii_lower(header.substr(0, colon)) == "authorization") {
-                have_authorization = true;
-                break;
+        if (!extra_header.empty()) {
+            get.headers.push_back(extra_header);
+        } else {
+            bool have_authorization = false;
+            for (const std::string& header : get.headers) {
+                const std::size_t colon = header.find(':');
+                if (colon != std::string::npos && ascii_lower(header.substr(0, colon)) == "authorization") {
+                    have_authorization = true;
+                    break;
+                }
             }
-        }
-        if (!have_authorization && !context.api_key.empty()) {
-            get.headers.push_back("Authorization: Bearer " + context.api_key);
+            if (!have_authorization && !context.api_key.empty()) {
+                get.headers.push_back("Authorization: Bearer " + context.api_key);
+            }
         }
     }
     get.on_body = [&](const std::string& chunk) {
@@ -445,6 +450,10 @@ Error generate_video(const RequestContext& context, const VideoGenerateRequest& 
     }
     if (request.capability.protocol == VideoProtocol::XaiImagine) {
         return generate_xai_imagine_video(context, request, result, cancellation);
+    }
+    if (request.capability.protocol == VideoProtocol::GeminiInteractions ||
+        request.capability.protocol == VideoProtocol::GeminiVeo) {
+        return generate_gemini_video(context, request, result, cancellation);
     }
     VideoGenerateRequest wire_request = request;
     for (VideoInput& media : wire_request.inputs) { Error upload_error = upload_fal_media(context, media, cancellation); if (!upload_error.ok()) return upload_error; }

@@ -679,6 +679,15 @@ image-to-video, and reference-to-video stay three catalog records because a
 single attached image has different first-frame vs reference semantics. FAL and
 Replicate records whose ids mention xAI remain those providers' transports.
 
+Native Gemini video reuses `--provider gemini`. Omni Flash uses the compiled
+`gemini_interactions` video protocol (`POST /v1beta/interactions`) because that
+is the documented REST for `gemini-omni-1.1-flash`. Veo 3.1 uses a separate
+`gemini_veo` protocol (`:predictLongRunning` plus operation poll) because the
+request body is Vertex-style `instances`/`parameters`, not Interactions.
+Omni is one mixed catalog record; Veo keeps text / image / reference records
+with unique `-m` suffixes and a shared wire model, matching xAI Imagine. FAL
+and Replicate `google/veo-*` records remain those providers.
+
 Reference files use FAL CDN uploads rather than base64 queue bodies, including
 multipart uploads for large bounded video inputs. Billable submissions are never
 retried after an ambiguous send failure. Signed upload and output URLs carry no
