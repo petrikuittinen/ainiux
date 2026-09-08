@@ -654,13 +654,22 @@ application dependency.
 
 Video generation is a shared cancellable operation used by the headless CLI and
 control server, with the browser remaining a protocol/presentation client. Video
-models live in layered `videos.conf`; records describe FAL endpoint ids, text,
-keyframe, or multimodal-reference input mode, provider field mappings, count
-limits, and typed scalar descriptors. This keeps defaults and enum vocabulary in
-configuration while one compiled `fal_queue` adapter owns upload, queue polling,
-cancellation, output validation, and atomic persistence. Nested Kling storyboard
-and element objects are deferred because they need a structured UI and validation
-contract rather than an untyped JSON escape hatch.
+models live in layered `videos.conf`; records describe FAL or Replicate endpoint
+ids, text, keyframe, mixed, or multimodal-reference input mode, provider field
+mappings, count limits, and typed scalar descriptors. This keeps defaults and
+enum vocabulary in configuration while compiled `fal_queue` and
+`replicate_predictions` adapters own upload, polling, cancellation, output
+validation, and atomic persistence. `mixed` covers unified Replicate endpoints
+that accept a prompt with optional start/end frames and extra references.
+Nested Kling storyboard and element objects are deferred because they need a
+structured UI and validation contract rather than an untyped JSON escape hatch.
+
+Replicate video attachments use the Files API rather than JSON data URLs so
+bounded video and audio inputs stay out of prediction bodies. The prediction
+conversation reuses the existing image Replicate wait/poll/cancel helpers.
+Seedance first/last-frame fields are mutually exclusive with reference arrays;
+when a video or audio attachment is present, all images go to the reference
+array.
 
 Reference files use FAL CDN uploads rather than base64 queue bodies, including
 multipart uploads for large bounded video inputs. Billable submissions are never

@@ -154,8 +154,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v19.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v23.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v20.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v25.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -204,7 +204,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v19.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v20.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -214,6 +214,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find("@media (max-width: 42rem)") != std::string::npos &&
               stylesheet.body.find(".topbar") != std::string::npos &&
               stylesheet.body.find(".image-layout") != std::string::npos &&
+              stylesheet.body.find(".video-input-row") != std::string::npos &&
               stylesheet.body.find(".panel.placeholder-panel.active") != std::string::npos &&
               stylesheet.body.find("height: 100dvh") != std::string::npos &&
               stylesheet.body.find(".metrics-strip") != std::string::npos &&
@@ -243,7 +244,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v23.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v25.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -283,6 +284,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("uploadImageInputs") != std::string::npos &&
               javascript.body.find("function resetImageForm") != std::string::npos &&
               javascript.body.find("./image-options-v1.js") != std::string::npos &&
+              javascript.body.find("./video-options-v3.js") != std::string::npos &&
+              javascript.body.find("video-input-row") != std::string::npos &&
               javascript.body.find("./editor-history-v2.js") != std::string::npos &&
               javascript.body.find("./editor-indentation-v1.js") != std::string::npos &&
               javascript.body.find("reformatEditorSnapshot") != std::string::npos &&
@@ -396,10 +399,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               image_options.body.find("export function resetImageFormValues") != std::string::npos &&
               image_options.body.find("fetch(") == std::string::npos,
           "embedded image option module is pure and served as an immutable exact-path asset");
-    Response video_options = route_request(public_get("/ui/assets/video-options-v1.js"), config, status);
+    Response video_options = route_request(public_get("/ui/assets/video-options-v3.js"), config, status);
     check(video_options.status == 200 &&
               video_options.body.find("normalizeVideoCatalog") != std::string::npos &&
               video_options.body.find("videoFileError") != std::string::npos &&
+              video_options.body.find("cropVideoFileName") != std::string::npos &&
+              video_options.body.find("videoInputStatus") != std::string::npos &&
               video_options.cache_control.find("immutable") != std::string::npos,
           "embedded video option module is pure and served as an immutable exact-path asset");
 
@@ -453,7 +458,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/syntax-v1.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/syntax-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v22.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v23.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v24.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v18.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v19.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/video-options-v1.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/video-options-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v4.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/syntax-v3.js"), config, status).status == 404,
           "the first-batch WUI syntax assets are superseded after full language parity");
@@ -663,6 +673,8 @@ void test_video_input_store_validates_media_and_lifetimes() {
         parsed_request(request_text("/ainiux/v1/videos/catalog")), auth, status);
     check(catalog.status == 200 &&
               catalog.body.find("minimax/h3-max-turbo/text-to-video") != std::string::npos &&
+              catalog.body.find("prunaai/p-video") != std::string::npos &&
+              catalog.body.find("\"input_mode\":\"mixed\"") != std::string::npos &&
               catalog.body.find("\"max_input_image_bytes\":8388608") != std::string::npos &&
               catalog.body.find("model_regex") == std::string::npos,
           "video catalog route exposes safe model controls and byte limits");

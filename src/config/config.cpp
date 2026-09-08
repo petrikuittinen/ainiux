@@ -2205,9 +2205,9 @@ Error apply_videos_document_impl(const Document& document, cli::Options& options
         std::string prompt_field = "prompt";
         std::string start_image_field = "image_url";
         std::string end_image_field = "end_image_url";
-        std::string reference_images_field = "reference_image_urls";
-        std::string reference_videos_field = "reference_video_urls";
-        std::string reference_audios_field = "reference_audio_urls";
+        std::string reference_images_field;
+        std::string reference_videos_field;
+        std::string reference_audios_field;
         std::string defaults_json;
         std::string settings_json = "[]";
         SourceLocation source;
@@ -2243,10 +2243,12 @@ Error apply_videos_document_impl(const Document& document, cli::Options& options
             else if (key == "api_model") partial.api_model = entry.value.string;
             else if (key == "protocol") {
                 VideoProtocol value;
-                if (!parse_video_protocol(entry.value.string, value)) return schema_error(entry, "unknown video protocol; expected fal_queue");
+                if (!parse_video_protocol(entry.value.string, value))
+                    return schema_error(entry, "unknown video protocol; expected fal_queue or replicate_predictions");
                 partial.protocol = value;
             } else if (key == "input_mode") {
-                if (!parse_video_input_mode(entry.value.string, partial.input_mode)) return schema_error(entry, "input_mode must be text, image, or reference");
+                if (!parse_video_input_mode(entry.value.string, partial.input_mode))
+                    return schema_error(entry, "input_mode must be text, image, reference, or mixed");
                 partial.have_input_mode = true;
             } else if (key == "prompt_field") partial.prompt_field = entry.value.string;
             else if (key == "start_image_field") partial.start_image_field = entry.value.string;

@@ -120,13 +120,15 @@ Endpoint metadata and explicit CLI values outrank catalog fallbacks. Protocol na
 `images.conf` contains repeatable `[image]` records for `ainiux image`. Matching uses the full model id or the final slash component. `protocol` selects a compiled HTTP adapter (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`). Replicate, fal, and Gemini records set `api_model` to the provider endpoint id and optional field names (`size_field`, `aspect_field`, `images_field`, `defaults_json`) so a new model is a catalog change. User `~/.config/ainiux/images.conf` overlays bundled records by `id`. `models.conf` `images = on` means vision **input** (text-image-to-text), not image generation.
 
 `videos.conf` contains repeatable `[video]` records for `ainiux video` and the
-WebUI Video tab. The bundled adapter is `fal_queue`; records select `text`,
-`image`, or `reference` input mode, provider field names, per-modality and total
-reference counts, optional per-modality byte limits, and a JSON array of scalar
-setting descriptors. Those
+WebUI Video tab. `protocol` selects `fal_queue` or `replicate_predictions`.
+Records select `text`, `image`, `reference`, or `mixed` input mode, provider
+field names, per-modality and total reference counts, optional per-modality
+byte limits, and a JSON array of scalar setting descriptors. Those
 descriptors drive CLI validation, the control API, the browser controls, and
 the provider request, so supported enums and defaults remain data-driven. User
 `~/.config/ainiux/videos.conf` records overlay bundled records by `id`.
+`mixed` models accept a prompt with optional attachments up to the catalog
+maxima (typical of unified Replicate endpoints).
 
 `AINIUX_VIDEOS` selects an alternate installed video catalog path. As with the
 other split catalogs, `--no-config` skips only the user overlay; it does not
@@ -137,8 +139,8 @@ Bundled provider defaults:
 | Provider | Protocol | Default `api_model` |
 | --- | --- | --- |
 | `openai` | `openai_images` | `gpt-image-2` |
-| `replicate` | `replicate_predictions` | `prunaai/z-image-turbo` |
-| `fal` | `fal_queue` | `fal-ai/flux/schnell` |
+| `replicate` | `replicate_predictions` | `prunaai/z-image-turbo` (images) / `prunaai/p-video` (video) |
+| `fal` | `fal_queue` | `fal-ai/flux/schnell` (images) / `minimax/h3-max-turbo/text-to-video` (video) |
 | `gemini` | `gemini_interactions` | `gemini-3.1-flash-image` |
 
 The bundled file currently lists one OpenAI Images model, nine Replicate models, twelve fal models, and four Gemini Nano Banana models (`gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`). Gemini Lite output is JPEG-only. Classic Google Imagen `:predict` is not a catalog protocol. CLI examples and the full `-m` list are in [CLI and scripting](cli.md#image-generation).

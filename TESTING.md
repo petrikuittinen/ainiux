@@ -105,7 +105,7 @@ transport, filesystem, or PTY boundary is involved.
 - Provider registry, every registered reasoning request protocol, ordinary response parsing, and native-tool readable-reasoning extraction for Chat/Responses streams, summaries, details, think tags, and encrypted-state omission
 - Main configuration plus `models.conf` parsing, embedded fallback availability outside the source directory, layering, disabling, regex validation, context-window fallback precedence, and final-component/case-insensitive family matching
 - `images.conf` parsing, id overlay, default image model, `openai_images` / `replicate_predictions` / `fal_queue` / `gemini_interactions` mapping, and catalog-driven size/quality/format mapping for `ainiux image`
-- `videos.conf` parsing and overlay, FAL endpoint matching, scalar setting and media-limit validation, request/result mapping, managed WebUI uploads, and browser catalog/input validation for `ainiux video`
+- `videos.conf` parsing and overlay, FAL and Replicate endpoint matching, scalar setting and media-limit validation, request/result mapping, managed WebUI uploads, and browser catalog/input validation for `ainiux video`
 - HTML/Markdown/input/output conversion, including punctuation-adjacent emphasis,
   literal intraword underscores, exact inline-code delimiter runs, blockquote
   text preservation across editor and TUI styling, and pretty table layout

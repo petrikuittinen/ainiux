@@ -170,11 +170,11 @@ FULL_AUTH=(--header "Authorization: Bearer ${FULL_SECRET}")
 MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
 request 200 "public embedded WUI index" "${BASE_URL}/ui/"
-expect_body '/ui/assets/app-v19.css' "WUI stylesheet reference"
-expect_body '/ui/assets/app-v23.js' "WUI JavaScript reference"
+expect_body '/ui/assets/app-v20.css' "WUI stylesheet reference"
+expect_body '/ui/assets/app-v25.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
-    "${BASE_URL}/ui/assets/app-v23.js"
+    "${BASE_URL}/ui/assets/app-v25.js"
 expect_body 'localStorage' "persistent browser token storage"
 expect_body 'Invalid authentication' "invalid browser authentication state"
 expect_body 'Last-Event-ID' "authenticated SSE replay"
@@ -206,7 +206,7 @@ request 200 "versioned WUI image option module" \
     "${BASE_URL}/ui/assets/image-options-v1.js"
 expect_body 'normalizeImageCatalog' "config-driven image option module"
 request 200 "versioned WUI video option module" \
-    "${BASE_URL}/ui/assets/video-options-v1.js"
+    "${BASE_URL}/ui/assets/video-options-v3.js"
 expect_body 'normalizeVideoCatalog' "config-driven video option module"
 request 200 "versioned WUI editor indentation module" --dump-header "${WUI_HEADERS}" \
     "${BASE_URL}/ui/assets/editor-indentation-v1.js"

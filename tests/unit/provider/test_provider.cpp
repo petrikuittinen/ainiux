@@ -3311,14 +3311,21 @@ void test_video_catalog_settings_and_request() {
     ainiux::cli::Options options;
     check(parsed.error.ok() && ainiux::config::apply_videos_document(parsed.document, options).ok(),
           "bundled video catalog parses");
-    check(options.video_catalog.models.size() == 14,
-          "video catalog includes all requested fal endpoints");
+    check(options.video_catalog.models.size() == 24,
+          "video catalog includes fal and replicate endpoints");
     options.video = true;
     options.provider = "fal";
     options.key = "test-key";
     options.prompt = "test video";
     check(ainiux::provider::build_context(options).error.ok(),
           "fal video mode does not require a chat endpoint");
+    options.provider = "replicate";
+    check(ainiux::provider::build_context(options).error.ok(),
+          "replicate video mode does not require a chat endpoint");
+    check(ainiux::config::default_video_model(options.video_catalog, "replicate") ==
+              "prunaai/p-video",
+          "replicate video default is prunaai/p-video");
+    options.provider = "fal";
     check(ainiux::config::default_video_model(options.video_catalog, "fal") ==
               "minimax/h3-max-turbo/text-to-video",
           "video catalog selects H3 Max Turbo text-to-video by default");
@@ -3355,6 +3362,109 @@ void test_video_catalog_settings_and_request() {
               "{\"video\":{\"url\":\"https://fal.media/out.mp4\"}}", url).ok() &&
               url == "https://fal.media/out.mp4",
           "video result parser extracts video.url");
+
+    const ainiux::VideoCapability* pvideo = ainiux::config::resolve_video_capability(
+        options.video_catalog, "replicate", "prunaai/p-video");
+    check(pvideo != nullptr && pvideo->protocol == ainiux::VideoProtocol::ReplicatePredictions &&
+              pvideo->input_mode == ainiux::VideoInputMode::Mixed &&
+              pvideo->start_image_field == "image" && pvideo->end_image_field == "last_frame_image",
+          "p-video is a mixed Replicate catalog record");
+    const ainiux::VideoCapability* grok = ainiux::config::resolve_video_capability(
+        options.video_catalog, "replicate", "xai/grok-imagine-video-1.5");
+    check(grok != nullptr && grok->input_mode == ainiux::VideoInputMode::Image,
+          "grok-imagine-video-1.5 requires a start image");
+    if (!pvideo) return;
+
+    ainiux::provider::VideoGenerateRequest replicate_request;
+    replicate_request.prompt = "a paper boat";
+    replicate_request.capability = *pvideo;
+    ainiux::json::Value fps; fps.type = ainiux::json::Value::Type::String; fps.string = "24";
+    replicate_request.settings["fps"] = fps;
+    ainiux::provider::VideoInput start; start.mime_type = "image/png";
+    start.remote_url = "https://api.replicate.com/v1/files/start";
+    ainiux::provider::VideoInput last; last.mime_type = "image/jpeg";
+    last.remote_url = "https://api.replicate.com/v1/files/last";
+    ainiux::provider::VideoInput audio; audio.mime_type = "audio/mpeg";
+    audio.remote_url = "https://api.replicate.com/v1/files/audio";
+    replicate_request.inputs.push_back(start);
+    replicate_request.inputs.push_back(last);
+    replicate_request.inputs.push_back(audio);
+    ainiux::json::Value replicate_wire;
+    check(ainiux::provider::build_replicate_video_input(replicate_request, replicate_wire).ok() &&
+              field(replicate_wire, "input") &&
+              field(field(replicate_wire, "input"), "image") &&
+              field(field(replicate_wire, "input"), "image")->string.find("files/start") !=
+                  std::string::npos &&
+              field(field(replicate_wire, "input"), "last_frame_image") &&
+              field(field(replicate_wire, "input"), "audio") &&
+              field(field(replicate_wire, "input"), "fps") &&
+              field(field(replicate_wire, "input"), "fps")->type ==
+                  ainiux::json::Value::Type::Number,
+          "replicate p-video maps start/end images, scalar audio, and numeric enums");
+
+    const ainiux::VideoCapability* kling = ainiux::config::resolve_video_capability(
+        options.video_catalog, "replicate", "kwaivgi/kling-v3-omni-video");
+    check(kling != nullptr, "kling omni catalog record exists");
+    if (kling) {
+        ainiux::provider::VideoGenerateRequest kling_request;
+        kling_request.prompt = "a trailer";
+        kling_request.capability = *kling;
+        ainiux::provider::VideoInput a; a.mime_type = "image/png";
+        a.remote_url = "https://api.replicate.com/v1/files/a";
+        ainiux::provider::VideoInput b; b.mime_type = "image/png";
+        b.remote_url = "https://api.replicate.com/v1/files/b";
+        ainiux::provider::VideoInput c; c.mime_type = "image/png";
+        c.remote_url = "https://api.replicate.com/v1/files/c";
+        ainiux::provider::VideoInput clip; clip.mime_type = "video/mp4";
+        clip.remote_url = "https://api.replicate.com/v1/files/clip";
+        kling_request.inputs = {a, b, c, clip};
+        ainiux::json::Value kling_wire;
+        const ainiux::json::Value* input = nullptr;
+        check(ainiux::provider::build_replicate_video_input(kling_request, kling_wire).ok() &&
+                  (input = field(kling_wire, "input")) != nullptr &&
+                  field(input, "start_image") && field(input, "end_image") &&
+                  field(input, "reference_images") &&
+                  field(input, "reference_images")->is_array() &&
+                  field(input, "reference_images")->array.size() == 1 &&
+                  field(input, "reference_video") &&
+                  field(input, "reference_video")->is_string(),
+              "kling omni maps start/end, leftover images, and a scalar reference video");
+    }
+
+    const ainiux::VideoCapability* seedance = ainiux::config::resolve_video_capability(
+        options.video_catalog, "replicate", "bytedance/seedance-2.0");
+    check(seedance != nullptr, "seedance 2.0 catalog record exists");
+    if (seedance) {
+        ainiux::provider::VideoGenerateRequest seedance_request;
+        seedance_request.prompt = "two subjects";
+        seedance_request.capability = *seedance;
+        ainiux::provider::VideoInput one; one.mime_type = "image/png";
+        one.remote_url = "https://api.replicate.com/v1/files/one";
+        ainiux::provider::VideoInput two; two.mime_type = "image/png";
+        two.remote_url = "https://api.replicate.com/v1/files/two";
+        seedance_request.inputs = {one, two};
+        ainiux::json::Value frames;
+        check(ainiux::provider::build_replicate_video_input(seedance_request, frames).ok() &&
+                  field(field(frames, "input"), "image") &&
+                  field(field(frames, "input"), "last_frame_image") &&
+                  field(field(frames, "input"), "reference_images") == nullptr,
+              "seedance uses start/end frames when only images are attached");
+        ainiux::provider::VideoInput motion; motion.mime_type = "video/mp4";
+        motion.remote_url = "https://api.replicate.com/v1/files/motion";
+        seedance_request.inputs.push_back(motion);
+        ainiux::json::Value refs;
+        const ainiux::json::Value* input = nullptr;
+        check(ainiux::provider::build_replicate_video_input(seedance_request, refs).ok() &&
+                  (input = field(refs, "input")) != nullptr &&
+                  field(input, "image") == nullptr &&
+                  field(input, "last_frame_image") == nullptr &&
+                  field(input, "reference_images") &&
+                  field(input, "reference_images")->is_array() &&
+                  field(input, "reference_images")->array.size() == 2 &&
+                  field(input, "reference_videos") &&
+                  field(input, "reference_videos")->is_array(),
+              "seedance sends reference arrays when a video is attached");
+    }
 }
 
 }  // namespace

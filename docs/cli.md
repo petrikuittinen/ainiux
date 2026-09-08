@@ -167,10 +167,11 @@ Stdout prints the saved path (or raw bytes for `--output stdout`). Status goes t
 
 ## Video generation
 
-`ainiux video` (or `--video`) generates one MP4 through FAL's queue API. The
-effective `videos.conf` selects the endpoint, accepted references, defaults,
-and scalar settings. `minimax/h3-max-turbo/text-to-video` is the bundled
-default.
+`ainiux video` (or `--video`) generates one MP4. The effective `videos.conf`
+selects the protocol, endpoint, accepted references, defaults, and scalar
+settings. FAL `minimax/h3-max-turbo/text-to-video` is the bundled default.
+Replicate models use `--provider replicate` and `REPLICATE_API_KEY` or
+`REPLICATE_API_TOKEN`.
 
 ```sh
 ainiux video -p "a paper boat drifting through rain" --duration 5 --resolution 768P
@@ -180,15 +181,29 @@ ainiux video -m minimax/h3-max-turbo/image-to-video \
 ainiux video -m minimax/h3-max/reference-to-video \
   -p "Image 1 and Video 1 meet in the same scene" \
   --attach subject.png --attach motion.mp4 --audio off
+ainiux video --provider replicate -m prunaai/p-video \
+  -p "a paper boat in rain" --duration 5
+ainiux video --provider replicate -m xai/grok-imagine-video-1.5 \
+  -p "slow cinematic push-in" --attach still.png --duration 6 --resolution 720p
 ```
 
-The bundled catalog contains these exact FAL endpoint ids:
+The bundled catalog contains these FAL endpoint ids:
 
 - MiniMax H3 Max and H3 Max Turbo text-to-video and image-to-video, plus H3 Max reference-to-video
 - Kling Video v3 Pro text-to-video, and Pro/Standard image-to-video
 - Seedance 2.5 reference-to-video and image-to-video
 - Seedance 2.0 text-to-video and Fast image-to-video
 - Veo 3.1 Fast image-to-video and Grok Imagine Video image-to-video
+
+and these Replicate `owner/name` ids (short names also match):
+
+- `prunaai/p-video` (Replicate default)
+- `alibaba/wan-3`, `alibaba/happyhorse-1.0`
+- `xai/grok-imagine-video-1.5` (requires a start image)
+- `kwaivgi/kling-v3-omni-video`
+- `bytedance/seedance-2.0`, `bytedance/seedance-2.0-fast`
+- `runwayml/gen-4.5`
+- `google/veo-3.1-fast`, `google/veo-3.1`
 
 Common options are `--resolution`, `--duration`, `--ar`, `--seed`,
 `--negative-prompt`, and `--audio on|off`. Repeatable
@@ -200,14 +215,17 @@ scalar setting surface.
 
 Use repeatable `--attach` for the selected model's ordered image, video, or
 audio files. Text-to-video records reject attachments; image-to-video records
-map the first two images to start/end frames where supported; reference models
-preserve each modality's order. Images are limited to 30 MiB, audio to 15 MiB,
-videos to 200 MiB, with catalog count limits. Files are uploaded to short-lived
-FAL CDN objects before queue submission.
+map the first two images to start/end frames where supported; mixed records
+accept optional media up to the catalog maxima; reference models preserve each
+modality's order. Images are limited to 30 MiB, audio to 15 MiB, videos to
+200 MiB, with catalog count limits. FAL uploads files to short-lived CDN
+objects; Replicate uploads them through the Files API. Both paths then poll a
+cancellable prediction/queue until the MP4 is downloaded.
 
 `--output PATH` writes the MP4 atomically and refuses an existing path unless
 `--force` is present. If omitted, Ainiux selects the first unused `videoN.mp4`.
 `--output stdout` emits raw MP4 bytes; progress and errors remain on stderr.
 Generation and downloads are cancellable. The generated download is capped at
-1 GiB and must have an MP4 `ftyp` signature. Credentials are `FAL_API_KEY` or
-`FAL_KEY`; do not put a key on the command line.
+1 GiB and must have an MP4 `ftyp` signature. FAL credentials are `FAL_API_KEY`
+or `FAL_KEY`. Replicate credentials are `REPLICATE_API_KEY` or
+`REPLICATE_API_TOKEN`. Do not put a key on the command line.

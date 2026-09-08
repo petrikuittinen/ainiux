@@ -91,8 +91,9 @@ limits are 30 MiB per image, 15 MiB per audio file, 200 MiB per video file,
 1 GiB combined, and 50 files. Successful jobs write a collision-safe
 `videoN.mp4` in the fixed workspace. The browser fetches the authenticated
 artifact into a local Blob URL for the native `<video controls>` player and
-download action, then revokes that URL on reset or sign-out. FAL keys, queue
-control URLs, CDN input URLs, and provider output URLs never enter browser JSON.
+download action, then revokes that URL on reset or sign-out. FAL and Replicate
+keys, queue/prediction control URLs, CDN/Files input URLs, and provider output
+URLs never enter browser JSON.
 
 Chat submission first persists the user message, runs the shared asynchronous
 chat job, and appends the assistant result only if the thread revision still

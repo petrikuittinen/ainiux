@@ -32,6 +32,58 @@ export function selectVideoModel(catalog, provider, requested = "") {
     models.find((model) => model.default === true) || models[0] || null;
 }
 
+export function cropVideoFileName(name, max = 16) {
+  const value = typeof name === "string" ? name : "";
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}…`;
+}
+
+function fileFromVideoInput(input) {
+  return input && input.file ? input.file : input;
+}
+
+export function videoInputCounts(values) {
+  const counts = { images: 0, videos: 0, audios: 0, total: 0 };
+  for (const input of Array.from(values || [])) {
+    const file = fileFromVideoInput(input);
+    if (!file || typeof file.type !== "string") continue;
+    counts.total += 1;
+    if (file.type.startsWith("image/")) counts.images += 1;
+    else if (file.type.startsWith("video/")) counts.videos += 1;
+    else if (file.type.startsWith("audio/")) counts.audios += 1;
+  }
+  return counts;
+}
+
+function listedMediaCounts(images, videos, audios) {
+  const parts = [];
+  if (images) parts.push(`${images} ${images === 1 ? "image" : "images"}`);
+  if (videos) parts.push(`${videos} ${videos === 1 ? "video" : "videos"}`);
+  if (audios) parts.push(`${audios} audio`);
+  return parts.join(", ");
+}
+
+export function videoInputStatus(model, inputs = []) {
+  if (!model) return "No configured video model is available.";
+  if (model.input_mode === "text") return "Text-to-video only.";
+  const selected = videoInputCounts(inputs);
+  const selectedText = selected.total
+    ? `${listedMediaCounts(selected.images, selected.videos, selected.audios)} selected. `
+    : "";
+  const limitText = listedMediaCounts(
+    Number(model.max_input_images || 0),
+    Number(model.max_input_videos || 0),
+    Number(model.max_input_audios || 0),
+  );
+  const mode = model.input_mode === "reference" ? "Reference-to-video"
+    : model.input_mode === "mixed"
+      ? (Number(model.max_input_videos || 0) || Number(model.max_input_audios || 0)
+        ? "Text, image, or reference-to-video" : "Text or image-to-video")
+      : "Image-to-video";
+  if (!limitText) return `${selectedText}${mode}.`;
+  return `${selectedText}${mode}. Up to ${limitText}.`;
+}
+
 export function videoFileError(model, values, limits) {
   if (!model) return "No configured video model is available.";
   const inputs = Array.from(values || []);

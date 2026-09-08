@@ -41,11 +41,22 @@ Error normalize_video_settings(const VideoCapability& capability,
                                const std::map<std::string, json::Value>& requested,
                                std::map<std::string, json::Value>& normalized);
 Error build_fal_video_input(const VideoGenerateRequest& request, json::Value& input);
+Error build_replicate_video_input(const VideoGenerateRequest& request, json::Value& input);
 Error parse_fal_video_result(const std::string& body, std::string& output_url);
 Error generate_video(const RequestContext& context,
                      const VideoGenerateRequest& request,
                      VideoGenerateResult& result,
                      runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error generate_replicate_video(const RequestContext& context,
+                               const VideoGenerateRequest& request,
+                               VideoGenerateResult& result,
+                               runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error download_generated_video(const RequestContext& context,
+                               const std::string& url,
+                               const VideoGenerateRequest& request,
+                               VideoGenerateResult& result,
+                               runtime::CancellationToken cancellation,
+                               bool authorize);
 Error allocate_unused_video_path(const std::string& directory, std::string& path);
 
 }  // namespace ainiux::provider

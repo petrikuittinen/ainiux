@@ -1390,7 +1390,7 @@ Usage:
   ainiux image --provider replicate -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider fal -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider gemini -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
-  ainiux video -p TEXT [-m FAL_ENDPOINT] [--attach MEDIA]... [--duration N]
+  ainiux video -p TEXT [-m MODEL] [--attach MEDIA]... [--duration N]
                [--resolution VALUE] [--ar W:H] [--audio on|off] [--output PATH]
   ainiux server [--workspace PATH] [--bind ADDRESS] [--port PORT]
                 [--tls-cert PATH --tls-key PATH] [--server-secret-file PATH]
@@ -1482,7 +1482,7 @@ Options:
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --image                   Generate one image (OpenAI, Replicate, fal, or
                                 Gemini models from images.conf; also: ainiux image ...).
-      --video                   Generate one MP4 with a fal model from videos.conf
+      --video                   Generate one MP4 with a videos.conf model
                                 (also: ainiux video ...).
       --server                  Start the Ainiux control API (also: ainiux server).
       --webui                   Browser-oriented server startup; use with server.

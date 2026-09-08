@@ -328,6 +328,19 @@ VideoResult run_video(provider::RequestContext context, const VideoRequest& inpu
         (capability->max_input_total > 0 && images + videos + audios > capability->max_input_total)) {
         result.error = {ErrorCode::BadArgs, "attached media exceeds this video model's input limits"}; return result;
     }
+    if (capability->input_mode == VideoInputMode::Text && images + videos + audios > 0) {
+        result.error = {ErrorCode::BadArgs, "text-to-video models do not accept --attach"};
+        return result;
+    }
+    if (capability->input_mode == VideoInputMode::Image && images < 1) {
+        result.error = {ErrorCode::BadArgs, "this image-to-video model requires a start image"};
+        return result;
+    }
+    if (capability->input_mode == VideoInputMode::Reference && images + videos < 1) {
+        result.error = {ErrorCode::BadArgs,
+                        "reference-to-video requires an image or video reference"};
+        return result;
+    }
     result.error = publish(events, {EventType::Started, "Generating video with " + result.request.model, 0, 0});
     if (!result.error.ok()) return result;
     if (!executor) executor = provider::generate_video;

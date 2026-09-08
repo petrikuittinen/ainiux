@@ -26,17 +26,26 @@ bool video_regex_matches(const std::string& expression, const std::string& model
 }  // namespace
 
 bool parse_video_protocol(const std::string& text, VideoProtocol& protocol) {
-    if (lower(text) != "fal_queue") return false;
-    protocol = VideoProtocol::FalQueue;
+    const std::string value = lower(text);
+    if (value == "fal_queue") protocol = VideoProtocol::FalQueue;
+    else if (value == "replicate_predictions") protocol = VideoProtocol::ReplicatePredictions;
+    else return false;
     return true;
 }
-const char* video_protocol_name(VideoProtocol) { return "fal_queue"; }
+const char* video_protocol_name(VideoProtocol protocol) {
+    switch (protocol) {
+        case VideoProtocol::ReplicatePredictions: return "replicate_predictions";
+        case VideoProtocol::FalQueue: return "fal_queue";
+    }
+    return "fal_queue";
+}
 
 bool parse_video_input_mode(const std::string& text, VideoInputMode& mode) {
     const std::string value = lower(text);
     if (value == "text") mode = VideoInputMode::Text;
     else if (value == "image") mode = VideoInputMode::Image;
     else if (value == "reference") mode = VideoInputMode::Reference;
+    else if (value == "mixed") mode = VideoInputMode::Mixed;
     else return false;
     return true;
 }
@@ -45,6 +54,7 @@ const char* video_input_mode_name(VideoInputMode mode) {
         case VideoInputMode::Text: return "text";
         case VideoInputMode::Image: return "image";
         case VideoInputMode::Reference: return "reference";
+        case VideoInputMode::Mixed: return "mixed";
     }
     return "text";
 }

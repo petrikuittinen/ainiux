@@ -46,8 +46,9 @@ generation.
 The v1.30 control-server milestone is complete: `/ainiux/v1/` jobs and replay,
 the MCP server adapter, interactive remote Agent/Guard sessions, revision-safe
 chat and workspace/editor operations, TLS/direct-access gates, and the embedded
-same-origin WebUI are implemented. Unreleased work adds catalog-driven FAL video
-generation to the headless CLI and browser controller. v1.31–v1.32 added safe Markdown and full-language
+same-origin WebUI are implemented. Catalog-driven video generation is in the
+headless CLI and browser controller (`fal_queue` and `replicate_predictions`).
+v1.31–v1.32 added safe Markdown and full-language
 syntax highlighting, model/settings parity, persisted idle agent history,
 catalog-driven browser image generation, editor undo/redo, and native-parity
 browser indentation/reformatting.

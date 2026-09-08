@@ -10,7 +10,8 @@ import {
 } from "./image-options-v1.js";
 import {
   normalizeVideoCatalog, selectVideoModel, videoFileError,
-} from "./video-options-v1.js";
+  cropVideoFileName, videoInputStatus,
+} from "./video-options-v3.js";
 import {
   createEditorHistory, editorHistoryDirection, recordEditorChange, redoEditorChange,
   undoEditorChange, updateEditorHistorySelection,
@@ -1183,13 +1184,23 @@ function selectedVideoModel() {
 }
 
 function renderVideoInputList() {
-  const list = byId("video-input-list"); clear(list);
-  if (!state.videoInputs.length) { list.classList.add("empty-state"); list.textContent = "No input media selected."; return; }
+  const list = byId("video-input-list");
+  clear(list);
+  if (!state.videoInputs.length) {
+    list.classList.add("empty-state");
+    list.textContent = "No input media selected.";
+    return;
+  }
   for (const input of state.videoInputs) {
-    const row = element("div", "image-input-row");
-    row.append(element("span", "", `${input.file.name} · ${input.file.type || "media"} · ${formatBytes(input.file.size)}`));
-    const remove = element("button", "ghost", "Remove"); remove.type = "button";
-    remove.addEventListener("click", () => void removeVideoInput(input)); row.append(remove); list.append(row);
+    const row = element("div", "video-input-row");
+    const details = element("span", "",
+      `${cropVideoFileName(input.file.name)} · ${formatBytes(input.file.size)}`);
+    details.title = input.file.name;
+    const remove = element("button", "ghost", "Remove");
+    remove.type = "button";
+    remove.addEventListener("click", () => void removeVideoInput(input));
+    row.append(details, remove);
+    list.append(row);
   }
 }
 
@@ -1236,7 +1247,7 @@ function renderVideoOptions(resetModel = false) {
   }
   state.videoRenderedModel = model ? model.model : "";
   const validation = videoInputError(model);
-  status.textContent = validation || (model ? `${model.input_mode} · images ${model.max_input_images}, videos ${model.max_input_videos}, audio ${model.max_input_audios}` : "No model available.");
+  status.textContent = validation || videoInputStatus(model, state.videoInputs);
   status.classList.toggle("error-text", Boolean(validation)); byId("video-input-files").disabled = !model || model.input_mode === "text";
   const active = state.videoJobId ? state.jobs.get(state.videoJobId) : null;
   byId("video-generate-button").disabled = !supports("video") || !model || state.videoSubmitting || Boolean(active && !TERMINAL_STATES.has(active.state)) || Boolean(validation);

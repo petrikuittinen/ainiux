@@ -6,8 +6,8 @@
 
 namespace ainiux {
 
-enum class VideoProtocol { FalQueue };
-enum class VideoInputMode { Text, Image, Reference };
+enum class VideoProtocol { FalQueue, ReplicatePredictions };
+enum class VideoInputMode { Text, Image, Reference, Mixed };
 
 struct VideoCapability {
     std::string id;
@@ -27,9 +27,9 @@ struct VideoCapability {
     std::string prompt_field = "prompt";
     std::string start_image_field = "image_url";
     std::string end_image_field = "end_image_url";
-    std::string reference_images_field = "reference_image_urls";
-    std::string reference_videos_field = "reference_video_urls";
-    std::string reference_audios_field = "reference_audio_urls";
+    std::string reference_images_field;
+    std::string reference_videos_field;
+    std::string reference_audios_field;
     // JSON object merged into the provider request before explicit settings.
     std::string defaults_json;
     // Public JSON array of scalar setting descriptors. Each descriptor has a

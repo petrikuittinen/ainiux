@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -21,7 +22,12 @@ json::Value array_value() { json::Value v; v.type = json::Value::Type::Array; re
 json::Value string_value(const std::string& s) { json::Value v; v.type = json::Value::Type::String; v.string = s; return v; }
 
 bool descriptor_matches_type(const json::Value& value, const std::string& type) {
-    if (type == "string" || type == "enum") return value.type == json::Value::Type::String;
+    if (type == "string") return value.type == json::Value::Type::String;
+    if (type == "enum") {
+        if (value.type == json::Value::Type::String) return true;
+        return value.type == json::Value::Type::Number &&
+            value.number == static_cast<double>(static_cast<long long>(value.number));
+    }
     if (type == "boolean") return value.type == json::Value::Type::Bool;
     if (type == "integer") return value.type == json::Value::Type::Number &&
         value.number == static_cast<double>(static_cast<long long>(value.number));
@@ -36,9 +42,18 @@ Error validate_setting(const json::Value& descriptor, const json::Value& value) 
     if (!descriptor_matches_type(value, type->string))
         return {ErrorCode::BadArgs, "video setting " + name->string + " must be " + type->string};
     if (const json::Value* options = descriptor.get("options")) {
+        auto option_text = [](const json::Value& option) -> std::string {
+            if (option.is_string()) return option.string;
+            if (option.type == json::Value::Type::Number &&
+                option.number == static_cast<double>(static_cast<long long>(option.number))) {
+                return std::to_string(static_cast<long long>(option.number));
+            }
+            return json::stringify(option);
+        };
+        const std::string wanted = option_text(value);
         bool found = false;
         for (const json::Value& option : options->array) {
-            if (json::stringify(option) == json::stringify(value)) { found = true; break; }
+            if (option_text(option) == wanted) { found = true; break; }
         }
         if (!found) return {ErrorCode::BadArgs, "unsupported value for video setting " + name->string};
     }
@@ -113,13 +128,12 @@ std::string url_origin(const std::string& url) {
     return url.substr(0, slash);
 }
 
-http::Request fal_request(const RequestContext& context, const std::string& method,
-                          const std::string& url, runtime::CancellationToken cancellation);
+}  // namespace
 
-Error download_video(const RequestContext& context, const std::string& url,
-                     const VideoGenerateRequest& request, VideoGenerateResult& result,
-                     runtime::CancellationToken cancellation) {
-    if (!starts_with_https(url)) return {ErrorCode::BadUrl, "fal video output URL must use HTTPS"};
+Error download_generated_video(const RequestContext& context, const std::string& url,
+                               const VideoGenerateRequest& request, VideoGenerateResult& result,
+                               runtime::CancellationToken cancellation, bool authorize) {
+    if (!starts_with_https(url)) return {ErrorCode::BadUrl, "video output URL must use HTTPS"};
     std::string random;
     Error err = platform::secure_random_hex(8, random);
     if (!err.ok()) return err;
@@ -135,6 +149,20 @@ Error download_video(const RequestContext& context, const std::string& url,
     get.proxy = context.options.proxy; get.insecure_tls = context.options.insecure_tls;
     get.trace = context.options.trace_http; get.cancellation = cancellation;
     get.max_body_bytes = kMaxVideoBytes; get.retain_body = false;
+    if (authorize) {
+        get.headers = context.headers;
+        bool have_authorization = false;
+        for (const std::string& header : get.headers) {
+            const std::size_t colon = header.find(':');
+            if (colon != std::string::npos && ascii_lower(header.substr(0, colon)) == "authorization") {
+                have_authorization = true;
+                break;
+            }
+        }
+        if (!have_authorization && !context.api_key.empty()) {
+            get.headers.push_back("Authorization: Bearer " + context.api_key);
+        }
+    }
     get.on_body = [&](const std::string& chunk) {
         file.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
         if (!file) return Error{ErrorCode::FileWrite, "could not write temporary video output: " + temporary};
@@ -145,13 +173,13 @@ Error download_video(const RequestContext& context, const std::string& url,
     file.flush(); file.close();
     if (!downloaded.error.ok()) return downloaded.error;
     if (downloaded.response.status < 200 || downloaded.response.status >= 300)
-        return {ErrorCode::HttpStatus, "HTTP " + std::to_string(downloaded.response.status) + ": fal video download failed\nURL: " + url};
-    if (bytes < 12) return {ErrorCode::ProviderSchema, "fal video output was empty or truncated"};
+        return {ErrorCode::HttpStatus, "HTTP " + std::to_string(downloaded.response.status) + ": video download failed\nURL: " + url};
+    if (bytes < 12) return {ErrorCode::ProviderSchema, "video output was empty or truncated"};
     std::ifstream check(std::filesystem::u8path(temporary), std::ios::binary);
     char header[32] = {}; check.read(header, sizeof(header));
     const std::streamsize count = check.gcount();
     std::string head(header, count > 0 ? static_cast<std::size_t>(count) : 0U);
-    if (head.size() < 8 || head.substr(4, 4) != "ftyp") return {ErrorCode::ProviderSchema, "fal video output was not an MP4 file"};
+    if (head.size() < 8 || head.substr(4, 4) != "ftyp") return {ErrorCode::ProviderSchema, "video output was not an MP4 file"};
     err = platform::atomic_move(temporary, request.output_path, request.overwrite);
     if (!err.ok()) return err;
     cleanup.path.clear();
@@ -159,6 +187,11 @@ Error download_video(const RequestContext& context, const std::string& url,
     if (!downloaded.response.content_type.empty()) result.content_type = downloaded.response.content_type;
     return ok_error();
 }
+
+namespace {
+
+http::Request fal_request(const RequestContext& context, const std::string& method,
+                          const std::string& url, runtime::CancellationToken cancellation);
 
 http::Request signed_request(const RequestContext& context, const std::string& method,
                              const std::string& url, runtime::CancellationToken cancellation) {
@@ -279,7 +312,90 @@ Error normalize_video_settings(const VideoCapability& capability,
     return ok_error();
 }
 
-Error build_fal_video_input(const VideoGenerateRequest& request, json::Value& input) {
+namespace {
+json::Value coerce_replicate_setting(const json::Value& value) {
+    if (!value.is_string() || value.string.empty()) return value;
+    const std::string& text = value.string;
+    std::size_t index = text[0] == '-' ? 1 : 0;
+    if (index >= text.size()) return value;
+    for (std::size_t i = index; i < text.size(); ++i) {
+        if (text[i] < '0' || text[i] > '9') return value;
+    }
+    json::Value number;
+    number.type = json::Value::Type::Number;
+    number.number = std::stod(text);
+    return number;
+}
+
+void assign_media_field(json::Value& input, const std::string& field,
+                        const std::vector<json::Value>& uris, int max_count) {
+    if (field.empty() || uris.empty()) return;
+    if (max_count == 1) {
+        input.object[field] = uris[0];
+        return;
+    }
+    json::Value values = array_value();
+    values.array = uris;
+    input.object[field] = std::move(values);
+}
+
+Error apply_video_media_fields(const VideoGenerateRequest& request, json::Value& input,
+                               const std::string& missing_upload_message) {
+    std::vector<json::Value> images, videos, audios;
+    for (const VideoInput& media : request.inputs) {
+        if (media.remote_url.empty()) return {ErrorCode::Internal, missing_upload_message};
+        if (media.mime_type.rfind("image/", 0) == 0) images.push_back(string_value(media.remote_url));
+        else if (media.mime_type.rfind("video/", 0) == 0) videos.push_back(string_value(media.remote_url));
+        else if (media.mime_type.rfind("audio/", 0) == 0) audios.push_back(string_value(media.remote_url));
+    }
+    const VideoCapability& capability = request.capability;
+    if (capability.input_mode == VideoInputMode::Text && !request.inputs.empty()) {
+        return {ErrorCode::BadArgs, "text-to-video models do not accept --attach"};
+    }
+    if (capability.input_mode == VideoInputMode::Image && images.empty()) {
+        return {ErrorCode::BadArgs, "this image-to-video model requires a start image"};
+    }
+    if (capability.input_mode == VideoInputMode::Reference && images.empty() && videos.empty()) {
+        return {ErrorCode::BadArgs, "reference-to-video requires an image or video reference"};
+    }
+    if (capability.input_mode == VideoInputMode::Reference) {
+        assign_media_field(input, capability.reference_images_field, images, capability.max_input_images);
+        assign_media_field(input, capability.reference_videos_field, videos, capability.max_input_videos);
+        assign_media_field(input, capability.reference_audios_field, audios, capability.max_input_audios);
+        return ok_error();
+    }
+    const bool force_reference_images = capability.input_mode == VideoInputMode::Mixed &&
+        (!videos.empty() || !audios.empty()) && !capability.reference_images_field.empty() &&
+        capability.start_image_field == "image";
+    if (force_reference_images) {
+        assign_media_field(input, capability.reference_images_field, images, capability.max_input_images);
+    } else {
+        std::size_t used = 0;
+        if (!images.empty() && !capability.start_image_field.empty()) {
+            input.object[capability.start_image_field] = images[0];
+            used = 1;
+        }
+        if (images.size() > 1 && !capability.end_image_field.empty()) {
+            input.object[capability.end_image_field] = images[1];
+            used = 2;
+        }
+        if (capability.input_mode == VideoInputMode::Mixed && images.size() > used &&
+            !capability.reference_images_field.empty()) {
+            assign_media_field(input, capability.reference_images_field,
+                               std::vector<json::Value>(images.begin() + static_cast<std::ptrdiff_t>(used),
+                                                       images.end()),
+                               capability.max_input_images);
+        }
+    }
+    if (capability.input_mode == VideoInputMode::Mixed) {
+        assign_media_field(input, capability.reference_videos_field, videos, capability.max_input_videos);
+        assign_media_field(input, capability.reference_audios_field, audios, capability.max_input_audios);
+    }
+    return ok_error();
+}
+
+Error fill_video_request_object(const VideoGenerateRequest& request, json::Value& input,
+                                bool coerce_numeric_settings, const std::string& missing_upload_message) {
     input = object_value();
     if (!request.capability.defaults_json.empty()) {
         const json::ParseResult defaults = json::parse(request.capability.defaults_json);
@@ -287,25 +403,25 @@ Error build_fal_video_input(const VideoGenerateRequest& request, json::Value& in
         input.object = defaults.value.object;
     }
     input.object[request.capability.prompt_field] = string_value(request.prompt);
-    for (const auto& setting : request.settings) input.object[setting.first] = setting.second;
-    std::vector<json::Value> images, videos, audios;
-    for (const VideoInput& media : request.inputs) {
-        const std::string uri = media.remote_url;
-        if (uri.empty()) return {ErrorCode::Internal, "video input was not uploaded to fal storage"};
-        if (media.mime_type.rfind("image/", 0) == 0) images.push_back(string_value(uri));
-        else if (media.mime_type.rfind("video/", 0) == 0) videos.push_back(string_value(uri));
-        else if (media.mime_type.rfind("audio/", 0) == 0) audios.push_back(string_value(uri));
+    for (const auto& setting : request.settings) {
+        input.object[setting.first] = coerce_numeric_settings ? coerce_replicate_setting(setting.second)
+                                                              : setting.second;
     }
-    if (request.capability.input_mode == VideoInputMode::Image) {
-        if (images.empty()) return {ErrorCode::BadArgs, "this image-to-video model requires a start image"};
-        input.object[request.capability.start_image_field] = images[0];
-        if (images.size() > 1) input.object[request.capability.end_image_field] = images[1];
-    } else if (request.capability.input_mode == VideoInputMode::Reference) {
-        if (images.empty() && videos.empty()) return {ErrorCode::BadArgs, "reference-to-video requires an image or video reference"};
-        if (!images.empty()) { json::Value a = array_value(); a.array = std::move(images); input.object[request.capability.reference_images_field] = std::move(a); }
-        if (!videos.empty()) { json::Value a = array_value(); a.array = std::move(videos); input.object[request.capability.reference_videos_field] = std::move(a); }
-        if (!audios.empty()) { json::Value a = array_value(); a.array = std::move(audios); input.object[request.capability.reference_audios_field] = std::move(a); }
-    } else if (!request.inputs.empty()) return {ErrorCode::BadArgs, "text-to-video models do not accept --attach"};
+    return apply_video_media_fields(request, input, missing_upload_message);
+}
+}  // namespace
+
+Error build_fal_video_input(const VideoGenerateRequest& request, json::Value& input) {
+    return fill_video_request_object(request, input, false, "video input was not uploaded to fal storage");
+}
+
+Error build_replicate_video_input(const VideoGenerateRequest& request, json::Value& input) {
+    json::Value payload;
+    Error err = fill_video_request_object(
+        request, payload, true, "video input was not uploaded to Replicate");
+    if (!err.ok()) return err;
+    input = object_value();
+    input.object["input"] = std::move(payload);
     return ok_error();
 }
 
@@ -324,6 +440,9 @@ Error generate_video(const RequestContext& context, const VideoGenerateRequest& 
     if (context.base_url.empty()) return {ErrorCode::BadUrl, "no base URL configured for video generation"};
     if (request.prompt.empty()) return {ErrorCode::BadArgs, "video generation requires a prompt"};
     if (request.output_path.empty()) return {ErrorCode::BadArgs, "video generation requires an output path"};
+    if (request.capability.protocol == VideoProtocol::ReplicatePredictions) {
+        return generate_replicate_video(context, request, result, cancellation);
+    }
     VideoGenerateRequest wire_request = request;
     for (VideoInput& media : wire_request.inputs) { Error upload_error = upload_fal_media(context, media, cancellation); if (!upload_error.ok()) return upload_error; }
     json::Value input_value; Error err = build_fal_video_input(wire_request, input_value); if (!err.ok()) return err;
@@ -367,7 +486,7 @@ Error generate_video(const RequestContext& context, const VideoGenerateRequest& 
     if (payload.response.status < 200 || payload.response.status >= 300)
         return fal_video_http_error(context, payload.response, "video result request");
     std::string output_url; err = parse_fal_video_result(payload.response.body, output_url); if (!err.ok()) return err;
-    err = download_video(context, output_url, request, result, cancellation); result.total_ms = elapsed(); return err;
+    err = download_generated_video(context, output_url, request, result, cancellation, false); result.total_ms = elapsed(); return err;
 }
 
 Error allocate_unused_video_path(const std::string& directory, std::string& path) {

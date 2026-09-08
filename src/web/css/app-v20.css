@@ -1,4 +1,4 @@
-/* Versioned embedded compact controller stylesheet, revision 18. */
+/* Versioned embedded compact controller stylesheet, revision 20. */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
@@ -396,6 +396,9 @@ kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0
 .image-input-row img { width: 2.5rem; height: 2.5rem; object-fit: cover; background: var(--code); }
 .image-input-row span { min-width: 0; overflow-wrap: anywhere; }
 .image-input-row button { min-height: 1.7rem; padding: 0.14rem 0.3rem; }
+.video-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.4rem; align-items: center; padding: 0.3rem; border: 1px solid var(--soft-border); background: var(--raised); font-size: 0.72rem; }
+.video-input-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-input-row button { min-height: 1.7rem; padding: 0.14rem 0.3rem; }
 .spinner { width: 1.5rem; height: 1.5rem; border: 2px solid var(--soft-border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

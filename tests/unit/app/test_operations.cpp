@@ -254,6 +254,48 @@ void test_video_operation_is_output_neutral_and_enforces_reference_limits() {
         });
     check(oversized.error.code == ErrorCode::BadArgs && !called,
           "video operation enforces model-specific media byte limits before provider work");
+
+    VideoCapability mixed = capability;
+    mixed.id = "mixed-video";
+    mixed.model_regex = "^test/mixed$";
+    mixed.api_model = "test/mixed";
+    mixed.input_mode = VideoInputMode::Mixed;
+    mixed.max_input_images = 2;
+    mixed.max_input_videos = 0;
+    mixed.max_input_audios = 1;
+    mixed.max_input_total = 0;
+    mixed.max_input_image_bytes = 0;
+    video_context.options.video_catalog.models = {mixed};
+    request.model = "test/mixed";
+    request.input_media.clear();
+    called = false;
+    const app::operation::VideoResult mixed_text = app::operation::run_video(
+        video_context, request, {}, {},
+        [&](const provider::RequestContext&, const provider::VideoGenerateRequest&,
+            provider::VideoGenerateResult& output, runtime::CancellationToken) {
+            called = true;
+            output.path = "unused.mp4";
+            return ok_error();
+        });
+    check(mixed_text.error.ok() && called,
+          "mixed video models accept a prompt with no attachments");
+
+    VideoCapability image_only = mixed;
+    image_only.input_mode = VideoInputMode::Image;
+    image_only.api_model = "test/image";
+    image_only.model_regex = "^test/image$";
+    video_context.options.video_catalog.models = {image_only};
+    request.model = "test/image";
+    called = false;
+    const app::operation::VideoResult missing_image = app::operation::run_video(
+        video_context, request, {}, {},
+        [&](const provider::RequestContext&, const provider::VideoGenerateRequest&,
+            provider::VideoGenerateResult&, runtime::CancellationToken) {
+            called = true;
+            return ok_error();
+        });
+    check(missing_image.error.code == ErrorCode::BadArgs && !called,
+          "image-to-video models require a start image before provider work");
 }
 
 }  // namespace
