@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -11,6 +13,7 @@
 #include "encoding/encoding.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
+#include "platform/filesystem.hpp"
 #include "server/chat_service.hpp"
 #include "server/embedded_assets.hpp"
 #include "server/limits.hpp"
@@ -324,11 +327,14 @@ bool preflight_request_body(const http::Request& request,
                             const AuthConfig& auth,
                             const PublicStatus& status,
                             Response& denial) {
-    const bool upload = request.method == "POST" &&
-                        request.path == "/ainiux/v1/images/inputs";
-    const std::size_t limit = upload ? Limits::upload_body_bytes : Limits::json_body_bytes;
+    const bool image_upload = request.method == "POST" && request.path == "/ainiux/v1/images/inputs";
+    const bool video_upload = request.method == "POST" && request.path == "/ainiux/v1/videos/inputs";
+    const bool upload = image_upload || video_upload;
+    const std::size_t limit = video_upload ? Limits::video_upload_body_bytes :
+                              image_upload ? Limits::upload_body_bytes : Limits::json_body_bytes;
     if (content_length > limit) {
         denial = error_response(413, "content_too_large",
+                                video_upload ? "video reference upload exceeds the 200 MiB per-file limit" :
                                 upload ? "image upload exceeds the 20 MiB per-file limit"
                                        : "HTTP request body exceeds the 1 MiB JSON limit");
         return false;
@@ -357,9 +363,16 @@ bool preflight_request_body(const http::Request& request,
     const auto type = request.headers.find("content-type");
     const std::string mime = type == request.headers.end()
                                  ? std::string() : ascii_lower(ascii_trim(type->second));
-    if (mime != "image/png" && mime != "image/jpeg") {
+    const bool video_media = mime == "image/png" || mime == "image/jpeg" || mime == "image/webp" ||
+                             mime == "image/gif" || mime == "image/bmp" || mime == "image/tiff" ||
+                             mime == "image/heic" || mime == "image/heif" || mime == "video/mp4" ||
+                             mime == "video/quicktime" || mime == "audio/mpeg" ||
+                             mime == "audio/wav" || mime == "audio/x-wav";
+    if ((!video_upload && mime != "image/png" && mime != "image/jpeg") ||
+        (video_upload && !video_media)) {
         denial = error_response(415, "unsupported_media_type",
-                                "image input uploads require Content-Type: image/png or image/jpeg");
+                                video_upload ? "video references require a supported image, MP4/MOV, MP3, or WAV Content-Type" :
+                                               "image input uploads require Content-Type: image/png or image/jpeg");
         return false;
     }
     return true;
@@ -403,7 +416,7 @@ Response route_request(const http::Request& request,
                                 : "no-store";
         web.content_security_policy =
             "default-src 'none'; script-src 'self'; style-src 'self'; "
-            "img-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+            "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; "
             "form-action 'self'; frame-ancestors 'none'";
         web.browser_asset = true;
         return web;
@@ -492,7 +505,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
@@ -572,6 +585,45 @@ Response route_request(const http::Request& request,
         }
         response.body = "{\"deleted\":true,\"id\":" + json::quote(id) + "}";
         return response;
+    }
+
+    if (request.path == "/ainiux/v1/videos/catalog") {
+        if (request.method != "GET") { response = error_response(405, "method_not_allowed", "video catalog accepts GET only"); response.allow = "GET"; return response; }
+        if (!request.query.empty() || !request.body.empty()) return error_response(400, "invalid_request", "video catalog does not accept a query or body");
+        if (!status.jobs) return error_response(503, "videos_unavailable", "video service is unavailable");
+        response.body = status.jobs->video_catalog_json(); return response;
+    }
+    const std::string video_inputs_path = "/ainiux/v1/videos/inputs";
+    if (request.path == video_inputs_path) {
+        if (request.method != "POST") { response = error_response(405, "method_not_allowed", "video input uploads accept POST only"); response.allow = "POST"; return response; }
+        if (!request.query.empty()) return error_response(400, "invalid_request", "video input uploads do not accept query parameters");
+        const auto type = request.headers.find("content-type");
+        const std::string mime = type == request.headers.end() ? std::string() : ascii_lower(ascii_trim(type->second));
+        if (!status.jobs) return error_response(503, "videos_unavailable", "video service is unavailable");
+        StoredVideoInput stored; const Error error = status.jobs->add_video_input(mime, request.body, stored);
+        if (!error.ok()) {
+            const int status_code = error.code == ErrorCode::RateLimit ? 429
+                                  : error.code == ErrorCode::UnsupportedFeature ? 415
+                                                                              : 400;
+            return error_response(status_code, "invalid_video_input", error.message);
+        }
+        response.status = 201;
+        response.body = "{\"id\":" + json::quote(stored.id) +
+                        ",\"mime_type\":" + json::quote(stored.mime_type) +
+                        ",\"size\":" + std::to_string(stored.bytes->size()) +
+                        ",\"expires_at\":" +
+                            json::quote(image_input_expiry_timestamp(stored.expires_at)) + "}";
+        return response;
+    }
+    if (request.path.rfind(video_inputs_path + "/", 0) == 0) {
+        if (request.method != "DELETE") { response = error_response(405, "method_not_allowed", "video input deletion accepts DELETE only"); response.allow = "DELETE"; return response; }
+        if (!request.query.empty() || !request.body.empty()) {
+            return error_response(400, "invalid_request",
+                                  "video input deletion does not accept a query or body");
+        }
+        const std::string id = request.path.substr(video_inputs_path.size() + 1U);
+        if (id.empty() || id.find('/') != std::string::npos || !status.jobs || !status.jobs->remove_video_input(id)) return error_response(404, "video_input_not_found", "uploaded video input is missing or expired");
+        response.body = "{\"deleted\":true,\"id\":" + json::quote(id) + "}"; return response;
     }
 
     if (request.path == "/ainiux/v1/workspace/review" ||
@@ -966,7 +1018,7 @@ Response route_request(const http::Request& request,
     }
     if (status.jobs == nullptr) return error_response(503, "jobs_unavailable", "job service is unavailable");
     std::string suffix = request.path.substr(jobs_prefix.size());
-    if (suffix == "models" || suffix == "chat" || suffix == "run" || suffix == "plan" || suffix == "image" ||
+    if (suffix == "models" || suffix == "chat" || suffix == "run" || suffix == "plan" || suffix == "image" || suffix == "video" ||
         suffix == "editor-assist") {
         if (request.method != "POST") {
             response = error_response(405, "method_not_allowed", "job submission accepts POST only");
@@ -1008,6 +1060,33 @@ Response route_request(const http::Request& request,
         }
         if (!request.body.empty()) return error_response(400, "invalid_request", "job status does not accept a body");
         response.body = job->snapshot_json();
+        return response;
+    }
+    if (action == "artifact") {
+        if (request.method != "GET") { response = error_response(405, "method_not_allowed", "job artifact accepts GET only"); response.allow = "GET"; return response; }
+        if (!request.body.empty() || !request.query.empty() || job->operation != "video" ||
+            job->state() != wire::JobState::Succeeded) {
+            return error_response(404, "artifact_not_found", "no video artifact is available for this job");
+        }
+        const json::ParseResult snapshot = json::parse(job->snapshot_json());
+        const json::Value* result = snapshot.error.ok() ? snapshot.value.get("result") : nullptr;
+        const json::Value* path_value = result && result->is_object() ? result->get("server_path") : nullptr;
+        if (!path_value || !path_value->is_string() || path_value->string.empty() || path_value->string.find('/') != std::string::npos || path_value->string.find('\\') != std::string::npos)
+            return error_response(404, "artifact_not_found", "no video artifact is available for this job");
+        const std::filesystem::path path = std::filesystem::u8path(status.jobs->workspace()) / std::filesystem::u8path(path_value->string);
+        std::error_code ec; const std::uintmax_t length = std::filesystem::file_size(path, ec);
+        bool linked = false; const Error link_error = platform::path_is_link_or_reparse(path.u8string(), linked);
+        if (ec || length > 1024ULL * 1024ULL * 1024ULL ||
+            length > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max()) ||
+            !link_error.ok() || linked || !std::filesystem::is_regular_file(path, ec)) {
+            return error_response(404, "artifact_not_found", "the video artifact is unavailable");
+        }
+        response.content_type = "video/mp4"; response.content_disposition = "attachment; filename=\"" + path_value->string + "\"";
+        response.streaming = true; response.close = true; response.stream_content_length = static_cast<std::size_t>(length);
+        response.stream_body = [path](const std::function<bool(std::string_view)>& write) {
+            std::ifstream file(path, std::ios::binary); char buffer[64 * 1024];
+            while (file) { file.read(buffer, sizeof(buffer)); const std::streamsize count = file.gcount(); if (count > 0 && !write(std::string_view(buffer, static_cast<std::size_t>(count)))) return; }
+        };
         return response;
     }
     if (action == "cancel") {
@@ -1077,6 +1156,8 @@ std::string serialize_response(const Response& response, bool keep_alive) {
                           reason_phrase(response.status) + "\r\nContent-Type: " +
                           response.content_type;
     if (!response.streaming) headers += "\r\nContent-Length: " + std::to_string(response.body.size());
+    else if (response.stream_content_length > 0) headers += "\r\nContent-Length: " + std::to_string(response.stream_content_length);
+    if (!response.content_disposition.empty()) headers += "\r\nContent-Disposition: " + response.content_disposition;
     headers += "\r\nCache-Control: " + response.cache_control +
                "\r\nX-Content-Type-Options: nosniff" +
                "\r\nContent-Security-Policy: " + response.content_security_policy;

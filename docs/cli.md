@@ -165,3 +165,49 @@ Image models and size/quality/format limits come from layered `images.conf` (not
 
 Stdout prints the saved path (or raw bytes for `--output stdout`). Status goes to stderr. GPT Image models may require OpenAI organization verification. Ordinary chat never generates images from a text prompt.
 
+## Video generation
+
+`ainiux video` (or `--video`) generates one MP4 through FAL's queue API. The
+effective `videos.conf` selects the endpoint, accepted references, defaults,
+and scalar settings. `minimax/h3-max-turbo/text-to-video` is the bundled
+default.
+
+```sh
+ainiux video -p "a paper boat drifting through rain" --duration 5 --resolution 768P
+ainiux video -m minimax/h3-max-turbo/image-to-video \
+  -p "the chart bars rise smoothly" --attach chart.png \
+  --duration 5 --resolution 480P --output chart.mp4
+ainiux video -m minimax/h3-max/reference-to-video \
+  -p "Image 1 and Video 1 meet in the same scene" \
+  --attach subject.png --attach motion.mp4 --audio off
+```
+
+The bundled catalog contains these exact FAL endpoint ids:
+
+- MiniMax H3 Max and H3 Max Turbo text-to-video and image-to-video, plus H3 Max reference-to-video
+- Kling Video v3 Pro text-to-video, and Pro/Standard image-to-video
+- Seedance 2.5 reference-to-video and image-to-video
+- Seedance 2.0 text-to-video and Fast image-to-video
+- Veo 3.1 Fast image-to-video and Grok Imagine Video image-to-video
+
+Common options are `--resolution`, `--duration`, `--ar`, `--seed`,
+`--negative-prompt`, and `--audio on|off`. Repeatable
+`--video-setting NAME=VALUE` reaches any scalar descriptor exposed by the
+selected catalog record. Values are validated locally against that record;
+unknown settings and unsupported enum values fail before a provider request.
+Nested Kling `multi_prompt` and `elements` objects are not part of this first
+scalar setting surface.
+
+Use repeatable `--attach` for the selected model's ordered image, video, or
+audio files. Text-to-video records reject attachments; image-to-video records
+map the first two images to start/end frames where supported; reference models
+preserve each modality's order. Images are limited to 30 MiB, audio to 15 MiB,
+videos to 200 MiB, with catalog count limits. Files are uploaded to short-lived
+FAL CDN objects before queue submission.
+
+`--output PATH` writes the MP4 atomically and refuses an existing path unless
+`--force` is present. If omitted, Ainiux selects the first unused `videoN.mp4`.
+`--output stdout` emits raw MP4 bytes; progress and errors remain on stderr.
+Generation and downloads are cancellable. The generated download is capped at
+1 GiB and must have an MP4 `ftyp` signature. Credentials are `FAL_API_KEY` or
+`FAL_KEY`; do not put a key on the command line.

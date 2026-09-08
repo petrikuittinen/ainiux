@@ -185,6 +185,77 @@ void test_image_operation_is_output_neutral() {
           "managed PNG and JPEG references share the existing image edit operation");
 }
 
+void test_video_operation_is_output_neutral_and_enforces_reference_limits() {
+    provider::RequestContext video_context;
+    video_context.options.provider = "fal";
+    VideoCapability capability;
+    capability.id = "test-video";
+    capability.provider = "fal";
+    capability.model_regex = "^test/reference-to-video$";
+    capability.api_model = "test/reference-to-video";
+    capability.input_mode = VideoInputMode::Reference;
+    capability.default_for_provider = true;
+    capability.max_input_images = 2;
+    capability.max_input_videos = 2;
+    capability.max_input_audios = 2;
+    capability.max_input_total = 2;
+    capability.max_input_image_bytes = 3;
+    capability.settings_json =
+        R"([{"name":"duration","field":"duration","type":"integer","default":5,"min":3,"max":10}])";
+    video_context.options.video_catalog.models.push_back(capability);
+
+    app::operation::VideoRequest request;
+    request.prompt = "animate both references";
+    request.output_path = "unused.mp4";
+    request.input_media.push_back(
+        {"image/png", "first", std::make_shared<const std::string>("png"), {}});
+    request.input_media.push_back(
+        {"video/mp4", "second", std::make_shared<const std::string>("mp4"), {}});
+    std::vector<app::operation::Event> events;
+    const app::operation::VideoResult result = app::operation::run_video(
+        video_context, request, runtime::CancellationToken(),
+        [&](const app::operation::Event& event) { events.push_back(event); return ok_error(); },
+        [](const provider::RequestContext&, const provider::VideoGenerateRequest& generated,
+           provider::VideoGenerateResult& output, runtime::CancellationToken) {
+            check(generated.model == "test/reference-to-video" && generated.inputs.size() == 2 &&
+                      generated.settings.count("duration") == 1,
+                  "video operation resolves catalog defaults and ordered managed media");
+            output.path = generated.output_path;
+            output.byte_size = 123;
+            return ok_error();
+        });
+    check(result.error.ok() && result.response.byte_size == 123 && events.size() == 2 &&
+              events.front().type == app::operation::EventType::Started &&
+              events.back().type == app::operation::EventType::Completed,
+          "video operation returns file metadata and typed lifecycle events");
+
+    request.input_media.push_back(
+        {"audio/wav", "third", std::make_shared<const std::string>("wav"), {}});
+    bool called = false;
+    const app::operation::VideoResult over_limit = app::operation::run_video(
+        video_context, request, {}, {},
+        [&](const provider::RequestContext&, const provider::VideoGenerateRequest&,
+            provider::VideoGenerateResult&, runtime::CancellationToken) {
+            called = true;
+            return ok_error();
+        });
+    check(over_limit.error.code == ErrorCode::BadArgs && !called,
+          "video operation enforces catalog combined reference counts before provider work");
+
+    request.input_media = {
+        {"image/png", "oversized", std::make_shared<const std::string>("four"), {}}};
+    called = false;
+    const app::operation::VideoResult oversized = app::operation::run_video(
+        video_context, request, {}, {},
+        [&](const provider::RequestContext&, const provider::VideoGenerateRequest&,
+            provider::VideoGenerateResult&, runtime::CancellationToken) {
+            called = true;
+            return ok_error();
+        });
+    check(oversized.error.code == ErrorCode::BadArgs && !called,
+          "video operation enforces model-specific media byte limits before provider work");
+}
+
 }  // namespace
 
 void run_all() {
@@ -193,6 +264,7 @@ void run_all() {
     test_mid_stream_cancel_propagates();
     test_empty_request_is_rejected();
     test_image_operation_is_output_neutral();
+    test_video_operation_is_output_neutral_and_enforces_reference_limits();
 }
 
 }  // namespace ainiux::test::app_operations

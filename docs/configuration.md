@@ -34,6 +34,7 @@ Bundled templates live in `config/` and are installed by `make install`:
 | `benchmarks.conf` | Judge grading instructions |
 | `models.conf` | Model capabilities, reasoning choices, context metadata, and purpose presets |
 | `images.conf` | Image-generation models, protocol, size/quality/format vocabulary, and edits |
+| `videos.conf` | Video-generation models, input modes, media limits, and scalar settings |
 
 The bundled documents are installed beside the binary's other shared data. User
 copies can override or extend them; see the comments in the bundled templates for
@@ -117,6 +118,19 @@ Endpoint metadata and explicit CLI values outrank catalog fallbacks. Protocol na
 ## Image catalog
 
 `images.conf` contains repeatable `[image]` records for `ainiux image`. Matching uses the full model id or the final slash component. `protocol` selects a compiled HTTP adapter (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`). Replicate, fal, and Gemini records set `api_model` to the provider endpoint id and optional field names (`size_field`, `aspect_field`, `images_field`, `defaults_json`) so a new model is a catalog change. User `~/.config/ainiux/images.conf` overlays bundled records by `id`. `models.conf` `images = on` means vision **input** (text-image-to-text), not image generation.
+
+`videos.conf` contains repeatable `[video]` records for `ainiux video` and the
+WebUI Video tab. The bundled adapter is `fal_queue`; records select `text`,
+`image`, or `reference` input mode, provider field names, per-modality and total
+reference counts, optional per-modality byte limits, and a JSON array of scalar
+setting descriptors. Those
+descriptors drive CLI validation, the control API, the browser controls, and
+the provider request, so supported enums and defaults remain data-driven. User
+`~/.config/ainiux/videos.conf` records overlay bundled records by `id`.
+
+`AINIUX_VIDEOS` selects an alternate installed video catalog path. As with the
+other split catalogs, `--no-config` skips only the user overlay; it does not
+remove the embedded or installed defaults.
 
 Bundled provider defaults:
 

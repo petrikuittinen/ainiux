@@ -25,7 +25,7 @@ filesystem containment, and error handling are shared foundations for:
 - REPL, full-screen chat, editor, and dired;
 - benchmarks and judge grading;
 - local Act/Plan/Goal agent workflows;
-- CLI and browser image generation;
+- CLI and browser image and video generation;
 - the authenticated control API, MCP adapter, and embedded browser controller.
 
 Each workstream must preserve existing CLI and interactive behavior unless its
@@ -46,14 +46,15 @@ generation.
 The v1.30 control-server milestone is complete: `/ainiux/v1/` jobs and replay,
 the MCP server adapter, interactive remote Agent/Guard sessions, revision-safe
 chat and workspace/editor operations, TLS/direct-access gates, and the embedded
-same-origin WebUI are implemented. v1.31–v1.32 added safe Markdown and full-language
+same-origin WebUI are implemented. Unreleased work adds catalog-driven FAL video
+generation to the headless CLI and browser controller. v1.31–v1.32 added safe Markdown and full-language
 syntax highlighting, model/settings parity, persisted idle agent history,
 catalog-driven browser image generation, editor undo/redo, and native-parity
 browser indentation/reformatting.
 
 Native Windows x64 implementation is present but unreleased pending the UCRT64
 parity gate. The code index intentionally stores definitions and static importance,
-not references or graph scores. REPL/TUI image generation and the deferred items
+not references or graph scores. REPL/TUI image/video generation and the deferred items
 listed below remain unimplemented.
 
 ## Active workstreams

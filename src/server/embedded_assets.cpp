@@ -34,6 +34,10 @@ bool find_embedded_asset(std::string_view path, EmbeddedAsset& asset) {
         asset = {"text/javascript; charset=utf-8", web::kImageOptionsJavascript, true};
         return true;
     }
+    if (path == web::kVideoOptionsJavascriptPath) {
+        asset = {"text/javascript; charset=utf-8", web::kVideoOptionsJavascript, true};
+        return true;
+    }
     if (path == web::kEditorHistoryJavascriptPath) {
         asset = {"text/javascript; charset=utf-8", web_history::kJavascript, true};
         return true;

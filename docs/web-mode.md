@@ -60,6 +60,9 @@ provides:
   and browser-local download;
 - ordered PNG/JPEG reference-image selection for catalog models that support
   image editing, including local thumbnails and per-model input limits;
+- a dedicated Video tab driven by layered `videos.conf`, with catalog-derived
+  scalar controls, ordered image/video/audio references, cancellable jobs,
+  HTML5 MP4 playback, and authenticated download;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
 - a bounded UTF-8 editor with optimistic saves, conflict recovery, detected
@@ -81,6 +84,15 @@ count. Opaque upload IDs expire after one hour; removing a preview or logging ou
 requests early deletion. A running job retains only the immutable buffers it
 needs. Uploads are never exposed as workspace paths or persisted by the input
 store.
+
+Video references follow the same opaque-ID lifecycle and stay server-side.
+Accepted media and counts depend on the selected `videos.conf` record; global
+limits are 30 MiB per image, 15 MiB per audio file, 200 MiB per video file,
+1 GiB combined, and 50 files. Successful jobs write a collision-safe
+`videoN.mp4` in the fixed workspace. The browser fetches the authenticated
+artifact into a local Blob URL for the native `<video controls>` player and
+download action, then revokes that URL on reset or sign-out. FAL keys, queue
+control URLs, CDN input URLs, and provider output URLs never enter browser JSON.
 
 Chat submission first persists the user message, runs the shared asynchronous
 chat job, and appends the assistant result only if the thread revision still

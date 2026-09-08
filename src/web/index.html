@@ -140,8 +140,24 @@
         </div>
       </section>
 
-      <section id="video-panel" class="panel placeholder-panel" aria-label="Video" hidden>
-        <div><h2>Video</h2><p>Video generation is not available yet.</p></div>
+      <section id="video-panel" class="panel" aria-label="Video" hidden>
+        <div class="image-layout">
+          <form id="video-job-form" class="control-pane stack">
+            <div class="pane-bar"><h2>Generate video</h2></div>
+            <label>Prompt <textarea id="video-prompt" rows="7" maxlength="262144" required placeholder="Describe the video…"></textarea></label>
+            <label>Provider <select id="video-provider"><option value="">Loading catalog…</option></select></label>
+            <label>Model <select id="video-model"><option value="">Loading catalog…</option></select></label>
+            <div id="video-settings" class="form-grid"></div>
+            <label>Input media and references <input id="video-input-files" type="file" accept="image/*,video/mp4,video/quicktime,audio/mpeg,audio/wav" multiple><small id="video-input-hint" class="field-hint">The selected model determines allowed image, video, and audio references.</small></label>
+            <div id="video-input-list" class="image-input-list" aria-live="polite"></div>
+            <p id="video-options-status" class="field-hint" aria-live="polite"></p>
+            <div class="button-row"><button id="video-generate-button" type="submit">Generate</button><button id="video-reset-button" class="ghost" type="button">Reset</button><button id="video-cancel-button" class="danger" type="button" hidden>Cancel</button></div>
+          </form>
+          <section class="content-pane image-preview" aria-labelledby="video-preview-heading">
+            <div class="pane-bar"><h2 id="video-preview-heading">Preview</h2><button id="video-download-button" class="ghost" type="button" hidden>Download</button></div>
+            <div id="video-output" class="image-output empty-state" aria-live="polite">Your generated video will appear here.</div>
+          </section>
+        </div>
       </section>
 
       <section id="workspace-panel" class="panel" aria-label="Workspace" hidden>

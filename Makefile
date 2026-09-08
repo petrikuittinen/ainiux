@@ -65,9 +65,11 @@ THEMES_CONFIG := config/themes.conf
 BENCHMARKS_CONFIG := config/benchmarks.conf
 MODELS_CONFIG := config/models.conf
 IMAGES_CONFIG := config/images.conf
+VIDEOS_CONFIG := config/videos.conf
 COMMON_CONFIG_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/config.conf
 MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
+VIDEOS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_videos_config.hpp
 WEB_INDEX := src/web/index.html
 WEB_STYLESHEET := src/web/css/app-v19.css
 WEB_JAVASCRIPT := src/web/js/app-v23.js
@@ -75,6 +77,7 @@ WEB_SELECTOR_JAVASCRIPT := src/web/js/selector-v3.js
 WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v5.js
 WEB_SYNTAX_JAVASCRIPT := src/web/js/syntax-v4.js
 WEB_IMAGE_OPTIONS_JAVASCRIPT := src/web/js/image-options-v1.js
+WEB_VIDEO_OPTIONS_JAVASCRIPT := src/web/js/video-options-v1.js
 WEB_EDITOR_HISTORY_JAVASCRIPT := src/web/js/editor-history-v2.js
 WEB_EDITOR_INDENTATION_JAVASCRIPT := src/web/js/editor-indentation-v1.js
 WEB_ASSET_HEADER := $(GENERATED_DIR)/embedded_web_assets.hpp
@@ -85,6 +88,7 @@ THEMES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/themes.conf
 BENCHMARKS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/benchmarks.conf
 MODELS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/models.conf
 IMAGES_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/images.conf
+VIDEOS_INSTALL := $(DESTDIR)$(PREFIX)/share/ainiux/videos.conf
 BENCHMARK_DATA_DIR := $(DESTDIR)$(PREFIX)/share/ainiux/benchmarks
 BUILTIN_BENCHMARK_HEADER := $(GENERATED_DIR)/builtin_dataset.hpp
 EDITOR_HELP_SRC := docs/editor_help.md
@@ -215,9 +219,19 @@ $(IMAGES_CONFIG_HEADER): $(IMAGES_CONFIG)
 	} >$@.tmp
 	@mv $@.tmp $@
 
-$(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(IMAGES_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
+$(VIDEOS_CONFIG_HEADER): $(VIDEOS_CONFIG)
+	@mkdir -p $(dir $@)
+	@{ \
+		printf '%s\n' '#pragma once' 'namespace ainiux::config {' \
+			'inline constexpr char kEmbeddedVideosConfig[] = R"AINIUX_VIDEOS('; \
+		cat $<; \
+		printf '%s\n' ')AINIUX_VIDEOS";' '}  // namespace ainiux::config'; \
+	} >$@.tmp
+	@mv $@.tmp $@
 
-$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGHLIGHT_JAVASCRIPT) $(WEB_SYNTAX_JAVASCRIPT) $(WEB_IMAGE_OPTIONS_JAVASCRIPT) $(WEB_EDITOR_HISTORY_JAVASCRIPT) $(WEB_EDITOR_INDENTATION_JAVASCRIPT) $(WEB_SELECTOR_JAVASCRIPT)
+$(OBJ_DIR)/src/config/config.o: $(MODELS_CONFIG_HEADER) $(IMAGES_CONFIG_HEADER) $(VIDEOS_CONFIG_HEADER) $(EDITOR_COMMANDS_CONFIG_HEADER)
+
+$(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGHLIGHT_JAVASCRIPT) $(WEB_SYNTAX_JAVASCRIPT) $(WEB_IMAGE_OPTIONS_JAVASCRIPT) $(WEB_VIDEO_OPTIONS_JAVASCRIPT) $(WEB_EDITOR_HISTORY_JAVASCRIPT) $(WEB_EDITOR_INDENTATION_JAVASCRIPT) $(WEB_SELECTOR_JAVASCRIPT)
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
@@ -227,6 +241,7 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGH
 			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v5.js";' \
 			'inline constexpr std::string_view kSyntaxJavascriptPath = "/ui/assets/syntax-v4.js";' \
 			'inline constexpr std::string_view kImageOptionsJavascriptPath = "/ui/assets/image-options-v1.js";' \
+			'inline constexpr std::string_view kVideoOptionsJavascriptPath = "/ui/assets/video-options-v1.js";' \
 			'inline constexpr std::string_view kEditorHistoryJavascriptPath = "/ui/assets/editor-history-v2.js";' \
 			'inline constexpr std::string_view kEditorIndentationJavascriptPath = "/ui/assets/editor-indentation-v1.js";' \
 			'inline constexpr char kIndexHtml[] = R"AINIUX_WEB_HTML('; \
@@ -249,7 +264,9 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGH
 		printf '%s\n' ')AINIUX_EDINDENT";' \
 			'inline constexpr char kImageOptionsJavascript[] = R"AINIUX_IMGOPT('; \
 		cat $(WEB_IMAGE_OPTIONS_JAVASCRIPT); \
-		printf '%s\n' ')AINIUX_IMGOPT";' 'inline constexpr char kSelectorJavascript[] = R"AINIUX_PICKER('; \
+		printf '%s\n' ')AINIUX_IMGOPT";' 'inline constexpr char kVideoOptionsJavascript[] = R"AINIUX_VIDOPT('; \
+		cat $(WEB_VIDEO_OPTIONS_JAVASCRIPT); \
+		printf '%s\n' ')AINIUX_VIDOPT";' 'inline constexpr char kSelectorJavascript[] = R"AINIUX_PICKER('; \
 		cat $(WEB_SELECTOR_JAVASCRIPT); \
 		printf '%s\n' ')AINIUX_PICKER";' '}  // namespace ainiux::server::web'; \
 	} >$@.tmp
@@ -323,10 +340,12 @@ test-web-js:
 		node --experimental-default-type=module --check $(WEB_HIGHLIGHT_JAVASCRIPT); \
 		node --experimental-default-type=module --check $(WEB_SYNTAX_JAVASCRIPT); \
 		node --experimental-default-type=module --check $(WEB_IMAGE_OPTIONS_JAVASCRIPT); \
+		node --experimental-default-type=module --check $(WEB_VIDEO_OPTIONS_JAVASCRIPT); \
 		node --experimental-default-type=module --check $(WEB_EDITOR_HISTORY_JAVASCRIPT); \
 		node --experimental-default-type=module --check $(WEB_EDITOR_INDENTATION_JAVASCRIPT); \
 		node --experimental-default-type=module --test tests/unit/web/test_highlight.mjs; \
 		node --experimental-default-type=module --test tests/unit/web/test_image_options.mjs; \
+		node --experimental-default-type=module --test tests/unit/web/test_video_options.mjs; \
 		node --experimental-default-type=module --test tests/unit/web/test_editor_history.mjs; \
 		node --experimental-default-type=module --test tests/unit/web/test_editor_indentation.mjs; \
 		node --experimental-default-type=module --test tests/unit/web/test_selector.mjs; \
@@ -400,7 +419,7 @@ leak-check: $(BIN) $(TEST_BIN) $(IO_FAULT_BIN)
 
 test-leak: leak-check
 
-install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(IMAGES_CONFIG) $(EDITOR_HELP_SRC) $(CLI_SKILL_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
+install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BENCHMARKS_CONFIG) $(MODELS_CONFIG) $(IMAGES_CONFIG) $(VIDEOS_CONFIG) $(EDITOR_HELP_SRC) $(CLI_SKILL_SRC) $(MASTER_PROMPT_SRC) $(SECURITY_PROMPT_SRC) $(AGENT_PROMPT_SRC)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
 	install -m 0755 $(BIN) "$(DESTDIR)$(PREFIX)/bin/$(BIN)"
 	install -d "$(BENCHMARK_DATA_DIR)"
@@ -415,6 +434,7 @@ install: $(BIN) $(COMMON_CONFIG) $(EDITOR_COMMANDS_CONFIG) $(THEMES_CONFIG) $(BE
 	install -m 0644 "$(BENCHMARKS_CONFIG)" "$(BENCHMARKS_INSTALL)"
 	install -m 0644 "$(MODELS_CONFIG)" "$(MODELS_INSTALL)"
 	install -m 0644 "$(IMAGES_CONFIG)" "$(IMAGES_INSTALL)"
+	install -m 0644 "$(VIDEOS_CONFIG)" "$(VIDEOS_INSTALL)"
 	install -d "$(AGENT_PROMPTS_INSTALL_DIR)"
 	install -m 0644 "$(MASTER_PROMPT_SRC)" "$(SECURITY_PROMPT_SRC)" "$(AGENT_PROMPT_SRC)" \
 		"$(AGENT_PROMPTS_INSTALL_DIR)"

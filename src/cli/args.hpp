@@ -9,6 +9,7 @@
 #include "editor/editor_prompts.hpp"
 #include "markdown/markdown.hpp"
 #include "ainiux/image_setting.hpp"
+#include "ainiux/video_setting.hpp"
 #include "ainiux/model_setting.hpp"
 #include "ainiux/compaction_strategy.hpp"
 #include "tui/theme_registry.hpp"
@@ -96,6 +97,8 @@ struct Options {
     bool disable_indexing = false;
     // One-shot image generation: ainiux image / --image
     bool image = false;
+    // One-shot video generation: ainiux video / --video
+    bool video = false;
     // v1.30 control API server. Loopback remains the safe default.
     bool server = false;
     // Browser-oriented server startup. Enables managed authentication, URL
@@ -112,6 +115,12 @@ struct Options {
     std::string image_ar;
     std::string image_quality;
     std::string image_format = "png";
+    std::string video_resolution;
+    std::string video_duration;
+    std::string video_seed;
+    std::string video_negative_prompt;
+    std::string video_audio;
+    std::vector<std::string> video_settings;
     std::string workspace = ".";
     std::string bind_address = "127.0.0.1";
     std::string server_secret_file;
@@ -279,6 +288,7 @@ struct Options {
     std::vector<std::string> attachment_paths;
     ModelCatalog model_catalog;
     ImageCatalog image_catalog;
+    VideoCatalog video_catalog;
 };
 
 // Parse a context-window token count accepted by both --context and interactive
@@ -300,6 +310,7 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
 Error validate_agent_interactive_arguments(int argc, char** argv, const Options& options);
 Error validate_disable_indexing_arguments(const Options& options);
 Error validate_image_mode_arguments(const Options& options);
+Error validate_video_mode_arguments(const Options& options);
 std::string help_text();
 
 }  // namespace ainiux::cli

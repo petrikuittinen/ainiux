@@ -24,6 +24,7 @@ cp "$binary" "$stage/ainiux.exe"
 cp config/ainiux.conf "$stage/share/ainiux/config.conf"
 cp config/editor-commands.conf config/themes.conf config/benchmarks.conf config/models.conf \
    config/images.conf \
+   config/videos.conf \
    docs/editor_help.md "$stage/share/ainiux/"
 cp resources/prompts/*.md "$stage/share/ainiux/prompts/"
 cp benchmarks/builtin.jsonl benchmarks/long-context.jsonl "$stage/share/ainiux/benchmarks/"

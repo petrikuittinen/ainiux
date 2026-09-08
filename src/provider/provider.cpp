@@ -24,6 +24,7 @@
 #include "json/json.hpp"
 #include "output/thinking.hpp"
 #include "platform/environment.hpp"
+#include "platform/filesystem.hpp"
 #include "security/redact.hpp"
 
 namespace ainiux::provider {
@@ -268,6 +269,33 @@ Error read_file(const std::string& path, std::string& out) {
         return {ErrorCode::FileRead, "could not read file: " + resolved};
     }
     out = ss.str();
+    return ok_error();
+}
+
+Error read_video_prompt(const cli::Options& options, std::string& output) {
+    const std::size_t limit = options.max_input_bytes > 0
+                                  ? static_cast<std::size_t>(options.max_input_bytes)
+                                  : 1024U * 1024U;
+    if (options.prompt_file != "-") {
+        return platform::read_file_bounded(options.prompt_file, limit, output);
+    }
+    output.clear();
+    char buffer[8192];
+    while (std::cin) {
+        std::cin.read(buffer, sizeof(buffer));
+        const std::streamsize count = std::cin.gcount();
+        if (count <= 0) break;
+        const std::size_t bytes = static_cast<std::size_t>(count);
+        if (output.size() > limit || bytes > limit - output.size()) {
+            output.clear();
+            return {ErrorCode::FileRead, "video prompt on stdin exceeds input.max_input_bytes"};
+        }
+        output.append(buffer, bytes);
+    }
+    if (std::cin.bad()) {
+        output.clear();
+        return {ErrorCode::FileRead, "could not read video prompt from stdin"};
+    }
     return ok_error();
 }
 
@@ -2367,7 +2395,8 @@ std::string normalize_base_url(const std::string& url, bool* changed, Error& err
 ContextResult build_context(const cli::Options& input_options) {
     cli::Options options = input_options;
     if (!options.prompt_file.empty()) {
-        Error err = read_file(options.prompt_file, options.prompt);
+        Error err = options.video ? read_video_prompt(options, options.prompt)
+                                  : read_file(options.prompt_file, options.prompt);
         if (!err.ok()) {
             return {{}, err};
         }
@@ -2514,7 +2543,7 @@ ContextResult build_context(const cli::Options& input_options) {
         }
     }
 
-    if (!options.image) {
+    if (!options.image && !options.video) {
         if (!profile.offline && api_kind == ApiKind::ChatCompletions &&
             !profile.capabilities.chat_completions && options.chat_url.empty()) {
             return {{}, {ErrorCode::UnsupportedFeature, "provider " + profile.name + " does not define a Chat Completions endpoint"}};

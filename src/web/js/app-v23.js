@@ -9,6 +9,9 @@ import {
   resetImageFormValues,
 } from "./image-options-v1.js";
 import {
+  normalizeVideoCatalog, selectVideoModel, videoFileError,
+} from "./video-options-v1.js";
+import {
   createEditorHistory, editorHistoryDirection, recordEditorChange, redoEditorChange,
   undoEditorChange, updateEditorHistorySelection,
 } from "./editor-history-v2.js";
@@ -58,6 +61,14 @@ const state = {
   imageError: "",
   imageCatalog: null,
   imageInputs: [],
+  videoJobId: "",
+  videoSubmitting: false,
+  videoResult: null,
+  videoError: "",
+  videoCatalog: null,
+  videoRenderedModel: "",
+  videoInputs: [],
+  videoObjectUrl: "",
   guard: null,
   directory: { path: ".", revision: "", entries: [] },
   file: null,
@@ -1164,6 +1175,92 @@ function resetImageForm() {
   byId("image-prompt").focus();
 }
 
+function selectedVideoModel() {
+  if (!state.videoCatalog) return null;
+  const provider = byId("video-provider").value || state.videoCatalog.default_provider;
+  const requested = byId("video-model").value;
+  return selectVideoModel(state.videoCatalog, provider, requested);
+}
+
+function renderVideoInputList() {
+  const list = byId("video-input-list"); clear(list);
+  if (!state.videoInputs.length) { list.classList.add("empty-state"); list.textContent = "No input media selected."; return; }
+  for (const input of state.videoInputs) {
+    const row = element("div", "image-input-row");
+    row.append(element("span", "", `${input.file.name} · ${input.file.type || "media"} · ${formatBytes(input.file.size)}`));
+    const remove = element("button", "ghost", "Remove"); remove.type = "button";
+    remove.addEventListener("click", () => void removeVideoInput(input)); row.append(remove); list.append(row);
+  }
+}
+
+function videoInputError(model) {
+  return videoFileError(model, state.videoInputs, state.videoCatalog.limits);
+}
+
+function renderVideoOptions(resetModel = false) {
+  const catalog = state.videoCatalog; const status = byId("video-options-status");
+  if (!catalog) { status.textContent = "Connect to load video models from videos.conf."; byId("video-generate-button").disabled = true; return; }
+  const provider = byId("video-provider"); const previousProvider = provider.value;
+  fillImageSelect("video-provider", catalog.providers, `Server default (${catalog.default_provider || "fal"})`, previousProvider);
+  const effectiveProvider = provider.value || catalog.default_provider;
+  const models = catalog.models.filter((item) => item.provider === effectiveProvider || item.provider === "any");
+  const priorModel = state.videoRenderedModel || "";
+  const previousModel = resetModel ? "" : byId("video-model").value;
+  const oldValues = new Map();
+  if (!resetModel) for (const control of byId("video-settings").querySelectorAll("[data-video-setting]")) {
+    oldValues.set(control.dataset.videoSetting, control.type === "checkbox" ? control.checked : control.value);
+  }
+  fillImageSelect("video-model", models.map((item) => item.model), "Catalog default", previousModel);
+  const model = selectedVideoModel(); if (model && !byId("video-model").value) byId("video-model").value = model.model;
+  const settings = byId("video-settings"); settings.replaceChildren();
+  for (const descriptor of model && Array.isArray(model.settings) ? model.settings : []) {
+    const label = element("label", "", descriptor.label || descriptor.name); let control;
+    if (descriptor.type === "boolean") {
+      control = document.createElement("input"); control.type = "checkbox"; control.checked = descriptor.default === true;
+    } else if (descriptor.type === "enum") {
+      control = document.createElement("select");
+      for (const value of descriptor.options || []) { const option = element("option", "", value); option.value = value; control.append(option); }
+      if (descriptor.default !== undefined) control.value = String(descriptor.default);
+    } else {
+      control = document.createElement("input"); control.type = descriptor.type === "string" ? "text" : "number";
+      if (descriptor.min !== undefined) control.min = String(descriptor.min);
+      if (descriptor.max !== undefined) control.max = String(descriptor.max);
+      control.step = String(descriptor.step !== undefined ? descriptor.step : descriptor.type === "integer" ? 1 : "any");
+      if (descriptor.default !== undefined) control.value = String(descriptor.default);
+    }
+    if (priorModel === (model && model.model) && oldValues.has(descriptor.name)) {
+      if (control.type === "checkbox") control.checked = oldValues.get(descriptor.name) === true;
+      else control.value = String(oldValues.get(descriptor.name));
+    }
+    control.dataset.videoSetting = descriptor.name; control.dataset.videoType = descriptor.type; label.append(control); settings.append(label);
+  }
+  state.videoRenderedModel = model ? model.model : "";
+  const validation = videoInputError(model);
+  status.textContent = validation || (model ? `${model.input_mode} · images ${model.max_input_images}, videos ${model.max_input_videos}, audio ${model.max_input_audios}` : "No model available.");
+  status.classList.toggle("error-text", Boolean(validation)); byId("video-input-files").disabled = !model || model.input_mode === "text";
+  const active = state.videoJobId ? state.jobs.get(state.videoJobId) : null;
+  byId("video-generate-button").disabled = !supports("video") || !model || state.videoSubmitting || Boolean(active && !TERMINAL_STATES.has(active.state)) || Boolean(validation);
+}
+
+async function removeVideoInput(input) {
+  state.videoInputs = state.videoInputs.filter((item) => item !== input);
+  if (input.uploadId && state.token) await api(`${API_ROOT}/videos/inputs/${encodeURIComponent(input.uploadId)}`, { method: "DELETE" }).catch(() => {});
+  renderVideoInputList(); renderVideoOptions();
+}
+
+function releaseAllVideoInputs() {
+  const token = state.token;
+  for (const input of state.videoInputs) if (input.uploadId && token) void fetch(`${API_ROOT}/videos/inputs/${encodeURIComponent(input.uploadId)}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` }, credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer" }).catch(() => {});
+  state.videoInputs = []; renderVideoInputList();
+}
+
+async function uploadVideoInputs() {
+  for (const input of state.videoInputs) if (!input.uploadId) {
+    const stored = await api(`${API_ROOT}/videos/inputs`, { method: "POST", rawBody: input.file, contentType: input.file.type }); input.uploadId = stored.id;
+  }
+  return state.videoInputs.map((input) => input.uploadId);
+}
+
 async function uploadImageInputs() {
   for (const input of state.imageInputs) {
     if (input.uploadId) continue;
@@ -1191,7 +1288,9 @@ function applyCapabilities() {
   byId("create-directory-button").disabled = !supports("workspace_mutations");
   for (const control of byId("goal-job-form").elements) control.disabled = !supports("run") && !supports("plan");
   for (const control of byId("image-job-form").elements) control.disabled = !supports("image");
+  for (const control of byId("video-job-form").elements) control.disabled = !supports("video");
   renderImageOptions();
+  renderVideoOptions();
   updateSettingsAvailability();
 }
 
@@ -1218,15 +1317,17 @@ function renderSettings() {
 }
 
 async function refreshSettings() {
-  const [capabilities, status, imageCatalog, workspaceSettings] = await Promise.all([
+  const [capabilities, status, imageCatalog, videoCatalog, workspaceSettings] = await Promise.all([
     api(`${API_ROOT}/capabilities`),
     api(`${API_ROOT}/status`),
     api(`${API_ROOT}/images/catalog`),
+    api(`${API_ROOT}/videos/catalog`),
     api(`${API_ROOT}/workspace/settings`),
   ]);
   state.capabilities = capabilities;
   state.status = status;
   state.imageCatalog = normalizeImageCatalog(imageCatalog);
+  state.videoCatalog = normalizeVideoCatalog(videoCatalog);
   state.workspaceSettings = workspaceSettings;
   renderSettings();
   applyCapabilities();
@@ -1369,6 +1470,9 @@ function forgetAuthentication(message = "") {
   stopAllStreams();
   stopAgentClock();
   releaseAllImageInputs();
+  releaseAllVideoInputs();
+  if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
+  state.videoObjectUrl = "";
   state.token = "";
   state.authenticated = false;
   state.connected = false;
@@ -1376,6 +1480,7 @@ function forgetAuthentication(message = "") {
   state.capabilities = null;
   state.status = null;
   state.imageCatalog = null;
+  state.videoCatalog = null;
   state.thread = null;
   state.chatInitialized = false;
   state.startingNewChat = false;
@@ -1400,6 +1505,7 @@ function forgetAuthentication(message = "") {
   byId("auth-error").textContent = message;
   openDialog(byId("auth-dialog"));
   renderImageOptions();
+  renderVideoOptions();
 }
 
 function invalidateAuthentication() {
@@ -1424,6 +1530,7 @@ function switchPanel(panelId) {
   byId("main").focus({ preventScroll: true });
   if (panelId === "agent-panel" && state.connected) void ensureWorkspaceAgent();
   if (panelId === "image-panel") renderImage();
+  if (panelId === "video-panel") renderVideo();
 }
 
 function jobLabel(job) {
@@ -1536,6 +1643,44 @@ function downloadGeneratedImage() {
   }
 }
 
+async function loadVideoArtifact(jobId) {
+  const response = await fetch(`${API_ROOT}/jobs/${encodeURIComponent(jobId)}/artifact`, {
+    headers: { Authorization: `Bearer ${state.token}`, Accept: "video/mp4" },
+    credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
+  });
+  if (!response.ok) {
+    if (response.status === 401) invalidateAuthentication();
+    throw new ApiError(response.status, "artifact_download_failed", "Could not load the generated video artifact");
+  }
+  const blob = await response.blob();
+  if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
+  state.videoObjectUrl = URL.createObjectURL(blob);
+}
+
+function renderVideo() {
+  const output = byId("video-output"); const cancel = byId("video-cancel-button");
+  const download = byId("video-download-button"); const job = state.videoJobId ? state.jobs.get(state.videoJobId) : null;
+  cancel.hidden = !job || TERMINAL_STATES.has(job.state); download.hidden = !state.videoObjectUrl;
+  if (job && !TERMINAL_STATES.has(job.state)) {
+    clear(output); const latest = Array.isArray(job._events) ? job._events[job._events.length - 1] : null;
+    output.append(element("div", "spinner", ""), element("strong", "", job.state === "queued" ? "Queued" : "Generating…"), element("p", "muted", latest && latest.data && latest.data.text ? latest.data.text : "Waiting for the video provider.")); return;
+  }
+  if (state.videoError) { setEmpty(output, state.videoError); output.classList.add("danger-text"); return; }
+  output.classList.remove("danger-text");
+  if (!state.videoResult || !state.videoObjectUrl) { setEmpty(output, state.videoResult ? "Loading generated video…" : "Your generated video will appear here."); return; }
+  clear(output); const video = document.createElement("video"); video.controls = true; video.preload = "metadata"; video.src = state.videoObjectUrl;
+  const details = [state.videoResult.model || "model"];
+  if (state.videoResult.server_path) details.push(`saved as ${state.videoResult.server_path}`);
+  if (state.videoResult.byte_size) details.push(formatBytes(state.videoResult.byte_size));
+  output.append(video, element("p", "image-meta", details.join(" · ")));
+}
+
+function downloadGeneratedVideo() {
+  if (!state.videoObjectUrl || !state.videoResult) return;
+  const link = element("a"); link.href = state.videoObjectUrl; link.download = state.videoResult.server_path || "video.mp4";
+  document.body.append(link); link.click(); link.remove();
+}
+
 function renderJobs() {
   const list = byId("job-list");
   const jobs = [...state.jobs.values()]
@@ -1576,6 +1721,7 @@ function updateJob(snapshot, context) {
   state.jobs.set(merged.id, merged);
   renderJobs();
   if (merged.operation === "image") renderImage();
+  if (merged.operation === "video") renderVideo();
   return merged;
 }
 
@@ -1616,6 +1762,7 @@ function watchJob(jobId) {
       }
       if (event && TERMINAL_STATES.has(event.type)) job.state = event.type;
       if (job.operation === "image") renderImage();
+      else if (job.operation === "video") renderVideo();
       else if (activePanelId() === "jobs-panel" || !event || event.type !== "delta") renderJobs();
       if (event && TERMINAL_STATES.has(event.type)) void refreshJob(jobId);
     },
@@ -1655,6 +1802,16 @@ async function handleJobCompletion(job) {
       : job.state === "cancelled" ? "Image generation cancelled." : "";
     renderImage();
     renderImageOptions();
+  }
+  if (job.operation === "video") {
+    state.videoJobId = "";
+    state.videoResult = job.state === "succeeded" ? job.result : null;
+    state.videoError = job.state === "failed" && job.error ? (job.error.message || "Video generation failed") : job.state === "cancelled" ? "Video generation cancelled." : "";
+    if (job.state === "succeeded") {
+      try { await loadVideoArtifact(job.id); }
+      catch (error) { state.videoError = errorMessage(error); }
+    }
+    renderVideo(); renderVideoOptions();
   }
 }
 
@@ -3307,6 +3464,45 @@ function bindEvents() {
   });
   byId("image-reset-button").addEventListener("click", resetImageForm);
   byId("image-download-button").addEventListener("click", downloadGeneratedImage);
+  byId("video-job-form").addEventListener("submit", async (event) => {
+    event.preventDefault(); state.videoSubmitting = true; renderVideoOptions();
+    try {
+      state.videoError = ""; state.videoResult = null;
+      if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
+      state.videoObjectUrl = "";
+      const model = selectedVideoModel(); const validation = videoInputError(model);
+      if (validation) throw new ApiError(400, "invalid_video_input", validation);
+      const settings = {};
+      for (const control of byId("video-settings").querySelectorAll("[data-video-setting]")) {
+        const type = control.dataset.videoType; let value;
+        if (type === "boolean") value = control.checked;
+        else if (type === "integer" || type === "number") { if (control.value === "") continue; value = Number(control.value); }
+        else { if (control.value === "") continue; value = control.value; }
+        settings[control.dataset.videoSetting] = value;
+      }
+      const job = await submitJob("video", optionalPayload({ prompt: byId("video-prompt").value.trim(), provider: byId("video-provider").value, model: model ? model.model : "", settings, input_media_ids: await uploadVideoInputs() }), { type: "video" });
+      state.videoJobId = job.id; renderVideo();
+    } catch (error) { toast(errorMessage(error), "error"); }
+    finally { state.videoSubmitting = false; renderVideoOptions(); }
+  });
+  byId("video-provider").addEventListener("change", () => renderVideoOptions(true));
+  byId("video-model").addEventListener("change", () => renderVideoOptions());
+  byId("video-input-files").addEventListener("change", (event) => {
+    const additions = Array.from(event.target.files || []); state.videoInputs.push(...additions.map((file) => ({ file, uploadId: "" })));
+    event.target.value = ""; const validation = videoInputError(selectedVideoModel());
+    if (validation) { state.videoInputs.splice(state.videoInputs.length - additions.length, additions.length); toast(validation, "error"); }
+    renderVideoInputList(); renderVideoOptions();
+  });
+  byId("video-cancel-button").addEventListener("click", () => { if (state.videoJobId) void cancelJob(state.videoJobId); });
+  byId("video-reset-button").addEventListener("click", () => {
+    byId("video-prompt").value = ""; byId("video-input-files").value = ""; releaseAllVideoInputs();
+    state.videoResult = null;
+    state.videoError = "";
+    if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
+    state.videoObjectUrl = "";
+    renderVideoOptions(); renderVideo(); byId("video-prompt").focus();
+  });
+  byId("video-download-button").addEventListener("click", downloadGeneratedVideo);
   byId("edit-file-button").addEventListener("click", beginFileEdit);
 
   byId("new-thread-button").addEventListener("click", () => openDialog(byId("new-thread-dialog")));
@@ -3484,6 +3680,8 @@ async function boot() {
   renderJobs();
   renderImage();
   renderImageInputList();
+  renderVideo();
+  renderVideoInputList();
   renderChat();
   renderAgent();
   const remembered = storageGet(TOKEN_STORAGE_KEY);
@@ -3501,6 +3699,7 @@ async function boot() {
   }
   openDialog(byId("auth-dialog"));
   renderImageOptions();
+  renderVideoOptions();
 }
 
 void boot();

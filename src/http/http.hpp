@@ -27,6 +27,12 @@ struct Request {
     runtime::CancellationToken cancellation;
     long max_body_bytes = 0;
     BodyCallback on_body;
+    // Streaming sinks can disable response retention to avoid keeping large
+    // generated media in memory. Error responses are still retained.
+    bool retain_body = true;
+    // Queue submissions can be billable and must not be retried after an
+    // ambiguous send failure.
+    bool retry_post_on_send_error = true;
 };
 
 struct Response {

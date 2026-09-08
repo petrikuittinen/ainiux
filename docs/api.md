@@ -271,7 +271,7 @@ output file, write to stdout or stderr, own terminal state, or install process
 signal handlers. CLI adapters retain their existing output behavior while HTTP,
 MCP, and later browser adapters translate the same operation results.
 
-The extracted operations cover ordinary chat and one-shot image generation.
+The extracted operations cover ordinary chat plus one-shot image and video generation.
 Agent run/plan use the existing headless `run_agent_goal` boundary and the
 server's fixed canonical workspace.
 
@@ -328,9 +328,14 @@ GET  /ainiux/v1/images/catalog
 POST /ainiux/v1/images/inputs  (raw image/png or image/jpeg)
 DELETE /ainiux/v1/images/inputs/:input_id
 POST /ainiux/v1/jobs/image  {provider?, model?, api?, prompt, size?, aspect?, quality?, format?, input_image_ids?:[]}
+GET  /ainiux/v1/videos/catalog
+POST /ainiux/v1/videos/inputs  (raw supported image, video, or audio body)
+DELETE /ainiux/v1/videos/inputs/:input_id
+POST /ainiux/v1/jobs/video  {provider?, model?, prompt, settings?:{}, input_media_ids?:[]}
 POST /ainiux/v1/jobs/editor-assist {provider?, model?, api?, path, revision, instruction, selection_start?, selection_end?}
 GET  /ainiux/v1/jobs/:job_id
 GET  /ainiux/v1/jobs/:job_id/events
+GET  /ainiux/v1/jobs/:job_id/artifact
 POST /ainiux/v1/jobs/:job_id/cancel
 ```
 
@@ -361,6 +366,23 @@ deleted early. Limits are 20 MiB per file, 40 MiB combined per image job, 16
 inputs globally per job (with lower catalog model limits), and 160 MiB of live
 server upload buffers. `input_image_ids` preserves array order. Missing or
 expired IDs are rejected before a job starts.
+
+The authenticated video catalog is the safe public projection of layered
+`videos.conf`: it exposes provider/model ids, defaults, input mode, media count
+and model-specific byte limits, and scalar setting descriptors, while provider field mappings, regular
+expressions, and defaults JSON remain private. Video uploads accept only the
+supported image/video/audio MIME families and verify file signatures. Opaque
+ids expire after one hour and preserve per-modality order in `input_media_ids`.
+Limits are 30 MiB per image, 15 MiB per audio file, 200 MiB per video file,
+1 GiB combined per job, 50 inputs, and 2 GiB of live upload buffers.
+
+A successful video result contains `model`, a workspace-relative `server_path`,
+`content_type`, `byte_size`, and `total_ms`; it never contains the FAL output
+URL. `GET /jobs/:job_id/artifact` requires full-control authentication, accepts
+only a succeeded video job, revalidates the filename-only workspace artifact,
+and streams `video/mp4` with `Content-Length` and attachment disposition. It
+does not expose arbitrary workspace paths and is unavailable to MCP-only
+credentials.
 
 Successful chat, run, and plan results include an additive `metrics` object.
 Interactive agent completion/failure events include the same object, and the

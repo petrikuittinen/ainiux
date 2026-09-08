@@ -39,7 +39,8 @@ bool needs_value(const std::string& opt) {
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
         "--summary-format",
         "-r", "--run", "--run-file", "--plan", "--plan-file",
-        "--size", "--ar", "--quality"};
+        "--size", "--ar", "--quality", "--resolution", "--seed",
+        "--negative-prompt", "--audio", "--video-setting"};
     for (const char* item : with_values) {
         if (opt == item) {
             return true;
@@ -318,6 +319,9 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
             opts.agent_plan = true;
         } else if ((arg == "image" && verb_after_globals()) || arg == "--image") {
             opts.image = true;
+        } else if ((arg == "video" && verb_after_globals()) || arg == "--video") {
+            opts.video = true;
+            if (!opts.provider_explicit) opts.provider = "fal";
         } else if ((arg == "server" && verb_after_globals()) || arg == "--server") {
             opts.server = true;
         } else if (arg == "webserver" && verb_after_globals()) {
@@ -600,6 +604,16 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.image_ar = value;
             } else if (opt == "--quality") {
                 opts.image_quality = value;
+            } else if (opt == "--resolution") {
+                opts.video_resolution = value;
+            } else if (opt == "--seed") {
+                opts.video_seed = value;
+            } else if (opt == "--negative-prompt") {
+                opts.video_negative_prompt = value;
+            } else if (opt == "--audio") {
+                opts.video_audio = value;
+            } else if (opt == "--video-setting") {
+                opts.video_settings.push_back(value);
             } else if (opt == "--output-format") {
                 if (value == "json") {
                     opts.format = OutputFormat::Json;
@@ -861,12 +875,14 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 }
                 opts.benchmark_options_seen = true;
             } else if (opt == "--duration") {
-                Error err = parse_duration(value, opts.benchmark_duration_ms);
-                if (!err.ok()) {
-                    return {opts, err};
+                if (opts.video) {
+                    opts.video_duration = value;
+                } else {
+                    Error err = parse_duration(value, opts.benchmark_duration_ms);
+                    if (!err.ok()) return {opts, err};
+                    opts.benchmark_options_seen = true;
+                    opts.benchmark_duration_explicit = true;
                 }
-                opts.benchmark_options_seen = true;
-                opts.benchmark_duration_explicit = true;
             } else if (opt == "--summary-format") {
                 if (value != "table" && value != "csv") {
                     return {opts, {ErrorCode::BadArgs,
@@ -1197,7 +1213,7 @@ Error validate_image_mode_arguments(const Options& options) {
         if (!options.image_size.empty()) {
             return {ErrorCode::BadArgs, "--size requires image mode (ainiux image / --image)"};
         }
-        if (!options.image_ar.empty()) {
+        if (!options.image_ar.empty() && !options.video) {
             return {ErrorCode::BadArgs, "--ar requires image mode (ainiux image / --image)"};
         }
         if (!options.image_quality.empty()) {
@@ -1207,7 +1223,7 @@ Error validate_image_mode_arguments(const Options& options) {
             return {ErrorCode::BadArgs,
                     "--format png|jpeg|webp|auto requires image mode (ainiux image / --image)"};
         }
-        if (options.image_force) {
+        if (options.image_force && !options.video) {
             return {ErrorCode::BadArgs, "--force requires image mode (ainiux image / --image)"};
         }
         return ok_error();
@@ -1292,6 +1308,55 @@ Error validate_image_mode_arguments(const Options& options) {
     return ok_error();
 }
 
+Error validate_video_mode_arguments(const Options& options) {
+    const bool video_options = !options.video_resolution.empty() || !options.video_duration.empty() ||
+        !options.video_seed.empty() || !options.video_negative_prompt.empty() ||
+        !options.video_audio.empty() || !options.video_settings.empty();
+    if (!options.video) {
+        if (video_options) return {ErrorCode::BadArgs, "video settings require video mode (ainiux video / --video)"};
+        return ok_error();
+    }
+    if (options.image) return {ErrorCode::BadArgs, "video mode cannot be combined with image mode"};
+    if (options.editor || options.dired || options.repl || options.tui || options.agent || options.agent_run ||
+        options.benchmark || options.grade || options.security_review || options.server) {
+        return {ErrorCode::BadArgs, "video mode cannot be combined with another interactive or job mode"};
+    }
+    if (options.list_models || options.list_mcp || options.add_mcp || options.remove_mcp ||
+        options.enable_mcp || options.disable_mcp) {
+        return {ErrorCode::BadArgs, "video mode cannot be combined with model or MCP management"};
+    }
+    if (options.index_code || options.print_index || options.clear_index) {
+        return {ErrorCode::BadArgs, "video mode cannot be combined with code index commands"};
+    }
+    if (!options.system.empty() || !options.system_file.empty()) return {ErrorCode::BadArgs, "video mode does not use system prompts"};
+    if (options.temperature_cli_explicit || options.has_top_p || options.has_top_k ||
+        options.has_min_p || options.has_repeat_penalty || options.has_presence_penalty) {
+        return {ErrorCode::BadArgs, "video mode does not use chat sampling options"};
+    }
+    if (options.reasoning_cli_explicit || !options.chat_purpose.empty() ||
+        options.has_max_output_tokens) {
+        return {ErrorCode::BadArgs, "video mode does not use chat reasoning, purpose, or token options"};
+    }
+    if (options.prompt.empty() && options.prompt_file.empty()) return {ErrorCode::BadArgs, "video mode requires -p/--prompt or --prompt-file"};
+    if (!options.prompt.empty() && !options.prompt_file.empty()) return {ErrorCode::BadArgs, "use either -p/--prompt or --prompt-file, not both"};
+    if (!options.image_size.empty() || !options.image_quality.empty() || options.image_format_explicit)
+        return {ErrorCode::BadArgs, "video mode does not use --size, --quality, or image --format"};
+    if (options.format_cli_explicit || options.output_format_explicit || options.rendered_output_format_explicit)
+        return {ErrorCode::BadArgs, "video mode does not use text output formats"};
+    if (options.stream_cli_explicit) return {ErrorCode::BadArgs, "video mode does not use --stream or --no-stream"};
+    if (!options.save_chat_path.empty() || !options.load_chat_path.empty())
+        return {ErrorCode::BadArgs, "video mode does not use --save-chat or --load-chat"};
+    if (!options.input_path.empty() || !options.html_file.empty())
+        return {ErrorCode::BadArgs, "video mode uses --attach for reference media; --input is not supported"};
+    if (!options.fetch_url.empty() || !options.search_query.empty())
+        return {ErrorCode::BadArgs, "video mode does not use --fetch-url or --search"};
+    if (options.attachment_paths.size() > 50)
+        return {ErrorCode::BadArgs, "video generation accepts at most 50 --attach files"};
+    for (const std::string& path : options.attachment_paths) if (path.empty() || path == "-" || path == "stdin")
+        return {ErrorCode::BadArgs, "video mode --attach requires a local media file path"};
+    return ok_error();
+}
+
 std::string help_text() {
     return app_version_label() + R"( - script-friendly OpenAI-compatible chat CLI
 
@@ -1325,6 +1390,8 @@ Usage:
   ainiux image --provider replicate -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider fal -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
   ainiux image --provider gemini -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
+  ainiux video -p TEXT [-m FAL_ENDPOINT] [--attach MEDIA]... [--duration N]
+               [--resolution VALUE] [--ar W:H] [--audio on|off] [--output PATH]
   ainiux server [--workspace PATH] [--bind ADDRESS] [--port PORT]
                 [--tls-cert PATH --tls-key PATH] [--server-secret-file PATH]
   ainiux server --webui [--workspace PATH] [--bind ADDRESS] [--port PORT]
@@ -1415,6 +1482,8 @@ Options:
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --image                   Generate one image (OpenAI, Replicate, fal, or
                                 Gemini models from images.conf; also: ainiux image ...).
+      --video                   Generate one MP4 with a fal model from videos.conf
+                                (also: ainiux video ...).
       --server                  Start the Ainiux control API (also: ainiux server).
       --webui                   Browser-oriented server startup; use with server.
                                 The equivalent subcommand is ainiux webserver.
@@ -1436,6 +1505,12 @@ Options:
                                 Image output size. With --ar 16:9, 2k is 2048x1152 and
                                 4k is 3840x2160. Default: provider auto.
       --ar W:H                  Aspect ratio used with --size 1k|2k|4k (for example 16:9).
+      --resolution VALUE        Video resolution offered by the selected videos.conf model.
+      --seed N                  Video seed, when the selected model supports it.
+      --negative-prompt TEXT    Video negative prompt, when supported.
+      --audio on|off            Enable or disable generated video audio, when supported.
+      --video-setting NAME=VALUE
+                                Set any scalar control exposed by the selected video model.
       --quality low|medium|high|auto
                                 Image quality; default auto.
       --force                   Overwrite --output if the file already exists.
@@ -1526,7 +1601,8 @@ Options:
       --dataset PATH            Benchmark JSONL dataset; default 'builtin'.
       --mode MODE               speed, long-context, quality, refusals; comma-separated.
       --concurrency N           Concurrent benchmark requests; default 1, maximum 256.
-      --duration TIME           Speed-test duration with ms, s, m, or h suffix; default 60s.
+      --duration VALUE          Video duration in video mode; otherwise speed-test time
+                                with ms, s, m, or h suffix (default 60s).
       --summary-format FORMAT   Human summary on stderr: table (default) or csv.
       --category NAME           Run only benchmark cases in this category.
       --case ID                 Run only one benchmark case.

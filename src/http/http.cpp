@@ -158,6 +158,7 @@ struct TransferState {
     std::string blocked_address_text;
     std::chrono::steady_clock::time_point transfer_start;
     bool first_body_seen = false;
+    std::size_t received_body_bytes = 0;
 };
 
 bool blocked_ipv4(const in_addr& address) {
@@ -264,12 +265,13 @@ size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     }
     if (state->request->max_body_bytes > 0) {
         const size_t limit = static_cast<size_t>(state->request->max_body_bytes);
-        if (bytes > limit || state->response.body.size() > limit - bytes) {
+        if (bytes > limit || state->received_body_bytes > limit - bytes) {
             state->callback_error = {ErrorCode::FileRead,
                                      "HTTP response exceeded maximum body size for " + state->request->url};
             return 0;
         }
     }
+    state->received_body_bytes += bytes;
     const std::string chunk(ptr, bytes);
     if (!state->first_body_seen && !chunk.empty()) {
         state->first_body_seen = true;
@@ -278,7 +280,9 @@ size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
                 std::chrono::steady_clock::now() - state->transfer_start)
                 .count();
     }
-    state->response.body += chunk;
+    if (state->request->retain_body || state->response.status < 200 || state->response.status >= 300) {
+        state->response.body += chunk;
+    }
     if (state->request->on_body && state->response.status >= 200 && state->response.status < 300 && !chunk.empty()) {
         state->callback_error = state->request->on_body(chunk);
         if (!state->callback_error.ok()) {
@@ -420,6 +424,13 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
     } else {
         err = setopt(curl, CURLOPT_CUSTOMREQUEST, request.method.c_str());
         if (!err.ok()) return {{}, err};
+        if (!request.body.empty()) {
+            err = setopt(curl, CURLOPT_POSTFIELDS, request.body.c_str());
+            if (!err.ok()) return {{}, err};
+            CURLcode body_code = curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE,
+                                                  static_cast<curl_off_t>(request.body.size()));
+            if (body_code != CURLE_OK) return {{}, {ErrorCode::Internal, std::string("curl_easy_setopt failed: ") + curl_easy_strerror(body_code)}};
+        }
     }
 
     err = setopt_ptr(curl, CURLOPT_HEADERDATA, &state);
@@ -470,7 +481,7 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
     state.transfer_start = std::chrono::steady_clock::now();
     code = curl_easy_perform(curl);
     capture_timings();
-    if (code == CURLE_SEND_ERROR && request.method == "POST" && !state.cancelled &&
+    if (code == CURLE_SEND_ERROR && request.method == "POST" && request.retry_post_on_send_error && !state.cancelled &&
         !request.cancellation.cancelled()) {
         (void)setopt_long(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
         state.response.body.clear();
@@ -480,6 +491,7 @@ Result perform(const Request& request, const std::vector<std::string>& secrets) 
         state.current_status = 0;
         state.final_headers_seen = false;
         state.first_body_seen = false;
+        state.received_body_bytes = 0;
         error_buffer[0] = '\0';
         state.transfer_start = std::chrono::steady_clock::now();
         code = curl_easy_perform(curl);

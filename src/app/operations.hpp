@@ -3,12 +3,14 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "common.hpp"
 #include "config/image_catalog.hpp"
 #include "provider/image.hpp"
+#include "provider/video.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 
@@ -85,5 +87,33 @@ ImageResult run_image(provider::RequestContext context,
                       runtime::CancellationToken cancellation = runtime::CancellationToken(),
                       EventSink events = {},
                       ImageExecutor executor = {});
+
+struct VideoRequest {
+    std::string model;
+    std::string prompt;
+    std::vector<std::string> attachment_paths;
+    std::vector<provider::VideoInput> input_media;
+    std::map<std::string, json::Value> settings;
+    std::string output_path;
+    bool overwrite = false;
+    std::size_t max_input_bytes = 200U * 1024U * 1024U;
+};
+
+struct VideoResult {
+    Error error;
+    std::string selected_model;
+    provider::VideoGenerateRequest request;
+    provider::VideoGenerateResult response;
+};
+
+using VideoExecutor = std::function<Error(const provider::RequestContext&,
+                                          const provider::VideoGenerateRequest&,
+                                          provider::VideoGenerateResult&,
+                                          runtime::CancellationToken)>;
+VideoResult run_video(provider::RequestContext context,
+                      const VideoRequest& request,
+                      runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                      EventSink events = {},
+                      VideoExecutor executor = {});
 
 }  // namespace ainiux::app::operation

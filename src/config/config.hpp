@@ -60,7 +60,7 @@ struct Environment {
 };
 
 enum class ConfigScope { Bundled, User };
-enum class ConfigFileKind { Config, EditorCommands, Themes, Benchmarks, Models, Images };
+enum class ConfigFileKind { Config, EditorCommands, Themes, Benchmarks, Models, Images, Videos };
 enum class ConfigFileState { Loaded, Missing, Skipped, Error, Unavailable };
 
 struct ConfigDiagnostic {
@@ -85,6 +85,7 @@ Error apply_themes_document(const Document& document, cli::Options& options);
 Error apply_benchmarks_document(const Document& document, cli::Options& options);
 Error apply_models_document(const Document& document, cli::Options& options);
 Error apply_images_document(const Document& document, cli::Options& options);
+Error apply_videos_document(const Document& document, cli::Options& options);
 Error validate_benchmark_grading_prompts(const cli::BenchmarkGradingPrompts& prompts);
 Environment process_environment();
 std::string user_config_path(const Environment& environment);
@@ -93,12 +94,14 @@ std::string user_themes_path(const Environment& environment);
 std::string user_benchmarks_path(const Environment& environment);
 std::string user_models_path(const Environment& environment);
 std::string user_images_path(const Environment& environment);
+std::string user_videos_path(const Environment& environment);
 std::vector<std::string> bundled_config_paths();
 std::vector<std::string> bundled_editor_commands_paths();
 std::vector<std::string> bundled_themes_paths();
 std::vector<std::string> bundled_benchmarks_paths();
 std::vector<std::string> bundled_models_paths();
 std::vector<std::string> bundled_images_paths();
+std::vector<std::string> bundled_videos_paths();
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config = true);

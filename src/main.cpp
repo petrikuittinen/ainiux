@@ -317,6 +317,26 @@ int ainiux_main(int argc, char** argv) {
     if (options.grade) {
         return ainiux::app::run_grade_mode(options);
     }
+    if (options.video) {
+        const ainiux::Error argument_error = ainiux::cli::validate_video_mode_arguments(options);
+        if (!argument_error.ok()) { ainiux::app::print_error(argument_error); return ainiux::app::exit_code_for(argument_error.code); }
+        const ainiux::Error profile_error = ainiux::provider::validate_profile_name(options.provider);
+        if (!profile_error.ok()) { ainiux::app::print_error(profile_error); return ainiux::app::exit_code_for(profile_error.code); }
+        ainiux::provider::ContextResult context_result = ainiux::provider::build_context(options);
+        if (!context_result.error.ok()) { ainiux::app::print_error(context_result.error); return ainiux::app::exit_code_for(context_result.error.code); }
+        if (context_result.context.profile.offline) {
+            const ainiux::Error error{ainiux::ErrorCode::UnsupportedFeature, "video generation requires an online provider"};
+            ainiux::app::print_error(error); return ainiux::app::exit_code_for(error.code);
+        }
+        if (!options.key.empty() && !options.quiet) {
+            std::cerr << "Warning: command line API keys may be visible to other local users; prefer --key-env, "
+                         "--key-file, or --key-stdin.\n";
+        }
+        if (options.insecure_tls) {
+            std::cerr << "Warning: TLS certificate verification is disabled by the effective configuration.\n";
+        }
+        return ainiux::app::run_video_mode(std::move(context_result.context));
+    }
     if (options.image) {
         const ainiux::Error argument_error = ainiux::cli::validate_image_mode_arguments(options);
         if (!argument_error.ok()) {
@@ -354,6 +374,10 @@ int ainiux_main(int argc, char** argv) {
             ainiux::app::print_error(image_option_error);
             return ainiux::app::exit_code_for(image_option_error.code);
         }
+    }
+    {
+        const ainiux::Error video_option_error = ainiux::cli::validate_video_mode_arguments(options);
+        if (!video_option_error.ok()) { ainiux::app::print_error(video_option_error); return ainiux::app::exit_code_for(video_option_error.code); }
     }
     if (options.benchmark_options_seen) {
         ainiux::app::print_error({ainiux::ErrorCode::BadArgs,

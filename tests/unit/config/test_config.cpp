@@ -155,14 +155,15 @@ void test_config_applies_user_settings() {
     ainiux::config::Environment environment{config_home, "/nonexistent"};
     ainiux::config::LoadResult loaded = ainiux::config::load_automatic(ainiux::cli::Options{}, environment);
     check(loaded.error.ok(), "automatic user config loading succeeds");
-    check(loaded.loaded_paths.size() == 7 &&
+    check(loaded.loaded_paths.size() == 8 &&
               loaded.loaded_paths[0].find("models.conf") != std::string::npos &&
               loaded.loaded_paths[1].find("images.conf") != std::string::npos &&
-              loaded.loaded_paths[2].find("benchmarks.conf") != std::string::npos &&
-              loaded.loaded_paths[3].find("themes.conf") != std::string::npos &&
-              loaded.loaded_paths[4].find("editor-commands.conf") != std::string::npos &&
-              loaded.loaded_paths[5].find("ainiux.conf") != std::string::npos &&
-              loaded.loaded_paths[6] == config_home + "/ainiux/config.conf",
+              loaded.loaded_paths[2].find("videos.conf") != std::string::npos &&
+              loaded.loaded_paths[3].find("benchmarks.conf") != std::string::npos &&
+              loaded.loaded_paths[4].find("themes.conf") != std::string::npos &&
+              loaded.loaded_paths[5].find("editor-commands.conf") != std::string::npos &&
+              loaded.loaded_paths[6].find("ainiux.conf") != std::string::npos &&
+              loaded.loaded_paths[7] == config_home + "/ainiux/config.conf",
           "automatic loading applies installed defaults before user config");
     check(loaded.options.tui_themes.has("dark") && loaded.options.tui_themes.has("light") &&
               loaded.options.tui_themes.has("sepia"),
@@ -210,13 +211,14 @@ void test_config_applies_user_settings() {
     check(system_only.error.ok() && !system_only.options.allow_private_url_fetch &&
               !system_only.options.show_thinking_traces && system_only.options.tui_theme == "dark",
           "disabling user config retains installed defaults");
-    check(system_only.loaded_paths.size() == 6 &&
+    check(system_only.loaded_paths.size() == 7 &&
               system_only.loaded_paths[0].find("models.conf") != std::string::npos &&
               system_only.loaded_paths[1].find("images.conf") != std::string::npos &&
-              system_only.loaded_paths[2].find("benchmarks.conf") != std::string::npos &&
-              system_only.loaded_paths[3].find("themes.conf") != std::string::npos &&
-              system_only.loaded_paths[4].find("editor-commands.conf") != std::string::npos &&
-              system_only.loaded_paths[5].find("ainiux.conf") != std::string::npos,
+              system_only.loaded_paths[2].find("videos.conf") != std::string::npos &&
+              system_only.loaded_paths[3].find("benchmarks.conf") != std::string::npos &&
+              system_only.loaded_paths[4].find("themes.conf") != std::string::npos &&
+              system_only.loaded_paths[5].find("editor-commands.conf") != std::string::npos &&
+              system_only.loaded_paths[6].find("ainiux.conf") != std::string::npos,
           "disabling user config still loads installed defaults");
     bool skipped_user_config = false;
     for (const ainiux::config::ConfigDiagnostic& diagnostic : system_only.diagnostics) {

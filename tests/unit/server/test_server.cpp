@@ -29,6 +29,7 @@
 #include "cli/args.hpp"
 #include "agent/project_settings.hpp"
 #include "chat/settings.hpp"
+#include "config/config.hpp"
 #include "server/model_settings.hpp"
 #include "json/json.hpp"
 #include "platform/filesystem.hpp"
@@ -45,6 +46,7 @@
 #include "server/session_hub.hpp"
 #include "server/server.hpp"
 #include "server/tls.hpp"
+#include "server/video_input_store.hpp"
 #include "server/web_ui_launch.hpp"
 #include "server/workspace_service.hpp"
 #include "support/test_support.hpp"
@@ -394,6 +396,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               image_options.body.find("export function resetImageFormValues") != std::string::npos &&
               image_options.body.find("fetch(") == std::string::npos,
           "embedded image option module is pure and served as an immutable exact-path asset");
+    Response video_options = route_request(public_get("/ui/assets/video-options-v1.js"), config, status);
+    check(video_options.status == 200 &&
+              video_options.body.find("normalizeVideoCatalog") != std::string::npos &&
+              video_options.body.find("videoFileError") != std::string::npos &&
+              video_options.cache_control.find("immutable") != std::string::npos,
+          "embedded video option module is pure and served as an immutable exact-path asset");
 
     const std::size_t chat_submit_start = javascript.body.find("async function sendChatMessage");
     const std::size_t chat_submit_end = javascript.body.find("async function finishChatJob");
@@ -612,6 +620,74 @@ void test_image_catalog_uploads_and_job_references() {
     check(!preflight_request_body(ordinary, Limits::json_body_bytes + 1U, auth, status, denial) &&
               denial.status == 413,
           "ordinary JSON routes retain the 1 MiB request limit");
+    jobs.shutdown();
+}
+
+void test_video_input_store_validates_media_and_lifetimes() {
+    const std::string mp4("\0\0\0\x18" "ftypisom", 12);
+    VideoInputStore store(32U);
+    StoredVideoInput video;
+    check(store.add("video/mp4", mp4, video).ok() && video.bytes &&
+              video.id.rfind("video_input_", 0) == 0,
+          "managed video store validates MP4 and returns an opaque identifier");
+    std::vector<StoredVideoInput> resolved;
+    check(store.resolve({video.id}, resolved).ok() && resolved.size() == 1 &&
+              resolved.front().mime_type == "video/mp4",
+          "managed video identifiers resolve to ordered shared media");
+    check(store.resolve({video.id, video.id}, resolved).code == ErrorCode::BadArgs,
+          "managed video identifiers reject duplicates");
+    check(store.add("image/webp", "not-webp", video).code == ErrorCode::BadArgs,
+          "managed video references verify declared image signatures");
+    check(store.erase(video.id), "managed video inputs can be explicitly removed");
+
+    VideoInputStore expiring(32U, std::chrono::seconds(0));
+    StoredVideoInput expired;
+    check(expiring.add("video/mp4", mp4, expired).ok(),
+          "zero-lifetime managed video input can be created");
+    check(expiring.resolve({expired.id}, resolved).code == ErrorCode::FileRead,
+          "expired managed video identifiers are rejected and removed");
+
+    config::ParseResult parsed = config::read_file("config/videos.conf");
+    cli::Options options;
+    options.provider = "fal";
+    check(parsed.error.ok() &&
+              config::apply_videos_document(parsed.document, options).ok(),
+          "server test loads the bundled video catalog");
+    JobService jobs(std::move(options), ".", 8U);
+    AuthConfig auth{"controller", "mcp-token"};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 8, &active};
+    status.jobs = &jobs;
+
+    const Response catalog = route_request(
+        parsed_request(request_text("/ainiux/v1/videos/catalog")), auth, status);
+    check(catalog.status == 200 &&
+              catalog.body.find("minimax/h3-max-turbo/text-to-video") != std::string::npos &&
+              catalog.body.find("\"max_input_image_bytes\":8388608") != std::string::npos &&
+              catalog.body.find("model_regex") == std::string::npos,
+          "video catalog route exposes safe model controls and byte limits");
+
+    http::Request upload = parsed_request(
+        "POST /ainiux/v1/videos/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: video/mp4\r\n"
+        "Content-Length: 0\r\n\r\n");
+    upload.body = mp4;
+    const Response created = route_request(upload, auth, status);
+    const json::ParseResult created_json = json::parse(created.body);
+    const json::Value* id = created_json.error.ok() ? created_json.value.get("id") : nullptr;
+    check(created.status == 201 && id != nullptr && id->is_string() &&
+              created_json.value.get("expires_at") != nullptr,
+          "authenticated video upload returns an expiring opaque identifier");
+    check(id != nullptr && route_request(parsed_request(
+              "DELETE /ainiux/v1/videos/inputs/" + id->string +
+              "?unexpected=1 HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+              "Authorization: Bearer controller\r\n\r\n"), auth, status).status == 400,
+          "video upload deletion rejects query parameters");
+    check(id != nullptr && route_request(parsed_request(
+              "DELETE /ainiux/v1/videos/inputs/" + id->string +
+              " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+              "Authorization: Bearer controller\r\n\r\n"), auth, status).status == 200,
+          "managed video upload can be explicitly deleted");
     jobs.shutdown();
 }
 
@@ -2070,6 +2146,7 @@ void run_all() {
     test_embedded_web_ui_assets_and_browser_security();
     test_auth_and_routes();
     test_image_catalog_uploads_and_job_references();
+    test_video_input_store_validates_media_and_lifetimes();
     test_event_replay_is_ordered_and_bounded();
     test_job_registry_idempotency_lane_and_cancellation();
     test_provider_job_concurrency_cap();

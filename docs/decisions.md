@@ -649,3 +649,24 @@ SSE cursor, not a replay of old tool execution. Request-only summaries stay
 hidden; restarting always leaves the agent idle. Browser regression coverage
 uses an optional installed Chromium through its DevTools pipe and adds no
 application dependency.
+
+### Catalog-driven FAL video generation
+
+Video generation is a shared cancellable operation used by the headless CLI and
+control server, with the browser remaining a protocol/presentation client. Video
+models live in layered `videos.conf`; records describe FAL endpoint ids, text,
+keyframe, or multimodal-reference input mode, provider field mappings, count
+limits, and typed scalar descriptors. This keeps defaults and enum vocabulary in
+configuration while one compiled `fal_queue` adapter owns upload, queue polling,
+cancellation, output validation, and atomic persistence. Nested Kling storyboard
+and element objects are deferred because they need a structured UI and validation
+contract rather than an untyped JSON escape hatch.
+
+Reference files use FAL CDN uploads rather than base64 queue bodies, including
+multipart uploads for large bounded video inputs. Billable submissions are never
+retried after an ambiguous send failure. Signed upload and output URLs carry no
+FAL credential and must pass HTTPS and resolved-address checks. The server exposes
+opaque expiring input ids and returns only local artifact metadata; a separate
+authenticated route streams completed MP4 files after filename and workspace
+containment checks. The WebUI uses a native HTML5 player and Blob download URL.
+No runtime dependency or JavaScript framework is added.

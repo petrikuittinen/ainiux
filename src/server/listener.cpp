@@ -248,7 +248,7 @@ struct Listener::Impl {
             public_status.bind_address = config.bind_address;
             public_status.tls = tls.enabled();
             public_status.remote = !loopback_bind_address(config.bind_address);
-            http::Parser parser(Limits::upload_body_bytes);
+            http::Parser parser(Limits::video_upload_body_bytes);
             auto phase_started = std::chrono::steady_clock::now();
             bool received_any = !pending.empty();
             http::ParseState state = pending.empty() ? http::ParseState::NeedMore

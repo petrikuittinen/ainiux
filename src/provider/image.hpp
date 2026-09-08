@@ -87,6 +87,9 @@ Error parse_fal_queue_status(const std::string& body,
                              std::string& error_text);
 Error parse_fal_queue_result(const std::string& body, std::string& output_url);
 std::string fal_queue_url(const RequestContext& context, const std::string& api_model);
+std::string fal_queue_result_url(const RequestContext& context,
+                                 const std::string& api_model,
+                                 const std::string& request_id);
 bool fal_status_completed(const std::string& status);
 bool fal_status_failed(const std::string& status);
 Error parse_replicate_prediction(const std::string& body,

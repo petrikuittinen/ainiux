@@ -25,7 +25,7 @@ Useful targets:
 | `make test` | In-process units plus the small mock smoke |
 | `make test-full` | Units, fault tests, and comprehensive integration; Windows also runs native SQLite/ConPTY parity paths |
 | `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
-| `make test-web-js` | Optional dependency-free WebUI Markdown, syntax, editor indentation/history, image, and selector tests when Node.js is installed; real-browser test when `AINIUX_TEST_BROWSER` is set |
+| `make test-web-js` | Optional dependency-free WebUI Markdown, syntax, editor indentation/history, image/video, and selector tests when Node.js is installed; real-browser test when `AINIUX_TEST_BROWSER` is set |
 | `make test-unit-faults` | Fault tests only |
 | `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
@@ -105,6 +105,7 @@ transport, filesystem, or PTY boundary is involved.
 - Provider registry, every registered reasoning request protocol, ordinary response parsing, and native-tool readable-reasoning extraction for Chat/Responses streams, summaries, details, think tags, and encrypted-state omission
 - Main configuration plus `models.conf` parsing, embedded fallback availability outside the source directory, layering, disabling, regex validation, context-window fallback precedence, and final-component/case-insensitive family matching
 - `images.conf` parsing, id overlay, default image model, `openai_images` / `replicate_predictions` / `fal_queue` / `gemini_interactions` mapping, and catalog-driven size/quality/format mapping for `ainiux image`
+- `videos.conf` parsing and overlay, FAL endpoint matching, scalar setting and media-limit validation, request/result mapping, managed WebUI uploads, and browser catalog/input validation for `ainiux video`
 - HTML/Markdown/input/output conversion, including punctuation-adjacent emphasis,
   literal intraword underscores, exact inline-code delimiter runs, blockquote
   text preservation across editor and TUI styling, and pretty table layout

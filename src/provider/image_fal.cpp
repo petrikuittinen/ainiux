@@ -181,6 +181,27 @@ std::string fal_queue_url(const RequestContext& context, const std::string& api_
     return join_url(context.base_url, api_model);
 }
 
+std::string fal_queue_result_url(const RequestContext& context,
+                                 const std::string& api_model,
+                                 const std::string& request_id) {
+    std::size_t components = 2;
+    if (api_model.rfind("workflows/", 0) == 0 || api_model.rfind("comfy/", 0) == 0) {
+        components = 3;
+    }
+    std::size_t end = 0;
+    for (std::size_t count = 0; count < components; ++count) {
+        end = api_model.find('/', end);
+        if (end == std::string::npos) {
+            end = api_model.size();
+            break;
+        }
+        ++end;
+    }
+    if (end > 0 && end <= api_model.size() && api_model[end - 1] == '/') --end;
+    return join_url(fal_queue_url(context, api_model.substr(0, end)),
+                    "requests/" + request_id);
+}
+
 bool fal_status_completed(const std::string& status) {
     return ascii_lower(status) == "completed";
 }
@@ -300,13 +321,16 @@ Error generate_fal_image(const RequestContext& context,
         return parse_error;
     }
     if (status_url.empty() && !request_id.empty()) {
-        status_url = join_url(url, "requests/" + request_id + "/status");
+        status_url = fal_queue_result_url(context, api_model, request_id) + "/status";
     }
-    if (response_url.empty() && !request_id.empty()) {
-        response_url = join_url(url, "requests/" + request_id);
+    // The queue submit payload has historically returned both canonical URLs and
+    // convenience URLs ending in /response. The documented result endpoint and
+    // current fal clients use /requests/{request_id}; derive it from the opaque ID.
+    if (!request_id.empty()) {
+        response_url = fal_queue_result_url(context, api_model, request_id);
     }
     if (cancel_url.empty() && !request_id.empty()) {
-        cancel_url = join_url(url, "requests/" + request_id + "/cancel");
+        cancel_url = fal_queue_result_url(context, api_model, request_id) + "/cancel";
     }
 
     std::string status;

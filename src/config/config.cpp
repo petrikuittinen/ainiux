@@ -6,12 +6,14 @@
 #include "context/policy.hpp"
 #include "config/image_catalog.hpp"
 #include "config/model_catalog.hpp"
+#include "config/video_catalog.hpp"
 #include "json/json.hpp"
 #include "platform/environment.hpp"
 #include "editor/autosave.hpp"
 #include "editor/editor_prompts.hpp"
 #include "embedded_editor_commands.hpp"
 #include "embedded_images_config.hpp"
+#include "embedded_videos_config.hpp"
 #include "embedded_models_config.hpp"
 #include "ainiux/model_setting.hpp"
 #include "tui/theme_registry.hpp"
@@ -433,7 +435,7 @@ class Parser {
 
     static bool is_repeatable_section(const std::string& name) {
         return name == "command" || name == "theme" || name == "model" ||
-               name == "preset" || name == "image";
+               name == "preset" || name == "image" || name == "video";
     }
 
     Error parse_multiline_quoted(size_t opening_offset,
@@ -2181,6 +2183,137 @@ Error apply_images_document_impl(const Document& document, cli::Options& options
     return ok_error();
 }
 
+Error apply_videos_document_impl(const Document& document, cli::Options& options) {
+    struct Partial {
+        std::optional<std::string> id;
+        std::string provider = "fal";
+        std::optional<std::string> model;
+        std::string api_model;
+        std::optional<VideoProtocol> protocol;
+        VideoInputMode input_mode = VideoInputMode::Text;
+        bool have_input_mode = false;
+        bool default_for_provider = false;
+        bool enabled = true;
+        int max_input_images = 0;
+        int max_input_videos = 0;
+        int max_input_audios = 0;
+        int max_input_total = 0;
+        int max_input_image_bytes = 0;
+        int max_input_video_bytes = 0;
+        int max_input_audio_bytes = 0;
+        int priority = 0;
+        std::string prompt_field = "prompt";
+        std::string start_image_field = "image_url";
+        std::string end_image_field = "end_image_url";
+        std::string reference_images_field = "reference_image_urls";
+        std::string reference_videos_field = "reference_video_urls";
+        std::string reference_audios_field = "reference_audio_urls";
+        std::string defaults_json;
+        std::string settings_json = "[]";
+        SourceLocation source;
+    };
+    cli::Options candidate = options;
+    std::map<size_t, Partial> partials;
+    for (const auto& item : document.entries) {
+        const Entry& entry = item.second;
+        if (item.first == "config_version") {
+            Error err = require_type(entry, Value::Type::Integer);
+            if (!err.ok()) return err;
+            if (entry.value.integer != 1) return schema_error(entry, "unsupported videos config version; supported version is 1");
+            continue;
+        }
+        size_t index = 0;
+        std::string key;
+        if (!repeatable_entry_parts(item.first, "video", index, key)) {
+            return schema_error(entry, "unknown videos setting; expected [video]");
+        }
+        Partial& partial = partials[index];
+        if (partial.source.path.empty()) partial.source = entry.source;
+        if (key == "id" || key == "provider" || key == "model" || key == "api_model" ||
+            key == "input_mode" || key == "protocol" || key == "prompt_field" ||
+            key == "start_image_field" || key == "end_image_field" ||
+            key == "reference_images_field" || key == "reference_videos_field" ||
+            key == "reference_audios_field" || key == "defaults_json" || key == "settings_json") {
+            Error err = require_type(entry, Value::Type::String);
+            if (!err.ok()) return err;
+            if (entry.value.string.empty()) return schema_error(entry, key + " must not be empty");
+            if (key == "id") partial.id = entry.value.string;
+            else if (key == "provider") partial.provider = entry.value.string;
+            else if (key == "model") partial.model = entry.value.string;
+            else if (key == "api_model") partial.api_model = entry.value.string;
+            else if (key == "protocol") {
+                VideoProtocol value;
+                if (!parse_video_protocol(entry.value.string, value)) return schema_error(entry, "unknown video protocol; expected fal_queue");
+                partial.protocol = value;
+            } else if (key == "input_mode") {
+                if (!parse_video_input_mode(entry.value.string, partial.input_mode)) return schema_error(entry, "input_mode must be text, image, or reference");
+                partial.have_input_mode = true;
+            } else if (key == "prompt_field") partial.prompt_field = entry.value.string;
+            else if (key == "start_image_field") partial.start_image_field = entry.value.string;
+            else if (key == "end_image_field") partial.end_image_field = entry.value.string;
+            else if (key == "reference_images_field") partial.reference_images_field = entry.value.string;
+            else if (key == "reference_videos_field") partial.reference_videos_field = entry.value.string;
+            else if (key == "reference_audios_field") partial.reference_audios_field = entry.value.string;
+            else {
+                const json::ParseResult parsed = json::parse(entry.value.string);
+                if (!parsed.error.ok() || (key == "defaults_json" && !parsed.value.is_object()) ||
+                    (key == "settings_json" && !parsed.value.is_array())) {
+                    return schema_error(entry, key + (key == "defaults_json" ? " must be a JSON object" : " must be a JSON array"));
+                }
+                if (key == "defaults_json") partial.defaults_json = entry.value.string;
+                else partial.settings_json = entry.value.string;
+            }
+        } else if (key == "default" || key == "enabled") {
+            Error err = require_type(entry, Value::Type::Boolean);
+            if (!err.ok()) return err;
+            if (key == "default") partial.default_for_provider = entry.value.boolean;
+            else partial.enabled = entry.value.boolean;
+        } else if (key == "max_input_images" || key == "max_input_videos" ||
+                   key == "max_input_audios" || key == "max_input_total" ||
+                   key == "max_input_image_bytes" || key == "max_input_video_bytes" ||
+                   key == "max_input_audio_bytes" || key == "priority") {
+            int value = 0;
+            Error err = nonnegative_int(entry, value);
+            if (!err.ok()) return err;
+            if (key == "max_input_images") partial.max_input_images = value;
+            else if (key == "max_input_videos") partial.max_input_videos = value;
+            else if (key == "max_input_audios") partial.max_input_audios = value;
+            else if (key == "max_input_total") partial.max_input_total = value;
+            else if (key == "max_input_image_bytes") partial.max_input_image_bytes = value;
+            else if (key == "max_input_video_bytes") partial.max_input_video_bytes = value;
+            else if (key == "max_input_audio_bytes") partial.max_input_audio_bytes = value;
+            else partial.priority = value;
+        } else return schema_error(entry, "unknown [video] key");
+    }
+    for (const auto& item : partials) {
+        const Partial& p = item.second;
+        if (!p.id) return catalog_required(p.source, "video", "id");
+        erase_matching(candidate.video_catalog.models, [&](const VideoCapability& v) { return v.id == *p.id; });
+        if (!p.enabled) continue;
+        if (!p.model) return catalog_required(p.source, "video", "model");
+        if (!p.protocol) return catalog_required(p.source, "video", "protocol");
+        if (p.api_model.empty()) return catalog_required(p.source, "video", "api_model");
+        try { (void)std::regex(*p.model, std::regex::ECMAScript | std::regex::icase); }
+        catch (const std::regex_error& err) { return {ErrorCode::Config, p.source.path + ":" + std::to_string(p.source.line) + ": invalid model regex for [video] " + *p.id + ": " + err.what()}; }
+        VideoCapability v;
+        v.id = *p.id; v.provider = p.provider; v.model_regex = *p.model; v.api_model = p.api_model;
+        v.protocol = *p.protocol; v.input_mode = p.input_mode; v.default_for_provider = p.default_for_provider;
+        v.enabled = p.enabled; v.max_input_images = p.max_input_images; v.max_input_videos = p.max_input_videos;
+        v.max_input_audios = p.max_input_audios; v.max_input_total = p.max_input_total;
+        v.max_input_image_bytes = p.max_input_image_bytes;
+        v.max_input_video_bytes = p.max_input_video_bytes;
+        v.max_input_audio_bytes = p.max_input_audio_bytes;
+        v.priority = p.priority; v.prompt_field = p.prompt_field;
+        v.start_image_field = p.start_image_field; v.end_image_field = p.end_image_field;
+        v.reference_images_field = p.reference_images_field; v.reference_videos_field = p.reference_videos_field;
+        v.reference_audios_field = p.reference_audios_field; v.defaults_json = p.defaults_json;
+        v.settings_json = p.settings_json; v.load_order = candidate.video_catalog.next_load_order++;
+        candidate.video_catalog.models.push_back(std::move(v));
+    }
+    options = std::move(candidate);
+    return ok_error();
+}
+
 }  // namespace
 
 Error apply_editor_commands_document(const Document& document, cli::Options& options) {
@@ -2201,6 +2334,10 @@ Error apply_models_document(const Document& document, cli::Options& options) {
 
 Error apply_images_document(const Document& document, cli::Options& options) {
     return apply_images_document_impl(document, options);
+}
+
+Error apply_videos_document(const Document& document, cli::Options& options) {
+    return apply_videos_document_impl(document, options);
 }
 
 Error validate_benchmark_grading_prompts(const cli::BenchmarkGradingPrompts& prompts) {
@@ -2892,6 +3029,22 @@ std::vector<std::string> bundled_images_paths() {
     return paths;
 }
 
+std::string user_videos_path(const Environment& environment) {
+    if (absolute_path(environment.xdg_config_home)) return (std::filesystem::u8path(environment.xdg_config_home) / "ainiux" / "videos.conf").u8string();
+    if (!absolute_path(environment.home)) return {};
+    return (std::filesystem::u8path(environment.home) / ".config" / "ainiux" / "videos.conf").u8string();
+}
+
+std::vector<std::string> bundled_videos_paths() {
+    std::vector<std::string> paths;
+    const std::string override_path = environment_value("AINIUX_VIDEOS");
+    if (!override_path.empty()) paths.push_back(override_path);
+    paths.emplace_back("config/videos.conf");
+    append_executable_share_path(paths, "videos.conf");
+    append_installed_share_paths(paths, "videos.conf");
+    return paths;
+}
+
 LoadResult load_automatic(const cli::Options& base_options,
                           const Environment& environment,
                           bool load_user_config) {
@@ -3035,6 +3188,60 @@ LoadResult load_automatic(const cli::Options& base_options,
         Error err = load_images_path(user_images, ConfigScope::User, user_images_loaded);
         if (!err.ok()) { result.error = std::move(err); return result; }
         (void)user_images_loaded;
+    }
+
+    auto load_videos_path = [&](const std::string& path, ConfigScope scope, bool& loaded) -> Error {
+        std::error_code filesystem_error;
+        const bool exists = std::filesystem::exists(path, filesystem_error);
+        if (filesystem_error) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Videos, ConfigFileState::Error, path});
+            return {ErrorCode::Config, "could not inspect videos file: " + path};
+        }
+        if (!exists) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Videos, ConfigFileState::Missing, path});
+            return ok_error();
+        }
+        ParseResult parsed = read_file(path);
+        if (!parsed.error.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Videos, ConfigFileState::Error, path});
+            return parsed.error;
+        }
+        Error err = apply_videos_document(parsed.document, result.options);
+        if (!err.ok()) {
+            result.diagnostics.push_back({scope, ConfigFileKind::Videos, ConfigFileState::Error, path});
+            return err;
+        }
+        loaded = true;
+        result.loaded_paths.push_back(path);
+        result.diagnostics.push_back({scope, ConfigFileKind::Videos, ConfigFileState::Loaded, path});
+        return ok_error();
+    };
+    bool bundled_videos_loaded = false;
+    for (const std::string& path : bundled_videos_paths()) {
+        Error err = load_videos_path(path, ConfigScope::Bundled, bundled_videos_loaded);
+        if (!err.ok()) { result.error = std::move(err); return result; }
+        if (bundled_videos_loaded) break;
+    }
+    if (!bundled_videos_loaded) {
+        ParseResult parsed = parse(kEmbeddedVideosConfig, "embedded videos.conf");
+        if (!parsed.error.ok()) { result.error = std::move(parsed.error); return result; }
+        Error err = apply_videos_document(parsed.document, result.options);
+        if (!err.ok()) { result.error = std::move(err); return result; }
+        result.loaded_paths.push_back("embedded videos.conf");
+        result.diagnostics.push_back({ConfigScope::Bundled, ConfigFileKind::Videos,
+                                      ConfigFileState::Loaded, "embedded videos.conf"});
+    }
+    const std::string user_videos = user_videos_path(environment);
+    if (user_videos.empty()) {
+        result.diagnostics.push_back({ConfigScope::User, ConfigFileKind::Videos,
+                                      ConfigFileState::Unavailable, {}});
+    } else if (!load_user_config) {
+        result.diagnostics.push_back({ConfigScope::User, ConfigFileKind::Videos,
+                                      ConfigFileState::Skipped, user_videos});
+    } else {
+        bool loaded = false;
+        Error err = load_videos_path(user_videos, ConfigScope::User, loaded);
+        if (!err.ok()) { result.error = std::move(err); return result; }
     }
 
     auto load_benchmarks_path = [&](const std::string& path,

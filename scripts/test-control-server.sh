@@ -205,6 +205,9 @@ grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" |
 request 200 "versioned WUI image option module" \
     "${BASE_URL}/ui/assets/image-options-v1.js"
 expect_body 'normalizeImageCatalog' "config-driven image option module"
+request 200 "versioned WUI video option module" \
+    "${BASE_URL}/ui/assets/video-options-v1.js"
+expect_body 'normalizeVideoCatalog' "config-driven video option module"
 request 200 "versioned WUI editor indentation module" --dump-header "${WUI_HEADERS}" \
     "${BASE_URL}/ui/assets/editor-indentation-v1.js"
 expect_body 'reformatEditorSnapshot' "adaptive browser editor reformatting"
@@ -232,7 +235,12 @@ expect_body '"auth_scope":"full_control"' "status authentication scope"
 
 request 200 "authenticated capabilities" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/capabilities"
-expect_body '"image_catalog","image_inputs","models","chat"' "image catalog/upload capability operations"
+expect_body '"image_catalog"' "image catalog capability operation"
+expect_body '"image_inputs"' "image upload capability operation"
+expect_body '"video_catalog"' "video catalog capability operation"
+expect_body '"video_inputs"' "video upload capability operation"
+expect_body '"models"' "model-list capability operation"
+expect_body '"chat"' "chat capability operation"
 expect_body '"chat_threads"]' "chat-thread capability operation"
 expect_body '"mcp":true' "MCP adapter availability"
 expect_body '"web_ui":true' "embedded WUI availability"
@@ -256,6 +264,20 @@ request 202 "image edit job with managed input" "${FULL_AUTH[@]}" \
 expect_body '"operation":"image"' "managed-input image job operation"
 request 200 "managed image deletion" "${FULL_AUTH[@]}" --request DELETE \
     "${BASE_URL}/ainiux/v1/images/inputs/${INPUT_ID}"
+
+request 200 "effective video catalog" "${FULL_AUTH[@]}" \
+    "${BASE_URL}/ainiux/v1/videos/catalog"
+expect_body '"model":"minimax/h3-max-turbo/text-to-video"' "bundled video catalog default"
+expect_body '"max_input_image_bytes":8388608' "video model-specific input limit"
+request 201 "managed PNG video reference" "${FULL_AUTH[@]}" \
+    --header 'Content-Type: image/png' --data-binary "@${PNG_INPUT}" \
+    "${BASE_URL}/ainiux/v1/videos/inputs"
+expect_body '"mime_type":"image/png"' "managed video-reference MIME"
+expect_body '"expires_at"' "managed video-reference expiry"
+VIDEO_INPUT_ID="$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "${RESPONSE_FILE}")"
+[ -n "${VIDEO_INPUT_ID}" ] || die "managed video-reference response omitted its opaque identifier"
+request 200 "managed video-reference deletion" "${FULL_AUTH[@]}" --request DELETE \
+    "${BASE_URL}/ainiux/v1/videos/inputs/${VIDEO_INPUT_ID}"
 
 request 401 "MCP token cannot access control API" "${MCP_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/status"

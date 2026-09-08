@@ -17,6 +17,8 @@
 #include "security/redact.hpp"
 #include "server/metrics.hpp"
 #include "server/image_catalog_api.hpp"
+#include "server/video_catalog_api.hpp"
+#include "config/video_catalog.hpp"
 #include "server/workspace_service.hpp"
 #include "server/model_settings.hpp"
 #include "agent/project_settings.hpp"
@@ -141,7 +143,8 @@ JobService::JobService(cli::Options base_options, std::string workspace, std::si
     : base_options_(std::move(base_options)),
       workspace_(std::move(workspace)),
       registry_(max_jobs),
-      image_inputs_(Limits::image_upload_store_bytes) {
+      image_inputs_(Limits::image_upload_store_bytes),
+      video_inputs_(Limits::video_upload_store_bytes) {
     base_options_.server = false;
     base_options_.quiet = true;
     base_options_.prompt.clear();
@@ -157,6 +160,9 @@ JobService::JobService(cli::Options base_options, std::string workspace, std::si
 std::string JobService::image_catalog_json() const {
     return public_image_catalog_json(base_options_.image_catalog, base_options_.provider);
 }
+std::string JobService::video_catalog_json() const {
+    return public_video_catalog_json(base_options_.video_catalog, "fal");
+}
 
 Error JobService::add_image_input(std::string mime_type,
                                   std::string bytes,
@@ -167,6 +173,10 @@ Error JobService::add_image_input(std::string mime_type,
 bool JobService::remove_image_input(const std::string& id) {
     return image_inputs_.erase(id);
 }
+Error JobService::add_video_input(std::string mime_type, std::string bytes, StoredVideoInput& output) {
+    return video_inputs_.add(std::move(mime_type), std::move(bytes), output);
+}
+bool JobService::remove_video_input(const std::string& id) { return video_inputs_.erase(id); }
 
 Error JobService::validate_common(const json::Value& root,
                                   const std::string& operation,
@@ -216,11 +226,14 @@ Error JobService::validate_common(const json::Value& root,
         options.reasoning_explicit = true;
     }
     options.image = operation == "image";
+    options.video = operation == "video";
     options.agent_run = operation == "run" || operation == "plan";
     options.agent_plan = operation == "plan";
-    if (const auto* settings = root.get("settings")) {
-        error = apply_public_model_settings(*settings, options);
-        if (!error.ok()) return error;
+    if (operation != "video") {
+        if (const auto* settings = root.get("settings")) {
+            error = apply_public_model_settings(*settings, options);
+            if (!error.ok()) return error;
+        }
     }
     return ok_error();
 }
@@ -351,6 +364,23 @@ JobOutcome JobService::run_image_job(cli::Options options,
                 ",\"total_ms\":" + std::to_string(result.response.total_ms) + "}"};
 }
 
+JobOutcome JobService::run_video_job(cli::Options options,
+                                     app::operation::VideoRequest request,
+                                     runtime::CancellationToken cancellation,
+                                     JobEvents events) const {
+    options.prompt = request.prompt; options.video = true;
+    provider::ContextResult built = provider::build_context(options);
+    if (!built.error.ok()) return {public_operation_error(built.error, {options.key}), {}};
+    const std::string api_key = built.context.api_key;
+    app::operation::VideoResult result = app::operation::run_video(std::move(built.context), request, cancellation, std::move(events));
+    if (!result.error.ok()) return {public_operation_error(result.error, {api_key}), {}};
+    const std::filesystem::path path = std::filesystem::u8path(result.response.path);
+    return {ok_error(), "{\"model\":" + json::quote(result.selected_model) +
+        ",\"server_path\":" + json::quote(path.filename().u8string()) +
+        ",\"content_type\":\"video/mp4\",\"byte_size\":" + std::to_string(result.response.byte_size) +
+        ",\"total_ms\":" + std::to_string(result.response.total_ms) + "}"};
+}
+
 JobOutcome JobService::run_editor_assist_job(
     cli::Options options,
     std::string path,
@@ -432,6 +462,7 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
         return {{}, {ErrorCode::JsonParse, "request body is not valid JSON: " + parsed.error.message}};
     }
     cli::Options options = base_options_;
+    if (operation == "video" && parsed.value.get("provider") == nullptr) options.provider = "fal";
     if (operation == "editor-assist") {
         bool restored = false;
         const Error restore_error = agent::restore_project_settings(workspace_, options, restored);
@@ -562,6 +593,39 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
         };
         return {registry_.submit(operation, canonical, idempotency_key,
                                  JobClass::Provider, std::move(work)), ok_error()};
+    }
+
+    if (operation == "video") {
+        error = reject_unknown(parsed.value, {"provider", "model", "prompt", "settings", "input_media_ids"});
+        if (!error.ok()) return {{}, error};
+        app::operation::VideoRequest request;
+        error = required_string(parsed.value, "prompt", request.prompt); if (!error.ok()) return {{}, error};
+        request.model = options.model;
+        const json::Value* settings = parsed.value.get("settings");
+        if (settings) {
+            if (!settings->is_object()) return {{}, field_error("settings", "must be an object")};
+            for (const auto& item : settings->object) {
+                if (item.second.is_array() || item.second.is_object() || item.second.is_null()) return {{}, field_error("settings", "values must be scalar")};
+                request.settings[item.first] = item.second;
+            }
+        }
+        std::vector<std::string> ids;
+        if (const json::Value* values = parsed.value.get("input_media_ids")) {
+            if (!values->is_array()) return {{}, field_error("input_media_ids", "must be an array")};
+            for (const json::Value& value : values->array) {
+                if (!value.is_string() || value.string.empty() || value.string.size() > 128) return {{}, field_error("input_media_ids", "contains an invalid upload id")};
+                ids.push_back(value.string);
+            }
+        }
+        std::vector<StoredVideoInput> stored; error = video_inputs_.resolve(ids, stored); if (!error.ok()) return {{}, error};
+        for (StoredVideoInput& media : stored) request.input_media.push_back(
+            {media.mime_type, media.id, std::move(media.bytes), {}});
+        std::string output; error = provider::allocate_unused_video_path(workspace_, output); if (!error.ok()) return {{}, error};
+        request.output_path = output;
+        JobWork work = [this, options, request = std::move(request)](runtime::CancellationToken token, JobEvents events) mutable {
+            return run_video_job(options, std::move(request), token, std::move(events));
+        };
+        return {registry_.submit(operation, canonical, idempotency_key, JobClass::Provider, std::move(work)), ok_error()};
     }
 
     if (operation == "editor-assist") {

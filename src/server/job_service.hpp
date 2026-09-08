@@ -8,6 +8,7 @@
 #include "json/json.hpp"
 #include "server/job_registry.hpp"
 #include "server/image_input_store.hpp"
+#include "server/video_input_store.hpp"
 
 namespace ainiux::server {
 
@@ -34,10 +35,14 @@ class JobService {
     JobRegistry& registry() { return registry_; }
     const JobRegistry& registry() const { return registry_; }
     std::string image_catalog_json() const;
+    std::string video_catalog_json() const;
     Error add_image_input(std::string mime_type,
                           std::string bytes,
                           StoredImageInput& output);
     bool remove_image_input(const std::string& id);
+    Error add_video_input(std::string mime_type, std::string bytes, StoredVideoInput& output);
+    bool remove_video_input(const std::string& id);
+    const std::string& workspace() const { return workspace_; }
     void shutdown() { registry_.shutdown(); }
 
    private:
@@ -59,6 +64,10 @@ class JobService {
                              app::operation::ImageRequest request,
                              runtime::CancellationToken cancellation,
                              JobEvents events) const;
+    JobOutcome run_video_job(cli::Options options,
+                             app::operation::VideoRequest request,
+                             runtime::CancellationToken cancellation,
+                             JobEvents events) const;
     JobOutcome run_editor_assist_job(cli::Options options,
                                      std::string path,
                                      std::string revision,
@@ -72,6 +81,7 @@ class JobService {
     std::string workspace_;
     JobRegistry registry_;
     ImageInputStore image_inputs_;
+    VideoInputStore video_inputs_;
 };
 
 }  // namespace ainiux::server

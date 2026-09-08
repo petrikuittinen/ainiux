@@ -8,7 +8,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | --- | --- |
 | [Getting started](getting-started.md) | Dependencies, installation, providers, first commands, and platform expectations |
 | [Native Windows](windows.md) | UCRT64 build/package, Win32 terminal, PowerShell, clipboard, paths, and parity gate |
-| [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, image generation, attachments, fetch/search, output, and context |
+| [CLI and scripting](cli.md) | One-shot chat, REPL, conversion, image/video generation, attachments, fetch/search, output, and context |
 | [CLI skill for other agents](skills/ainiux-cli/SKILL.md) | How a foreign agent should invoke `ainiux` from bash (one-shot only; no TUI) |
 | [Chat TUI](chat.md) | Threads, persistence, commands, attachments, and mode switching |
 | [Editor help](editor_help.md) | Complete editor operation and embedded help content |
@@ -21,7 +21,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
 | [Control API](api.md) | Start the loopback-by-default v1.30 server; configure TLS/direct access; use jobs, sessions, revision-safe chat threads, workspace editing/assist, and MCP |
 | [Browser controller](web-mode.md) | Use the embedded responsive vanilla-JavaScript WUI for chat, jobs, agent/Guard, images, and revision-safe workspace work |
-| [Security](security.md) | Credential, persistence, fetch, attachment, image generation, and agent boundaries |
+| [Security](security.md) | Credential, persistence, fetch, attachment, image/video generation, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
 | [Version history](version-history.md) | Compact v0.0–v1.32 release timeline plus unreleased work |
 

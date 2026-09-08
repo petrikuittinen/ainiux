@@ -66,6 +66,8 @@ int run_agent_mode(provider::RequestContext context);
 // One-shot image generation (ainiux image / --image). Writes the saved path or
 // raw image bytes (--output stdout) to stdout.
 int run_image_mode(provider::RequestContext context);
+// One-shot video generation. Writes the saved path or raw MP4 bytes to stdout.
+int run_video_mode(provider::RequestContext context);
 
 // Shared agent goal runner used by one-shot --run and the interactive agent TUI.
 struct AgentGoalResult {

@@ -1,0 +1,51 @@
+#pragma once
+
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "ainiux/video_setting.hpp"
+#include "common.hpp"
+#include "json/json.hpp"
+#include "provider/provider.hpp"
+#include "runtime/runtime.hpp"
+
+namespace ainiux::provider {
+
+struct VideoInput {
+    std::string mime_type;
+    std::string display_name;
+    std::shared_ptr<const std::string> bytes;
+    std::string remote_url;
+};
+
+struct VideoGenerateRequest {
+    std::string model;
+    std::string prompt;
+    VideoCapability capability;
+    std::map<std::string, json::Value> settings;
+    std::vector<VideoInput> inputs;
+    std::string output_path;
+    bool overwrite = false;
+};
+
+struct VideoGenerateResult {
+    std::string path;
+    std::string content_type = "video/mp4";
+    long long byte_size = 0;
+    long long total_ms = -1;
+};
+
+Error normalize_video_settings(const VideoCapability& capability,
+                               const std::map<std::string, json::Value>& requested,
+                               std::map<std::string, json::Value>& normalized);
+Error build_fal_video_input(const VideoGenerateRequest& request, json::Value& input);
+Error parse_fal_video_result(const std::string& body, std::string& output_url);
+Error generate_video(const RequestContext& context,
+                     const VideoGenerateRequest& request,
+                     VideoGenerateResult& result,
+                     runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error allocate_unused_video_path(const std::string& directory, std::string& path);
+
+}  // namespace ainiux::provider

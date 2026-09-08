@@ -4,6 +4,8 @@
 #include <utility>
 
 #include "input/input.hpp"
+#include "platform/filesystem.hpp"
+#include "config/video_catalog.hpp"
 
 namespace ainiux::app::operation {
 namespace {
@@ -228,6 +230,110 @@ ImageResult run_image(provider::RequestContext context,
         result.error = {ErrorCode::ProviderSchema, "image response decoded to an empty file"};
         return result;
     }
+    result.error = publish(events, {EventType::Completed, {}, 0, 0});
+    return result;
+}
+
+namespace {
+std::string media_mime(const std::string& path, const std::string& bytes) {
+    std::string lower = ascii_lower(path);
+    auto ends = [&](const char* suffix) { const std::string s(suffix); return lower.size() >= s.size() && lower.compare(lower.size() - s.size(), s.size(), s) == 0; };
+    if (bytes.size() >= 8 && bytes.compare(0, 8, "\x89PNG\r\n\x1a\n", 8) == 0) return "image/png";
+    if (bytes.size() >= 3 && static_cast<unsigned char>(bytes[0]) == 0xff && static_cast<unsigned char>(bytes[1]) == 0xd8) return "image/jpeg";
+    if (bytes.rfind("RIFF", 0) == 0 && bytes.size() >= 12 && bytes.compare(8, 4, "WEBP") == 0) return "image/webp";
+    if (bytes.rfind("GIF8", 0) == 0) return "image/gif";
+    if (bytes.rfind("BM", 0) == 0) return "image/bmp";
+    if (bytes.size() >= 8 && (bytes.rfind("II*\0", 0) == 0 || bytes.rfind("MM\0*", 0) == 0)) return "image/tiff";
+    if ((ends(".heic") || ends(".heif")) && bytes.size() >= 12 && bytes.compare(4, 4, "ftyp") == 0) return ends(".heic") ? "image/heic" : "image/heif";
+    if (bytes.size() >= 12 && bytes.compare(4, 4, "ftyp") == 0) return ends(".mov") ? "video/quicktime" : "video/mp4";
+    if (bytes.rfind("RIFF", 0) == 0 && bytes.size() >= 12 && bytes.compare(8, 4, "WAVE") == 0) return "audio/wav";
+    if (bytes.rfind("ID3", 0) == 0 || ends(".mp3")) return "audio/mpeg";
+    return {};
+}
+}
+
+VideoResult run_video(provider::RequestContext context, const VideoRequest& input,
+                      runtime::CancellationToken cancellation, EventSink events,
+                      VideoExecutor executor) {
+    VideoResult result;
+    if (cancellation.cancelled()) { result.error = cancelled_error(); return result; }
+    const std::string provider_name = provider::canonical_profile_name(context.options.provider);
+    result.selected_model = input.model.empty() ? config::default_video_model(context.options.video_catalog, provider_name) : input.model;
+    if (result.selected_model.empty()) { result.error = {ErrorCode::BadArgs, "video mode requires a model or videos.conf default for provider " + provider_name}; return result; }
+    const VideoCapability* capability = config::resolve_video_capability(context.options.video_catalog, provider_name, result.selected_model);
+    if (!capability) { result.error = {ErrorCode::BadArgs, "videos.conf has no record for provider " + provider_name + " model " + result.selected_model + "; known models: " + config::known_video_models_description(context.options.video_catalog, provider_name)}; return result; }
+    result.request.model = capability->api_model;
+    result.request.prompt = ascii_trim(input.prompt);
+    if (result.request.prompt.empty()) { result.error = {ErrorCode::BadArgs, "video mode requires a non-empty prompt"}; return result; }
+    result.request.capability = *capability; result.request.output_path = input.output_path; result.request.overwrite = input.overwrite;
+    result.error = provider::normalize_video_settings(*capability, input.settings, result.request.settings);
+    if (!result.error.ok()) return result;
+    result.request.inputs = input.input_media;
+    for (const std::string& path : input.attachment_paths) {
+        if (cancellation.cancelled()) { result.error = cancelled_error(); return result; }
+        std::string bytes; result.error = platform::read_file_bounded(path, input.max_input_bytes, bytes);
+        if (!result.error.ok()) return result;
+        const std::string mime = media_mime(path, bytes);
+        if (mime.empty()) { result.error = {ErrorCode::BadArgs, "unsupported video reference media: " + path}; return result; }
+        const std::size_t per_media_limit = mime.rfind("audio/", 0) == 0 ? 15U * 1024U * 1024U :
+                                            mime.rfind("image/", 0) == 0 ? 30U * 1024U * 1024U :
+                                            200U * 1024U * 1024U;
+        if (bytes.size() > per_media_limit) { result.error = {ErrorCode::BadArgs, "video reference exceeds its media-type size limit: " + path}; return result; }
+        result.request.inputs.push_back({mime, path,
+            std::make_shared<const std::string>(std::move(bytes)), {}});
+        result.error = publish(events, {EventType::Progress, "Attached video reference: " + path, result.request.inputs.size(), input.attachment_paths.size()});
+        if (!result.error.ok()) return result;
+    }
+    int images = 0, videos = 0, audios = 0;
+    std::size_t total_bytes = 0;
+    for (const auto& media : result.request.inputs) {
+        if (!media.bytes || media.bytes->empty()) {
+            result.error = {ErrorCode::BadArgs, "video reference data is empty or unavailable"};
+            return result;
+        }
+        const bool image = media.mime_type.rfind("image/", 0) == 0;
+        const bool video = media.mime_type.rfind("video/", 0) == 0;
+        const bool audio = media.mime_type.rfind("audio/", 0) == 0;
+        if (!image && !video && !audio) {
+            result.error = {ErrorCode::BadArgs,
+                            "unsupported video reference media type: " + media.mime_type};
+            return result;
+        }
+        if (image) ++images;
+        else if (video) ++videos;
+        else ++audios;
+        const std::size_t general_limit = image ? 30U * 1024U * 1024U
+                                                : audio ? 15U * 1024U * 1024U
+                                                        : 200U * 1024U * 1024U;
+        const int configured_limit = image ? capability->max_input_image_bytes
+                                           : audio ? capability->max_input_audio_bytes
+                                                   : capability->max_input_video_bytes;
+        const std::size_t media_limit = configured_limit > 0
+                                            ? static_cast<std::size_t>(configured_limit)
+                                            : general_limit;
+        if (media.bytes->size() > media_limit) {
+            result.error = {ErrorCode::BadArgs,
+                            "video reference exceeds this model's media-type size limit"};
+            return result;
+        }
+        if (total_bytes > 1024U * 1024U * 1024U - media.bytes->size()) {
+            result.error = {ErrorCode::BadArgs,
+                            "video references exceed the combined 1 GiB input limit"};
+            return result;
+        }
+        total_bytes += media.bytes->size();
+    }
+    if (images > capability->max_input_images || videos > capability->max_input_videos ||
+        audios > capability->max_input_audios ||
+        (capability->max_input_total > 0 && images + videos + audios > capability->max_input_total)) {
+        result.error = {ErrorCode::BadArgs, "attached media exceeds this video model's input limits"}; return result;
+    }
+    result.error = publish(events, {EventType::Started, "Generating video with " + result.request.model, 0, 0});
+    if (!result.error.ok()) return result;
+    if (!executor) executor = provider::generate_video;
+    result.error = executor(context, result.request, result.response, cancellation);
+    result.request.inputs.clear();
+    if (!result.error.ok()) return result;
     result.error = publish(events, {EventType::Completed, {}, 0, 0});
     return result;
 }

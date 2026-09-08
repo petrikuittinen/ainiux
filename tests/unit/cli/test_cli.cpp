@@ -988,6 +988,20 @@ void test_cli_image_mode_parse() {
           "--format png without image mode is rejected");
 }
 
+void test_cli_video_mode_parse() {
+    const char* argv[] = {"ainiux", "video", "-p", "animate", "--duration", "3",
+                          "--resolution", "480P", "--audio", "off",
+                          "--video-setting", "safety_checker=true"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(12, const_cast<char**>(argv));
+    check(parsed.error.ok() && parsed.options.video && parsed.options.provider == "fal",
+          "video subcommand parses and defaults to fal");
+    check(parsed.options.video_duration == "3" && parsed.options.video_resolution == "480P" &&
+              parsed.options.video_audio == "off" && parsed.options.video_settings.size() == 1,
+          "video scalar CLI settings are retained");
+    check(ainiux::cli::validate_video_mode_arguments(parsed.options).ok(),
+          "valid video mode arguments pass validation");
+}
+
 void run_all() {
     test_cli_encoding_parse();
     test_cli_empty_and_unicode_edge_cases();
@@ -1002,6 +1016,7 @@ void run_all() {
     test_cli_editor_parse();
     test_cli_help_displays_version();
     test_cli_image_mode_parse();
+    test_cli_video_mode_parse();
     test_cli_web_search_parse();
     test_cli_agent_max_response_bytes_parse();
     test_cli_html_extract_parse();

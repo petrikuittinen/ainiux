@@ -7,6 +7,8 @@
 #include "provider/model_selection.hpp"
 #include "provider/provider.hpp"
 #include "provider/image.hpp"
+#include "provider/video.hpp"
+#include "config/video_catalog.hpp"
 #include "config/image_catalog.hpp"
 #include "input/input.hpp"
 
@@ -3058,6 +3060,12 @@ void test_fal_image_catalog_and_requests() {
     check(ainiux::provider::fal_queue_url(context, "fal-ai/flux/schnell") ==
               "https://queue.fal.run/fal-ai/flux/schnell",
           "fal queue URL is base plus endpoint id");
+    check(ainiux::provider::fal_queue_result_url(context, "fal-ai/flux/schnell", "abc") ==
+              "https://queue.fal.run/fal-ai/flux/requests/abc" &&
+              ainiux::provider::fal_queue_result_url(
+                  context, "minimax/h3-max-turbo/image-to-video", "xyz") ==
+                  "https://queue.fal.run/minimax/h3-max-turbo/requests/xyz",
+          "fal result URLs strip endpoint subpaths before requests/{request_id}");
 
     std::string request_id;
     std::string status_url;
@@ -3069,8 +3077,9 @@ void test_fal_image_catalog_and_requests() {
               "\"cancel_url\":\"https://queue.fal.run/x/cancel\"}",
               request_id, status_url, response_url, cancel_url)
               .ok() &&
-              request_id == "abc" && status_url.find("/status") != std::string::npos,
-          "fal submit URLs parse");
+              request_id == "abc" && status_url.find("/status") != std::string::npos &&
+              response_url.find("/response") != std::string::npos,
+          "fal submit metadata parses even when it advertises a legacy response URL");
     std::string status;
     std::string error_text;
     check(ainiux::provider::parse_fal_queue_status("{\"status\":\"IN_QUEUE\",\"queue_position\":2}",
@@ -3297,6 +3306,57 @@ void test_image_output_path_allocation() {
     fs::remove_all(dir, ignored);
 }
 
+void test_video_catalog_settings_and_request() {
+    ainiux::config::ParseResult parsed = ainiux::config::read_file("config/videos.conf");
+    ainiux::cli::Options options;
+    check(parsed.error.ok() && ainiux::config::apply_videos_document(parsed.document, options).ok(),
+          "bundled video catalog parses");
+    check(options.video_catalog.models.size() == 14,
+          "video catalog includes all requested fal endpoints");
+    options.video = true;
+    options.provider = "fal";
+    options.key = "test-key";
+    options.prompt = "test video";
+    check(ainiux::provider::build_context(options).error.ok(),
+          "fal video mode does not require a chat endpoint");
+    check(ainiux::config::default_video_model(options.video_catalog, "fal") ==
+              "minimax/h3-max-turbo/text-to-video",
+          "video catalog selects H3 Max Turbo text-to-video by default");
+    const ainiux::VideoCapability* capability = ainiux::config::resolve_video_capability(
+        options.video_catalog, "fal", "minimax/h3-max-turbo/image-to-video");
+    check(capability != nullptr && capability->input_mode == ainiux::VideoInputMode::Image,
+          "video catalog resolves image-to-video capabilities");
+    const ainiux::VideoCapability* references = ainiux::config::resolve_video_capability(
+        options.video_catalog, "fal", "minimax/h3-max/reference-to-video");
+    check(references != nullptr && references->max_input_total == 12,
+          "video catalog preserves combined multimodal reference limits");
+    const ainiux::VideoCapability* veo = ainiux::config::resolve_video_capability(
+        options.video_catalog, "fal", "fal-ai/veo3.1/fast/image-to-video");
+    check(veo != nullptr && veo->max_input_image_bytes == 8 * 1024 * 1024,
+          "video catalog preserves model-specific media byte limits");
+    if (!capability) return;
+    ainiux::json::Value duration; duration.type = ainiux::json::Value::Type::Number; duration.number = 5;
+    ainiux::json::Value resolution; resolution.type = ainiux::json::Value::Type::String; resolution.string = "480P";
+    std::map<std::string, ainiux::json::Value> normalized;
+    check(ainiux::provider::normalize_video_settings(*capability,
+              {{"duration", duration}, {"resolution", resolution}}, normalized).ok() &&
+              normalized.count("duration") && normalized.count("resolution"),
+          "video scalar settings validate and map to provider fields");
+    ainiux::provider::VideoGenerateRequest request;
+    request.prompt = "animate the chart"; request.capability = *capability; request.settings = normalized;
+    ainiux::provider::VideoInput image; image.mime_type = "image/png";
+    image.remote_url = "https://fal.media/files/example.png"; request.inputs.push_back(std::move(image));
+    ainiux::json::Value wire;
+    check(ainiux::provider::build_fal_video_input(request, wire).ok() &&
+              field(wire, "image_url") && field(wire, "image_url")->string.find("https://") == 0,
+          "video request uses uploaded fal CDN URLs");
+    std::string url;
+    check(ainiux::provider::parse_fal_video_result(
+              "{\"video\":{\"url\":\"https://fal.media/out.mp4\"}}", url).ok() &&
+              url == "https://fal.media/out.mp4",
+          "video result parser extracts video.url");
+}
+
 }  // namespace
 
 void run_all() {
@@ -3306,6 +3366,7 @@ void run_all() {
     test_fal_image_catalog_and_requests();
     test_gemini_image_catalog_and_requests();
     test_image_output_path_allocation();
+    test_video_catalog_settings_and_request();
     test_http_status_errors_are_friendly();
     test_openrouter_nested_provider_errors_are_unwrapped();
     test_chat_sse_accepts_cr_only_event_boundaries();

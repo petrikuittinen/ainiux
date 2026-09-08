@@ -35,6 +35,8 @@ void print_config_diagnostics(const config::LoadResult& configured) {
             kind = "models";
         } else if (diagnostic.kind == config::ConfigFileKind::Images) {
             kind = "images";
+        } else if (diagnostic.kind == config::ConfigFileKind::Videos) {
+            kind = "videos";
         }
         std::cerr << "Config debug: " << state << " " << scope << " " << kind;
         if (!diagnostic.path.empty()) {
