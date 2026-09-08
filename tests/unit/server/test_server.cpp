@@ -154,8 +154,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v20.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v25.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v21.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v27.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -183,6 +183,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("id=\"threads-heading\">Threads</h2>") != std::string::npos &&
               index.body.find("id=\"new-thread-button\"") <
                   index.body.find("id=\"thread-list\"") &&
+              index.body.find("id=\"confirm-dialog\"") != std::string::npos &&
               index.body.find("<p class=\"eyebrow\">Conversation</p>") == std::string::npos &&
               index.body.find("id=\"chat-heading\"") == std::string::npos &&
               index.body.find("id=\"chat-metrics\"") != std::string::npos &&
@@ -204,7 +205,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v20.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v21.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -244,7 +245,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v25.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v27.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -261,6 +262,15 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("data.action === \"append\"") != std::string::npos &&
               javascript.body.find("async function regenerateChat") != std::string::npos &&
               javascript.body.find("async function abandonUnusedThread") != std::string::npos &&
+              javascript.body.find("async function cleanupEmptyThreads") != std::string::npos &&
+              javascript.body.find("async function deleteThread") != std::string::npos &&
+              javascript.body.find("function askConfirm") != std::string::npos &&
+              javascript.body.find("function cancelChatMessageEdit") != std::string::npos &&
+              javascript.body.find("window.confirm") == std::string::npos &&
+              javascript.body.find("window.alert") == std::string::npos &&
+              javascript.body.find("window.prompt") == std::string::npos &&
+              javascript.body.find("cleanup-empty") != std::string::npos &&
+              javascript.body.find("edit-message") != std::string::npos &&
               javascript.body.find("async function createNewChat") != std::string::npos &&
               javascript.body.find("async function cancelActiveAgentTurn") != std::string::npos &&
               javascript.body.find("key === \"r\"") != std::string::npos &&
@@ -460,8 +470,11 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/app-v22.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v23.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v24.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v25.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v26.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v18.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v19.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v20.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/video-options-v1.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/video-options-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v4.js"), config, status).status == 404 &&
@@ -991,7 +1004,8 @@ http::Request session_request(const std::string& method,
                               const std::string& body = "{}") {
     std::string request = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                           "Authorization: Bearer controller\r\n";
-    if (method == "POST" || method == "PUT" || method == "PATCH")
+    if (method == "POST" || method == "PUT" || method == "PATCH" ||
+        (method == "DELETE" && !body.empty()))
         request += "Content-Type: application/json\r\n";
     request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
     return parsed_request(request);
@@ -1805,6 +1819,145 @@ void test_revision_safe_chat_thread_routes() {
     check(read_only_abandon.status == 409 &&
               read_only_abandon.body.find("thread_read_only") != std::string::npos,
           "read-only chat abandonment preserves the thread");
+
+    const long long leftover_empty = create_abandon_fixture();
+    const long long leftover_system = create_abandon_fixture();
+    Response leftover_system_added = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(leftover_system) + "/messages",
+        "{\"revision\":1,\"messages\":[{\"role\":\"system\",\"content\":\"Be concise\"}]}"),
+        auth, status);
+    const long long keep_empty = create_abandon_fixture();
+    const long long populated = create_abandon_fixture();
+    Response populated_added = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(populated) + "/messages",
+        "{\"revision\":1,\"messages\":[{\"role\":\"user\",\"content\":\"keep\"},"
+        "{\"role\":\"assistant\",\"content\":\"kept answer\"}]}"),
+        auth, status);
+    check(leftover_system_added.status == 200 && populated_added.status == 200,
+          "empty-thread cleanup fixtures persist");
+    Response cleaned = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/cleanup-empty",
+        "{\"keep_id\":" + std::to_string(keep_empty) + "}"), auth, status);
+    listed = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
+                           auth, status);
+    check(cleaned.status == 200 &&
+              cleaned.body.find("\"deleted_count\":") != std::string::npos &&
+              listed.body.find("\"id\":" + std::to_string(leftover_empty)) == std::string::npos &&
+              listed.body.find("\"id\":" + std::to_string(leftover_system)) == std::string::npos &&
+              listed.body.find("\"id\":" + std::to_string(keep_empty)) != std::string::npos &&
+              listed.body.find("\"id\":" + std::to_string(populated)) != std::string::npos,
+          "empty-thread cleanup removes leftovers and honors keep_id");
+
+    Response loaded_populated = route_request(session_request(
+        "GET", "/ainiux/v1/chat/threads/" + std::to_string(populated), ""), auth, status);
+    check(loaded_populated.status == 200 &&
+              loaded_populated.body.find("\"ordinal\":1") != std::string::npos &&
+              loaded_populated.body.find("kept answer") != std::string::npos,
+          "populated chat thread exposes assistant ordinals");
+    Response edited = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(populated) + "/edit-message",
+        "{\"revision\":2,\"ordinal\":1,\"content\":\"corrected answer\"}"), auth, status);
+    check(edited.status == 200 &&
+              edited.body.find("corrected answer") != std::string::npos &&
+              edited.body.find("kept answer") == std::string::npos,
+          "assistant message editing replaces the selected response");
+    Response edit_user = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(populated) + "/edit-message",
+        "{\"revision\":3,\"ordinal\":0,\"content\":\"nope\"}"), auth, status);
+    check(edit_user.status == 400 &&
+              edit_user.body.find("only assistant messages") != std::string::npos,
+          "user messages cannot be edited through the chat API");
+    Response stale_edit = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(populated) + "/edit-message",
+        "{\"revision\":2,\"ordinal\":1,\"content\":\"stale\"}"), auth, status);
+    check(stale_edit.status == 409 &&
+              stale_edit.body.find("\"current_revision\":3") != std::string::npos,
+          "stale chat message edits return the current revision");
+    Response deleted_message = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(populated) + "/delete-message",
+        "{\"revision\":3,\"ordinal\":1}"), auth, status);
+    check(deleted_message.status == 200 &&
+              deleted_message.body.find("corrected answer") == std::string::npos &&
+              deleted_message.body.find("\"role\":\"user\"") != std::string::npos,
+          "assistant message deletion removes that response");
+
+    const long long rewind_id = create_abandon_fixture();
+    Response rewind_added = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(rewind_id) + "/messages",
+        "{\"revision\":1,\"messages\":["
+        "{\"role\":\"user\",\"content\":\"first user\"},"
+        "{\"role\":\"assistant\",\"content\":\"first assistant\"},"
+        "{\"role\":\"user\",\"content\":\"second user\"},"
+        "{\"role\":\"assistant\",\"content\":\"second assistant\"}]}"),
+        auth, status);
+    Response rewind_deleted = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(rewind_id) + "/delete-message",
+        "{\"revision\":2,\"ordinal\":1}"), auth, status);
+    check(rewind_added.status == 200 && rewind_deleted.status == 200 &&
+              rewind_deleted.body.find("first user") != std::string::npos &&
+              rewind_deleted.body.find("first assistant") == std::string::npos &&
+              rewind_deleted.body.find("second user") == std::string::npos &&
+              rewind_deleted.body.find("second assistant") == std::string::npos,
+          "deleting an earlier assistant removes it and every following message");
+    Response rewind_user = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(rewind_id) + "/delete-message",
+        "{\"revision\":3,\"ordinal\":0}"), auth, status);
+    check(rewind_user.status == 200 &&
+              rewind_user.body.find("\"message_count\":0") != std::string::npos &&
+              rewind_user.body.find("\"content\":\"first user\"") == std::string::npos,
+          "user messages can be deleted to rewind the remaining transcript");
+    const long long system_delete_id = create_abandon_fixture();
+    Response system_delete_added = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(system_delete_id) + "/messages",
+        "{\"revision\":1,\"messages\":[{\"role\":\"system\",\"content\":\"Be concise\"},"
+        "{\"role\":\"user\",\"content\":\"hello\"}]}"), auth, status);
+    Response delete_system = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(system_delete_id) + "/delete-message",
+        "{\"revision\":2,\"ordinal\":0}"), auth, status);
+    check(system_delete_added.status == 200 && delete_system.status == 400 &&
+              delete_system.body.find("only user and assistant") != std::string::npos,
+          "system messages cannot be deleted through the chat API");
+
+    Response deleted_empty = route_request(session_request(
+        "DELETE", "/ainiux/v1/chat/threads/" + std::to_string(keep_empty),
+        "{\"revision\":1}"), auth, status);
+    check(deleted_empty.status == 200 &&
+              deleted_empty.body == "{\"id\":" + std::to_string(keep_empty) +
+                  ",\"deleted\":true}",
+          "explicit chat deletion removes an empty thread");
+    Response deleted_populated = route_request(session_request(
+        "DELETE", "/ainiux/v1/chat/threads/" + std::to_string(populated),
+        "{\"revision\":4}"), auth, status);
+    check(deleted_populated.status == 200 &&
+              deleted_populated.body.find("\"deleted\":true") != std::string::npos,
+          "explicit chat deletion removes a non-empty thread");
+    listed = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
+                           auth, status);
+    check(listed.body.find("\"id\":" + std::to_string(keep_empty)) == std::string::npos &&
+              listed.body.find("\"id\":" + std::to_string(populated)) == std::string::npos,
+          "deleted chat threads disappear from listings");
+    Response stale_delete = route_request(session_request(
+        "DELETE", "/ainiux/v1/chat/threads/" + std::to_string(content_id),
+        "{\"revision\":1}"), auth, status);
+    check(stale_delete.status == 409 &&
+              stale_delete.body.find("\"current_revision\":2") != std::string::npos,
+          "stale chat deletion returns the current revision");
+    Response missing_delete = route_request(session_request(
+        "DELETE", "/ainiux/v1/chat/threads/999999", "{\"revision\":1}"),
+        auth, status);
+    check(missing_delete.status == 404, "missing chat deletion target remains missing");
+    Response read_only_delete = route_request(session_request(
+        "DELETE", "/ainiux/v1/chat/threads/" + std::to_string(read_only_id),
+        "{\"revision\":1}"), auth, status);
+    check(read_only_delete.status == 409 &&
+              read_only_delete.body.find("thread_read_only") != std::string::npos,
+          "read-only chat deletion preserves the thread");
+    Response read_only_edit = route_request(session_request(
+        "POST", "/ainiux/v1/chat/threads/" + std::to_string(read_only_id) + "/edit-message",
+        "{\"revision\":1,\"ordinal\":0,\"content\":\"nope\"}"), auth, status);
+    check(read_only_edit.status == 409 &&
+              read_only_edit.body.find("thread_read_only") != std::string::npos,
+          "read-only chat message edits are rejected");
 
     const fs::path blocked_parent = directory / "not-a-directory";
     std::ofstream(blocked_parent, std::ios::binary) << "file";

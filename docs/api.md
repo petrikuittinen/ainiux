@@ -182,12 +182,16 @@ PR 7 exposes the existing user-private SQLite chat library through domain
 operations rather than database files or tables:
 
 ```text
-GET  /ainiux/v1/chat/threads
-POST /ainiux/v1/chat/threads
-GET  /ainiux/v1/chat/threads/:thread_id
-POST /ainiux/v1/chat/threads/:thread_id/messages
-POST /ainiux/v1/chat/threads/:thread_id/regenerate
-POST /ainiux/v1/chat/threads/:thread_id/abandon
+GET    /ainiux/v1/chat/threads
+POST   /ainiux/v1/chat/threads
+POST   /ainiux/v1/chat/threads/cleanup-empty
+GET    /ainiux/v1/chat/threads/:thread_id
+DELETE /ainiux/v1/chat/threads/:thread_id
+POST   /ainiux/v1/chat/threads/:thread_id/messages
+POST   /ainiux/v1/chat/threads/:thread_id/regenerate
+POST   /ainiux/v1/chat/threads/:thread_id/abandon
+POST   /ainiux/v1/chat/threads/:thread_id/edit-message
+POST   /ainiux/v1/chat/threads/:thread_id/delete-message
 ```
 
 Listing returns at most 200 newest summaries with `id`, `revision`, `name`,
@@ -239,12 +243,30 @@ system-prompt-only threads count as empty. Success returns
 preserved and returns `deleted:false` with `reason:"not_empty"`; stale,
 missing, and read-only targets use the existing thread error responses.
 
+`POST /ainiux/v1/chat/threads/cleanup-empty` soft-deletes every writable empty
+thread. The optional body `{"keep_id":N}` preserves one empty thread, typically
+the one the browser currently has open. Read-only empties are left in place.
+Success returns `{"deleted_count":N}`.
+
+`DELETE /ainiux/v1/chat/threads/:thread_id` accepts `{"revision":N}` and
+soft-deletes a revision-matching writable thread whether or not it has
+conversation content. Success returns `{"id":N,"deleted":true}`. Stale,
+missing, and read-only targets use the existing thread error responses.
+Thread rename remains unsupported.
+
+`POST .../edit-message` accepts `{"revision":N,"ordinal":N,"content":"..."}`
+and replaces the content of one assistant message. User and system messages
+cannot be edited. `POST .../delete-message` accepts `{"revision":N,"ordinal":N}`
+and removes that user or assistant message together with every following
+message, so a client can rewind the transcript. System messages are rejected.
+Both return the updated public thread projection. Stale revisions cannot
+rewrite a thread changed by another client.
+
 Thread responses expose at most 64 attachments per message, with kind, MIME
 type, display name, and byte size only; `attachments_truncated` reports an
 omission. Managed-media identifiers, inline attachment bodies, original
 source references, database paths, base URLs, usage internals, and provider
-credentials are omitted. PR 7 does not accept remote attachment input or
-delete/rename threads.
+credentials are omitted. Remote attachment input is not accepted.
 
 Regenerate accepts `{"revision":N}`. It atomically removes messages after the
 latest user prompt and returns that prompt plus the advanced thread revision;

@@ -104,9 +104,14 @@ class SqliteStore {
                         MediaCleanupResult& result,
                         runtime::CancellationToken cancellation = runtime::CancellationToken());
     Error soft_delete_thread(long long thread_id);
+    // Soft-delete a writable thread only when its revision still matches.
+    Error remove_thread(long long thread_id,
+                        long long expected_revision,
+                        long long& current_revision);
     Error soft_delete_empty_threads(long long& deleted_count,
                                     long long watch_thread_id,
-                                    bool& watch_thread_deleted);
+                                    bool& watch_thread_deleted,
+                                    long long keep_thread_id = 0);
 
    private:
     sqlite3* db_ = nullptr;

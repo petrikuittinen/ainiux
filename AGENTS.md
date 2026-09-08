@@ -275,6 +275,9 @@ agent loops, approval decisions, or filesystem mutation logic in a UI.
 - Build dynamic content with DOM APIs and `textContent`; raw model/tool HTML remains
   inert. Preserve desktop/mobile, keyboard/touch, visible focus, reduced-motion,
   light/dark, bounded-work, undo/redo, and highlight/editor synchronization behavior.
+- Never use `alert()`, `confirm()`, or `prompt()` in the WebUI. Blocking choices
+  use in-page `<dialog>` elements (or the same custom overlay pattern), never
+  the browser's built-in dialogs.
 
 ### Benchmark and grade
 

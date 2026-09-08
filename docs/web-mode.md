@@ -104,12 +104,23 @@ whether to keep the draft or reload the current server copy.
 An unnamed thread initially appears as “New chat”; its first non-empty user
 prompt supplies the stored title. Thread rows show the locally formatted
 modified date and message count rather than internal concurrency values.
-On the first authenticated browser load, the controller creates and selects a
-new thread even when older threads exist. It immediately prompts for a provider
-when the effective provider is `none`, or for a model when only the model is
-missing. A browser-created thread left without user or assistant content is
-revision-safely abandoned when another thread is selected; reconnection reloads
-the active thread instead of creating another one.
+Each writable row also has a small **Delete** control under that metadata.
+Empty threads delete immediately; threads with user or assistant content ask
+for confirmation first in an in-page dialog (never `alert`/`confirm`/`prompt`).
+Read-only threads cannot be deleted.
+On the first authenticated browser load, the controller sweeps leftover empty
+threads, then creates and selects a new thread even when older conversations
+exist. It immediately prompts for a provider when the effective provider is
+`none`, or for a model when only the model is missing. A thread left without
+user or assistant content is revision-safely abandoned when another thread is
+selected or created; reconnection reloads the active thread instead of creating
+another one and keeps that thread while sweeping other empties.
+Completed assistant responses on a writable thread can be edited in place
+(Save or Cancel). User and assistant messages can be deleted after an in-page
+confirmation; deleting a message also removes every message after it, so a
+turn can be rewound to an earlier user prompt. System messages stay
+append-only. Streaming cards have no edit or delete controls until the turn
+finishes.
 Completed chat and agent turns show compact context, input/output token, elapsed,
 TTFT, cache, and decode-rate measurements when the provider/runtime supplies
 them. A `~` marker identifies estimated token values.

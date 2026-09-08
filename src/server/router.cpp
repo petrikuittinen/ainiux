@@ -710,14 +710,16 @@ Response route_request(const http::Request& request,
     }
 
     const std::string chat_threads_prefix = "/ainiux/v1/chat/threads";
-    if (request.path == chat_threads_prefix) {
+    if (request.path == chat_threads_prefix ||
+        request.path == chat_threads_prefix + "/cleanup-empty") {
         if (status.chat_threads == nullptr) {
             return error_response(503, "chat_unavailable", "the chat thread service is unavailable");
         }
         if (!request.query.empty()) {
             return error_response(400, "invalid_request", "chat thread routes do not accept query parameters");
         }
-        if (request.method == "GET") {
+        const bool cleanup = request.path != chat_threads_prefix;
+        if (!cleanup && request.method == "GET") {
             if (!request.body.empty()) {
                 return error_response(400, "invalid_request", "thread listing does not accept a body");
             }
@@ -729,18 +731,21 @@ Response route_request(const http::Request& request,
         }
         if (request.method != "POST") {
             response = error_response(405, "method_not_allowed",
-                                      "chat thread collection accepts GET and POST only");
-            response.allow = "GET, POST";
+                                      cleanup ? "empty-thread cleanup accepts POST only"
+                                              : "chat thread collection accepts GET and POST only");
+            response.allow = cleanup ? "POST" : "GET, POST";
             return response;
         }
         if (!json_content_type(request)) {
             return error_response(415, "unsupported_media_type",
-                                  "thread creation requires Content-Type: application/json");
+                                  cleanup ? "empty-thread cleanup requires Content-Type: application/json"
+                                          : "thread creation requires Content-Type: application/json");
         }
         std::string body;
-        const Error error = status.chat_threads->create(request.body, body);
+        const Error error = cleanup ? status.chat_threads->cleanup_empty(request.body, body)
+                                    : status.chat_threads->create(request.body, body);
         if (!error.ok()) return chat_thread_error(error);
-        response.status = 201;
+        if (!cleanup) response.status = 201;
         response.body = std::move(body);
         return response;
     }
@@ -759,15 +764,11 @@ Response route_request(const http::Request& request,
         if (!positive_decimal_id(id_text, thread_id) ||
             (slash != std::string::npos && action.empty()) ||
             (!action.empty() && action != "messages" && action != "regenerate" &&
-             action != "settings" && action != "abandon")) {
+             action != "settings" && action != "abandon" && action != "edit-message" &&
+             action != "delete-message")) {
             return error_response(404, "thread_route_not_found", "no chat thread route matches this path");
         }
-        if (action.empty() || (action == "settings" && request.method == "GET")) {
-            if (request.method != "GET") {
-                response = error_response(405, "method_not_allowed", "chat thread loading accepts GET only");
-                response.allow = "GET";
-                return response;
-            }
+        if ((action.empty() || action == "settings") && request.method == "GET") {
             if (!request.body.empty()) {
                 return error_response(400, "invalid_request", "chat thread loading does not accept a body");
             }
@@ -777,11 +778,32 @@ Response route_request(const http::Request& request,
             response.body = std::move(body);
             return response;
         }
+        if (action.empty() && request.method == "DELETE") {
+            if (!json_content_type(request)) {
+                return error_response(415, "unsupported_media_type",
+                                      "chat thread deletion requires Content-Type: application/json");
+            }
+            std::string body;
+            long long current_revision = 0;
+            const Error error =
+                status.chat_threads->remove(thread_id, request.body, body, current_revision);
+            if (!error.ok()) return chat_thread_error(error, current_revision);
+            response.body = std::move(body);
+            return response;
+        }
+        if (action.empty()) {
+            response = error_response(405, "method_not_allowed",
+                                      "chat thread loading accepts GET and DELETE");
+            response.allow = "GET, DELETE";
+            return response;
+        }
         if (request.method != "POST") {
             response = error_response(
                 405, "method_not_allowed",
                 action == "regenerate" ? "chat regeneration accepts POST only"
                 : action == "abandon" ? "chat abandonment accepts POST only"
+                : action == "edit-message" ? "chat message editing accepts POST only"
+                : action == "delete-message" ? "chat message deletion accepts POST only"
                                       : "message append accepts POST only");
             response.allow = "POST";
             return response;
@@ -792,6 +814,10 @@ Response route_request(const http::Request& request,
                                       ? "chat regeneration requires Content-Type: application/json"
                                   : action == "abandon"
                                       ? "chat abandonment requires Content-Type: application/json"
+                                  : action == "edit-message"
+                                      ? "chat message editing requires Content-Type: application/json"
+                                  : action == "delete-message"
+                                      ? "chat message deletion requires Content-Type: application/json"
                                       : "message append requires Content-Type: application/json");
         }
         std::string body;
@@ -803,6 +829,12 @@ Response route_request(const http::Request& request,
                                       thread_id, request.body, body, current_revision)
                                 : action == "regenerate"
                                 ? status.chat_threads->rewind_last_answer(
+                                      thread_id, request.body, body, current_revision)
+                                : action == "edit-message"
+                                ? status.chat_threads->edit_message(
+                                      thread_id, request.body, body, current_revision)
+                                : action == "delete-message"
+                                ? status.chat_threads->delete_message(
                                       thread_id, request.body, body, current_revision)
                                 : status.chat_threads->append(
                                       thread_id, request.body, body, current_revision);

@@ -36,6 +36,19 @@ class ChatService {
                   const std::string& request_body,
                   std::string& body,
                   long long& current_revision);
+    Error cleanup_empty(const std::string& request_body, std::string& body);
+    Error remove(long long thread_id,
+                 const std::string& request_body,
+                 std::string& body,
+                 long long& current_revision);
+    Error edit_message(long long thread_id,
+                       const std::string& request_body,
+                       std::string& body,
+                       long long& current_revision);
+    Error delete_message(long long thread_id,
+                         const std::string& request_body,
+                         std::string& body,
+                         long long& current_revision);
 
    private:
     Error ensure_open();

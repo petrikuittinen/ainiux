@@ -1,4 +1,4 @@
-/* Versioned embedded compact controller stylesheet, revision 20. */
+/* Versioned embedded compact controller stylesheet, revision 21. */
 :root {
   color-scheme: light dark;
   --bg: #ffffff;
@@ -223,9 +223,19 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .thread-sidebar { display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); }
 .item-list { flex: 1; min-height: 0; overflow: auto; }
 .list-button { display: block; width: 100%; min-height: 0; margin: 0; padding: 0.42rem 0.5rem; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; }
+.thread-item { border-bottom: 1px solid var(--soft-border); }
+.thread-item:hover, .thread-item.selected { background: var(--raised); }
+.thread-item.selected { box-shadow: inset 3px 0 var(--accent); }
+.thread-item .list-button:hover, .thread-item .list-button.selected { background: transparent; box-shadow: none; }
 .list-button:hover, .list-button.selected { background: var(--raised); box-shadow: inset 3px 0 var(--accent); }
 .list-button strong, .list-button small { display: block; overflow-wrap: anywhere; }
 .list-button small { margin-top: 0.12rem; color: var(--muted); font-size: 0.7rem; font-weight: 500; }
+.thread-delete { display: block; width: 100%; min-height: 0; margin: 0; padding: 0.08rem 0.5rem 0.38rem; border: 0; border-radius: 0; background: transparent; color: var(--danger); font-size: 0.7rem; font-weight: 650; text-align: left; }
+.message-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.38rem; }
+.message-actions button { min-height: 1.55rem; padding: 0.12rem 0.42rem; background: transparent; color: var(--accent); font-size: 0.72rem; }
+.message-actions button.delete { border-color: var(--danger); color: var(--danger); }
+.message-edit { display: grid; gap: 0.35rem; margin-top: 0.38rem; }
+.message-edit textarea { min-height: 6rem; font: inherit; line-height: 1.45; }
 .conversation, .agent-console { display: flex; flex-direction: column; background: var(--bg); }
 .agent-console { height: 100%; max-height: 100%; overflow: hidden; }
 .agent-toolbar, .agent-composer { flex: 0 0 auto; }
@@ -518,7 +528,7 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
   :root { --topbar-height: 2.4rem; }
   .brand { padding-inline: 0.5rem; }
   .primary-nav button, .nav-action { padding-inline: 0.58rem; }
-  .chat-layout { grid-template-columns: 1fr; grid-template-rows: minmax(5rem, 7rem) minmax(0, 1fr); }
+  .chat-layout { grid-template-columns: 1fr; grid-template-rows: minmax(7rem, 11rem) minmax(0, 1fr); }
   .thread-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   .conversation-bar { align-items: flex-start; flex-direction: column; gap: 0.25rem; }
   .editor-toolbar { align-items: flex-start; }

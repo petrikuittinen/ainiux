@@ -853,6 +853,36 @@ void test_chat_sqlite_remove_empty_threads() {
     err = store.soft_delete_empty_threads(deleted_count, another_empty.thread_id, current_removed);
     check(err.ok() && deleted_count == 1 && current_removed,
           "SQLite empty-thread cleanup reports when the watched thread is removed");
+
+    ainiux::chat::Session kept_empty = ainiux::chat::new_session(context);
+    err = store.save_session(kept_empty);
+    check(err.ok(), "SQLite keep-id empty thread saves");
+    ainiux::chat::Session leftover_empty = ainiux::chat::new_session(context);
+    leftover_empty.messages.push_back({"system", "unused"});
+    err = store.save_session(leftover_empty);
+    check(err.ok(), "SQLite leftover empty thread saves");
+    deleted_count = 0;
+    current_removed = false;
+    err = store.soft_delete_empty_threads(deleted_count, leftover_empty.thread_id, current_removed,
+                                          kept_empty.thread_id);
+    check(err.ok() && deleted_count == 1 && current_removed,
+          "SQLite empty-thread cleanup honors keep_id and still reports the watched deletion");
+    threads.clear();
+    err = store.list_threads(threads, 20);
+    check(err.ok() && threads.size() == 2 &&
+              (threads[0].id == kept_empty.thread_id || threads[1].id == kept_empty.thread_id),
+          "SQLite empty-thread cleanup preserves the kept empty thread");
+
+    long long current_revision = 0;
+    err = store.remove_thread(kept_empty.thread_id, kept_empty.revision, current_revision);
+    check(err.ok() && current_revision == kept_empty.revision,
+          "SQLite revision-safe delete removes a writable thread");
+    err = store.remove_thread(kept_empty.thread_id, kept_empty.revision, current_revision);
+    check(err.code == ainiux::ErrorCode::FileRead,
+          "SQLite revision-safe delete reports a missing thread");
+    err = store.remove_thread(with_user.thread_id, with_user.revision + 1, current_revision);
+    check(err.code == ainiux::ErrorCode::FileLock && current_revision == with_user.revision,
+          "SQLite revision-safe delete reports a stale revision");
 }
 
 void test_chat_sqlite_thread_name_from_first_user_prompt() {

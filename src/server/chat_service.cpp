@@ -257,6 +257,88 @@ Error parse_revision(const std::string& input, long long& revision,
     return ok_error();
 }
 
+Error parse_keep_id(const std::string& input, long long& keep_id) {
+    keep_id = 0;
+    const json::ParseResult parsed = json::parse(input);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return invalid("empty-thread cleanup body must be one JSON object");
+    }
+    std::string unknown;
+    if (!known_fields(parsed.value, {"keep_id"}, unknown)) {
+        return invalid("unknown empty-thread cleanup field: " + unknown);
+    }
+    if (parsed.value.get("keep_id") == nullptr) return ok_error();
+    if (!integer_value(parsed.value.get("keep_id"), keep_id) || keep_id < 0) {
+        return invalid("keep_id must be a non-negative integer");
+    }
+    return ok_error();
+}
+
+Error parse_message_mutation(const std::string& input,
+                             long long& revision,
+                             long long& ordinal,
+                             std::string* content,
+                             const char* operation) {
+    const json::ParseResult parsed = json::parse(input);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return invalid(std::string("chat ") + operation + " body must be one JSON object");
+    }
+    std::string unknown;
+    std::vector<std::string> allowed{"revision", "ordinal"};
+    if (content != nullptr) allowed.emplace_back("content");
+    if (!known_fields(parsed.value, allowed, unknown)) {
+        return invalid(std::string("unknown chat ") + operation + " field: " + unknown);
+    }
+    if (!integer_value(parsed.value.get("revision"), revision) || revision <= 0) {
+        return invalid("revision must be a positive integer");
+    }
+    if (!integer_value(parsed.value.get("ordinal"), ordinal) || ordinal < 0) {
+        return invalid("ordinal must be a non-negative integer");
+    }
+    if (content == nullptr) return ok_error();
+    const json::Value* value = parsed.value.get("content");
+    if (value == nullptr || !value->is_string() || value->string.size() > kMaxMessageBytes) {
+        return invalid("message content must be a string no larger than 1 MiB");
+    }
+    *content = value->string;
+    return ok_error();
+}
+
+Error load_unbounded_session(chat::SqliteStore& store,
+                             long long thread_id,
+                             long long expected_revision,
+                             chat::Session& session,
+                             long long& current_revision) {
+    chat::LoadSessionOptions options;
+    options.update_last_thread = false;
+    Error error = store.load_session(thread_id, session, options);
+    if (!error.ok()) return error;
+    current_revision = session.revision;
+    if (session.revision != expected_revision) {
+        return {ErrorCode::FileLock, "chat thread revision is stale"};
+    }
+    if (session.read_only) {
+        return {ErrorCode::FileWrite, "chat thread is read-only"};
+    }
+    if (session.messages_truncated) {
+        return invalid("chat thread transcript is truncated");
+    }
+    return ok_error();
+}
+
+std::size_t message_index_for_ordinal(const chat::Session& session, long long ordinal) {
+    const long long message_count = session.persisted_message_count > 0
+                                        ? session.persisted_message_count
+                                        : static_cast<long long>(session.messages.size());
+    const long long first_ordinal =
+        std::max(0LL, message_count - static_cast<long long>(session.messages.size()));
+    const long long index = ordinal - first_ordinal;
+    if (index < 0 || static_cast<std::size_t>(index) >= session.messages.size()) {
+        return session.messages.size();
+    }
+    return static_cast<std::size_t>(index);
+}
+
 }  // namespace
 
 ChatService::ChatService(std::string database_path, cli::Options defaults)
@@ -422,6 +504,113 @@ Error ChatService::abandon(long long thread_id,
            ",\"deleted\":" + std::string(deleted ? "true" : "false");
     if (!deleted) body += ",\"reason\":\"not_empty\"";
     body += "}";
+    return ok_error();
+}
+
+Error ChatService::cleanup_empty(const std::string& request_body, std::string& body) {
+    long long keep_id = 0;
+    Error error = parse_keep_id(request_body, keep_id);
+    if (!error.ok()) return error;
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.clear();
+    error = ensure_open();
+    if (!error.ok()) return error;
+    long long deleted_count = 0;
+    bool watch_deleted = false;
+    error = store_.soft_delete_empty_threads(deleted_count, 0, watch_deleted, keep_id);
+    if (!error.ok()) return safe_store_error(error, "clean up empty chat threads");
+    body = "{\"deleted_count\":" + std::to_string(deleted_count) + "}";
+    return ok_error();
+}
+
+Error ChatService::remove(long long thread_id,
+                          const std::string& request_body,
+                          std::string& body,
+                          long long& current_revision) {
+    long long expected_revision = 0;
+    Error error = parse_revision(request_body, expected_revision, "delete");
+    if (!error.ok()) return error;
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.clear();
+    current_revision = 0;
+    error = ensure_open();
+    if (!error.ok()) return error;
+    error = store_.remove_thread(thread_id, expected_revision, current_revision);
+    if (!error.ok()) return safe_store_error(error, "delete the chat thread");
+    body = "{\"id\":" + std::to_string(thread_id) + ",\"deleted\":true}";
+    return ok_error();
+}
+
+Error ChatService::edit_message(long long thread_id,
+                                const std::string& request_body,
+                                std::string& body,
+                                long long& current_revision) {
+    long long expected_revision = 0;
+    long long ordinal = -1;
+    std::string content;
+    Error error = parse_message_mutation(request_body, expected_revision, ordinal, &content,
+                                         "edit");
+    if (!error.ok()) return error;
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.clear();
+    current_revision = 0;
+    error = ensure_open();
+    if (!error.ok()) return error;
+    chat::Session session;
+    error = load_unbounded_session(store_, thread_id, expected_revision, session,
+                                   current_revision);
+    if (!error.ok()) return error.code == ErrorCode::BadArgs
+                               ? error
+                               : safe_store_error(error, "load the chat thread");
+    const std::size_t index = message_index_for_ordinal(session, ordinal);
+    if (index >= session.messages.size()) {
+        return invalid("chat message was not found");
+    }
+    if (session.messages[index].role != "assistant") {
+        return invalid("only assistant messages can be edited");
+    }
+    session.messages[index].content = std::move(content);
+    error = store_.save_session(session);
+    if (!error.ok()) return safe_store_error(error, "edit the chat message");
+    current_revision = session.revision;
+    body = "{\"thread\":" + session_json(session, defaults_) + "}";
+    return ok_error();
+}
+
+Error ChatService::delete_message(long long thread_id,
+                                  const std::string& request_body,
+                                  std::string& body,
+                                  long long& current_revision) {
+    long long expected_revision = 0;
+    long long ordinal = -1;
+    Error error = parse_message_mutation(request_body, expected_revision, ordinal, nullptr,
+                                         "delete");
+    if (!error.ok()) return error;
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.clear();
+    current_revision = 0;
+    error = ensure_open();
+    if (!error.ok()) return error;
+    chat::Session session;
+    error = load_unbounded_session(store_, thread_id, expected_revision, session,
+                                   current_revision);
+    if (!error.ok()) return error.code == ErrorCode::BadArgs
+                               ? error
+                               : safe_store_error(error, "load the chat thread");
+    const std::size_t index = message_index_for_ordinal(session, ordinal);
+    if (index >= session.messages.size()) {
+        return invalid("chat message was not found");
+    }
+    if (session.messages[index].role != "user" &&
+        session.messages[index].role != "assistant") {
+        return invalid("only user and assistant messages can be deleted");
+    }
+    session.messages.erase(session.messages.begin() + static_cast<std::ptrdiff_t>(index),
+                           session.messages.end());
+    error = store_.save_session(session);
+    if (!error.ok()) return safe_store_error(error, "delete the chat message");
+    current_revision = session.revision;
+    body = "{\"thread\":" + session_json(session, defaults_) + "}";
     return ok_error();
 }
 

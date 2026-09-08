@@ -38,6 +38,7 @@ const state = {
   thread: null,
   chatInitialized: false,
   startingNewChat: false,
+  chatEdit: null,
   chatPending: false,
   chatPendingJobId: "",
   chatStreams: new Map(),
@@ -82,7 +83,6 @@ const picker = createSelector(document);
 const pickerButtons = new Map();
 const threadSettingsSaves = new Map();
 const threadSettingsSnapshots = new Map();
-const newUnusedThreadIds = new Set();
 let threadLoadSequence = 0;
 let workspaceSavePending = false;
 let workspaceModelPickerQueued = "";
@@ -124,6 +124,28 @@ function openDialog(dialog) {
 
 function closeDialog(dialog) {
   if (dialog.open) dialog.close();
+}
+
+let confirmResolver = null;
+
+function finishConfirm(accepted) {
+  const resolve = confirmResolver;
+  confirmResolver = null;
+  closeDialog(byId("confirm-dialog"));
+  if (resolve) resolve(!!accepted);
+}
+
+function askConfirm({ title, message, confirmLabel = "OK", danger = false } = {}) {
+  return new Promise((resolve) => {
+    if (confirmResolver) finishConfirm(false);
+    confirmResolver = resolve;
+    byId("confirm-title").textContent = title || "Confirm";
+    byId("confirm-message").textContent = message || "";
+    const submit = byId("confirm-submit");
+    submit.textContent = confirmLabel || "OK";
+    submit.classList.toggle("danger", danger === true);
+    openDialog(byId("confirm-dialog"));
+  });
 }
 
 function storageGet(key) {
@@ -1391,6 +1413,7 @@ async function restoreBrowserState() {
   if (supports("chat_threads")) {
     tasks.push((async () => {
       await loadThreads();
+      await cleanupEmptyThreads(threadId || 0);
       if (threadId) await loadThread(threadId);
       else if (!state.chatInitialized) await createNewChat({ provider: "none" }, true);
     })());
@@ -1495,7 +1518,7 @@ function forgetAuthentication(message = "") {
   state.thread = null;
   state.chatInitialized = false;
   state.startingNewChat = false;
-  newUnusedThreadIds.clear();
+  state.chatEdit = null;
   state.chatMetrics.clear();
   state.session = null;
   state.modelCatalogs.clear();
@@ -1848,23 +1871,73 @@ function renderThreads() {
   }
   clear(list);
   for (const thread of state.threads) {
-    const button = element("button", `list-button ${state.thread && state.thread.id === thread.id ? "selected" : ""}`);
+    const selected = state.thread && state.thread.id === thread.id;
+    const item = element("div", `thread-item ${selected ? "selected" : ""}`);
+    const button = element("button", `list-button ${selected ? "selected" : ""}`);
     button.type = "button";
     const details = [formatDate(thread.modified_at), `${thread.message_count || 0} messages`];
     if (thread.provider || thread.model) details.push(`${thread.provider || "provider"} / ${thread.model || "default"}`);
     button.append(element("strong", "", thread.name || "New chat"),
       element("small", "", details.join(" · ")));
     button.addEventListener("click", () => void loadThread(thread.id));
-    list.append(button);
+    item.append(button);
+    if (thread.read_only !== true) {
+      const remove = element("button", "thread-delete", "Delete");
+      remove.type = "button";
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void deleteThread(thread);
+      });
+      item.append(remove);
+    }
+    list.append(item);
   }
 }
 
-function appendChatMessage(container, role, content, streaming = false) {
+function appendChatMessage(container, role, content, streaming = false, ordinal = null) {
   const card = element("article", `message ${role || "system"}${streaming ? " streaming" : ""}`);
   if (streaming) card.id = "chat-stream-message";
   const output = element("div", "message-content");
-  renderChatContent(output, role, content, streaming);
-  card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"), output);
+  const editing = !streaming && role === "assistant" && state.chatEdit &&
+    state.chatEdit.ordinal === ordinal;
+  if (editing) {
+    const editor = element("div", "message-edit");
+    const textarea = element("textarea");
+    textarea.rows = 6;
+    textarea.value = state.chatEdit.draft;
+    textarea.addEventListener("input", () => {
+      if (state.chatEdit && state.chatEdit.ordinal === ordinal) state.chatEdit.draft = textarea.value;
+    });
+    const actions = element("div", "message-actions");
+    const save = element("button", "", "Save");
+    save.type = "button";
+    save.addEventListener("click", () => void saveChatMessageEdit(ordinal, textarea.value));
+    const cancel = element("button", "ghost", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => cancelChatMessageEdit());
+    actions.append(save, cancel);
+    editor.append(textarea, actions);
+    card.append(element("div", "role", "assistant · editing"), editor);
+    queueMicrotask(() => textarea.focus());
+  } else {
+    renderChatContent(output, role, content, streaming);
+    card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"), output);
+    const writable = state.thread && state.thread.read_only !== true && !state.chatPending;
+    if (!streaming && (role === "assistant" || role === "user") && writable && ordinal != null) {
+      const actions = element("div", "message-actions");
+      if (role === "assistant") {
+        const edit = element("button", "", "Edit");
+        edit.type = "button";
+        edit.addEventListener("click", () => startChatMessageEdit(ordinal, content));
+        actions.append(edit);
+      }
+      const remove = element("button", "delete", "Delete");
+      remove.type = "button";
+      remove.addEventListener("click", () => void deleteChatMessage(ordinal));
+      actions.append(remove);
+      card.append(actions);
+    }
+  }
   container.append(card);
 }
 
@@ -1912,7 +1985,7 @@ function renderChat() {
   else {
     clear(messages);
     for (const message of transcript) {
-      appendChatMessage(messages, message.role, message.content);
+      appendChatMessage(messages, message.role, message.content, false, message.ordinal);
     }
     if (stream) appendChatMessage(messages, "assistant", stream.streamText, true);
     messages.scrollTop = messages.scrollHeight;
@@ -1943,6 +2016,7 @@ async function loadThread(threadId) {
     const response = await api(`${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}`);
     if (sequence !== threadLoadSequence) return;
     state.thread = response.thread;
+    if (!previous || previous.id !== threadId) state.chatEdit = null;
     threadSettingsSnapshots.set(threadId, state.thread);
     applyThreadModelSettings(state.thread);
     renderChat();
@@ -1952,16 +2026,156 @@ async function loadThread(threadId) {
   }
 }
 
+async function cleanupEmptyThreads(keepId = 0) {
+  try {
+    await api(`${API_ROOT}/chat/threads/cleanup-empty`, {
+      method: "POST",
+      body: keepId ? { keep_id: keepId } : {},
+    });
+    await loadThreads();
+  } catch (error) {
+    if (!(error instanceof ApiError) || ![404, 409].includes(error.status)) {
+      toast(`Could not clean up unused chats: ${errorMessage(error)}`, "error");
+    }
+  }
+}
+
+function threadHasConversation(thread) {
+  if (!thread) return false;
+  if (state.thread && state.thread.id === thread.id && Array.isArray(state.thread.messages)) {
+    return state.thread.messages.some((message) => message.role === "user" || message.role === "assistant");
+  }
+  return (thread.message_count || 0) > 0;
+}
+
+async function deleteThread(thread) {
+  if (!thread || thread.read_only === true) return;
+  if (state.chatPending && state.thread && state.thread.id === thread.id) {
+    toast("Wait for the current response to finish before deleting this chat", "error");
+    return;
+  }
+  if (threadHasConversation(thread) &&
+      !await askConfirm({
+        title: "Delete chat?",
+        message: "Delete this chat thread? This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+      })) return;
+  try {
+    await threadSettingsSaves.get(thread.id);
+    const snapshot = threadSettingsSnapshots.get(thread.id) || thread;
+    await api(`${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}`, {
+      method: "DELETE",
+      body: { revision: snapshot.revision },
+    });
+    const wasCurrent = state.thread && state.thread.id === thread.id;
+    if (wasCurrent) {
+      state.thread = null;
+      state.chatEdit = null;
+      renderChat();
+    }
+    threadSettingsSnapshots.delete(thread.id);
+    await loadThreads();
+    if (!wasCurrent) return;
+    if (state.threads.length) await loadThread(state.threads[0].id);
+    else await createNewChat({ provider: "none" }, true);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "revision_conflict") {
+      toast("The chat thread changed in another client. Reload it before deleting.", "error");
+      await loadThreads();
+      if (state.thread && state.thread.id === thread.id) await loadThread(thread.id);
+    } else toast(errorMessage(error), "error");
+  }
+}
+
+function startChatMessageEdit(ordinal, content) {
+  state.chatEdit = { ordinal, draft: content == null ? "" : String(content) };
+  renderChat();
+}
+
+function cancelChatMessageEdit() {
+  state.chatEdit = null;
+  renderChat();
+}
+
+async function saveChatMessageEdit(ordinal, content) {
+  if (!state.thread || state.thread.read_only === true) return;
+  const threadId = state.thread.id;
+  try {
+    await threadSettingsSaves.get(threadId);
+    if (state.thread?.id !== threadId) return;
+    const response = await api(
+      `${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}/edit-message`, {
+        method: "POST",
+        body: { revision: state.thread.revision, ordinal, content },
+      });
+    state.chatEdit = null;
+    if (response.thread && state.thread?.id === threadId) {
+      state.thread = response.thread;
+      threadSettingsSnapshots.set(threadId, state.thread);
+      applyThreadModelSettings(state.thread);
+      renderChat();
+      await loadThreads();
+    } else await loadThread(threadId);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "revision_conflict") {
+      showConflict("The chat thread changed in another client. Reload it before editing again.",
+        () => loadThread(threadId));
+    } else toast(errorMessage(error), "error");
+  }
+}
+
+async function deleteChatMessage(ordinal) {
+  if (!state.thread || state.thread.read_only === true) return;
+  const transcript = Array.isArray(state.thread.messages) ? state.thread.messages : [];
+  const index = transcript.findIndex((message) => message.ordinal === ordinal);
+  const following = index >= 0 ? transcript.length - index - 1 : 0;
+  if (!await askConfirm({
+    title: "Delete message?",
+    message: following > 0
+      ? "Delete this message and every message after it? This cannot be undone."
+      : "Delete this message? This cannot be undone.",
+    confirmLabel: "Delete",
+    danger: true,
+  })) return;
+  const threadId = state.thread.id;
+  try {
+    await threadSettingsSaves.get(threadId);
+    if (state.thread?.id !== threadId) return;
+    const response = await api(
+      `${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}/delete-message`, {
+        method: "POST",
+        body: { revision: state.thread.revision, ordinal },
+      });
+    state.chatEdit = null;
+    if (response.thread && state.thread?.id === threadId) {
+      state.thread = response.thread;
+      threadSettingsSnapshots.set(threadId, state.thread);
+      applyThreadModelSettings(state.thread);
+      renderChat();
+      await loadThreads();
+    } else await loadThread(threadId);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "revision_conflict") {
+      showConflict("The chat thread changed in another client. Reload it before deleting again.",
+        () => loadThread(threadId));
+    } else toast(errorMessage(error), "error");
+  }
+}
+
 async function abandonUnusedThread(thread) {
-  if (!thread || !newUnusedThreadIds.has(thread.id)) return;
-  newUnusedThreadIds.delete(thread.id);
+  if (!thread || thread.read_only === true) return;
+  if (state.thread && state.thread.id === thread.id) return;
   try {
     await threadSettingsSaves.get(thread.id);
     const snapshot = threadSettingsSnapshots.get(thread.id) || thread;
     const result = await api(`${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/abandon`, {
       method: "POST", body: { revision: snapshot.revision },
     });
-    if (result.deleted) await loadThreads();
+    if (result.deleted) {
+      threadSettingsSnapshots.delete(thread.id);
+      await loadThreads();
+    }
   } catch (error) {
     if (!(error instanceof ApiError) || ![404, 409].includes(error.status)) {
       toast(`Could not clean up the unused chat: ${errorMessage(error)}`, "error");
@@ -1981,7 +2195,7 @@ async function createNewChat(values = {}, promptForRouting = false) {
     });
     state.thread = response.thread;
     state.startingNewChat = false;
-    newUnusedThreadIds.add(state.thread.id);
+    state.chatEdit = null;
     threadSettingsSnapshots.set(state.thread.id, state.thread);
     applyThreadModelSettings(state.thread);
     await loadThreads();
@@ -2083,7 +2297,6 @@ async function sendChatMessage(text) {
       streamText: "",
       jobId: "",
     };
-    newUnusedThreadIds.delete(threadId);
     state.chatStreams.set(threadId, context);
     renderChat();
     const job = await submitJob("chat", payload, context);
@@ -3066,7 +3279,12 @@ function showFileViewer() {
 
 async function loadFile(path) {
   if (state.file && state.file.dirty && state.file.path !== path &&
-      !window.confirm("Discard the unsaved editor draft and open another file?")) return;
+      !await askConfirm({
+        title: "Discard draft?",
+        message: "Discard the unsaved editor draft and open another file?",
+        confirmLabel: "Discard",
+        danger: true,
+      })) return;
   try {
     const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`);
     const indentation = detectIndentation(response.content || "", 4, "spaces");
@@ -3115,9 +3333,14 @@ async function saveFile() {
   }
 }
 
-function openMutation(type, entry = null) {
+async function openMutation(type, entry = null) {
   if ((type === "rename" || type === "delete") && openFileCoveredBy(entry) &&
-      state.file.dirty && !window.confirm("Discard the unsaved editor draft before changing this target?")) {
+      state.file.dirty && !await askConfirm({
+        title: "Discard draft?",
+        message: "Discard the unsaved editor draft before changing this target?",
+        confirmLabel: "Discard",
+        danger: true,
+      })) {
     return;
   }
   state.mutation = { type, entry };
@@ -3326,6 +3549,10 @@ function bindEvents() {
   for (const button of document.querySelectorAll(".dialog-cancel")) {
     button.addEventListener("click", () => closeDialog(button.closest("dialog")));
   }
+  byId("confirm-submit").addEventListener("click", () => finishConfirm(true));
+  byId("confirm-dialog").addEventListener("close", () => {
+    if (confirmResolver) finishConfirm(false);
+  });
   for (const control of modelControls()) {
     byId(control.providerId).addEventListener("change", () => refreshModelControl(control));
     if (control.reasoningId) {

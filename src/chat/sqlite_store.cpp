@@ -1970,9 +1970,55 @@ Error SqliteStore::soft_delete_thread(long long thread_id) {
     return ok_error();
 }
 
+Error SqliteStore::remove_thread(long long thread_id,
+                                 long long expected_revision,
+                                 long long& current_revision) {
+    current_revision = 0;
+    if (db_ == nullptr) return {ErrorCode::Internal, "SQLite database is not open"};
+    if (thread_id <= 0 || expected_revision <= 0) {
+        return {ErrorCode::BadArgs, "thread id and expected revision must be positive"};
+    }
+
+    Transaction tx(db_, path_);
+    Error error = tx.begin();
+    if (!error.ok()) return error;
+    Statement current(db_, path_);
+    error = current.prepare(
+        "SELECT revision, read_only FROM threads WHERE id=?1 AND deleted_at IS NULL;");
+    if (!error.ok()) return error;
+    error = BindChain(current).int64(1, thread_id).error();
+    if (!error.ok()) return error;
+    const int rc = current.step();
+    if (rc == SQLITE_DONE) return {ErrorCode::FileRead, "chat thread not found"};
+    if (rc != SQLITE_ROW) {
+        return sqlite_error(db_, path_, "could not inspect SQLite thread for deletion", rc);
+    }
+    current_revision = current.column_int64(0);
+    if (current.column_int64(1) != 0) {
+        return {ErrorCode::FileWrite, "chat thread is read-only"};
+    }
+    if (current_revision != expected_revision) {
+        return {ErrorCode::FileLock, "chat thread revision is stale"};
+    }
+
+    Statement update(db_, path_);
+    error = update.prepare(
+        "UPDATE threads SET deleted_at=?1, modified_at=?1 "
+        "WHERE id=?2 AND revision=?3 AND deleted_at IS NULL AND read_only=0;");
+    if (!error.ok()) return error;
+    error = BindChain(update).text(1, current_timestamp_utc()).int64(2, thread_id)
+                .int64(3, expected_revision).step_done("could not delete SQLite thread");
+    if (!error.ok()) return error;
+    if (sqlite3_changes(db_) != 1) {
+        return {ErrorCode::FileLock, "chat thread changed while being deleted"};
+    }
+    return tx.commit();
+}
+
 Error SqliteStore::soft_delete_empty_threads(long long& deleted_count,
                                              long long watch_thread_id,
-                                             bool& watch_thread_deleted) {
+                                             bool& watch_thread_deleted,
+                                             long long keep_thread_id) {
     deleted_count = 0;
     watch_thread_deleted = false;
     if (db_ == nullptr) {
@@ -1983,7 +2029,7 @@ Error SqliteStore::soft_delete_empty_threads(long long& deleted_count,
     Statement select(db_, path_);
     Error err = select.prepare(
         "SELECT t.id FROM threads t "
-        "WHERE t.deleted_at IS NULL AND NOT EXISTS ("
+        "WHERE t.deleted_at IS NULL AND t.read_only=0 AND NOT EXISTS ("
         "SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.role IN ('user', 'assistant')"
         ");");
     if (!err.ok()) {
@@ -2006,6 +2052,7 @@ Error SqliteStore::soft_delete_empty_threads(long long& deleted_count,
 
     const std::string now = current_timestamp_utc();
     for (long long thread_id : thread_ids) {
+        if (keep_thread_id > 0 && thread_id == keep_thread_id) continue;
         Statement stmt(db_, path_);
         err = stmt.prepare(
             "UPDATE threads SET deleted_at = ?1, modified_at = ?1 WHERE id = ?2 AND deleted_at IS NULL;");
