@@ -129,6 +129,8 @@ ainiux video -p "a paper boat drifting through rain" --duration 5 --resolution 7
 ainiux video -m minimax/h3-max-turbo/image-to-video -p "the chart bars rise smoothly" \
   --attach chart.png --duration 5 --resolution 480P --output chart.mp4
 ainiux video --provider replicate -m prunaai/p-video -p "a paper boat in rain" --duration 5
+ainiux image --provider xai -p "a red cube on white" --size 1k --ar 1:1 --quality low
+ainiux video --provider xai -m grok-imagine-video-1.5 -p "a red cube rotating" --duration 1 --resolution 480p
 ```
 
 Text, Markdown, and HTML can be attached with `--attach`. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. PDF and DOCX conversion are not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
@@ -233,7 +235,7 @@ Datasets and results are line-oriented so failed cases do not make all preceding
 
 ## Provider profiles and credentials
 
-Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw base URL is also accepted. Local profiles normally require no key, although LM Studio and custom servers can be configured to require one. Cloud profiles use the first available variable shown below. `AINIUX_API_KEY` is the shared fallback for every keyed built-in chat profile. Replicate image and video generation uses `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`. fal image and video generation uses `FAL_API_KEY` or `FAL_KEY`. Gemini native image generation uses `GEMINI_API_KEY` (same as Gemini chat). See [CLI image generation](docs/cli.md#image-generation) and [video generation](docs/cli.md#video-generation) for bundled models and examples.
+Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw base URL is also accepted. Local profiles normally require no key, although LM Studio and custom servers can be configured to require one. Cloud profiles use the first available variable shown below. `AINIUX_API_KEY` is the shared fallback for every keyed built-in chat profile. Replicate image and video generation uses `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`. fal image and video generation uses `FAL_API_KEY` or `FAL_KEY`. Gemini native image generation uses `GEMINI_API_KEY` (same as Gemini chat). Native Grok Imagine image and video generation uses `XAI_API_KEY` or `GROK_API_KEY` (same `xai`/`grok` profile as Grok chat). See [CLI image generation](docs/cli.md#image-generation) and [video generation](docs/cli.md#video-generation) for bundled models and examples.
 
 | Profile | Aliases | Provider-specific key variables |
 | --- | --- | --- |
@@ -243,7 +245,7 @@ Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw ba
 | `deepseek` | — | `DEEPSEEK_API_KEY` |
 | `gemini` | — | `GEMINI_API_KEY` |
 | `anthropic` | — | `ANTHROPIC_API_KEY` |
-| `xai` | `grok` | `XAI_API_KEY` |
+| `xai` | `grok` | `XAI_API_KEY`, `GROK_API_KEY` |
 | `moonshot` | `kimi` | `MOONSHOT_API_KEY` |
 | `llamacpp` | `llama_cpp`, `llama.cpp` | None |
 | `lm_studio` | `lmstudio` | `LMSTUDIO_API_KEY`, `LM_STUDIO_API_KEY` |
@@ -424,7 +426,7 @@ Read [Security](docs/security.md) for the detailed threat boundaries and [the se
 
 ## Limitations and roadmap
 
-Ainiux does not yet implement an OpenAI-compatible `/v1` proxy, REPL/TUI image or video generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The embedded browser controller, one-shot control-API jobs including config-driven image generation, edits, and video generation, interactive agent sessions, revision-safe chat threads, revision-safe workspace review/dired/file mutations and editor assist, TLS/direct non-loopback policy, the MCP server adapter, and CLI image/video generation are implemented. Image models use `images.conf`; video models use `videos.conf` with the `fal_queue` and `replicate_predictions` adapters; keys remain server-side. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
+Ainiux does not yet implement an OpenAI-compatible `/v1` proxy, REPL/TUI image or video generation, PDF/DOCX conversion, `/loop`, sub-agents, or a native Anthropic Messages adapter. The embedded browser controller, one-shot control-API jobs including config-driven image generation, edits, and video generation, interactive agent sessions, revision-safe chat threads, revision-safe workspace review/dired/file mutations and editor assist, TLS/direct non-loopback policy, the MCP server adapter, and CLI image/video generation are implemented. Image models use `images.conf`; video models use `videos.conf` with the `fal_queue`, `replicate_predictions`, and `xai_imagine` adapters; keys remain server-side. The terminal UI uses native POSIX `termios` or Win32 console mode ownership with shared ANSI/VT parsing rather than ncurses. HTML extraction is intentionally lightweight: it does not execute JavaScript or implement a browser DOM.
 
 The editor’s grapheme and cell-width implementation covers the shipped behavior but is not a claim of complete Unicode standard conformance. The code index is a navigation hint. Benchmark and judge results require human interpretation. Provider compatibility may change outside this project’s control.
 

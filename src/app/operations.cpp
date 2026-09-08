@@ -197,7 +197,8 @@ ImageResult run_image(provider::RequestContext context,
     result.request.model =
         ((capability->protocol == ImageProtocol::ReplicatePredictions ||
           capability->protocol == ImageProtocol::FalQueue ||
-          capability->protocol == ImageProtocol::GeminiInteractions) &&
+          capability->protocol == ImageProtocol::GeminiInteractions ||
+          capability->protocol == ImageProtocol::XaiImagine) &&
          !capability->api_model.empty())
             ? capability->api_model
             : result.selected_model;

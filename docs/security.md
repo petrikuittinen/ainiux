@@ -282,7 +282,10 @@ Images are embedded in provider requests as data URLs, which sends the complete 
 
 `/cleanup` and automatic media expiration delete managed bytes but retain database tombstones and lock affected transcripts read-only, so missing media is never silently omitted from a later request. The same lock is applied when a managed file is manually removed or cannot be validated.
 
-One-shot `ainiux image` sends the prompt and any `--attach` PNG/JPEG bytes to the matched `images.conf` protocol. OpenAI uses `/v1/images/generations` or `/v1/images/edits`. Replicate uses `{base}/models/{owner}/{name}/predictions` with data-URL attachments, then downloads the first output file (Authorization on `replicate.delivery` URLs). fal uses `{base}/{endpoint_id}` on `queue.fal.run` with `Authorization: Key` and downloads `images[0].url` from fal media hosts. Gemini uses `POST /v1beta/interactions` with `x-goog-api-key` and `store: false` so one-shot prompts are not retained on Google’s interaction log. Generated files are written in the current working directory (or `--output`) with ordinary umask permissions via atomic replace; they are not stored in `~/.ainiux/` or `.ainiux-pr/`. Overwrite of an existing `--output` path requires `--force`. `--output stdout` writes raw image bytes. Replicate credentials are `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`. fal credentials are `FAL_API_KEY` or `FAL_KEY`. Gemini credentials are `GEMINI_API_KEY` or `AINIUX_API_KEY`.
+One-shot `ainiux image` sends the prompt and any `--attach` PNG/JPEG bytes to the matched `images.conf` protocol. OpenAI uses `/v1/images/generations` or `/v1/images/edits`. Replicate uses `{base}/models/{owner}/{name}/predictions` with data-URL attachments, then downloads the first output file (Authorization on `replicate.delivery` URLs). fal uses `{base}/{endpoint_id}` on `queue.fal.run` with `Authorization: Key` and downloads `images[0].url` from fal media hosts. Gemini uses `POST /v1beta/interactions` with `x-goog-api-key` and `store: false` so one-shot prompts are not retained on Google’s interaction log. Generated files are written in the current working directory (or `--output`) with ordinary umask permissions via atomic replace; they are not stored in `~/.ainiux/` or `.ainiux-pr/`. Overwrite of an existing `--output` path requires `--force`. `--output stdout` writes raw image bytes. Replicate credentials are `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`. fal credentials are `FAL_API_KEY` or `FAL_KEY`. Gemini credentials are `GEMINI_API_KEY` or `AINIUX_API_KEY`. Native Grok Imagine
+image generation posts JSON to xAI `/v1/images/generations` or `/v1/images/edits`
+with data-URI attachments and requests `b64_json` so temporary image URLs are
+not required. Credentials are `XAI_API_KEY` or `GROK_API_KEY`.
 
 One-shot `ainiux video` and control-server video jobs send the prompt, selected
 catalog scalar settings, and supported reference media to the matched
@@ -302,6 +305,13 @@ Replicate video jobs upload attachments through `{base}/files` and poll
 to Replicate API hosts and to `replicate.delivery` output downloads. File and
 output URLs must use HTTPS and retain resolved-address blocking. Credentials
 are `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`.
+
+Native xAI Imagine video jobs post to `{base}/videos/generations` and poll
+`{base}/videos/{request_id}`. Image attachments are inlined as data URIs rather
+than uploaded to a third-party store. The xAI bearer token is sent to xAI API
+hosts and to output downloads when Authorization is required. There is no
+documented video-cancel URL; cancellation stops polling. Credentials are
+`XAI_API_KEY` or `GROK_API_KEY`.
 
 Generated videos stream into a random temporary file with a 1 GiB limit, require
 an MP4 `ftyp` signature, and move atomically to the selected destination.

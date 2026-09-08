@@ -1900,7 +1900,8 @@ Error apply_configured_image_catalog(const Document& document, cli::Options& can
         }
         if ((*partial.protocol == ImageProtocol::ReplicatePredictions ||
              *partial.protocol == ImageProtocol::FalQueue ||
-             *partial.protocol == ImageProtocol::GeminiInteractions) &&
+             *partial.protocol == ImageProtocol::GeminiInteractions ||
+             *partial.protocol == ImageProtocol::XaiImagine) &&
             partial.api_model.empty()) {
             return {ErrorCode::Config,
                     partial.source.path + ":" + std::to_string(partial.source.line) +
@@ -2244,7 +2245,7 @@ Error apply_videos_document_impl(const Document& document, cli::Options& options
             else if (key == "protocol") {
                 VideoProtocol value;
                 if (!parse_video_protocol(entry.value.string, value))
-                    return schema_error(entry, "unknown video protocol; expected fal_queue or replicate_predictions");
+                    return schema_error(entry, "unknown video protocol; expected fal_queue, replicate_predictions, or xai_imagine");
                 partial.protocol = value;
             } else if (key == "input_mode") {
                 if (!parse_video_input_mode(entry.value.string, partial.input_mode))

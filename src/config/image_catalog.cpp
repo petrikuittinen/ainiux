@@ -46,6 +46,10 @@ bool parse_image_protocol(const std::string& text, ImageProtocol& protocol) {
         protocol = ImageProtocol::GeminiInteractions;
         return true;
     }
+    if (lower == "xai_imagine") {
+        protocol = ImageProtocol::XaiImagine;
+        return true;
+    }
     return false;
 }
 
@@ -59,19 +63,22 @@ const char* image_protocol_name(ImageProtocol protocol) {
             return "fal_queue";
         case ImageProtocol::GeminiInteractions:
             return "gemini_interactions";
+        case ImageProtocol::XaiImagine:
+            return "xai_imagine";
     }
     return "openai_images";
 }
 
 std::string image_protocol_names() {
-    return "openai_images, replicate_predictions, fal_queue, or gemini_interactions";
+    return "openai_images, replicate_predictions, fal_queue, gemini_interactions, or xai_imagine";
 }
 
 bool image_protocol_implemented(ImageProtocol protocol) {
     return protocol == ImageProtocol::OpenAiImages ||
            protocol == ImageProtocol::ReplicatePredictions ||
            protocol == ImageProtocol::FalQueue ||
-           protocol == ImageProtocol::GeminiInteractions;
+           protocol == ImageProtocol::GeminiInteractions ||
+           protocol == ImageProtocol::XaiImagine;
 }
 
 bool image_model_regex_matches(const std::string& expression, const std::string& model) {

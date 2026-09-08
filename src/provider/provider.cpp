@@ -155,7 +155,7 @@ const std::vector<Profile>& profile_registry() {
             "https://api.deepseek.com/user/balance"),
         make_profile("gemini", {}, "https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions", "/models", "", {"GEMINI_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("anthropic", {}, "https://api.anthropic.com/v1", "/chat/completions", "/models", "", {"ANTHROPIC_API_KEY", "AINIUX_API_KEY"}, true, false, "", "OpenAI compatibility layer is mainly for testing/comparison."),
-        make_profile("xai", {"grok"}, "https://api.x.ai/v1", "/chat/completions", "/models", "/responses", {"XAI_API_KEY", "AINIUX_API_KEY"}, true, false),
+        make_profile("xai", {"grok"}, "https://api.x.ai/v1", "/chat/completions", "/models", "/responses", {"XAI_API_KEY", "GROK_API_KEY", "AINIUX_API_KEY"}, true, false),
         make_profile("moonshot", {"kimi"}, "https://api.moonshot.ai/v1", "/chat/completions", "/models", "", {"MOONSHOT_API_KEY", "AINIUX_API_KEY"}, true, false),
         // Local OpenAI-compatible servers (after kimi): llama.cpp, LM Studio, Ollama, vLLM, SGLang.
         make_profile(names::kLlamacpp, {"llama_cpp", "llama.cpp"}, "http://localhost:8080/v1", "/chat/completions", "/models", "", {}, false, true),

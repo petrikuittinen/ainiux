@@ -443,6 +443,9 @@ Error generate_video(const RequestContext& context, const VideoGenerateRequest& 
     if (request.capability.protocol == VideoProtocol::ReplicatePredictions) {
         return generate_replicate_video(context, request, result, cancellation);
     }
+    if (request.capability.protocol == VideoProtocol::XaiImagine) {
+        return generate_xai_imagine_video(context, request, result, cancellation);
+    }
     VideoGenerateRequest wire_request = request;
     for (VideoInput& media : wire_request.inputs) { Error upload_error = upload_fal_media(context, media, cancellation); if (!upload_error.ok()) return upload_error; }
     json::Value input_value; Error err = build_fal_video_input(wire_request, input_value); if (!err.ok()) return err;

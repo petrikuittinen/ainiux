@@ -121,6 +121,7 @@ Full guide: [MCP servers](mcp.md).
 | `replicate` | `replicate_predictions` | `prunaai/z-image-turbo` | `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN` (not `AINIUX_API_KEY`) |
 | `fal` / `fal_ai` | `fal_queue` | `fal-ai/flux/schnell` | `FAL_API_KEY` or `FAL_KEY` (not `AINIUX_API_KEY`) |
 | `gemini` | `gemini_interactions` | `gemini-3.1-flash-image` | `GEMINI_API_KEY` then `AINIUX_API_KEY` |
+| `xai` / `grok` | `xai_imagine` | `grok-imagine-image-2.0` | `XAI_API_KEY` then `GROK_API_KEY` then `AINIUX_API_KEY` |
 
 Google’s native Gemini image models (Nano Banana) use `--provider gemini`. That is the Gemini Interactions API, not classic Imagen `:predict`. The same Nano Banana names also appear as Replicate (`google/nano-banana-2`) and fal (`fal-ai/nano-banana-2`) catalog records; those still use Replicate or fal credentials.
 
@@ -139,6 +140,10 @@ ainiux image --provider replicate -m google/nano-banana-2 -p "make it night" --a
 ainiux image --provider fal -m fal-ai/flux/schnell -p "a cute cat" --ar 1:1
 ainiux image --provider fal -m fal-ai/nano-banana-2 -p "a ramen shop at night" --size 1k --ar 1:1
 
+# xAI Grok Imagine
+ainiux image --provider xai -m grok-imagine-image-2.0 -p "a red cube" --size 1k --ar 1:1 --quality low
+ainiux image --provider grok -p "make it night" --attach photo.png --size 1k
+
 # Gemini native image (Nano Banana)
 ainiux image --provider gemini -p "a cute chubby cat" --size 1k --ar 1:1
 ainiux image --provider gemini -m gemini-3.1-flash-lite-image -p "a ramen shop at night"
@@ -151,10 +156,11 @@ Bundled `-m` values (short names and owner/name ids both work where matching all
 - **Replicate:** `prunaai/z-image-turbo`, `bytedance/seedream-5-lite`, `bytedance/seedream-5-pro`, `wan-video/wan-2.7-image`, `black-forest-labs/flux-2-flex`, `black-forest-labs/flux-2-pro`, `prunaai/p-image`, `google/nano-banana-pro`, `google/nano-banana-2`
 - **fal:** `fal-ai/flux/schnell`, `fal-ai/flux/dev`, `fal-ai/flux-2-pro`, `fal-ai/z-image/turbo`, `fal-ai/nano-banana-2`, `openai/gpt-image-2`, `bytedance/seedream/v5/pro/text-to-image`, `xai/grok-imagine-image`, `xai/grok-imagine-image/v2.0/text-to-image`, `fal-ai/ideogram/v3`, `krea/v2/large/text-to-image`, `fal-ai/recraft/v3/text-to-image`
 - **Gemini:** `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`
+- **xAI Imagine:** `grok-imagine-image-2.0`
 
 - Prompt: `-p` / `--prompt` / `--prompt-file` (required)
-- Input images: repeatable `--attach` PNG or JPEG when the matched record sets `edits = on`. OpenAI uses `/v1/images/edits`; Replicate and fal put data URLs in the model’s image array field; Gemini sends Interactions `image` content parts.
-Image models and size/quality/format limits come from layered `images.conf` (not `models.conf`). Unknown `-m` values fail before HTTP. Replicate matching uses the final slash component, so `-m z-image-turbo` and `-m prunaai/z-image-turbo` both work. fal matching also accepts the full endpoint id (`fal-ai/flux/schnell`, `bytedance/seedream/v5/pro/text-to-image`). Credentials: Replicate `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`; fal `FAL_API_KEY` or `FAL_KEY` (not `AINIUX_API_KEY`); Gemini `GEMINI_API_KEY` (then `AINIUX_API_KEY`, same as Gemini chat). OpenAI uses `OPENAI_API_KEY`.
+- Input images: repeatable `--attach` PNG or JPEG when the matched record sets `edits = on`. OpenAI uses `/v1/images/edits`; Replicate and fal put data URLs in the model’s image array field; Gemini sends Interactions `image` content parts; xAI Imagine posts JSON to `/v1/images/edits` with one `image` or two to five `images[]` data URIs.
+Image models and size/quality/format limits come from layered `images.conf` (not `models.conf`). Unknown `-m` values fail before HTTP. Replicate matching uses the final slash component, so `-m z-image-turbo` and `-m prunaai/z-image-turbo` both work. fal matching also accepts the full endpoint id (`fal-ai/flux/schnell`, `bytedance/seedream/v5/pro/text-to-image`). Credentials: Replicate `REPLICATE_API_KEY` or `REPLICATE_API_TOKEN`; fal `FAL_API_KEY` or `FAL_KEY` (not `AINIUX_API_KEY`); Gemini `GEMINI_API_KEY` (then `AINIUX_API_KEY`, same as Gemini chat); xAI Imagine `XAI_API_KEY` or `GROK_API_KEY` (then `AINIUX_API_KEY`). OpenAI uses `OPENAI_API_KEY`.
 
 - `--size`: `WIDTHxHEIGHT`, or `1k` / `2k` / `4k` / `auto` (`0.5k` on Gemini 3.1 Flash Image). OpenAI maps `2k`+`16:9` to `2048x1152`. Replicate and Gemini enum models send the catalog token (`2K`, `1K`) and keep `--ar` separate. Gemini requires an uppercase `K` on the wire (`1K`, not `1k`).
 - `--ar W:H` (and named values such as `match_input_image` when listed)
@@ -171,7 +177,8 @@ Stdout prints the saved path (or raw bytes for `--output stdout`). Status goes t
 selects the protocol, endpoint, accepted references, defaults, and scalar
 settings. FAL `minimax/h3-max-turbo/text-to-video` is the bundled default.
 Replicate models use `--provider replicate` and `REPLICATE_API_KEY` or
-`REPLICATE_API_TOKEN`.
+`REPLICATE_API_TOKEN`. Native Grok Imagine uses `--provider xai` (or `grok`)
+and `XAI_API_KEY` or `GROK_API_KEY`.
 
 ```sh
 ainiux video -p "a paper boat drifting through rain" --duration 5 --resolution 768P
@@ -185,6 +192,10 @@ ainiux video --provider replicate -m prunaai/p-video \
   -p "a paper boat in rain" --duration 5
 ainiux video --provider replicate -m xai/grok-imagine-video-1.5 \
   -p "slow cinematic push-in" --attach still.png --duration 6 --resolution 720p
+ainiux video --provider xai -m grok-imagine-video-1.5 \
+  -p "a red cube rotating slowly" --duration 1 --resolution 480p
+ainiux video --provider xai -m grok-imagine-video-1.5/image-to-video \
+  -p "slow push-in" --attach still.png --duration 1 --resolution 480p
 ```
 
 The bundled catalog contains these FAL endpoint ids:
@@ -204,6 +215,17 @@ and these Replicate `owner/name` ids (short names also match):
 - `bytedance/seedance-2.0`, `bytedance/seedance-2.0-fast`
 - `runwayml/gen-4.5`
 - `google/veo-3.1-fast`, `google/veo-3.1`
+
+and these native xAI Imagine ids:
+
+- `grok-imagine-video-1.5` (text-to-video, xAI default)
+- `grok-imagine-video-1.5/image-to-video`
+- `grok-imagine-video-1.5/reference-to-video`
+
+Native xAI records keep a unique `-m` / WebUI id per mode
+(`grok-imagine-video-1.5`, `.../image-to-video`, `.../reference-to-video`) and
+send `grok-imagine-video-1.5` on the wire. FAL and Replicate records whose ids
+contain `xai/` still use FAL or Replicate credentials, not `XAI_API_KEY`.
 
 Common options are `--resolution`, `--duration`, `--ar`, `--seed`,
 `--negative-prompt`, and `--audio on|off`. Repeatable
@@ -228,4 +250,5 @@ cancellable prediction/queue until the MP4 is downloaded.
 Generation and downloads are cancellable. The generated download is capped at
 1 GiB and must have an MP4 `ftyp` signature. FAL credentials are `FAL_API_KEY`
 or `FAL_KEY`. Replicate credentials are `REPLICATE_API_KEY` or
-`REPLICATE_API_TOKEN`. Do not put a key on the command line.
+`REPLICATE_API_TOKEN`. Native xAI Imagine credentials are `XAI_API_KEY` or
+`GROK_API_KEY`. Do not put a key on the command line.

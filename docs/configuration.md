@@ -117,10 +117,10 @@ Endpoint metadata and explicit CLI values outrank catalog fallbacks. Protocol na
 
 ## Image catalog
 
-`images.conf` contains repeatable `[image]` records for `ainiux image`. Matching uses the full model id or the final slash component. `protocol` selects a compiled HTTP adapter (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`). Replicate, fal, and Gemini records set `api_model` to the provider endpoint id and optional field names (`size_field`, `aspect_field`, `images_field`, `defaults_json`) so a new model is a catalog change. User `~/.config/ainiux/images.conf` overlays bundled records by `id`. `models.conf` `images = on` means vision **input** (text-image-to-text), not image generation.
+`images.conf` contains repeatable `[image]` records for `ainiux image`. Matching uses the full model id or the final slash component. `protocol` selects a compiled HTTP adapter (`openai_images`, `replicate_predictions`, `fal_queue`, `gemini_interactions`, `xai_imagine`). Replicate, fal, Gemini, and xAI records set `api_model` to the provider endpoint id and optional field names (`size_field`, `aspect_field`, `images_field`, `defaults_json`) so a new model is a catalog change. User `~/.config/ainiux/images.conf` overlays bundled records by `id`. `models.conf` `images = on` means vision **input** (text-image-to-text), not image generation.
 
 `videos.conf` contains repeatable `[video]` records for `ainiux video` and the
-WebUI Video tab. `protocol` selects `fal_queue` or `replicate_predictions`.
+WebUI Video tab. `protocol` selects `fal_queue`, `replicate_predictions`, or `xai_imagine`.
 Records select `text`, `image`, `reference`, or `mixed` input mode, provider
 field names, per-modality and total reference counts, optional per-modality
 byte limits, and a JSON array of scalar setting descriptors. Those
@@ -142,8 +142,9 @@ Bundled provider defaults:
 | `replicate` | `replicate_predictions` | `prunaai/z-image-turbo` (images) / `prunaai/p-video` (video) |
 | `fal` | `fal_queue` | `fal-ai/flux/schnell` (images) / `minimax/h3-max-turbo/text-to-video` (video) |
 | `gemini` | `gemini_interactions` | `gemini-3.1-flash-image` |
+| `xai` / `grok` | `xai_imagine` | `grok-imagine-image-2.0` (images) / `grok-imagine-video-1.5` (video) |
 
-The bundled file currently lists one OpenAI Images model, nine Replicate models, twelve fal models, and four Gemini Nano Banana models (`gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`). Gemini Lite output is JPEG-only. Classic Google Imagen `:predict` is not a catalog protocol. CLI examples and the full `-m` list are in [CLI and scripting](cli.md#image-generation).
+The bundled file currently lists one OpenAI Images model, nine Replicate models, twelve fal models, four Gemini Nano Banana models (`gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`, `gemini-3-pro-image`, `gemini-2.5-flash-image`), and one native xAI Imagine model (`grok-imagine-image-2.0`). Gemini Lite output is JPEG-only. Classic Google Imagen `:predict` is not a catalog protocol. CLI examples and the full `-m` list are in [CLI and scripting](cli.md#image-generation).
 
 ## Custom editor commands
 

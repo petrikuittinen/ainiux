@@ -76,6 +76,8 @@ Error serialize_replicate_request(const ImageGenerateRequest& request, std::stri
 Error serialize_fal_request(const ImageGenerateRequest& request, std::string& body);
 Error serialize_gemini_request(const ImageGenerateRequest& request, std::string& body);
 Error parse_gemini_interaction(const std::string& body, ImageGenerateResult& result);
+Error serialize_xai_imagine_request(const ImageGenerateRequest& request, std::string& body);
+Error parse_xai_imagine_response(const std::string& body, ImageGenerateResult& result);
 std::string gemini_interactions_url(const RequestContext& context);
 Error parse_fal_queue_submit(const std::string& body,
                              std::string& request_id,

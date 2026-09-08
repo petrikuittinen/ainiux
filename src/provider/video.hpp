@@ -42,7 +42,11 @@ Error normalize_video_settings(const VideoCapability& capability,
                                std::map<std::string, json::Value>& normalized);
 Error build_fal_video_input(const VideoGenerateRequest& request, json::Value& input);
 Error build_replicate_video_input(const VideoGenerateRequest& request, json::Value& input);
+Error build_xai_imagine_video_input(const VideoGenerateRequest& request, json::Value& input);
 Error parse_fal_video_result(const std::string& body, std::string& output_url);
+Error parse_xai_imagine_video_status(const std::string& body, std::string& status,
+                                     std::string& request_id, std::string& output_url,
+                                     std::string& error_text);
 Error generate_video(const RequestContext& context,
                      const VideoGenerateRequest& request,
                      VideoGenerateResult& result,
@@ -51,6 +55,10 @@ Error generate_replicate_video(const RequestContext& context,
                                const VideoGenerateRequest& request,
                                VideoGenerateResult& result,
                                runtime::CancellationToken cancellation = runtime::CancellationToken());
+Error generate_xai_imagine_video(const RequestContext& context,
+                                 const VideoGenerateRequest& request,
+                                 VideoGenerateResult& result,
+                                 runtime::CancellationToken cancellation = runtime::CancellationToken());
 Error download_generated_video(const RequestContext& context,
                                const std::string& url,
                                const VideoGenerateRequest& request,

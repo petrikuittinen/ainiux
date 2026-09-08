@@ -1708,6 +1708,11 @@ void test_image_catalog_parse_and_match() {
           "fal_queue is implemented");
     check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::GeminiInteractions),
           "gemini_interactions is implemented");
+    check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::XaiImagine),
+          "xai_imagine is implemented");
+    check(ainiux::config::default_image_model(options.image_catalog, "xai") ==
+              "grok-imagine-image-2.0",
+          "xai default image model is grok-imagine-image-2.0");
     check(ainiux::config::default_image_model(options.image_catalog, "gemini") ==
               "gemini-3.1-flash-image",
           "gemini default image model is gemini-3.1-flash-image");
@@ -1847,6 +1852,14 @@ void test_image_catalog_layering_and_validation() {
     err = ainiux::config::apply_images_document(invalid.document, options);
     check(!err.ok() && err.message.find("api_model") != std::string::npos,
           "gemini_interactions records require api_model");
+
+    invalid = ainiux::config::parse(
+        "[image]\nid = broken-xai\nprovider = xai\nmodel = \"^x$\"\n"
+        "protocol = xai_imagine\n",
+        "invalid-xai-api-model.conf");
+    err = ainiux::config::apply_images_document(invalid.document, options);
+    check(!err.ok() && err.message.find("api_model") != std::string::npos,
+          "xai_imagine records require api_model");
 
     invalid = ainiux::config::parse(
         "[image]\nid = broken-json\nprovider = replicate\nmodel = \"^x$\"\n"

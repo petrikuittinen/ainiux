@@ -29,12 +29,14 @@ bool parse_video_protocol(const std::string& text, VideoProtocol& protocol) {
     const std::string value = lower(text);
     if (value == "fal_queue") protocol = VideoProtocol::FalQueue;
     else if (value == "replicate_predictions") protocol = VideoProtocol::ReplicatePredictions;
+    else if (value == "xai_imagine") protocol = VideoProtocol::XaiImagine;
     else return false;
     return true;
 }
 const char* video_protocol_name(VideoProtocol protocol) {
     switch (protocol) {
         case VideoProtocol::ReplicatePredictions: return "replicate_predictions";
+        case VideoProtocol::XaiImagine: return "xai_imagine";
         case VideoProtocol::FalQueue: return "fal_queue";
     }
     return "fal_queue";

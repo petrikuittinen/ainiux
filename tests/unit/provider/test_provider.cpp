@@ -3287,6 +3287,85 @@ void test_gemini_image_catalog_and_requests() {
           "gemini completed without an image is an error");
 }
 
+void test_xai_imagine_image_catalog_and_requests() {
+    ainiux::config::ParseResult parsed = ainiux::config::read_file("config/images.conf");
+    ainiux::cli::Options options;
+    check(parsed.error.ok() && ainiux::config::apply_images_document(parsed.document, options).ok(),
+          "bundled image catalog parses for xAI Imagine");
+    check(ainiux::config::default_image_model(options.image_catalog, "xai") ==
+              "grok-imagine-image-2.0",
+          "xai default image model is grok-imagine-image-2.0");
+    const ainiux::ImageCapability* imagine = ainiux::config::resolve_image_capability(
+        options.image_catalog, "xai", "grok-imagine-image-2.0");
+    check(imagine != nullptr && imagine->protocol == ainiux::ImageProtocol::XaiImagine &&
+              imagine->edits && imagine->max_input_images == 5 &&
+              imagine->size_field == "resolution",
+          "grok-imagine-image-2.0 matches xai_imagine");
+    check(ainiux::config::image_protocol_implemented(ainiux::ImageProtocol::XaiImagine),
+          "xai_imagine is implemented");
+    bool has_grok_key = false;
+    for (const ainiux::provider::Profile& profile : ainiux::provider::built_in_profiles()) {
+        if (profile.name != "xai") continue;
+        for (const std::string& env : profile.key_envs) {
+            if (env == "GROK_API_KEY") has_grok_key = true;
+        }
+    }
+    check(has_grok_key, "xai profile accepts GROK_API_KEY");
+    if (!imagine) return;
+
+    ainiux::provider::ImageGenerateRequest request;
+    request.capability = *imagine;
+    request.protocol = ainiux::ImageProtocol::XaiImagine;
+    request.model = imagine->api_model;
+    request.prompt = "a red cube";
+    request.size = "1k";
+    request.aspect = "1:1";
+    request.quality = "low";
+    std::string body;
+    check(ainiux::provider::serialize_xai_imagine_request(request, body).ok(),
+          "xAI Imagine generation serializes");
+    ainiux::json::ParseResult json_body = ainiux::json::parse(body);
+    check(json_body.error.ok() &&
+              field(json_body.value, "model") &&
+              field(json_body.value, "model")->string == "grok-imagine-image-2.0" &&
+              field(json_body.value, "response_format") &&
+              field(json_body.value, "response_format")->string == "b64_json" &&
+              field(json_body.value, "resolution") &&
+              field(json_body.value, "resolution")->string == "1k" &&
+              field(json_body.value, "aspect_ratio") &&
+              field(json_body.value, "quality") &&
+              field(json_body.value, "image") == nullptr,
+          "xAI Imagine generation sends extras without an image object");
+
+    request.images.push_back({"image/png", "AAAA"});
+    check(ainiux::provider::serialize_xai_imagine_request(request, body).ok(),
+          "xAI Imagine single edit serializes");
+    json_body = ainiux::json::parse(body);
+    check(json_body.error.ok() && field(json_body.value, "image") &&
+              field(field(json_body.value, "image"), "url") &&
+              field(field(json_body.value, "image"), "url")->string.find("data:image/png;base64,") == 0 &&
+              field(json_body.value, "images") == nullptr,
+          "xAI Imagine single edit uses image.url data URI");
+
+    request.images.push_back({"image/jpeg", "BBBB"});
+    check(ainiux::provider::serialize_xai_imagine_request(request, body).ok(),
+          "xAI Imagine multi edit serializes");
+    json_body = ainiux::json::parse(body);
+    check(json_body.error.ok() && field(json_body.value, "images") &&
+              field(json_body.value, "images")->is_array() &&
+              field(json_body.value, "images")->array.size() == 2 &&
+              field(json_body.value, "image") == nullptr,
+          "xAI Imagine multi edit uses images[] and omits image");
+
+    ainiux::provider::ImageGenerateResult decoded;
+    check(ainiux::provider::parse_xai_imagine_response(
+              "{\"data\":[{\"b64_json\":\"AAAA\",\"mime_type\":\"image/jpeg\"}]}", decoded).ok(),
+          "xAI Imagine parses b64_json");
+    check(!ainiux::provider::parse_xai_imagine_response(
+               "{\"data\":[{\"url\":\"https://example.test/x.jpg\"}]}", decoded).ok(),
+          "xAI Imagine URL-only bodies fail when b64_json was requested");
+}
+
 void test_image_output_path_allocation() {
     namespace fs = std::filesystem;
     const fs::path dir = fs::temp_directory_path() / "ainiux-image-alloc-test";
@@ -3311,8 +3390,8 @@ void test_video_catalog_settings_and_request() {
     ainiux::cli::Options options;
     check(parsed.error.ok() && ainiux::config::apply_videos_document(parsed.document, options).ok(),
           "bundled video catalog parses");
-    check(options.video_catalog.models.size() == 24,
-          "video catalog includes fal and replicate endpoints");
+    check(options.video_catalog.models.size() == 27,
+          "video catalog includes fal, replicate, and xAI Imagine endpoints");
     options.video = true;
     options.provider = "fal";
     options.key = "test-key";
@@ -3325,6 +3404,12 @@ void test_video_catalog_settings_and_request() {
     check(ainiux::config::default_video_model(options.video_catalog, "replicate") ==
               "prunaai/p-video",
           "replicate video default is prunaai/p-video");
+    options.provider = "xai";
+    check(ainiux::provider::build_context(options).error.ok(),
+          "xai video mode reuses the chat xAI profile");
+    check(ainiux::config::default_video_model(options.video_catalog, "xai") ==
+              "grok-imagine-video-1.5",
+          "xai video default is grok-imagine-video-1.5");
     options.provider = "fal";
     check(ainiux::config::default_video_model(options.video_catalog, "fal") ==
               "minimax/h3-max-turbo/text-to-video",
@@ -3465,6 +3550,86 @@ void test_video_catalog_settings_and_request() {
                   field(input, "reference_videos")->is_array(),
               "seedance sends reference arrays when a video is attached");
     }
+
+    const ainiux::VideoCapability* xai_text = ainiux::config::resolve_video_capability(
+        options.video_catalog, "xai", "grok-imagine-video-1.5");
+    const ainiux::VideoCapability* xai_image = ainiux::config::resolve_video_capability(
+        options.video_catalog, "xai", "grok-imagine-video-1.5/image-to-video");
+    const ainiux::VideoCapability* xai_ref = ainiux::config::resolve_video_capability(
+        options.video_catalog, "xai", "grok-imagine-video-1.5/reference-to-video");
+    check(xai_text != nullptr && xai_text->protocol == ainiux::VideoProtocol::XaiImagine &&
+              xai_text->input_mode == ainiux::VideoInputMode::Text &&
+              xai_text->api_model == "grok-imagine-video-1.5" &&
+              xai_image != nullptr && xai_image->input_mode == ainiux::VideoInputMode::Image &&
+              xai_image->api_model == "grok-imagine-video-1.5/image-to-video" &&
+              xai_ref != nullptr && xai_ref->input_mode == ainiux::VideoInputMode::Reference &&
+              xai_ref->api_model == "grok-imagine-video-1.5/reference-to-video" &&
+              xai_text != xai_image && xai_image != xai_ref,
+          "xAI Imagine video text, image, and reference records stay distinct");
+    if (!xai_text || !xai_image || !xai_ref) return;
+
+    ainiux::provider::VideoGenerateRequest xai_request;
+    xai_request.prompt = "a red cube rotating";
+    xai_request.capability = *xai_text;
+    duration.type = ainiux::json::Value::Type::Number;
+    duration.number = 1;
+    resolution.type = ainiux::json::Value::Type::String;
+    resolution.string = "480p";
+    xai_request.settings["duration"] = duration;
+    xai_request.settings["resolution"] = resolution;
+    ainiux::json::Value xai_wire;
+    check(ainiux::provider::build_xai_imagine_video_input(xai_request, xai_wire).ok() &&
+              field(xai_wire, "model") &&
+              field(xai_wire, "model")->string == "grok-imagine-video-1.5" &&
+              field(xai_wire, "prompt") && field(xai_wire, "duration") &&
+              field(xai_wire, "image") == nullptr &&
+              field(xai_wire, "reference_images") == nullptr,
+          "xAI text-to-video omits image fields");
+
+    xai_request.capability = *xai_image;
+    ainiux::provider::VideoInput still;
+    still.mime_type = "image/png";
+    still.bytes = std::make_shared<const std::string>(std::string("png"));
+    xai_request.inputs = {still};
+    check(ainiux::provider::build_xai_imagine_video_input(xai_request, xai_wire).ok() &&
+              field(xai_wire, "model") &&
+              field(xai_wire, "model")->string == "grok-imagine-video-1.5" &&
+              field(xai_wire, "image") && field(field(xai_wire, "image"), "url") &&
+              field(field(xai_wire, "image"), "url")->string.find("data:image/png;base64,") == 0 &&
+              field(xai_wire, "reference_images") == nullptr,
+          "xAI image-to-video sends a single image.url data URI");
+
+    xai_request.capability = *xai_ref;
+    ainiux::provider::VideoInput second = still;
+    xai_request.inputs = {still, second};
+    check(ainiux::provider::build_xai_imagine_video_input(xai_request, xai_wire).ok() &&
+              field(xai_wire, "model") &&
+              field(xai_wire, "model")->string == "grok-imagine-video-1.5" &&
+              field(xai_wire, "reference_images") &&
+              field(xai_wire, "reference_images")->is_array() &&
+              field(xai_wire, "reference_images")->array.size() == 2 &&
+              field(xai_wire, "image") == nullptr,
+          "xAI reference-to-video sends reference_images and omits image");
+
+    std::string status, request_id, output_url, error_text;
+    check(ainiux::provider::parse_xai_imagine_video_status(
+              "{\"request_id\":\"abc\"}", status, request_id, output_url, error_text).ok() &&
+              request_id == "abc" && status.empty(),
+          "xAI submit body exposes request_id");
+    check(ainiux::provider::parse_xai_imagine_video_status(
+              "{\"status\":\"pending\"}", status, request_id, output_url, error_text).ok() &&
+              status == "pending",
+          "xAI pending poll is not terminal");
+    check(ainiux::provider::parse_xai_imagine_video_status(
+              "{\"status\":\"done\",\"video\":{\"url\":\"https://vidgen.x.ai/out.mp4\"}}",
+              status, request_id, output_url, error_text).ok() &&
+              status == "done" && output_url.find("https://") == 0,
+          "xAI done poll exposes video.url");
+    check(ainiux::provider::parse_xai_imagine_video_status(
+              "{\"status\":\"failed\",\"error\":{\"message\":\"bad prompt\"}}",
+              status, request_id, output_url, error_text).ok() &&
+              status == "failed" && error_text.find("bad prompt") != std::string::npos,
+          "xAI failed poll surfaces the provider message");
 }
 
 }  // namespace
@@ -3475,6 +3640,7 @@ void run_all() {
     test_replicate_image_catalog_and_requests();
     test_fal_image_catalog_and_requests();
     test_gemini_image_catalog_and_requests();
+    test_xai_imagine_image_catalog_and_requests();
     test_image_output_path_allocation();
     test_video_catalog_settings_and_request();
     test_http_status_errors_are_friendly();

@@ -12,6 +12,7 @@ enum class ImageProtocol {
     ReplicatePredictions,
     FalQueue,
     GeminiInteractions,
+    XaiImagine,
 };
 
 enum class ImageSizeMode {

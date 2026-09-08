@@ -15,6 +15,7 @@
 #include "provider/image_fal.hpp"
 #include "provider/image_gemini.hpp"
 #include "provider/image_replicate.hpp"
+#include "provider/image_xai.hpp"
 
 namespace ainiux::provider {
 namespace {
@@ -970,6 +971,9 @@ Error generate_or_edit_image(const RequestContext& context,
     }
     if (request.protocol == ImageProtocol::GeminiInteractions) {
         return generate_gemini_image(context, request, result, cancellation);
+    }
+    if (request.protocol == ImageProtocol::XaiImagine) {
+        return generate_xai_imagine_image(context, request, result, cancellation);
     }
 
     const bool edits = !request.images.empty();
