@@ -1579,7 +1579,7 @@ Options:
       --html-format text|markdown
                                 Compatibility alias for old HTML extraction commands.
       --max-fetch-bytes N       Default 1048576.
-      --max-input-bytes N       Maximum bytes per text input/attachment; default 1048576.
+      --max-input-bytes N       Maximum bytes per text input/attachment; default 10485760 (10 MiB).
       --max-image-bytes N       Maximum image file size; default 20971520.
       --max-agent-response-bytes N
                                 Agent LLM HTTP body cap (SSE included); default 32M.

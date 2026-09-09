@@ -12,6 +12,7 @@
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
+#include "pdf/pdf.hpp"
 #include "search/search.hpp"
 
 namespace ainiux::app {
@@ -78,6 +79,8 @@ const char* input_kind_name(InputKind kind) {
             return "markdown";
         case InputKind::Html:
             return "html";
+        case InputKind::Pdf:
+            return "pdf";
         case InputKind::Image:
             return "image";
     }
@@ -131,7 +134,7 @@ markdown::OutputFormat document_output_format(const cli::Options& options,
     if (kind == InputKind::Html) {
         return legacy_html_output_format(options);
     }
-    if (kind == InputKind::Markdown) {
+    if (kind == InputKind::Markdown || kind == InputKind::Pdf) {
         return markdown::OutputFormat::Markdown;
     }
     return markdown::OutputFormat::Plaintext;
@@ -151,7 +154,7 @@ std::string render_document_body(const std::string& body,
         }
         return markdown;
     }
-    if (kind == InputKind::Markdown) {
+    if (kind == InputKind::Markdown || kind == InputKind::Pdf) {
         return markdown::render(body, output_format, complete_html_document);
     }
     if (kind == InputKind::Image) {
@@ -289,6 +292,24 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
         }
         if (options.max_input_bytes <= 0) {
             return {ErrorCode::BadArgs, "--max-input-bytes must be greater than zero"};
+        }
+        if (input_type.kind == InputKind::Pdf) {
+            pdf::Options pdf_options;
+            pdf_options.max_bytes = static_cast<size_t>(options.max_input_bytes);
+            std::string markdown;
+            err = pdf::to_markdown_file(local_input_path(options), pdf_options, markdown);
+            if (!err.ok()) {
+                return err;
+            }
+            document.source = document_source_label(options);
+            document.input_kind = InputKind::Pdf;
+            document.output_format = document_output_format(options, document.input_kind, standalone);
+            const bool complete_html_document =
+                standalone && document.output_format == markdown::OutputFormat::Html &&
+                !options.output_path.empty() && options.output_path != "stdout";
+            document.converted =
+                render_document_body(markdown, document.input_kind, document.output_format, complete_html_document);
+            return ok_error();
         }
         err = read_local_file(local_input_path(options), input_type.name,
                               static_cast<size_t>(options.max_input_bytes), body);

@@ -15,6 +15,7 @@
 
 #include "encoding/encoding.hpp"
 #include "html/html.hpp"
+#include "pdf/pdf.hpp"
 
 namespace ainiux::input {
 namespace {
@@ -355,6 +356,10 @@ Error classify_file_type(const std::string& path, FileType& type) {
         type = {Kind::Html, "html", "text/html"};
         return ok_error();
     }
+    if (ends_with(lower, ".pdf")) {
+        type = {Kind::Pdf, "pdf", "application/pdf"};
+        return ok_error();
+    }
     if (ends_with(lower, ".png")) {
         type = {Kind::Image, "image", "image/png"};
         return ok_error();
@@ -371,7 +376,7 @@ Error classify_file_type(const std::string& path, FileType& type) {
     // if (ends_with(lower, ".webp")) type = {Kind::Image, "image", "image/webp"};
     return {ErrorCode::UnsupportedFeature,
             "unsupported input file type for " + resolved +
-                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .png, .jpg, .jpeg, "
+                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .png, .jpg, .jpeg, "
                 "and .gif "
                 "(case-insensitive)"};
 }
@@ -460,8 +465,25 @@ Error load_text_context_file(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text insertion supports .txt, .md, and .html files; attach images to a prompt instead: " +
+                "text insertion supports .txt, .md, .html, and .pdf files; attach images to a prompt instead: " +
                     resolved};
+    }
+    if (type.kind == Kind::Pdf) {
+        if (resolved == "stdin") {
+            return {ErrorCode::UnsupportedFeature, "PDF input from stdin is not supported; pass a .pdf path"};
+        }
+        pdf::Options pdf_options;
+        pdf_options.max_bytes = max_bytes;
+        pdf_options.cancellation = cancellation;
+        TextContext loaded;
+        loaded.source = "file " + resolved;
+        loaded.kind = Kind::Pdf;
+        Error pdf_err = pdf::to_markdown_file(resolved, pdf_options, loaded.content);
+        if (!pdf_err.ok()) {
+            return pdf_err;
+        }
+        context = std::move(loaded);
+        return ok_error();
     }
 
     std::ifstream file;
@@ -593,7 +615,7 @@ Error load_insert_source(const std::string& source,
 
 std::string text_context_message(const TextContext& context) {
     std::string message = "Input context from " + context.source + "\nFormat: ";
-    if (context.kind == Kind::Markdown || context.kind == Kind::Html) {
+    if (context.kind == Kind::Markdown || context.kind == Kind::Html || context.kind == Kind::Pdf) {
         message += "md";
     } else {
         message += "plaintext";
@@ -620,8 +642,14 @@ Error read_local_text_file_for_attach(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text attach supports .txt, .md, .html files; images use the pending image queue: " +
+                "text attach supports .txt, .md, .html, and .pdf files; images use the pending image queue: " +
                     resolved};
+    }
+    if (type.kind == Kind::Pdf) {
+        pdf::Options pdf_options;
+        pdf_options.max_bytes = max_bytes;
+        pdf_options.cancellation = cancellation;
+        return pdf::to_markdown_file(resolved, pdf_options, content);
     }
 
     std::ifstream file(std::filesystem::u8path(resolved), std::ios::binary);

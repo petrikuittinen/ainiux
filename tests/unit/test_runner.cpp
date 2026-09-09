@@ -30,6 +30,7 @@
 #include "markdown/test_markdown.hpp"
 #include "mcp/test_mcp.hpp"
 #include "output/test_output.hpp"
+#include "pdf/test_pdf.hpp"
 #include "provider/test_provider.hpp"
 #include "runtime/test_runtime.hpp"
 #include "search/test_search.hpp"
@@ -57,6 +58,7 @@ int main() {
     ainiux::test::agent_adversarial::run_all();
     ainiux::test::agent_review::run_all();
     ainiux::test::output::run_all();
+    ainiux::test::pdf::run_all();
     ainiux::test::config::run_all();
     ainiux::test::cli::run_all();
     ainiux::test::benchmark::run_all();

@@ -550,6 +550,8 @@ void test_cli_empty_and_unicode_edge_cases() {
     const char* argv[] = {"ainiux"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(1, const_cast<char**>(argv));
     check(parsed.error.ok(), "CLI parse succeeds with only the program name");
+    check(parsed.options.max_input_bytes == 10485760,
+          "default --max-input-bytes is 10 MiB");
 
     const char* empty_prompt_argv[] = {"ainiux", "-p", ""};
     parsed = ainiux::cli::parse_args(3, const_cast<char**>(empty_prompt_argv));

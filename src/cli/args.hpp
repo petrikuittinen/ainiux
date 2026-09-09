@@ -233,7 +233,7 @@ struct Options {
     long max_fetch_bytes = 1048576;
     int max_web_search_results = 3;
     bool max_web_search_results_explicit = false;
-    long max_input_bytes = 1048576;
+    long max_input_bytes = 10485760;
     size_t max_source_code_file_size = 10U * 1024U * 1024U;
     int max_parallel_agents = 4;
     int agent_max_turns = 250;

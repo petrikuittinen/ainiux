@@ -58,7 +58,7 @@ Editor-only `/width`, `/alignment-width`, `/left-align`, `/right-align`, `/cente
 
 ## Attachments and media
 
-Text, Markdown, and HTML are converted into bounded canonical Markdown. PNG, JPEG, and GIF attachments require a compatible Chat Completions model. PDF and DOCX are not supported. Managed media cleanup never turns missing content into silent empty context; affected threads are marked read-only.
+Text, Markdown, HTML, and PDF are converted into bounded canonical Markdown. PNG, JPEG, and GIF attachments require a compatible Chat Completions model. DOCX is not supported. Managed media cleanup never turns missing content into silent empty context; affected threads are marked read-only.
 
 ## Themes, highlighting, and thinking
 

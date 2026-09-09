@@ -73,6 +73,7 @@ to capture the test's desktop and mobile views for visual inspection.
 ## Layout
 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
+- `tests/unit/pdf/` — COS reader (tokenizer, xref, Flate, repair) against synthetic PDFs and `tests/pdf_files/`. Text extraction and `make bench-pdf` come in later slices.
 - `tests/unit/mcp/` — MCP registry, HTTP/stdio client against `tests/mock_server/mcp_mock.py`, tool envelope, prepare-cancel regression.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
 - `tests/integration/test_mock_smoke.sh` — fast protocol-isolated Chat, Responses,

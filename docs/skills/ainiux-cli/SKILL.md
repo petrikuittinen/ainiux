@@ -109,6 +109,7 @@ Conversion / fetch / search:
 
 ```sh
 ainiux --input page.html --output-format md
+ainiux --input report.pdf --output-format md --output report.md
 ainiux --fetch-url https://example.com --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
@@ -138,8 +139,8 @@ and a next step when one exists.
 ## Attachments and safety
 
 `--attach` is bounded text or PNG/JPEG/GIF for capable Chat Completions models.
-`--input` on an image is the chat vision path, not `ainiux image`. PDF and DOCX
-are rejected.
+`--input` on an image is the chat vision path, not `ainiux image`. `--input`
+on a `.pdf` converts to Markdown. DOCX is rejected.
 
 `--fetch-url` and `--search` are explicit. A URL inside `-p` is not fetched.
 Private/loopback fetch needs `--allow-private-url-fetch`.

@@ -34,12 +34,21 @@ Without a chat prompt, `--input`, `--fetch-url`, and `--search` perform extracti
 ```sh
 ainiux --input article.html --output-format md
 ainiux --input notes.md --output-format plaintext
+ainiux --input report.pdf --output-format md --output report.md
 ainiux --fetch-url https://example.com --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
 ```
 
-Text, Markdown, and HTML are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. PDF and DOCX are rejected rather than inserted as binary prompt text.
+Text, Markdown, HTML, and PDF are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. PDF input is converted to Markdown (then to HTML or plaintext with `--output-format`). UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. DOCX is still rejected rather than inserted as binary prompt text. `.pdf` and `.PDF` are both accepted.
+
+```sh
+ainiux --input report.pdf --output-format md --output report.md
+ainiux --input Paper.PDF --output-format plaintext
+ainiux --input notes.pdf --output-format html --output notes.html
+```
+
+The default `--max-input-bytes` limit is 10 MiB (10485760). Larger PDFs need an explicit higher cap.
 
 ```sh
 ainiux --input letter.txt --encoding cp1251 --output-format plaintext

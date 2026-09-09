@@ -13,6 +13,7 @@ enum class Kind {
     Plaintext,
     Markdown,
     Html,
+    Pdf,
     Image,
 };
 
@@ -35,7 +36,7 @@ struct TextContext {
 };
 
 struct InsertSourceOptions {
-    size_t max_file_bytes = 1048576;
+    size_t max_file_bytes = 10485760;
     fetch::Options fetch;
     bool auto_convert_html_to_markdown = true;
     std::string encoding_name;

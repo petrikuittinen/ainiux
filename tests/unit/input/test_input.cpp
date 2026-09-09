@@ -124,6 +124,8 @@ void test_input_file_type_classification() {
         {"README.MD", ainiux::input::Kind::Markdown, "text/markdown"},
         {"notes.TxT", ainiux::input::Kind::Plaintext, "text/plain"},
         {"page.HTML", ainiux::input::Kind::Html, "text/html"},
+        {"paper.pdf", ainiux::input::Kind::Pdf, "application/pdf"},
+        {"Paper.PDF", ainiux::input::Kind::Pdf, "application/pdf"},
         {"image.PnG", ainiux::input::Kind::Image, "image/png"},
         {"photo.JPG", ainiux::input::Kind::Image, "image/jpeg"},
         {"photo.JpEg", ainiux::input::Kind::Image, "image/jpeg"},
