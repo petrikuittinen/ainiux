@@ -26,6 +26,7 @@ Useful targets:
 | `make test-full` | Units, fault tests, and comprehensive integration; Windows also runs native SQLite/ConPTY parity paths |
 | `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
 | `make test-web-js` | Optional dependency-free WebUI Markdown, syntax, editor indentation/history, image/video, and selector tests when Node.js is installed; real-browser test when `AINIUX_TEST_BROWSER` is set |
+| `make compare-pdf` | Optional PDF-to-Markdown quality table vs `pdftotext` (`scripts/ainiux/pdf_compare.py`); not part of `make test` |
 | `make test-unit-faults` | Fault tests only |
 | `make test-integration-smoke` | Small Chat/Responses/agent mock smoke |
 | `make test-integration` | Code-index, mock-server, and SQLite TUI end-to-end scripts |
@@ -73,7 +74,8 @@ to capture the test's desktop and mobile views for visual inspection.
 ## Layout
 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
-- `tests/unit/pdf/` — COS reader (tokenizer, xref, Flate, repair) against synthetic PDFs and `tests/pdf_files/`. Text extraction and `make bench-pdf` come in later slices.
+- `tests/unit/pdf/` — COS reader (tokenizer, xref, Flate, repair) against synthetic PDFs and `tests/pdf_files/`, plus PDF-to-Markdown spacing/kerning units (`TJ` word gaps vs letter kerning, DeepSeek whole-word needles).
+- `scripts/ainiux/pdf_compare.py` — optional quality harness (`make compare-pdf`). Compares Ainiux Markdown against `pdftotext` (and `pdfplumber`/`pypdf` with `--python-backends`) on letter/token recall, split words, and extra spaces. Not part of `make test`; skip cleanly when a backend is missing. Set `AINIUX` to the binary if it is not `./ainiux`.
 - `tests/unit/mcp/` — MCP registry, HTTP/stdio client against `tests/mock_server/mcp_mock.py`, tool envelope, prepare-cancel regression.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.
 - `tests/integration/test_mock_smoke.sh` — fast protocol-isolated Chat, Responses,

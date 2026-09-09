@@ -336,6 +336,9 @@ test-unit: $(TEST_BIN)
 	tests/unit/config/test_config_migration.sh
 	$(MAKE) test-web-js
 
+compare-pdf: $(BIN)
+	python3 scripts/ainiux/pdf_compare.py tests/pdf_files/*.pdf
+
 test-web-js:
 	@set -e; if command -v node >/dev/null 2>&1; then \
 		node --experimental-default-type=module --check $(WEB_JAVASCRIPT); \

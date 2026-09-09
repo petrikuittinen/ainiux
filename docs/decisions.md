@@ -248,7 +248,9 @@ v0.5 starts document extraction with a separate `src/html/` module. The HTML con
 
 Future PDF and Word extraction should live in separate modules such as `src/pdf/` and `src/word/` rather than growing the HTML module.
 
-PDF conversion is canonical **PDF ↔ Markdown**. `src/pdf/` reimplements pdfio-style COS parsing in C++17 (no vendored pdfio) and links **zlib** only for Flate. Plaintext and HTML are not separate PDF writers/readers: `--output-format plaintext` and `html` run `markdown::render` on the Markdown result, so HTML→PDF is HTML→Markdown→PDF and PDF→HTML is PDF→Markdown→HTML. Encrypted PDFs, ToUnicode text extraction, and Markdown→PDF writing land in later slices. Passwords never appear in errors.
+PDF conversion is canonical **PDF ↔ Markdown**. `src/pdf/` reimplements pdfio-style COS parsing in C++17 (no vendored pdfio) and links **zlib** only for Flate. Plaintext and HTML are not separate PDF writers/readers: `--output-format plaintext` and `html` run `markdown::render` on the Markdown result, so HTML→PDF is HTML→Markdown→PDF and PDF→HTML is PDF→Markdown→HTML. Encrypted PDFs and Markdown→PDF writing land in later slices. Passwords never appear in errors.
+
+Text spacing follows pdfio’s rule that a `TJ` number is a horizontal displacement, not a character, and uses one geometric gap check after reconstructing `x` from `/Widths`, CID `/W`/`/DW`, or compact Core-14 fallbacks. Ainiux does **not** copy pdfio `pdf2text`’s `|n| > 100 → putchar(' ')` heuristic: that inserts spaces inside TeX/microtype letter kerning. Word spaces come from the leftover user-space gap versus the font’s space width. `scripts/ainiux/pdf_compare.py` scores this against `pdftotext` and is not a runtime dependency.
 
 ## Markdown Output Rendering
 

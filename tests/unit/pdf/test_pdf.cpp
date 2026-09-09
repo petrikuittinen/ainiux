@@ -26,8 +26,7 @@ std::string xref_line(std::size_t offset, unsigned generation, char type) {
     return std::string(line, 20);
 }
 
-std::string make_simple_pdf() {
-    const std::string content = "BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET\n";
+std::string make_pdf_with_content(const std::string& content) {
     const std::string obj4 = "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "endstream";
     std::vector<std::string> bodies = {
         "",
@@ -53,6 +52,10 @@ std::string make_simple_pdf() {
     out += "trailer\n<< /Size " + std::to_string(bodies.size()) + " /Root 1 0 R >>\n";
     out += "startxref\n" + std::to_string(xref) + "\n%%EOF\n";
     return out;
+}
+
+std::string make_simple_pdf() {
+    return make_pdf_with_content("BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET\n");
 }
 
 std::string flate_bytes(const std::string& raw) {
@@ -216,6 +219,51 @@ void test_to_markdown_russian_needle() {
           "Russian PDF markdown keeps Cyrillic");
 }
 
+std::string markdown_of(const std::string& content) {
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(make_pdf_with_content(content), ainiux::pdf::Options{},
+                                                            markdown);
+    check(err.ok(), "synthetic PDF converts: " + err.message);
+    return markdown;
+}
+
+void test_tj_kerning_does_not_split_words() {
+    const std::string markdown = markdown_of("BT /F1 12 Tf 72 720 Td [(gener)-80(ation)] TJ ET\n");
+    check(markdown.find("generation") != std::string::npos, "small TJ kerning stays inside generation");
+    check(markdown.find("gener ation") == std::string::npos, "small TJ kerning does not insert a space");
+}
+
+void test_tj_word_gap_inserts_one_space() {
+    const std::string markdown = markdown_of("BT /F1 12 Tf 72 720 Td [(Hello)-400(World)] TJ ET\n");
+    check(markdown.find("Hello World") != std::string::npos, "large TJ displacement is one word space");
+    check(markdown.find("Hello  World") == std::string::npos, "word gap does not emit two spaces");
+}
+
+void test_tj_does_not_space_before_comma() {
+    const std::string markdown = markdown_of("BT /F1 12 Tf 72 720 Td [(Hello)-80(,)] TJ ET\n");
+    check(markdown.find("Hello,") != std::string::npos, "kerning before comma does not insert a space");
+}
+
+void test_td_word_gap_inserts_one_space() {
+    const std::string markdown = markdown_of("BT /F1 12 Tf 72 720 Td (Hello) Tj 30 0 Td (World) Tj ET\n");
+    check(markdown.find("Hello World") != std::string::npos, "Td word gap inserts one space");
+    check(markdown.find("Hello  World") == std::string::npos, "Td word gap does not double-space");
+}
+
+void test_to_markdown_deepseek_does_not_split_words() {
+    const std::string bytes = read_fixture("tests/pdf_files/DeepSeek2501.12948v1.pdf");
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(err.ok(), "DeepSeek PDF to markdown: " + err.message);
+    check(markdown.find("DeepSeek-R1-Zero") != std::string::npos, "DeepSeek keeps DeepSeek-R1-Zero intact");
+    check(markdown.find("first-generation") != std::string::npos, "DeepSeek keeps first-generation intact");
+    check(markdown.find("reinforcement") != std::string::npos || markdown.find("Reinforcement") != std::string::npos,
+          "DeepSeek keeps reinforcement intact");
+    check(markdown.find("capabilities") != std::string::npos, "DeepSeek keeps capabilities intact");
+    check(markdown.find("Zer o") == std::string::npos, "DeepSeek does not split Zero");
+    check(markdown.find("Reinfor cement") == std::string::npos, "DeepSeek does not split reinforcement");
+}
+
 }  // namespace
 
 void run_all() {
@@ -231,6 +279,11 @@ void run_all() {
     test_open_corpus_page_counts();
     test_to_markdown_extracts_simple_pdf();
     test_to_markdown_russian_needle();
+    test_tj_kerning_does_not_split_words();
+    test_tj_word_gap_inserts_one_space();
+    test_tj_does_not_space_before_comma();
+    test_td_word_gap_inserts_one_space();
+    test_to_markdown_deepseek_does_not_split_words();
 }
 
 }  // namespace ainiux::test::pdf

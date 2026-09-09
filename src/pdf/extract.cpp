@@ -18,7 +18,9 @@ namespace {
 struct Span {
     double x = 0;
     double y = 0;
+    double end_x = 0;
     double size = 11;
+    double space_width = 3;
     std::string text;
 };
 
@@ -200,12 +202,212 @@ void fill_win_ansi(int encoding[256]) {
 struct FontDecoder {
     int encoding[256]{};
     std::unordered_map<std::uint32_t, std::string> to_unicode;
+    std::unordered_map<std::uint32_t, double> widths;
     int code_width = 1;
     bool has_tounicode = false;
+    double default_width = 500;
+    double space_width = 250;
 };
 
 double operand_number(const Token& token) {
     return std::strtod(token.text.c_str(), nullptr);
+}
+
+const Value* resolve_value(Document& document, const Value* value) {
+    if (value == nullptr) {
+        return nullptr;
+    }
+    if (value->type == ValueType::Ref) {
+        return document.object_value(value->ref.number);
+    }
+    return value;
+}
+
+const Value* dict_resolved(Document& document, const Value& dict, const char* key) {
+    return resolve_value(document, dict_get(dict, key));
+}
+
+bool starts_with_punct(const std::string& text) {
+    if (text.empty()) {
+        return false;
+    }
+    switch (static_cast<unsigned char>(text[0])) {
+        case '.':
+        case ',':
+        case ';':
+        case ':':
+        case '!':
+        case '?':
+        case ')':
+        case ']':
+        case '}':
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool is_space_text(const std::string& text) {
+    return text == " " || text == "\xC2\xA0";
+}
+
+std::string strip_subset_prefix(const std::string& name) {
+    if (name.size() > 7 && name[6] == '+') {
+        bool prefix = true;
+        for (std::size_t i = 0; i < 6; ++i) {
+            const unsigned char ch = static_cast<unsigned char>(name[i]);
+            if (ch < 'A' || ch > 'Z') {
+                prefix = false;
+                break;
+            }
+        }
+        if (prefix) {
+            return name.substr(7);
+        }
+    }
+    return name;
+}
+
+void apply_ascii_widths(FontDecoder& font, const short* table, int count, double space, double missing) {
+    for (int i = 0; i < count; ++i) {
+        font.widths[static_cast<std::uint32_t>(32 + i)] = table[i];
+    }
+    font.space_width = space;
+    font.default_width = missing;
+}
+
+void apply_base_font_widths(const std::string& basefont, FontDecoder& font) {
+    const std::string name = strip_subset_prefix(basefont);
+    if (name.find("Courier") != std::string::npos) {
+        font.default_width = 600;
+        font.space_width = 600;
+        return;
+    }
+    static const short kHelvetica[95] = {
+        278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556,
+        556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778,
+        722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278,
+        278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+        556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584};
+    static const short kTimes[95] = {
+        250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 250, 278, 500, 500, 500, 500,
+        500, 500, 500, 500, 500, 500, 278, 278, 564, 564, 564, 444, 921, 722, 667, 667, 722, 611, 556, 722,
+        722, 333, 389, 722, 611, 889, 722, 722, 556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611, 333,
+        278, 333, 469, 500, 333, 444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500,
+        500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444, 480, 200, 480, 541};
+    if (name.find("Helvetica") != std::string::npos || name.find("Arial") != std::string::npos) {
+        apply_ascii_widths(font, kHelvetica, 95, 278, 556);
+        return;
+    }
+    if (name.find("Times") != std::string::npos) {
+        apply_ascii_widths(font, kTimes, 95, 250, 500);
+    }
+}
+
+double width_of(const FontDecoder& font, std::uint32_t code) {
+    const auto it = font.widths.find(code);
+    if (it != font.widths.end() && it->second > 0) {
+        return it->second;
+    }
+    return font.default_width > 0 ? font.default_width : 500.0;
+}
+
+void load_simple_widths(Document& document, const Value& font_dict, FontDecoder& font) {
+    std::int64_t first = 0;
+    std::int64_t last = 255;
+    dict_int(font_dict, "FirstChar", first);
+    dict_int(font_dict, "LastChar", last);
+    const Value* widths = dict_resolved(document, font_dict, "Widths");
+    if (widths != nullptr && widths->type == ValueType::Array) {
+        for (std::size_t i = 0; i < widths->array.size(); ++i) {
+            if (widths->array[i].type != ValueType::Number) {
+                continue;
+            }
+            const std::int64_t code = first + static_cast<std::int64_t>(i);
+            if (code >= 0 && (last < first || code <= last)) {
+                font.widths[static_cast<std::uint32_t>(code)] = widths->array[i].number;
+            }
+        }
+    }
+    const Value* descriptor = dict_resolved(document, font_dict, "FontDescriptor");
+    if (descriptor != nullptr && descriptor->type == ValueType::Dict) {
+        double missing = 0;
+        if (dict_number(*descriptor, "MissingWidth", missing) && missing > 0) {
+            font.default_width = missing;
+        }
+    }
+}
+
+void load_cid_widths(Document& document, const Value& font_dict, FontDecoder& font) {
+    font.default_width = 1000;
+    const Value* descendants = dict_resolved(document, font_dict, "DescendantFonts");
+    if (descendants == nullptr || descendants->type != ValueType::Array || descendants->array.empty()) {
+        return;
+    }
+    const Value* cid = resolve_value(document, &descendants->array[0]);
+    if (cid == nullptr || cid->type != ValueType::Dict) {
+        return;
+    }
+    double dw = 0;
+    if (dict_number(*cid, "DW", dw) && dw > 0) {
+        font.default_width = dw;
+    }
+    const Value* w = dict_resolved(document, *cid, "W");
+    if (w == nullptr || w->type != ValueType::Array) {
+        return;
+    }
+    const std::vector<Value>& items = w->array;
+    for (std::size_t i = 0; i < items.size();) {
+        if (items[i].type != ValueType::Number) {
+            ++i;
+            continue;
+        }
+        const std::uint32_t first = static_cast<std::uint32_t>(items[i].number);
+        ++i;
+        if (i >= items.size()) {
+            break;
+        }
+        if (items[i].type == ValueType::Array) {
+            std::uint32_t code = first;
+            for (const Value& width : items[i].array) {
+                if (width.type == ValueType::Number) {
+                    font.widths[code] = width.number;
+                }
+                ++code;
+            }
+            ++i;
+        } else if (items[i].type == ValueType::Number && i + 1 < items.size() &&
+                   items[i + 1].type == ValueType::Number) {
+            const std::uint32_t last = static_cast<std::uint32_t>(items[i].number);
+            const double width = items[i + 1].number;
+            for (std::uint32_t code = first; code <= last; ++code) {
+                font.widths[code] = width;
+            }
+            i += 2;
+        } else {
+            ++i;
+        }
+    }
+}
+
+void finish_font_metrics(const Value& font_dict, FontDecoder& font) {
+    std::string basefont;
+    dict_name(font_dict, "BaseFont", basefont);
+    if (font.widths.empty() && !basefont.empty()) {
+        apply_base_font_widths(basefont, font);
+    }
+    for (int code = 0; code < 256; ++code) {
+        if (font.encoding[code] == 0x20) {
+            const auto it = font.widths.find(static_cast<std::uint32_t>(code));
+            if (it != font.widths.end() && it->second > 0) {
+                font.space_width = it->second;
+            }
+            break;
+        }
+    }
+    if (font.space_width <= 0) {
+        font.space_width = font.default_width > 0 ? std::min(font.default_width, 333.0) : 250.0;
+    }
 }
 
 Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
@@ -372,53 +574,52 @@ Error load_font(Document& document, const Value& font_dict, FontDecoder& font) {
             }
         }
     }
+    if (subtype == "Type0") {
+        load_cid_widths(document, font_dict, font);
+    } else {
+        load_simple_widths(document, font_dict, font);
+    }
+    finish_font_metrics(font_dict, font);
     return ok_error();
 }
 
-std::string decode_string(const FontDecoder& font, const std::string& bytes) {
-    std::string out;
-    const int width = font.code_width > 0 ? font.code_width : 1;
-    for (std::size_t i = 0; i < bytes.size();) {
-        std::uint32_t code = 0;
-        int used = 0;
-        if (width >= 2 && i + 1 < bytes.size()) {
-            code = (static_cast<unsigned char>(bytes[i]) << 8) | static_cast<unsigned char>(bytes[i + 1]);
-            used = 2;
-        } else {
-            code = static_cast<unsigned char>(bytes[i]);
-            used = 1;
-        }
-        i += static_cast<std::size_t>(used);
-        const auto it = font.to_unicode.find(code);
-        if (it != font.to_unicode.end()) {
-            out += it->second;
-            continue;
-        }
-        if (used == 1 && code < 256 && font.encoding[code] > 0) {
-            append_utf8(out, static_cast<unsigned int>(font.encoding[code]));
-        }
-    }
-    return out;
-}
-
 void tidy_extracted(std::string& text) {
-    std::string out;
-    out.reserve(text.size());
+    std::string mapped;
+    mapped.reserve(text.size());
     for (std::size_t i = 0; i < text.size();) {
         const unsigned char c0 = static_cast<unsigned char>(text[i]);
         if (c0 == 0xE2 && i + 2 < text.size() && static_cast<unsigned char>(text[i + 1]) == 0x90 &&
             static_cast<unsigned char>(text[i + 2]) == 0xA3) {
-            out.push_back(' ');
+            mapped.push_back(' ');
             i += 3;
             continue;
         }
         if (c0 == 0xC2 && i + 1 < text.size() && static_cast<unsigned char>(text[i + 1]) == 0xA0) {
-            out.push_back(' ');
+            mapped.push_back(' ');
             i += 2;
             continue;
         }
-        out.push_back(text[i]);
+        mapped.push_back(text[i]);
         ++i;
+    }
+    std::string out;
+    out.reserve(mapped.size());
+    for (char ch : mapped) {
+        if (ch == ' ' || ch == '\t') {
+            if (!out.empty() && out.back() != ' ') {
+                out.push_back(' ');
+            }
+            continue;
+        }
+        if ((ch == '.' || ch == ',' || ch == ';' || ch == ':' || ch == '!' || ch == '?' || ch == ')' || ch == ']' ||
+             ch == '}') &&
+            !out.empty() && out.back() == ' ') {
+            out.pop_back();
+        }
+        out.push_back(ch);
+    }
+    while (!out.empty() && out.back() == ' ') {
+        out.pop_back();
     }
     text = std::move(out);
 }
@@ -502,9 +703,14 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
     FontDecoder* current = nullptr;
     FontDecoder fallback;
     fill_win_ansi(fallback.encoding);
+    fallback.default_width = 500;
+    fallback.space_width = 250;
     current = &fallback;
     double font_size = 11;
     double leading = 11;
+    double tc = 0;
+    double tw = 0;
+    double tz = 100;
     Matrix ctm;
     Matrix text_matrix;
     Matrix text_line;
@@ -536,21 +742,62 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
         if (raw.empty() || current == nullptr) {
             return;
         }
-        std::string decoded = decode_string(*current, raw);
+        const int width = current->code_width > 0 ? current->code_width : 1;
+        const double scale = tz > 0 ? tz / 100.0 : 1.0;
+        std::string decoded;
+        decoded.reserve(raw.size());
+        double dx = 0;
+        for (std::size_t i = 0; i < raw.size();) {
+            std::uint32_t code = 0;
+            int used = 0;
+            if (width >= 2 && i + 1 < raw.size()) {
+                code = (static_cast<unsigned char>(raw[i]) << 8) | static_cast<unsigned char>(raw[i + 1]);
+                used = 2;
+            } else {
+                code = static_cast<unsigned char>(raw[i]);
+                used = 1;
+            }
+            i += static_cast<std::size_t>(used);
+            std::string glyph;
+            const auto it = current->to_unicode.find(code);
+            if (it != current->to_unicode.end()) {
+                glyph = it->second;
+            } else if (used == 1 && code < 256 && current->encoding[code] > 0) {
+                append_utf8(glyph, static_cast<unsigned int>(current->encoding[code]));
+            }
+            dx += (width_of(*current, code) / 1000.0) * font_size * scale + tc;
+            if (is_space_text(glyph)) {
+                dx += tw;
+            }
+            decoded += glyph;
+        }
+        const Matrix combined = multiply(ctm, text_matrix);
+        double x = 0;
+        double y = 0;
+        transform(combined, 0, 0, x, y);
+        text_matrix = multiply(Matrix{1, 0, 0, 1, dx, 0}, text_matrix);
+        const Matrix combined_end = multiply(ctm, text_matrix);
+        double x2 = 0;
+        double y2 = 0;
+        transform(combined_end, 0, 0, x2, y2);
+        (void)y2;
         if (decoded.empty()) {
             return;
         }
-        double x = 0;
-        double y = 0;
-        transform(multiply(ctm, text_matrix), 0, 0, x, y);
         Span span;
         span.x = x;
         span.y = y;
-        span.size = font_size;
+        span.end_x = x2;
+        span.size = font_size * std::hypot(combined.a, combined.b);
+        if (span.size < 0.5) {
+            span.size = std::max(font_size, 1.0);
+        }
+        span.space_width = (current->space_width / 1000.0) * span.size * scale;
+        if (span.space_width < 0.5) {
+            span.space_width = 0.25 * span.size;
+        }
         span.text = std::move(decoded);
         spans.push_back(std::move(span));
-        const double advance = static_cast<double>(spans.back().text.size()) * font_size * 0.5;
-        text_matrix = multiply(Matrix{1, 0, 0, 1, advance, 0}, text_matrix);
     };
 
     Tokenizer tokens(Cursor{reinterpret_cast<const std::uint8_t*>(content.data()), content.size(), 0});
@@ -610,6 +857,15 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
                 text_matrix = text_line;
             } else if (op == "TL" && !stack.empty()) {
                 leading = operand_number(stack.back());
+            } else if (op == "Tc" && !stack.empty()) {
+                tc = operand_number(stack.back());
+            } else if (op == "Tw" && !stack.empty()) {
+                tw = operand_number(stack.back());
+            } else if (op == "Tz" && !stack.empty()) {
+                tz = operand_number(stack.back());
+                if (tz <= 0) {
+                    tz = 100;
+                }
             } else if (op == "Tf" && stack.size() >= 2) {
                 font_size = operand_number(stack.back());
                 if (leading <= 0) {
@@ -629,6 +885,10 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
                     }
                 }
             } else if (op == "Tj" || op == "'" || op == "\"") {
+                if (op == "\"" && stack.size() >= 3) {
+                    tw = operand_number(stack[stack.size() - 3]);
+                    tc = operand_number(stack[stack.size() - 2]);
+                }
                 if (op == "'" || op == "\"") {
                     text_line = multiply(Matrix{1, 0, 0, 1, 0, -leading}, text_line);
                     text_matrix = text_line;
@@ -660,11 +920,9 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
                         emit(item.text);
                     } else if (item.kind == TokenKind::Number) {
                         const double kern = operand_number(item);
-                        if (std::fabs(kern) >= 180.0) {
-                            emit(std::string(1, ' '));
-                        } else {
-                            text_matrix = multiply(Matrix{1, 0, 0, 1, -kern / 1000.0 * font_size, 0}, text_matrix);
-                        }
+                        const double scale = tz > 0 ? tz / 100.0 : 1.0;
+                        text_matrix =
+                            multiply(Matrix{1, 0, 0, 1, -kern / 1000.0 * font_size * scale, 0}, text_matrix);
                     }
                 }
             } else if (op == "Do") {
@@ -697,15 +955,13 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
     std::string line;
     double line_y = spans.front().y;
     double line_size = spans.front().size;
-    double last_x = spans.front().x;
+    double last_end = spans.front().x;
     auto flush_line = [&]() {
         while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
             line.pop_back();
         }
         if (!line.empty()) {
             if (!text.empty()) {
-                const double gap = std::fabs(line_y - spans.front().y);
-                (void)gap;
                 text.push_back('\n');
             }
             nfkc_arabic_forms(line);
@@ -717,23 +973,28 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
 
     for (std::size_t i = 0; i < spans.size(); ++i) {
         const Span& span = spans[i];
-        const double threshold = std::max(4.0, 0.35 * std::max(line_size, span.size));
-        if (i > 0 && std::fabs(span.y - line_y) > threshold) {
+        const double y_gap = std::fabs(span.y - line_y);
+        const double line_thresh = std::max(2.0, 0.6 * std::max(line_size, span.size));
+        if (i > 0 && y_gap > line_thresh) {
             flush_line();
-            if (std::fabs(span.y - line_y) > threshold * 2.2 && !text.empty()) {
+            if (y_gap > 1.6 * std::max(line_size, span.size) && !text.empty()) {
                 text += "\n";
             }
             line_y = span.y;
-            last_x = span.x;
+            last_end = span.x;
         }
         if (!line.empty()) {
-            const double gap = span.x - last_x;
-            if (gap > 0.28 * span.size && line.back() != ' ') {
+            const double gap = span.x - last_end;
+            const double user_size = std::max(span.size, line_size);
+            const double space_em = span.space_width > 0.5 ? span.space_width : 0.25 * user_size;
+            const double space_thresh = std::max(0.22 * user_size, 0.55 * space_em);
+            if (gap > space_thresh && line.back() != ' ' && !starts_with_punct(span.text) &&
+                !is_space_text(span.text)) {
                 line.push_back(' ');
             }
         }
         line += span.text;
-        last_x = span.x + static_cast<double>(span.text.size()) * span.size * 0.45;
+        last_end = span.end_x;
         line_size = span.size;
         line_y = span.y;
     }
