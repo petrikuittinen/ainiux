@@ -932,8 +932,8 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
             continue;
         }
         stack.push_back(std::move(token));
-        if (stack.size() > 64) {
-            stack.erase(stack.begin(), stack.begin() + static_cast<std::ptrdiff_t>(stack.size() - 32));
+        if (stack.size() > 8192) {
+            stack.erase(stack.begin(), stack.begin() + static_cast<std::ptrdiff_t>(stack.size() - 4096));
         }
         (void)in_text;
     }
@@ -986,8 +986,11 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
         if (!line.empty()) {
             const double gap = span.x - last_end;
             const double user_size = std::max(span.size, line_size);
-            const double space_em = span.space_width > 0.5 ? span.space_width : 0.25 * user_size;
-            const double space_thresh = std::max(0.22 * user_size, 0.55 * space_em);
+            // pdfio pdf2text treats |TJ| > 100 (0.1 em) as a word gap. Letter kerning in
+            // TeX is typically < 0.08 em; justified word glue is often 0.20–0.35 em.
+            // Do not raise this with the font's space glyph: some Type1 subsets store a
+            // 0.5 em width at code 32 even though the file spaces words with ~0.24 em TJ.
+            const double space_thresh = std::max(0.5, 0.12 * user_size);
             if (gap > space_thresh && line.back() != ' ' && !starts_with_punct(span.text) &&
                 !is_space_text(span.text)) {
                 line.push_back(' ');

@@ -239,6 +239,14 @@ void test_tj_word_gap_inserts_one_space() {
     check(markdown.find("Hello  World") == std::string::npos, "word gap does not emit two spaces");
 }
 
+void test_tj_tex_word_glue_is_not_glued() {
+    const std::string markdown =
+        markdown_of("BT /F1 12 Tf 72 720 Td [(economic)-237(growth)-237(and)-348(labor)] TJ ET\n");
+    check(markdown.find("economic growth and labor") != std::string::npos,
+          "TeX-style 0.24 em TJ glue remains word spaces");
+    check(markdown.find("economicgrowth") == std::string::npos, "0.24 em TJ glue does not concatenate words");
+}
+
 void test_tj_does_not_space_before_comma() {
     const std::string markdown = markdown_of("BT /F1 12 Tf 72 720 Td [(Hello)-80(,)] TJ ET\n");
     check(markdown.find("Hello,") != std::string::npos, "kerning before comma does not insert a space");
@@ -281,6 +289,7 @@ void run_all() {
     test_to_markdown_russian_needle();
     test_tj_kerning_does_not_split_words();
     test_tj_word_gap_inserts_one_space();
+    test_tj_tex_word_glue_is_not_glued();
     test_tj_does_not_space_before_comma();
     test_td_word_gap_inserts_one_space();
     test_to_markdown_deepseek_does_not_split_words();
