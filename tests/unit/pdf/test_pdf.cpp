@@ -265,8 +265,16 @@ void test_from_markdown_print_margins_and_bold_italic() {
     const ainiux::Error err =
         ainiux::pdf::from_markdown("# Title\n\n***bold italic*** word\n\n> quoted line\n", options, pdf);
     check(err.ok(), "margin/style PDF: " + err.message);
-    check(pdf.find("/CropBox") == std::string::npos,
-          "page CropBox is omitted so viewers keep MediaBox as the paper");
+    const size_t media = pdf.find("/MediaBox [0 0 ");
+    const size_t crop = pdf.find("/CropBox [0 0 ");
+    check(media != std::string::npos && crop != std::string::npos,
+          "page writes both MediaBox and CropBox");
+    const size_t media_end = pdf.find(']', media);
+    const size_t crop_end = pdf.find(']', crop);
+    check(media_end != std::string::npos && crop_end != std::string::npos &&
+              pdf.substr(media + 10, media_end - (media + 10)) ==
+                  pdf.substr(crop + 9, crop_end - (crop + 9)),
+          "CropBox equals MediaBox so Edge uses the full paper");
     check(pdf.find("/Helvetica-BoldOblique") != std::string::npos,
           "bold-italic uses Helvetica-BoldOblique");
     ainiux::pdf::Document document;
@@ -276,13 +284,20 @@ void test_from_markdown_print_margins_and_bold_italic() {
     const ainiux::Error content_err = document.page_content(0, content);
     check(content_err.ok(), "page content decodes: " + content_err.message);
     check(content.find("/FBI") != std::string::npos, "content selects the bold-italic font");
-    const size_t re = content.find(" re\n");
-    check(re != std::string::npos, "blockquote draws a bar rectangle");
-    const size_t line_start = content.rfind('\n', re);
-    const std::string rect = content.substr(line_start == std::string::npos ? 0 : line_start + 1,
-                                            re - (line_start == std::string::npos ? 0 : line_start + 1));
-    check(rect.find("72") != std::string::npos || rect.find("78") != std::string::npos,
-          "blockquote bar sits in the 1 inch left margin gutter, not on the page edge: " + rect);
+    check(content.find("0 0 ") != std::string::npos && content.find("792 re") != std::string::npos,
+          "page paints a full MediaBox fill so ink-bbox equals the paper");
+    bool found_bar = false;
+    for (size_t pos = 0; (pos = content.find(" re\n", pos)) != std::string::npos; pos += 4) {
+        const size_t line_start = content.rfind('\n', pos);
+        const std::string rect =
+            content.substr(line_start == std::string::npos ? 0 : line_start + 1,
+                           pos - (line_start == std::string::npos ? 0 : line_start + 1));
+        if (rect.find("78 ") != std::string::npos) {
+            found_bar = true;
+            break;
+        }
+    }
+    check(found_bar, "blockquote bar sits in the 1 inch left margin gutter, not on the page edge");
 }
 
 void test_from_markdown_hello_roundtrip() {
@@ -302,7 +317,7 @@ void test_from_markdown_hello_roundtrip() {
     check(markdown.find("Hello PDF") != std::string::npos, "PDF extract contains paragraph");
 }
 
-void test_from_markdown_thematic_break_is_page_break() {
+void test_from_markdown_thematic_break_is_rule_not_page_break() {
     ainiux::pdf::WriteOptions options;
     std::string pdf;
     const ainiux::Error err = ainiux::pdf::from_markdown("Alpha\n\n---\n\nBeta\n", options, pdf);
@@ -310,12 +325,45 @@ void test_from_markdown_thematic_break_is_page_break() {
     ainiux::pdf::Document document;
     const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document);
     check(open_err.ok(), "thematic break PDF opens: " + open_err.message);
-    check(document.page_count() == 2, "thematic break yields two pages");
+    check(document.page_count() == 1, "thematic break stays on one page");
+    std::string content;
+    const ainiux::Error content_err = document.page_content(0, content);
+    check(content_err.ok(), "thematic break content decodes: " + content_err.message);
+    check(content.find(" l S") != std::string::npos, "thematic break draws a hairline");
     std::string markdown;
     const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
     check(extract_err.ok(), "thematic break extract: " + extract_err.message);
     check(markdown.find("Alpha") != std::string::npos && markdown.find("Beta") != std::string::npos,
-          "both pages survive extract");
+          "both sides of the rule survive extract");
+}
+
+void test_from_markdown_coalesces_line_into_one_show() {
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("Hello world from Ainiux.\n", options, pdf);
+    check(err.ok(), "coalesce PDF: " + err.message);
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "coalesce PDF opens: " + open_err.message);
+    std::string content;
+    const ainiux::Error content_err = document.page_content(0, content);
+    check(content_err.ok(), "coalesce content decodes: " + content_err.message);
+    check(content.find("(Hello world from Ainiux.)") != std::string::npos,
+          "words on a line share one Tj: " + content);
+    size_t tm = 0;
+    for (size_t pos = 0; (pos = content.find(" Tm\n", pos)) != std::string::npos; pos += 4) {
+        ++tm;
+    }
+    check(tm <= 4, "line coalescing keeps Tm count near lines, not words: " + std::to_string(tm));
+}
+
+void test_to_markdown_does_not_insert_thematic_rules() {
+    const std::string bytes = read_fixture("tests/pdf_files/ru-transformers-short-note.pdf");
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(err.ok(), "two-page extract: " + err.message);
+    check(markdown.find("\n---\n") == std::string::npos,
+          "PDF extract does not insert --- page separators");
 }
 
 void test_from_markdown_llm_typical_needles() {
@@ -440,7 +488,9 @@ void run_all() {
     test_to_markdown_deepseek_does_not_split_words();
     test_from_markdown_print_margins_and_bold_italic();
     test_from_markdown_hello_roundtrip();
-    test_from_markdown_thematic_break_is_page_break();
+    test_from_markdown_thematic_break_is_rule_not_page_break();
+    test_from_markdown_coalesces_line_into_one_show();
+    test_to_markdown_does_not_insert_thematic_rules();
     test_from_markdown_llm_typical_needles();
     test_html_to_pdf_via_markdown();
     test_pdf_md_pdf_latin_needles();

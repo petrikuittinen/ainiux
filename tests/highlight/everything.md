@@ -44,7 +44,7 @@ Linked image:
 >
 > > Nested quote: *still quoted*, with `code`.
 
-A thematic break follows and starts a new PDF page.
+A thematic break follows and is drawn as a hairline, not a page break.
 
 ---
 

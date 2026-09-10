@@ -15,8 +15,8 @@ namespace {
 constexpr double kMm = 72.0 / 25.4;
 constexpr double kPageWidth = 210.0 * kMm;
 constexpr double kPageHeight = 11.0 * 72.0;
-// 1 inch body margins. CropBox stays equal to MediaBox so viewers (Edge) do not
-// clip the inset away and leave text on the paper edge.
+// 1 inch body margins. CropBox equals MediaBox (not an inset art box). A white
+// page fill makes PDFium/Edge ink-bbox match the paper so side margins stay visible.
 constexpr double kMargin = 72.0;
 constexpr double kPageLeft = kMargin;
 constexpr double kPageRight = kPageWidth - kMargin;
@@ -36,6 +36,8 @@ constexpr double kQuoteBarGap = 6.0;
 constexpr double kQuoteThickness = 3.0;
 constexpr double kCodePadding = 4.5;
 constexpr double kTablePadding = 4.5;
+constexpr double kRuleGap = 8.0;
+constexpr double kRuleThickness = 0.5;
 constexpr int kMaxTableCols = 20;
 
 const char* kFontRes[] = {"FR", "FB", "FI", "FBI", "FM"};
@@ -97,6 +99,11 @@ struct Layout {
     BaseFont current_font = BaseFont::Regular;
     double current_size = 0;
     bool in_text = false;
+    bool current_rgb = false;
+    double current_gray = -1;
+    double current_r = 0;
+    double current_g = 0;
+    double current_b = 0;
 
     explicit Layout(WriteOptions& opts) : options(&opts) {}
 
@@ -123,17 +130,39 @@ struct Layout {
         if (!in_text) {
             append_op("BT");
             in_text = true;
-            current_size = 0;
         }
     }
 
     void set_fill_gray(double g) {
         end_text();
+        if (!current_rgb && current_gray == g) {
+            return;
+        }
         append_op(pdf_number(g) + " g");
+        current_gray = g;
+        current_rgb = false;
     }
 
     void set_fill_rgb(double r, double g, double b) {
+        if (current_rgb && current_r == r && current_g == g && current_b == b) {
+            return;
+        }
         append_op(pdf_number(r) + " " + pdf_number(g) + " " + pdf_number(b) + " rg");
+        current_rgb = true;
+        current_r = r;
+        current_g = g;
+        current_b = b;
+        current_gray = -1;
+    }
+
+    void ensure_font(BaseFont font, double size) {
+        if (current_size == size && current_font == font && current_size != 0) {
+            return;
+        }
+        append_op(std::string("/") + kFontRes[static_cast<int>(font)] + " " + pdf_number(size) +
+                  " Tf");
+        current_font = font;
+        current_size = size;
     }
 
     void fill_rect(double x, double yb, double w, double h) {
@@ -159,6 +188,8 @@ struct Layout {
         links.clear();
         page_open = false;
         current_size = 0;
+        current_rgb = false;
+        current_gray = -1;
         return ok_error();
     }
 
@@ -178,20 +209,22 @@ struct Layout {
         ++page_number;
         page_open = true;
         y = kPageTop;
+        // White MediaBox fill so PDFium/Edge ink-bbox equals the paper, not the text.
+        set_fill_gray(1);
+        fill_rect(0, 0, kPageWidth, kPageHeight);
+        set_fill_gray(0);
         if (page_number > 1 && !title.empty()) {
             const std::string win = utf8_to_win_ansi(title, options->substituted_glyphs);
             const double width = text_width(BaseFont::Regular, win, kSizeHeadFoot);
             begin_text();
-            append_op("/FR " + pdf_number(kSizeHeadFoot) + " Tf");
-            append_op("0 g");
+            ensure_font(BaseFont::Regular, kSizeHeadFoot);
             append_op("1 0 0 1 " + pdf_number((kPageWidth - width) / 2.0) + " " +
                       pdf_number(kPageHeader - 2) + " Tm");
             append_op("(" + pdf_escape_string(win) + ") Tj");
             end_text();
         }
         begin_text();
-        append_op("/FR " + pdf_number(kSizeHeadFoot) + " Tf");
-        append_op("0 g");
+        ensure_font(BaseFont::Regular, kSizeHeadFoot);
         if (!heading.empty()) {
             const std::string win = utf8_to_win_ansi(heading, options->substituted_glyphs);
             append_op("1 0 0 1 " + pdf_number(kPageLeft) + " " + pdf_number(kPageFooter) + " Tm");
@@ -202,7 +235,6 @@ struct Layout {
         append_op("1 0 0 1 " + pdf_number(kPageRight - pw) + " " + pdf_number(kPageFooter) + " Tm");
         append_op("(" + pdf_escape_string(page_text) + ") Tj");
         end_text();
-        current_size = 0;
         return ok_error();
     }
 
@@ -220,13 +252,12 @@ struct Layout {
         begin_text();
         if (frag.link) {
             set_fill_rgb(0, 0, 0.8);
-        } else {
+        } else if (current_rgb || current_gray != 0) {
             append_op("0 g");
+            current_rgb = false;
+            current_gray = 0;
         }
-        append_op(std::string("/") + kFontRes[static_cast<int>(frag.font)] + " " +
-                  pdf_number(frag.size) + " Tf");
-        current_font = frag.font;
-        current_size = frag.size;
+        ensure_font(frag.font, frag.size);
         append_op("1 0 0 1 " + pdf_number(x) + " " + pdf_number(baseline) + " Tm");
         append_op("(" + pdf_escape_string(frag.winansi) + ") Tj");
         if (frag.strike || frag.link) {
@@ -299,20 +330,45 @@ struct Layout {
         return out;
     }
 
+    static bool same_paint(const Frag& a, const Frag& b) {
+        return a.font == b.font && a.size == b.size && a.link == b.link && a.strike == b.strike &&
+               a.url == b.url;
+    }
+
     Error render_line(double left, const std::vector<Frag>& frags, double lineheight) {
         Error err = ensure_space(lineheight);
         if (!err.ok()) {
             return err;
         }
         double x = left;
-        for (const Frag& frag : frags) {
+        size_t i = 0;
+        while (i < frags.size()) {
+            const Frag& frag = frags[i];
+            if (frag.winansi.empty()) {
+                if (frag.width >= 0) {
+                    x += frag.width;
+                }
+                ++i;
+                continue;
+            }
             const double fx = frag.width < 0 ? left + frag.width : x;
-            if (!frag.winansi.empty()) {
-                show_frag(frag, fx, y);
-            }
+            Frag joined = frag;
+            double total_w = frag.width < 0 ? -frag.width : frag.width;
+            size_t j = i + 1;
             if (frag.width >= 0) {
-                x += frag.width;
+                while (j < frags.size() && frags[j].width >= 0 && !frags[j].winansi.empty() &&
+                       same_paint(joined, frags[j])) {
+                    joined.winansi += frags[j].winansi;
+                    total_w += frags[j].width;
+                    ++j;
+                }
             }
+            joined.width = total_w;
+            show_frag(joined, fx, y);
+            if (frag.width >= 0) {
+                x += total_w;
+            }
+            i = j;
         }
         y -= lineheight;
         return ok_error();
@@ -406,7 +462,7 @@ struct Layout {
         set_fill_gray(0.93);
         fill_rect(left - kCodePadding, top - block_h + kCodePadding, right - left + 2 * kCodePadding,
                   block_h);
-        append_op("0 g");
+        set_fill_gray(0);
         for (const std::string& line : lines) {
             err = ensure_space(lineheight);
             if (!err.ok()) {
@@ -499,11 +555,18 @@ Error Layout::format_blocks(const std::vector<markdown::Block>& blocks, double l
         }
         switch (block.kind) {
             case markdown::BlockKind::Rule:
-                y = kPageBottom;
-                err = new_page();
+                err = ensure_space(kRuleGap * 2.0 + kRuleThickness);
                 if (!err.ok()) {
                     return err;
                 }
+                y -= kRuleGap;
+                end_text();
+                append_op(pdf_number(kRuleThickness) + " w");
+                append_op("0.55 G");
+                append_op(pdf_number(left) + " " + pdf_number(y) + " m " + pdf_number(right) + " " +
+                          pdf_number(y) + " l S");
+                append_op("0 G");
+                y -= kRuleGap;
                 break;
             case markdown::BlockKind::Heading: {
                 int level = std::max(1, std::min(block.heading_level, 6));
@@ -569,7 +632,7 @@ Error Layout::format_blocks(const std::vector<markdown::Block>& blocks, double l
                 const double bottom = y + kSizeBody * 0.35;
                 const double bar_h = std::max(top - bottom, kSizeBody * 0.8);
                 fill_rect(left + kQuoteBarGap, bottom, kQuoteThickness, bar_h);
-                append_op("0 g");
+                set_fill_gray(0);
                 break;
             }
             case markdown::BlockKind::Code:
@@ -659,11 +722,12 @@ Error layout_markdown(std::string_view markdown, WriteOptions& options, std::str
             }
             annots += " ]";
         }
+        const std::string box =
+            "[0 0 " + pdf_number(kPageWidth) + " " + pdf_number(kPageHeight) + "]";
         const std::uint32_t page = layout.writer.add_object(
-            "<< /Type /Page /Parent " + std::to_string(pages_obj) + " 0 R /MediaBox [0 0 " +
-            pdf_number(kPageWidth) + " " + pdf_number(kPageHeight) + "] /Resources " +
-            page_resources(layout.fonts) + " /Contents " + std::to_string(rec.content) + " 0 R" +
-            annots + " >>");
+            "<< /Type /Page /Parent " + std::to_string(pages_obj) + " 0 R /MediaBox " + box +
+            " /CropBox " + box + " /Resources " + page_resources(layout.fonts) + " /Contents " +
+            std::to_string(rec.content) + " 0 R" + annots + " >>");
         page_objs.push_back(page);
     }
 

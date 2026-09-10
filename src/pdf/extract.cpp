@@ -998,7 +998,10 @@ Error extract_markdown(Document& document, const Options& options, std::string& 
         Error err = extract_page(document, i, page);
         if (!err.ok()) {
             if (!markdown.empty()) {
-                markdown += "\n\n---\n\n";
+                while (!markdown.empty() && markdown.back() == '\n') {
+                    markdown.pop_back();
+                }
+                markdown += "\n\n";
             }
             markdown += "[page " + std::to_string(i + 1) + ": " + err.message + "]";
             continue;
@@ -1007,7 +1010,10 @@ Error extract_markdown(Document& document, const Options& options, std::string& 
             page = "[scanned page " + std::to_string(i + 1) + ": no extractable text]";
         }
         if (!markdown.empty()) {
-            markdown += "\n\n---\n\n";
+            while (!markdown.empty() && markdown.back() == '\n') {
+                markdown.pop_back();
+            }
+            markdown += "\n\n";
         }
         markdown += page;
     }
