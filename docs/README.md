@@ -42,7 +42,8 @@ These documents preserve audit context. Their dates and code references matter; 
 - [Testing coverage analysis](testing_coverage.md)
 - [Prompt-cache hit rate test runs](cache_hit_rate_test_runs.md)
 - [Qwen and DeepSeek index-prompt benchmark report](index_prompt_benchmark_report.md)
-- [PDF-to-Markdown extract speed](pdf_to_md_benchmark.md)
+- [PDF conversion speed (extract and write)](pdf_to_md_benchmark.md)
+- [Markdown-to-PDF write speed](md_to_pdf_benchmark.md)
 
 ## Other project material
 
