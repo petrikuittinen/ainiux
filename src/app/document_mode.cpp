@@ -147,16 +147,29 @@ std::string canonical_markdown_body(const std::string& body, InputKind kind) {
     return body;
 }
 
-Error write_pdf_from_markdown(const std::string& markdown, bool quiet, std::string& pdf) {
+void warn_pdf_substitutions(bool quiet, const pdf::WriteOptions& options) {
+    if (quiet) {
+        return;
+    }
+    if (options.cjk_font_missing) {
+        std::cerr << "warning: CJK characters were replaced with ? (install a TrueType CJK font "
+                     "such as DroidSansFallback or pass --font PATH)\n";
+    }
+    if (options.substituted_glyphs > 0) {
+        std::cerr << "warning: replaced " << options.substituted_glyphs
+                  << " character(s) that cannot be encoded in the PDF fonts\n";
+    }
+}
+
+Error write_pdf_from_markdown(const std::string& markdown, bool quiet, const std::string& font_path,
+                              std::string& pdf) {
     pdf::WriteOptions options;
+    options.font_path = font_path;
     Error err = pdf::from_markdown(markdown, options, pdf);
     if (!err.ok()) {
         return err;
     }
-    if (!quiet && options.substituted_glyphs > 0) {
-        std::cerr << "warning: replaced " << options.substituted_glyphs
-                  << " character(s) that cannot be encoded in WinAnsi\n";
-    }
+    warn_pdf_substitutions(quiet, options);
     return ok_error();
 }
 
@@ -328,7 +341,7 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
             document.input_kind = InputKind::Pdf;
             document.output_format = document_output_format(options, document.input_kind, standalone);
             if (document.output_format == markdown::OutputFormat::Pdf) {
-                return write_pdf_from_markdown(markdown, options.quiet, document.converted);
+                return write_pdf_from_markdown(markdown, options.quiet, options.pdf_font, document.converted);
             }
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
@@ -371,7 +384,7 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
     document.output_format = document_output_format(options, document.input_kind, standalone);
     if (document.output_format == markdown::OutputFormat::Pdf) {
         return write_pdf_from_markdown(canonical_markdown_body(body, document.input_kind), options.quiet,
-                                       document.converted);
+                                       options.pdf_font, document.converted);
     }
     const bool complete_html_document = standalone &&
                                         document.output_format == markdown::OutputFormat::Html &&

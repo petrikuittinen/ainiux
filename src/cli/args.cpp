@@ -27,7 +27,7 @@ bool needs_value(const std::string& opt) {
         "--key-env", "--key-file", "-k", "--key", "--header", "--connect-timeout", "--timeout",
         "--proxy", "--fetch-url", "--search", "--web-search-provider", "--input", "--encoding",
         "--attach",
-        "--html-file", "--html-format", "--max-fetch-bytes", "--max-web-search-results",
+        "--html-file", "--html-format", "--font", "--max-fetch-bytes", "--max-web-search-results",
         "--max-input-bytes", "--max-image-bytes", "--max-context-bytes",
         "--max-agent-response-bytes",
         "--max-source-code-file-size", "--trusted-prompt-dir",
@@ -627,6 +627,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 } else {
                     return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, json, jsond, or ndjson"}};
                 }
+            } else if (opt == "--font") {
+                opts.pdf_font = value;
             } else if (opt == "--output") {
                 opts.output_path = value;
             } else if (opt == "--save-chat") {
@@ -1552,6 +1554,8 @@ Options:
       --format text|json|ndjson|jsonl|jsond
                                 In image mode: png|jpeg|webp|auto (default png).
       --output-format html|md|plaintext|pdf|json|jsond|ndjson
+      --font PATH               TrueType (.ttf/.ttc with glyf) for CJK in PDF output.
+                                Also AINIUX_PDF_FONT, then a small system-font allowlist.
       --output PATH             Use 'stdout' to write to standard output.
                                 In image mode, omit to write the first unused imageN.png.
 

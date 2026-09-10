@@ -74,7 +74,7 @@ to capture the test's desktop and mobile views for visual inspection.
 ## Layout
 
 - `tests/unit/` — module-oriented C++ unit tests. `test_runner` dispatches `run_all()` from each module directory.
-- `tests/unit/pdf/` — COS reader (tokenizer, xref, Flate, repair) against synthetic PDFs and `tests/pdf_files/`, PDF-to-Markdown spacing/kerning units (`TJ` word gaps vs letter kerning, DeepSeek whole-word needles), and Markdown-to-PDF writer units (COS round-trip, CropBox=MediaBox, thematic hairlines, coalesced `Tj` lines, `llm_typical.md` needles, HTML→MD→PDF, PDF→MD→PDF reflow, WinAnsi substitution, empty input, cancellation).
+- `tests/unit/pdf/` — COS reader (tokenizer, xref, Flate, repair) against synthetic PDFs and `tests/pdf_files/`, PDF-to-Markdown spacing/kerning units (`TJ` word gaps vs letter kerning, DeepSeek whole-word needles), and Markdown-to-PDF writer units (COS round-trip, CropBox=MediaBox, thematic hairlines, coalesced `Tj` lines, CJK Identity-H subset embed, `llm_typical.md` needles, HTML→MD→PDF, PDF→MD→PDF reflow, emoji substitution, empty input, cancellation).
 - `scripts/ainiux/pdf_compare.py` — optional quality harness (`make compare-pdf`). Compares Ainiux Markdown against `pdftotext` (and `pdfplumber`/`pypdf` with `--python-backends`) on letter/token recall, split words, and extra spaces. Not part of `make test`; skip cleanly when a backend is missing. Set `AINIUX` to the binary if it is not `./ainiux`.
 - `tests/unit/mcp/` — MCP registry, HTTP/stdio client against `tests/mock_server/mcp_mock.py`, tool envelope, prepare-cancel regression.
 - `build/test_io_faults` — separate binary for slower or environment-dependent checks.

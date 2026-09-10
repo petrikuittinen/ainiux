@@ -47,7 +47,7 @@ const short kHelveticaBold[224] = {
     611, 611, 611, 611, 611, 611, 611, 584, 611, 611, 611, 611, 611, 556, 611, 556
 };
 
-unsigned decode_utf8(std::string_view text, std::size_t& i) {
+unsigned decode_next(std::string_view text, std::size_t& i) {
     if (i >= text.size()) {
         return 0;
     }
@@ -86,7 +86,7 @@ unsigned decode_utf8(std::string_view text, std::size_t& i) {
     return cp;
 }
 
-int win_ansi_from_cp(unsigned cp) {
+int map_win_ansi(unsigned cp) {
     if (cp == 0x09 || cp == 0x0A || cp == 0x0D) {
         return ' ';
     }
@@ -183,13 +183,50 @@ double text_width(BaseFont font, std::string_view win_ansi, double size) {
     return em * size / 1000.0;
 }
 
+unsigned next_utf8(std::string_view utf8, std::size_t& i) {
+    return decode_next(utf8, i);
+}
+
+int win_ansi_code(unsigned cp) {
+    return map_win_ansi(cp);
+}
+
+bool is_cjk_cp(unsigned cp) {
+    if (cp >= 0x2E80 && cp <= 0x9FFF) {
+        return true;
+    }
+    if (cp >= 0xAC00 && cp <= 0xD7AF) {
+        return true;
+    }
+    if (cp >= 0xF900 && cp <= 0xFAFF) {
+        return true;
+    }
+    if (cp >= 0xFF00 && cp <= 0xFFEF) {
+        return true;
+    }
+    if (cp >= 0x20000 && cp <= 0x2FA1F) {
+        return true;
+    }
+    return cp >= 0x30000 && cp <= 0x323AF;
+}
+
+bool needs_embedded_cp(unsigned cp) {
+    if (is_cjk_cp(cp)) {
+        return true;
+    }
+    if (cp >= 0x0100 && cp <= 0x024F) {
+        return true;
+    }
+    return cp >= 0x1E00 && cp <= 0x1EFF;
+}
+
 std::string utf8_to_win_ansi(std::string_view utf8, std::size_t& substituted) {
     std::string out;
     out.reserve(utf8.size());
     std::size_t i = 0;
     while (i < utf8.size()) {
-        const unsigned cp = decode_utf8(utf8, i);
-        const int mapped = win_ansi_from_cp(cp);
+        const unsigned cp = decode_next(utf8, i);
+        const int mapped = map_win_ansi(cp);
         if (mapped >= 0) {
             out.push_back(static_cast<char>(mapped));
         } else if (cp != 0) {

@@ -50,14 +50,19 @@ Error write_rendered_assistant_output(const cli::Options& options,
                                       std::ostream& out) {
     if (options.output_format == markdown::OutputFormat::Pdf) {
         pdf::WriteOptions pdf_options;
+        pdf_options.font_path = options.pdf_font;
         std::string rendered;
         Error err = pdf::from_markdown(content, pdf_options, rendered);
         if (!err.ok()) {
             return err;
         }
+        if (!options.quiet && pdf_options.cjk_font_missing) {
+            std::cerr << "warning: CJK characters were replaced with ? (install a TrueType CJK font "
+                         "such as DroidSansFallback or pass --font PATH)\n";
+        }
         if (!options.quiet && pdf_options.substituted_glyphs > 0) {
             std::cerr << "warning: replaced " << pdf_options.substituted_glyphs
-                      << " character(s) that cannot be encoded in WinAnsi\n";
+                      << " character(s) that cannot be encoded in the PDF fonts\n";
         }
         out << rendered;
         return ok_error();

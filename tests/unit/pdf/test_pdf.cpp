@@ -4,12 +4,14 @@
 #include "pdf/document.hpp"
 #include "pdf/pdf.hpp"
 #include "pdf/stream.hpp"
+#include "pdf/ttf.hpp"
 #include "pdf/token.hpp"
 #include "pdf/value.hpp"
 #include "runtime/runtime.hpp"
 #include "support/test_support.hpp"
 
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <zlib.h>
@@ -415,18 +417,55 @@ void test_pdf_md_pdf_latin_needles() {
           "reflow keeps reinforcement");
 }
 
-void test_winansi_substitution() {
+void test_emoji_still_substituted() {
     ainiux::pdf::WriteOptions options;
     std::string pdf;
-    const ainiux::Error err = ainiux::pdf::from_markdown("Hello 你好 world\n", options, pdf);
-    check(err.ok(), "CJK substitution still writes PDF: " + err.message);
-    check(options.substituted_glyphs > 0, "CJK glyphs are counted as substitutions");
+    const ainiux::Error err = ainiux::pdf::from_markdown("Hello 😀 world\n", options, pdf);
+    check(err.ok(), "emoji substitution still writes PDF: " + err.message);
+    check(options.substituted_glyphs > 0, "emoji glyphs are counted as substitutions");
     std::string markdown;
     const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
     check(extract_err.ok(), "substitution PDF extracts: " + extract_err.message);
     check(markdown.find("Hello") != std::string::npos && markdown.find("world") != std::string::npos,
           "Latin text survives substitution");
     check(markdown.find("?") != std::string::npos, "unencodable glyphs become question marks");
+}
+
+std::string write_placeholder_font() {
+    std::string ttf;
+    const ainiux::Error err = ainiux::pdf::make_placeholder_cjk_ttf(ttf);
+    check(err.ok(), "placeholder CJK TTF: " + err.message);
+    const char* path = "build/test_placeholder_cjk.ttf";
+    std::ofstream out(path, std::ios::binary);
+    check(static_cast<bool>(out), "can write placeholder font");
+    out.write(ttf.data(), static_cast<std::streamsize>(ttf.size()));
+    check(static_cast<bool>(out), "placeholder font write finishes");
+    return path;
+}
+
+void test_cjk_roundtrip_with_embedded_ttf() {
+    ainiux::pdf::WriteOptions options;
+    options.font_path = write_placeholder_font();
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("Hello 中文\n", options, pdf);
+    check(err.ok(), "CJK markdown to PDF: " + err.message);
+    check(pdf.find("/Identity-H") != std::string::npos, "CJK PDF uses Identity-H");
+    check(pdf.find("/CIDFontType2") != std::string::npos, "CJK PDF embeds CIDFontType2");
+    check(options.substituted_glyphs == 0, "embedded TTF avoids CJK substitution");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "CJK PDF extracts: " + extract_err.message);
+    check(markdown.find("Hello") != std::string::npos, "CJK PDF keeps Hello");
+    check(markdown.find("中") != std::string::npos && markdown.find("文") != std::string::npos,
+          "CJK PDF round-trip keeps 中文: " + markdown);
+}
+
+void test_cjk_missing_font_path_errors() {
+    ainiux::pdf::WriteOptions options;
+    options.font_path = "build/no-such-cjk-font.ttf";
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("中\n", options, pdf);
+    check(!err.ok(), "missing --font path fails when CJK is present");
 }
 
 void test_empty_markdown_is_one_page() {
@@ -494,7 +533,9 @@ void run_all() {
     test_from_markdown_llm_typical_needles();
     test_html_to_pdf_via_markdown();
     test_pdf_md_pdf_latin_needles();
-    test_winansi_substitution();
+    test_emoji_still_substituted();
+    test_cjk_roundtrip_with_embedded_ttf();
+    test_cjk_missing_font_path_errors();
     test_empty_markdown_is_one_page();
     test_pdf_write_cancel();
 }
