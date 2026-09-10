@@ -629,6 +629,20 @@ void nfkc_arabic_forms(std::string& text) {
                 i += 3;
                 continue;
             }
+            if (cp >= 0xFEF5 && cp <= 0xFEFC) {
+                unsigned alef = 0x0627;
+                if (cp <= 0xFEF6) {
+                    alef = 0x0622;
+                } else if (cp <= 0xFEF8) {
+                    alef = 0x0623;
+                } else if (cp <= 0xFEFA) {
+                    alef = 0x0625;
+                }
+                append_utf8(out, 0x0644);
+                append_utf8(out, alef);
+                i += 3;
+                continue;
+            }
         }
         out.push_back(text[i]);
         ++i;

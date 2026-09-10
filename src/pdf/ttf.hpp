@@ -61,10 +61,12 @@ class TrueTypeFont {
 };
 
 std::string find_cjk_font_path(const std::string& explicit_path);
+std::string find_rtl_font_path(const std::string& explicit_path, bool need_hebrew, bool need_arabic);
 Error embed_cid_type0(DocumentWriter& writer, const std::string& subset_ttf, const TtfInfo& info,
                       const std::vector<std::uint16_t>& cid_widths_1000,
                       const std::unordered_map<unsigned, std::uint16_t>& cid_of_cp,
                       std::uint32_t& type0);
 Error make_placeholder_cjk_ttf(std::string& out);
+Error make_placeholder_rtl_ttf(std::string& out);
 
 }  // namespace ainiux::pdf

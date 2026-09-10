@@ -3,6 +3,7 @@
 #include "html/html.hpp"
 #include "pdf/document.hpp"
 #include "pdf/pdf.hpp"
+#include "pdf/rtl.hpp"
 #include "pdf/stream.hpp"
 #include "pdf/ttf.hpp"
 #include "pdf/token.hpp"
@@ -187,7 +188,9 @@ void test_open_corpus_page_counts() {
         {"tests/pdf_files/ru-llm-eval-short-note.pdf", 1},
         {"tests/pdf_files/ru-transformers-short-note.pdf", 2},
         {"tests/pdf_files/arabic-prose-sample.pdf", 8},
+        {"tests/pdf_files/hebrew-prose-sample.pdf", 1},
         {"tests/pdf_files/chinese-proverbs-collection.pdf", 46},
+        {"tests/pdf_files/chinese-tang-poems-traditional.pdf", 1},
         {"tests/pdf_files/DeepSeek2501.12948v1.pdf", 22},
         {"tests/pdf_files/Nvidia-Quarterly-Presentation-final-1.pdf", 17},
         {"tests/pdf_files/dgx-spark.pdf", 81},
@@ -220,6 +223,126 @@ void test_to_markdown_russian_needle() {
     check(err.ok(), "Russian PDF to markdown: " + err.message);
     check(markdown.find("языковая модель") != std::string::npos || markdown.find("языков") != std::string::npos,
           "Russian PDF markdown keeps Cyrillic");
+}
+
+bool has_rtl_or_logical(const std::string& markdown, const std::string& logical) {
+    if (markdown.find(logical) != std::string::npos) {
+        return true;
+    }
+    std::vector<std::string> chars;
+    for (std::size_t i = 0; i < logical.size();) {
+        const unsigned char lead = static_cast<unsigned char>(logical[i]);
+        std::size_t n = 1;
+        if ((lead & 0x80) == 0) {
+            n = 1;
+        } else if ((lead & 0xE0) == 0xC0) {
+            n = 2;
+        } else if ((lead & 0xF0) == 0xE0) {
+            n = 3;
+        } else if ((lead & 0xF8) == 0xF0) {
+            n = 4;
+        }
+        if (n == 0 || i + n > logical.size()) {
+            n = 1;
+        }
+        chars.push_back(logical.substr(i, n));
+        i += n;
+    }
+    std::string visual;
+    for (auto it = chars.rbegin(); it != chars.rend(); ++it) {
+        visual += *it;
+    }
+    return markdown.find(visual) != std::string::npos;
+}
+
+void test_to_markdown_arabic_needles() {
+    const std::string bytes = read_fixture("tests/pdf_files/arabic-prose-sample.pdf");
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(bytes, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "Arabic fixture opens: " + open_err.message);
+    check(document.page_count() == 8, "Arabic fixture is eight pages");
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(err.ok(), "Arabic PDF to markdown: " + err.message);
+    check(markdown.find("Ibn al-Muqaffa") != std::string::npos, "Arabic PDF keeps Latin name");
+    check(markdown.find("https://example.org/kalila") != std::string::npos, "Arabic PDF keeps URL");
+    check(has_rtl_or_logical(markdown, "كليلة"), "Arabic PDF keeps كليلة");
+    check(has_rtl_or_logical(markdown, "دمنة"), "Arabic PDF keeps دمنة");
+    check(has_rtl_or_logical(markdown, "شتربة"), "Arabic PDF keeps شتربة");
+}
+
+void test_arabic_shaping() {
+    std::vector<unsigned> lam_alef;
+    ainiux::pdf::decode_utf8("لا", lam_alef);
+    ainiux::pdf::shape_arabic(lam_alef);
+    check(lam_alef.size() == 1 && lam_alef[0] == 0xFEFB, "لا becomes Lam-Alef isolated ligature");
+
+    std::vector<unsigned> bab;
+    ainiux::pdf::decode_utf8("باب", bab);
+    ainiux::pdf::shape_arabic(bab);
+    check(bab.size() == 3, "باب stays three glyphs");
+    check(bab[0] == 0xFE91 && bab[1] == 0xFE8E && bab[2] == 0xFE8F,
+          "باب shapes to beh-init, alef-final, beh-isol");
+
+    std::vector<unsigned> already = {0xFEFB};
+    ainiux::pdf::shape_arabic(already);
+    check(already.size() == 1 && already[0] == 0xFEFB, "already-shaped ligature is left alone");
+}
+
+void test_hebrew_visual_order() {
+    std::vector<unsigned> mixed;
+    ainiux::pdf::decode_utf8("Hello שלום", mixed);
+    const std::vector<unsigned> visual = ainiux::pdf::visual_order_rtl(mixed);
+    const std::string out = ainiux::pdf::encode_utf8(visual);
+    check(out.find("Hello") != std::string::npos, "visual RTL keeps Hello");
+    check(out.size() >= 5 && out.compare(out.size() - 5, 5, "Hello") == 0, "Hello stays a trailing LTR run");
+    check(has_rtl_or_logical(out, "שלום"), "visual RTL keeps שלום");
+
+    std::vector<unsigned> dotted = {0x05D1, 0x05BC, 0x05D0};
+    ainiux::pdf::reverse_grapheme_clusters(dotted);
+    check(dotted.size() == 3 && dotted[0] == 0x05D0 && dotted[1] == 0x05D1 && dotted[2] == 0x05BC,
+          "grapheme reverse keeps Hebrew dagesh on its base");
+}
+
+void test_to_markdown_hebrew_needles() {
+    const std::string bytes = read_fixture("tests/pdf_files/hebrew-prose-sample.pdf");
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(bytes, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "Hebrew fixture opens: " + open_err.message);
+    check(document.page_count() == 1, "Hebrew fixture is one page");
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(err.ok(), "Hebrew PDF to markdown: " + err.message);
+    check(markdown.find("Hebrew RTL sample") != std::string::npos, "Hebrew PDF keeps English caption");
+    check(has_rtl_or_logical(markdown, "תהלים"), "Hebrew PDF keeps תהלים");
+    check(has_rtl_or_logical(markdown, "מזמור לדוד"), "Hebrew PDF keeps מזמור לדוד");
+    check(has_rtl_or_logical(markdown, "לא אחסר"), "Hebrew PDF keeps לא אחסר");
+    check(has_rtl_or_logical(markdown, "בגיא צלמות"), "Hebrew PDF keeps בגיא צלמות");
+    check(has_rtl_or_logical(markdown, "לארך ימים"), "Hebrew PDF keeps לארך ימים");
+}
+
+void test_to_markdown_traditional_chinese_needles() {
+    const std::string bytes = read_fixture("tests/pdf_files/chinese-tang-poems-traditional.pdf");
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(bytes, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "Traditional Chinese fixture opens: " + open_err.message);
+    check(document.page_count() == 1, "Traditional Chinese fixture is one page");
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(err.ok(), "Traditional Chinese PDF to markdown: " + err.message);
+    check(markdown.find("靜夜思") != std::string::npos, "Traditional PDF keeps 靜夜思");
+    check(markdown.find("舉頭") != std::string::npos, "Traditional PDF keeps 舉頭");
+    check(markdown.find("故鄉") != std::string::npos, "Traditional PDF keeps 故鄉");
+    check(markdown.find("不覺曉") != std::string::npos, "Traditional PDF keeps 不覺曉");
+    check(markdown.find("處處") != std::string::npos, "Traditional PDF keeps 處處");
+    check(markdown.find("夜來風雨聲") != std::string::npos, "Traditional PDF keeps 夜來風雨聲");
+    check(markdown.find("登鸛雀樓") != std::string::npos, "Traditional PDF keeps 登鸛雀樓");
+    check(markdown.find("黃河") != std::string::npos, "Traditional PDF keeps 黃河");
+    check(markdown.find("欲窮") != std::string::npos, "Traditional PDF keeps 欲窮");
+    check(markdown.find("一層樓") != std::string::npos, "Traditional PDF keeps 一層樓");
+    check(markdown.find("静夜思") == std::string::npos, "Traditional PDF is not Simplified 静夜思");
+    check(markdown.find("故乡") == std::string::npos, "Traditional PDF is not Simplified 故乡");
+    check(markdown.find("一层楼") == std::string::npos, "Traditional PDF is not Simplified 一层楼");
 }
 
 std::string markdown_of(const std::string& content) {
@@ -468,6 +591,85 @@ void test_cjk_missing_font_path_errors() {
     check(!err.ok(), "missing --font path fails when CJK is present");
 }
 
+std::string write_placeholder_rtl_font() {
+    std::string ttf;
+    const ainiux::Error err = ainiux::pdf::make_placeholder_rtl_ttf(ttf);
+    check(err.ok(), "placeholder RTL TTF: " + err.message);
+    const char* path = "build/test_placeholder_rtl.ttf";
+    std::ofstream out(path, std::ios::binary);
+    check(static_cast<bool>(out), "can write RTL placeholder font");
+    out.write(ttf.data(), static_cast<std::streamsize>(ttf.size()));
+    check(static_cast<bool>(out), "RTL placeholder font write finishes");
+    return path;
+}
+
+void test_rtl_roundtrip_with_embedded_ttf() {
+    ainiux::pdf::WriteOptions options;
+    options.font_path = write_placeholder_rtl_font();
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("Hello שלום\n\nباب و لا\n", options, pdf);
+    check(err.ok(), "RTL markdown to PDF: " + err.message);
+    check(pdf.find("/Identity-H") != std::string::npos, "RTL PDF uses Identity-H");
+    check(pdf.find("/CIDFontType2") != std::string::npos, "RTL PDF embeds CIDFontType2");
+    check(pdf.find("/FA ") != std::string::npos, "RTL PDF uses /FA font resource");
+    check(options.substituted_glyphs == 0, "embedded RTL TTF avoids substitution");
+    check(!options.rtl_font_missing, "placeholder RTL font is not reported missing");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "RTL PDF extracts: " + extract_err.message);
+    check(markdown.find("Hello") != std::string::npos, "RTL PDF keeps Hello");
+    check(has_rtl_or_logical(markdown, "שלום"), "RTL PDF round-trip keeps שלום: " + markdown);
+    check(has_rtl_or_logical(markdown, "باب"), "RTL PDF round-trip keeps باب: " + markdown);
+    check(has_rtl_or_logical(markdown, "لا"), "RTL PDF round-trip keeps لا: " + markdown);
+}
+
+void test_rtl_missing_font_path_errors() {
+    ainiux::pdf::WriteOptions options;
+    options.font_path = "build/no-such-rtl-font.ttf";
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("שלום\n", options, pdf);
+    check(!err.ok(), "missing --font path fails when Hebrew is present");
+}
+
+void test_pdf_md_pdf_hebrew_needles() {
+    const std::string bytes = read_fixture("tests/pdf_files/hebrew-prose-sample.pdf");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "Hebrew extract for reflow: " + extract_err.message);
+    ainiux::pdf::WriteOptions options;
+    options.font_path = write_placeholder_rtl_font();
+    std::string pdf;
+    const ainiux::Error write_err = ainiux::pdf::from_markdown(markdown, options, pdf);
+    check(write_err.ok(), "Hebrew reflow write: " + write_err.message);
+    std::string again;
+    const ainiux::Error again_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, again);
+    check(again_err.ok(), "Hebrew reflow extract: " + again_err.message);
+    check(again.find("Hebrew RTL sample") != std::string::npos, "Hebrew reflow keeps English caption");
+    check(has_rtl_or_logical(again, "תהלים"), "Hebrew reflow keeps תהלים");
+    check(has_rtl_or_logical(again, "מזמור לדוד"), "Hebrew reflow keeps מזמור לדוד");
+    check(has_rtl_or_logical(again, "לא אחסר"), "Hebrew reflow keeps לא אחסר");
+}
+
+void test_pdf_md_pdf_arabic_needles() {
+    const std::string bytes = read_fixture("tests/pdf_files/arabic-prose-sample.pdf");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "Arabic extract for reflow: " + extract_err.message);
+    ainiux::pdf::WriteOptions options;
+    options.font_path = write_placeholder_rtl_font();
+    std::string pdf;
+    const ainiux::Error write_err = ainiux::pdf::from_markdown(markdown, options, pdf);
+    check(write_err.ok(), "Arabic reflow write: " + write_err.message);
+    std::string again;
+    const ainiux::Error again_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, again);
+    check(again_err.ok(), "Arabic reflow extract: " + again_err.message);
+    check(again.find("Ibn al-Muqaffa") != std::string::npos, "Arabic reflow keeps Latin name");
+    check(again.find("https://example.org/kalila") != std::string::npos, "Arabic reflow keeps URL");
+    check(has_rtl_or_logical(again, "كليلة"), "Arabic reflow keeps كليلة");
+    check(has_rtl_or_logical(again, "دمنة"), "Arabic reflow keeps دمنة");
+    check(has_rtl_or_logical(again, "شتربة"), "Arabic reflow keeps شتربة");
+}
+
 void test_empty_markdown_is_one_page() {
     ainiux::pdf::WriteOptions options;
     std::string pdf;
@@ -519,6 +721,11 @@ void run_all() {
     test_open_corpus_page_counts();
     test_to_markdown_extracts_simple_pdf();
     test_to_markdown_russian_needle();
+    test_to_markdown_hebrew_needles();
+    test_to_markdown_arabic_needles();
+    test_arabic_shaping();
+    test_hebrew_visual_order();
+    test_to_markdown_traditional_chinese_needles();
     test_tj_kerning_does_not_split_words();
     test_tj_word_gap_inserts_one_space();
     test_tj_tex_word_glue_is_not_glued();
@@ -536,6 +743,10 @@ void run_all() {
     test_emoji_still_substituted();
     test_cjk_roundtrip_with_embedded_ttf();
     test_cjk_missing_font_path_errors();
+    test_rtl_roundtrip_with_embedded_ttf();
+    test_rtl_missing_font_path_errors();
+    test_pdf_md_pdf_hebrew_needles();
+    test_pdf_md_pdf_arabic_needles();
     test_empty_markdown_is_one_page();
     test_pdf_write_cancel();
 }

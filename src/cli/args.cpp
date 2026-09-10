@@ -1554,7 +1554,7 @@ Options:
       --format text|json|ndjson|jsonl|jsond
                                 In image mode: png|jpeg|webp|auto (default png).
       --output-format html|md|plaintext|pdf|json|jsond|ndjson
-      --font PATH               TrueType (.ttf/.ttc with glyf) for CJK in PDF output.
+      --font PATH               TrueType (.ttf/.ttc with glyf) for CJK/Hebrew/Arabic PDF output.
                                 Also AINIUX_PDF_FONT, then a small system-font allowlist.
       --output PATH             Use 'stdout' to write to standard output.
                                 In image mode, omit to write the first unused imageN.png.

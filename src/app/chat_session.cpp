@@ -60,6 +60,10 @@ Error write_rendered_assistant_output(const cli::Options& options,
             std::cerr << "warning: CJK characters were replaced with ? (install a TrueType CJK font "
                          "such as DroidSansFallback or pass --font PATH)\n";
         }
+        if (!options.quiet && pdf_options.rtl_font_missing) {
+            std::cerr << "warning: Hebrew/Arabic characters were replaced with ? (install Noto Naskh "
+                         "Arabic or Noto Sans Hebrew, or pass --font PATH)\n";
+        }
         if (!options.quiet && pdf_options.substituted_glyphs > 0) {
             std::cerr << "warning: replaced " << pdf_options.substituted_glyphs
                       << " character(s) that cannot be encoded in the PDF fonts\n";

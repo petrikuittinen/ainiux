@@ -27,6 +27,8 @@ std::string utf8_to_win_ansi(std::string_view utf8, std::size_t& substituted);
 unsigned next_utf8(std::string_view utf8, std::size_t& i);
 int win_ansi_code(unsigned cp);
 bool is_cjk_cp(unsigned cp);
+bool is_hebrew_cp(unsigned cp);
+bool is_arabic_cp(unsigned cp);
 bool needs_embedded_cp(unsigned cp);
 
 }  // namespace ainiux::pdf

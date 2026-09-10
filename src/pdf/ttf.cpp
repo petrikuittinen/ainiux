@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <unordered_set>
 
 namespace ainiux::pdf {
@@ -549,6 +550,67 @@ std::string pdf_name_escape(const std::string& name) {
     return out.empty() ? std::string("Embedded") : out;
 }
 
+std::string placeholder_from_cps(const std::vector<unsigned>& cps, const std::string& ps_name) {
+    auto simple_square = []() {
+        std::string g;
+        wi16(g, 1);
+        wi16(g, 100);
+        wi16(g, 100);
+        wi16(g, 900);
+        wi16(g, 900);
+        wu16(g, 3);
+        wu16(g, 0);
+        g.push_back(static_cast<char>(0x01));
+        g.push_back(static_cast<char>(0x01));
+        g.push_back(static_cast<char>(0x01));
+        g.push_back(static_cast<char>(0x01));
+        wi16(g, 100);
+        wi16(g, 800);
+        wi16(g, 0);
+        wi16(g, -800);
+        wi16(g, 100);
+        wi16(g, 0);
+        wi16(g, 0);
+        wi16(g, 800);
+        return g;
+    };
+    std::string glyf;
+    std::string loca;
+    wu32(loca, 0);
+    wu32(loca, 0);
+    const std::string sq = simple_square();
+    std::string hmtx;
+    wu16(hmtx, 0);
+    wi16(hmtx, 0);
+    std::unordered_map<unsigned, std::uint16_t> cmap;
+    for (std::size_t i = 0; i < cps.size(); ++i) {
+        glyf += sq;
+        wu32(loca, static_cast<std::uint32_t>(glyf.size()));
+        wu16(hmtx, 1000);
+        wi16(hmtx, 100);
+        cmap[cps[i]] = static_cast<std::uint16_t>(i + 1);
+    }
+    TtfInfo info;
+    info.units_per_em = 1000;
+    info.x_min = 100;
+    info.y_min = 100;
+    info.x_max = 900;
+    info.y_max = 900;
+    info.postscript_name = ps_name;
+    const std::uint16_t ng = static_cast<std::uint16_t>(cps.size() + 1);
+    std::vector<std::pair<std::string, std::string>> tables;
+    tables.push_back({"cmap", cmap_from_map(cmap)});
+    tables.push_back({"glyf", glyf});
+    tables.push_back({"head", make_head(info, 1)});
+    tables.push_back({"hhea", make_hhea(info, ng)});
+    tables.push_back({"hmtx", hmtx});
+    tables.push_back({"loca", loca});
+    tables.push_back({"maxp", make_maxp(ng, {})});
+    tables.push_back({"name", name_table(info.postscript_name)});
+    tables.push_back({"post", post_table()});
+    return wrap_sfnt(std::move(tables));
+}
+
 }  // namespace
 
 Error TrueTypeFont::parse_face(std::size_t offset) {
@@ -844,6 +906,96 @@ std::string find_cjk_font_path(const std::string& explicit_path) {
     return {};
 }
 
+std::string find_rtl_font_path(const std::string& explicit_path, bool need_hebrew, bool need_arabic) {
+    if (!need_hebrew && !need_arabic) {
+        return {};
+    }
+    auto covers = [&](const TrueTypeFont& font) {
+        if (!font.has_glyf()) {
+            return false;
+        }
+        if (need_hebrew && font.glyph_id(0x05D0) == 0) {
+            return false;
+        }
+        if (need_arabic && font.glyph_id(0xFE8F) == 0) {
+            return false;
+        }
+        return true;
+    };
+    auto try_explicit = [&](const std::string& path) -> std::string {
+        if (path.empty()) {
+            return {};
+        }
+        TrueTypeFont font;
+        if (!font.load_file(path).ok()) {
+            return path;
+        }
+        return covers(font) ? path : std::string{};
+    };
+    if (!explicit_path.empty()) {
+        const std::string hit = try_explicit(explicit_path);
+        if (!hit.empty()) {
+            return hit;
+        }
+    } else {
+        const std::string env = platform::environment_value("AINIUX_PDF_FONT");
+        const std::string hit = try_explicit(env);
+        if (!hit.empty()) {
+            return hit;
+        }
+    }
+    std::vector<std::string> candidates;
+    const auto add = [&](std::initializer_list<const char*> paths) {
+        for (const char* path : paths) {
+            candidates.push_back(path);
+        }
+    };
+    if (need_hebrew && need_arabic) {
+        add({"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+             "/usr/share/fonts/truetype/freefont/FreeSerif.ttf"});
+    }
+    if (need_arabic) {
+        add({"/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+             "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+             "/usr/share/fonts/truetype/kacst/KacstNaskh.ttf",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+             "/usr/share/fonts/truetype/freefont/FreeSerif.ttf"});
+    }
+    if (need_hebrew) {
+        add({"/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+             "/usr/share/fonts/truetype/noto/NotoSerifHebrew-Regular.ttf",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+             "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+             "/usr/share/fonts/truetype/freefont/FreeSerif.ttf"});
+    }
+    add({"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+         "/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial Unicode.ttf",
+         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+         "/System/Library/Fonts/Supplemental/Times New Roman.ttf"});
+    const std::string windir = platform::environment_value("WINDIR");
+    if (!windir.empty()) {
+        candidates.insert(candidates.begin(),
+                          {windir + "/Fonts/arial.ttf", windir + "/Fonts/tahoma.ttf", windir + "/Fonts/times.ttf",
+                           windir + "/Fonts/david.ttf", windir + "/Fonts/tradbdo.ttf",
+                           windir + "/Fonts/segoeui.ttf"});
+    }
+    const std::string home = platform::home_directory();
+    if (!home.empty()) {
+        candidates.push_back(home + "/.local/share/fonts/NotoNaskhArabic-Regular.ttf");
+        candidates.push_back(home + "/.local/share/fonts/NotoSansHebrew-Regular.ttf");
+        candidates.push_back(home + "/.fonts/NotoNaskhArabic-Regular.ttf");
+        candidates.push_back(home + "/.fonts/NotoSansHebrew-Regular.ttf");
+    }
+    for (const std::string& path : candidates) {
+        TrueTypeFont font;
+        if (font.load_file(path).ok() && covers(font)) {
+            return path;
+        }
+    }
+    return {};
+}
+
 Error embed_cid_type0(DocumentWriter& writer, const std::string& subset_ttf, const TtfInfo& info,
                       const std::vector<std::uint16_t>& cid_widths_1000,
                       const std::unordered_map<unsigned, std::uint16_t>& cid_of_cp,
@@ -919,66 +1071,33 @@ Error embed_cid_type0(DocumentWriter& writer, const std::string& subset_ttf, con
 }
 
 Error make_placeholder_cjk_ttf(std::string& out) {
-    auto simple_square = []() {
-        std::string g;
-        wi16(g, 1);
-        wi16(g, 100);
-        wi16(g, 100);
-        wi16(g, 900);
-        wi16(g, 900);
-        wu16(g, 3);
-        wu16(g, 0);
-        g.push_back(static_cast<char>(0x01));
-        g.push_back(static_cast<char>(0x01));
-        g.push_back(static_cast<char>(0x01));
-        g.push_back(static_cast<char>(0x01));
-        wi16(g, 100);
-        wi16(g, 800);
-        wi16(g, 0);
-        wi16(g, -800);
-        wi16(g, 100);
-        wi16(g, 0);
-        wi16(g, 0);
-        wi16(g, 800);
-        return g;
-    };
-    std::string glyf;
-    std::string loca;
-    wu32(loca, 0);
-    wu32(loca, 0);
-    const std::string sq = simple_square();
-    glyf += sq;
-    wu32(loca, static_cast<std::uint32_t>(glyf.size()));
-    glyf += sq;
-    wu32(loca, static_cast<std::uint32_t>(glyf.size()));
-    std::string hmtx;
-    wu16(hmtx, 0);
-    wi16(hmtx, 0);
-    wu16(hmtx, 1000);
-    wi16(hmtx, 100);
-    wu16(hmtx, 1000);
-    wi16(hmtx, 100);
-    TtfInfo info;
-    info.units_per_em = 1000;
-    info.x_min = 100;
-    info.y_min = 100;
-    info.x_max = 900;
-    info.y_max = 900;
-    info.postscript_name = "AiniuxTestCJK";
-    std::unordered_map<unsigned, std::uint16_t> cmap;
-    cmap[0x4E2D] = 1;
-    cmap[0x6587] = 2;
-    std::vector<std::pair<std::string, std::string>> tables;
-    tables.push_back({"cmap", cmap_from_map(cmap)});
-    tables.push_back({"glyf", glyf});
-    tables.push_back({"head", make_head(info, 1)});
-    tables.push_back({"hhea", make_hhea(info, 3)});
-    tables.push_back({"hmtx", hmtx});
-    tables.push_back({"loca", loca});
-    tables.push_back({"maxp", make_maxp(3, {})});
-    tables.push_back({"name", name_table(info.postscript_name)});
-    tables.push_back({"post", post_table()});
-    out = wrap_sfnt(std::move(tables));
+    out = placeholder_from_cps({0x4E2D, 0x6587}, "AiniuxTestCJK");
+    return ok_error();
+}
+
+Error make_placeholder_rtl_ttf(std::string& out) {
+    std::vector<unsigned> cps;
+    cps.push_back(0x060C);
+    cps.push_back(0x061B);
+    cps.push_back(0x061F);
+    cps.push_back(0x0640);
+    cps.push_back(0x06D4);
+    for (unsigned cp = 0x05D0; cp <= 0x05EA; ++cp) {
+        cps.push_back(cp);
+    }
+    for (unsigned cp = 0x0621; cp <= 0x064A; ++cp) {
+        cps.push_back(cp);
+    }
+    for (unsigned cp = 0xFE80; cp <= 0xFEFC; ++cp) {
+        cps.push_back(cp);
+    }
+    const unsigned extra[] = {0xFB56, 0xFB57, 0xFB58, 0xFB59, 0xFB7A, 0xFB7B, 0xFB7C, 0xFB7D,
+                              0xFB8A, 0xFB8B, 0xFB8E, 0xFB8F, 0xFB90, 0xFB91, 0xFB92, 0xFB93,
+                              0xFB94, 0xFB95, 0xFBFC, 0xFBFD, 0xFBFE, 0xFBFF};
+    for (unsigned cp : extra) {
+        cps.push_back(cp);
+    }
+    out = placeholder_from_cps(cps, "AiniuxTestRTL");
     return ok_error();
 }
 

@@ -23,6 +23,7 @@ struct WriteOptions {
     std::size_t substituted_glyphs = 0;
     std::string font_path;
     bool cjk_font_missing = false;
+    bool rtl_font_missing = false;
 };
 
 // Canonical conversion is PDF ↔ Markdown. Callers that want plaintext or HTML

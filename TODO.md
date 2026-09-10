@@ -87,7 +87,7 @@
 
 - Extend interactive `/attach` to queue multiple heterogeneous attachments with clear per-item status; keep it separate from `/insert` text editing.
 
-1. PDF Unicode write: CJK Markdown→PDF via a subsetted system/`--font` TrueType (Type0 / Identity-H) is implemented. Arabic/RTL, emoji color fonts, CFF/OTF CJK, and encrypted PDF read/write remain later.
+1. PDF Unicode write: CJK, Hebrew, and Arabic Markdown→PDF via a subsetted system/`--font` TrueType (Type0 / Identity-H) is implemented. Arabic uses Presentation Forms-B joining, not HarfBuzz. Emoji color fonts, CFF/OTF CJK, and encrypted PDF read/write remain later.
 2. MS Word input (`.docx`-to-Markdown) and MS Word output (Markdown-to-`.docx`).
 
 PDF↔Markdown is implemented (`--input file.pdf`, `--output-format pdf`). Do not treat DOCX binary data as prompt text.

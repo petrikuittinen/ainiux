@@ -155,6 +155,10 @@ void warn_pdf_substitutions(bool quiet, const pdf::WriteOptions& options) {
         std::cerr << "warning: CJK characters were replaced with ? (install a TrueType CJK font "
                      "such as DroidSansFallback or pass --font PATH)\n";
     }
+    if (options.rtl_font_missing) {
+        std::cerr << "warning: Hebrew/Arabic characters were replaced with ? (install Noto Naskh "
+                     "Arabic or Noto Sans Hebrew, or pass --font PATH)\n";
+    }
     if (options.substituted_glyphs > 0) {
         std::cerr << "warning: replaced " << options.substituted_glyphs
                   << " character(s) that cannot be encoded in the PDF fonts\n";

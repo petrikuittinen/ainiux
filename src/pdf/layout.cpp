@@ -3,6 +3,7 @@
 #include "ainiux/version.hpp"
 #include "markdown/blocks.hpp"
 #include "pdf/fonts.hpp"
+#include "pdf/rtl.hpp"
 #include "pdf/ttf.hpp"
 #include "pdf/write.hpp"
 
@@ -69,7 +70,7 @@ struct Frag {
     double size = kSizeBody;
     std::string winansi;
     std::vector<std::uint16_t> cids;
-    bool cid = false;
+    int cid_kind = 0;  // 0 Latin, 1 CJK /FC, 2 RTL /FA
     std::string url;
     double width = 0;
     bool strike = false;
@@ -96,10 +97,14 @@ struct Layout {
     std::uint32_t encoding = 0;
     std::uint32_t fonts[static_cast<int>(BaseFont::Count)]{};
     std::uint32_t cjk_type0 = 0;
+    std::uint32_t rtl_type0 = 0;
     TrueTypeFont cjk_face;
-    std::unordered_map<unsigned, std::uint16_t> cid_of_cp;
+    TrueTypeFont rtl_face;
+    std::unordered_map<unsigned, std::uint16_t> cjk_cid_of_cp;
+    std::unordered_map<unsigned, std::uint16_t> rtl_cid_of_cp;
     bool have_cjk = false;
-    bool current_is_cid = false;
+    bool have_rtl = false;
+    int current_cid_kind = 0;
     std::string title;
     std::string heading;
     std::string content;
@@ -167,24 +172,24 @@ struct Layout {
         current_gray = -1;
     }
 
-    void ensure_font(BaseFont font, double size, bool cid = false) {
-        if (cid) {
-            if (current_is_cid && current_size == size && current_size != 0) {
+    void ensure_font(BaseFont font, double size, int cid_kind = 0) {
+        if (cid_kind != 0) {
+            if (current_cid_kind == cid_kind && current_size == size && current_size != 0) {
                 return;
             }
-            append_op("/FC " + pdf_number(size) + " Tf");
-            current_is_cid = true;
+            append_op(std::string(cid_kind == 2 ? "/FA " : "/FC ") + pdf_number(size) + " Tf");
+            current_cid_kind = cid_kind;
             current_size = size;
             return;
         }
-        if (!current_is_cid && current_size == size && current_font == font && current_size != 0) {
+        if (current_cid_kind == 0 && current_size == size && current_font == font && current_size != 0) {
             return;
         }
         append_op(std::string("/") + kFontRes[static_cast<int>(font)] + " " + pdf_number(size) +
                   " Tf");
         current_font = font;
         current_size = size;
-        current_is_cid = false;
+        current_cid_kind = 0;
     }
 
     void fill_rect(double x, double yb, double w, double h) {
@@ -210,7 +215,7 @@ struct Layout {
         links.clear();
         page_open = false;
         current_size = 0;
-        current_is_cid = false;
+        current_cid_kind = 0;
         current_rgb = false;
         current_gray = -1;
         return ok_error();
@@ -274,9 +279,9 @@ struct Layout {
             current_rgb = false;
             current_gray = 0;
         }
-        ensure_font(frag.font, frag.size, frag.cid);
+        ensure_font(frag.font, frag.size, frag.cid_kind);
         append_op("1 0 0 1 " + pdf_number(x) + " " + pdf_number(baseline) + " Tm");
-        if (frag.cid) {
+        if (frag.cid_kind != 0) {
             std::string hex = "<";
             for (std::uint16_t cid : frag.cids) {
                 char buf[8];
@@ -333,7 +338,7 @@ struct Layout {
         return frag;
     }
 
-    Frag cid_frag(const markdown::Run& run, unsigned cp, double size, BaseFont def_font) {
+    Frag cid_frag(const markdown::Run& run, unsigned cp, double size, BaseFont def_font, int cid_kind) {
         Frag frag;
         unsigned style = run.style;
         if ((style & static_cast<unsigned>(markdown::RunStyle::Code)) == 0) {
@@ -347,12 +352,17 @@ struct Layout {
         frag.font = font_for_style(style);
         frag.size = (style & static_cast<unsigned>(markdown::RunStyle::Code)) ? std::min(size, kSizeCode + 1)
                                                                                : size;
-        frag.cid = true;
-        frag.cids.push_back(cid_of_cp[cp]);
+        frag.cid_kind = cid_kind;
+        if (cid_kind == 2) {
+            frag.cids.push_back(rtl_cid_of_cp[cp]);
+            frag.width = rtl_face.width_pt(cp, frag.size);
+        } else {
+            frag.cids.push_back(cjk_cid_of_cp[cp]);
+            frag.width = cjk_face.width_pt(cp, frag.size);
+        }
         frag.url = run.url;
         frag.link = !run.url.empty();
         frag.strike = (style & static_cast<unsigned>(markdown::RunStyle::Strike)) != 0;
-        frag.width = cjk_face.width_pt(cp, frag.size);
         return frag;
     }
 
@@ -361,40 +371,46 @@ struct Layout {
         if (run.text.empty()) {
             return out;
         }
+        markdown::Run shaped = run;
+        shaped.text = shape_utf8(run.text);
         size_t i = 0;
-        while (i < run.text.size()) {
-            if (run.text[i] == ' ' || run.text[i] == '\t') {
+        while (i < shaped.text.size()) {
+            if (shaped.text[i] == ' ' || shaped.text[i] == '\t') {
                 size_t end = i;
-                while (end < run.text.size() && (run.text[end] == ' ' || run.text[end] == '\t')) {
+                while (end < shaped.text.size() && (shaped.text[end] == ' ' || shaped.text[end] == '\t')) {
                     ++end;
                 }
-                out.push_back(latin_frag(run, run.text.substr(i, end - i), size, def_font));
+                out.push_back(latin_frag(shaped, shaped.text.substr(i, end - i), size, def_font));
                 i = end;
                 continue;
             }
             const size_t cp_start = i;
-            const unsigned cp = next_utf8(run.text, i);
+            const unsigned cp = next_utf8(shaped.text, i);
             if (cp == 0) {
                 continue;
             }
-            if (have_cjk && cid_of_cp.count(cp)) {
-                out.push_back(cid_frag(run, cp, size, def_font));
+            if (have_rtl && rtl_cid_of_cp.count(cp)) {
+                out.push_back(cid_frag(run, cp, size, def_font, 2));
+                continue;
+            }
+            if (have_cjk && cjk_cid_of_cp.count(cp)) {
+                out.push_back(cid_frag(run, cp, size, def_font, 1));
                 continue;
             }
             size_t end = i;
-            while (end < run.text.size()) {
-                const char ch = run.text[end];
+            while (end < shaped.text.size()) {
+                const char ch = shaped.text[end];
                 if (ch == ' ' || ch == '\t') {
                     break;
                 }
                 size_t next = end;
-                const unsigned look = next_utf8(run.text, next);
-                if (have_cjk && cid_of_cp.count(look)) {
+                const unsigned look = next_utf8(shaped.text, next);
+                if ((have_rtl && rtl_cid_of_cp.count(look)) || (have_cjk && cjk_cid_of_cp.count(look))) {
                     break;
                 }
                 end = next;
             }
-            out.push_back(latin_frag(run, run.text.substr(cp_start, end - cp_start), size, def_font));
+            out.push_back(latin_frag(shaped, shaped.text.substr(cp_start, end - cp_start), size, def_font));
             i = end;
         }
         return out;
@@ -402,7 +418,7 @@ struct Layout {
 
     static bool same_paint(const Frag& a, const Frag& b) {
         return a.font == b.font && a.size == b.size && a.link == b.link && a.strike == b.strike &&
-               a.url == b.url && a.cid == b.cid;
+               a.url == b.url && a.cid_kind == b.cid_kind;
     }
 
     double measure_utf8(std::string_view text, double size, BaseFont font) {
@@ -420,7 +436,11 @@ struct Layout {
     void draw_utf8_at(std::string_view text, double x, double baseline, double size, BaseFont font) {
         markdown::Run run;
         run.text.assign(text.data(), text.size());
-        for (const Frag& frag : split_run(run, size, font)) {
+        std::vector<Frag> frags = split_run(run, size, font);
+        if (utf8_has_rtl(text)) {
+            std::reverse(frags.begin(), frags.end());
+        }
+        for (const Frag& frag : frags) {
             if (!frag.empty()) {
                 show_frag(frag, x, baseline);
             }
@@ -430,12 +450,12 @@ struct Layout {
         }
     }
 
-    Error render_line(double left, const std::vector<Frag>& frags, double lineheight) {
+    Error render_line(double left, double text_x, const std::vector<Frag>& frags, double lineheight) {
         Error err = ensure_space(lineheight);
         if (!err.ok()) {
             return err;
         }
-        double x = left;
+        double x = text_x;
         size_t i = 0;
         while (i < frags.size()) {
             const Frag& frag = frags[i];
@@ -473,7 +493,11 @@ struct Layout {
     Error format_runs(const std::vector<markdown::Run>& runs, double size, double left, double right,
                       BaseFont def_font, const std::string& leader) {
         std::vector<Frag> words;
+        bool rtl_para = false;
         for (const markdown::Run& run : runs) {
+            if (utf8_has_rtl(run.text)) {
+                rtl_para = true;
+            }
             auto parts = split_run(run, size, def_font);
             words.insert(words.end(), parts.begin(), parts.end());
             if (run.hard_break_after && !words.empty()) {
@@ -492,11 +516,115 @@ struct Layout {
             lead.width = -text_width(lead.font, lead.winansi, lead.size);
             line.push_back(lead);
         }
+        auto line_text_width = [](const std::vector<Frag>& frags) {
+            double w = 0;
+            for (const Frag& frag : frags) {
+                if (frag.width >= 0) {
+                    w += frag.width;
+                }
+            }
+            return w;
+        };
+        auto prepare_rtl = [&](std::vector<Frag>& frags) {
+            if (!rtl_para) {
+                return;
+            }
+            bool any_rtl = false;
+            for (const Frag& frag : frags) {
+                if (frag.cid_kind == 2) {
+                    any_rtl = true;
+                    break;
+                }
+            }
+            if (!any_rtl) {
+                return;
+            }
+            const std::size_t n = frags.size();
+            enum { DirL = 0, DirR = 1, DirN = 2 };
+            std::vector<int> cls(n, DirN);
+            auto is_ltr_word = [](const Frag& frag) {
+                if (frag.cid_kind != 0) {
+                    return false;
+                }
+                for (unsigned char ch : frag.winansi) {
+                    if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            for (std::size_t i = 0; i < n; ++i) {
+                if (frags[i].cid_kind == 2) {
+                    cls[i] = DirR;
+                } else if (frags[i].cid_kind == 1 || is_ltr_word(frags[i])) {
+                    cls[i] = DirL;
+                }
+            }
+            for (std::size_t i = 0; i < n; ++i) {
+                if (cls[i] != DirN) {
+                    continue;
+                }
+                int prev = DirR;
+                int next = DirR;
+                std::size_t p = i;
+                while (p > 0) {
+                    --p;
+                    if (cls[p] != DirN) {
+                        prev = cls[p];
+                        break;
+                    }
+                }
+                std::size_t q = i + 1;
+                while (q < n && cls[q] == DirN) {
+                    ++q;
+                }
+                if (q < n) {
+                    next = cls[q];
+                }
+                cls[i] = (prev == next) ? prev : DirR;
+            }
+            struct Run {
+                std::size_t begin;
+                std::size_t end;
+                int dir;
+            };
+            std::vector<Run> runs;
+            std::size_t i = 0;
+            while (i < n) {
+                Run run{i, i, cls[i]};
+                ++i;
+                while (i < n && cls[i] == run.dir) {
+                    ++i;
+                }
+                run.end = i;
+                runs.push_back(run);
+            }
+            std::vector<Frag> ordered;
+            ordered.reserve(n);
+            for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
+                std::vector<Frag> slice(frags.begin() + static_cast<std::ptrdiff_t>(it->begin),
+                                        frags.begin() + static_cast<std::ptrdiff_t>(it->end));
+                if (it->dir == DirR) {
+                    for (Frag& frag : slice) {
+                        if (frag.cid_kind == 0 && frag.winansi.size() == 1) {
+                            const unsigned mirrored =
+                                mirror_cp(static_cast<unsigned char>(frag.winansi[0]));
+                            frag.winansi[0] = static_cast<char>(mirrored);
+                        }
+                    }
+                    std::reverse(slice.begin(), slice.end());
+                }
+                ordered.insert(ordered.end(), slice.begin(), slice.end());
+            }
+            frags.swap(ordered);
+        };
         auto flush = [&]() -> Error {
             if (line.empty()) {
                 return ok_error();
             }
-            Error err = render_line(left, line, lineheight);
+            prepare_rtl(line);
+            const double text_x = rtl_para ? right - line_text_width(line) : left;
+            Error err = render_line(left, text_x, line, lineheight);
             line.clear();
             used = 0;
             return err;
@@ -514,7 +642,10 @@ struct Layout {
                 }
             }
             if (!space && word.width > width && line.empty()) {
-                Error err = render_line(left, std::vector<Frag>{word}, lineheight);
+                std::vector<Frag> one{word};
+                prepare_rtl(one);
+                const double text_x = rtl_para ? right - line_text_width(one) : left;
+                Error err = render_line(left, text_x, one, lineheight);
                 if (!err.ok()) {
                     return err;
                 }
@@ -754,7 +885,7 @@ std::string font_object(std::uint32_t encoding, BaseFont font) {
            " /Encoding " + std::to_string(encoding) + " 0 R >>";
 }
 
-std::string page_resources(const std::uint32_t* fonts, std::uint32_t cjk_type0) {
+std::string page_resources(const std::uint32_t* fonts, std::uint32_t cjk_type0, std::uint32_t rtl_type0) {
     std::string out = "<< /Font <<";
     for (int i = 0; i < static_cast<int>(BaseFont::Count); ++i) {
         out += " /";
@@ -768,18 +899,38 @@ std::string page_resources(const std::uint32_t* fonts, std::uint32_t cjk_type0) 
         out += std::to_string(cjk_type0);
         out += " 0 R";
     }
+    if (rtl_type0 != 0) {
+        out += " /FA ";
+        out += std::to_string(rtl_type0);
+        out += " 0 R";
+    }
     out += " >> >>";
     return out;
 }
 
-void collect_codepoints(const std::vector<markdown::Block>& blocks, std::vector<unsigned>& cps) {
+void collect_codepoints(const std::vector<markdown::Block>& blocks, std::vector<unsigned>& cjk_cps,
+                        std::vector<unsigned>& rtl_cps, bool& need_hebrew, bool& need_arabic) {
     std::unordered_set<unsigned> seen;
+    need_hebrew = false;
+    need_arabic = false;
     auto add_text = [&](const std::string& text) {
+        const std::string shaped = shape_utf8(text);
         size_t i = 0;
-        while (i < text.size()) {
-            const unsigned cp = next_utf8(text, i);
-            if (cp != 0 && needs_embedded_cp(cp) && seen.insert(cp).second) {
-                cps.push_back(cp);
+        while (i < shaped.size()) {
+            const unsigned cp = next_utf8(shaped, i);
+            if (cp == 0 || !needs_embedded_cp(cp) || !seen.insert(cp).second) {
+                continue;
+            }
+            if (is_hebrew_cp(cp) || is_arabic_cp(cp)) {
+                rtl_cps.push_back(cp);
+                if (is_hebrew_cp(cp)) {
+                    need_hebrew = true;
+                }
+                if (is_arabic_cp(cp)) {
+                    need_arabic = true;
+                }
+            } else {
+                cjk_cps.push_back(cp);
             }
         }
     };
@@ -809,6 +960,7 @@ Error layout_markdown(std::string_view markdown, WriteOptions& options, std::str
     pdf.clear();
     options.substituted_glyphs = 0;
     options.cjk_font_missing = false;
+    options.rtl_font_missing = false;
     Layout layout(options);
     layout.encoding = layout.writer.add_object("<< /Type /Encoding /BaseEncoding /WinAnsiEncoding >>");
     for (int i = 0; i < static_cast<int>(BaseFont::Count); ++i) {
@@ -818,7 +970,10 @@ Error layout_markdown(std::string_view markdown, WriteOptions& options, std::str
 
     const std::vector<markdown::Block> blocks = markdown::parse_blocks(std::string(markdown));
     std::vector<unsigned> cjk_cps;
-    collect_codepoints(blocks, cjk_cps);
+    std::vector<unsigned> rtl_cps;
+    bool need_hebrew = false;
+    bool need_arabic = false;
+    collect_codepoints(blocks, cjk_cps, rtl_cps, need_hebrew, need_arabic);
     if (!cjk_cps.empty()) {
         const std::string path = find_cjk_font_path(options.font_path);
         if (path.empty()) {
@@ -833,19 +988,50 @@ Error layout_markdown(std::string_view markdown, WriteOptions& options, std::str
             } else {
                 std::string subset;
                 std::vector<std::uint16_t> widths;
-                font_err = layout.cjk_face.subset(cjk_cps, subset, layout.cid_of_cp, widths);
+                font_err = layout.cjk_face.subset(cjk_cps, subset, layout.cjk_cid_of_cp, widths);
                 if (!font_err.ok()) {
                     return font_err;
                 }
-                if (layout.cid_of_cp.empty()) {
+                if (layout.cjk_cid_of_cp.empty()) {
                     options.cjk_font_missing = true;
                 } else {
                     font_err = embed_cid_type0(layout.writer, subset, layout.cjk_face.info(), widths,
-                                               layout.cid_of_cp, layout.cjk_type0);
+                                               layout.cjk_cid_of_cp, layout.cjk_type0);
                     if (!font_err.ok()) {
                         return font_err;
                     }
                     layout.have_cjk = true;
+                }
+            }
+        }
+    }
+    if (!rtl_cps.empty()) {
+        const std::string path = find_rtl_font_path(options.font_path, need_hebrew, need_arabic);
+        if (path.empty()) {
+            options.rtl_font_missing = true;
+        } else {
+            Error font_err = layout.rtl_face.load_file(path);
+            if (!font_err.ok()) {
+                if (!options.font_path.empty()) {
+                    return font_err;
+                }
+                options.rtl_font_missing = true;
+            } else {
+                std::string subset;
+                std::vector<std::uint16_t> widths;
+                font_err = layout.rtl_face.subset(rtl_cps, subset, layout.rtl_cid_of_cp, widths);
+                if (!font_err.ok()) {
+                    return font_err;
+                }
+                if (layout.rtl_cid_of_cp.empty()) {
+                    options.rtl_font_missing = true;
+                } else {
+                    font_err = embed_cid_type0(layout.writer, subset, layout.rtl_face.info(), widths,
+                                               layout.rtl_cid_of_cp, layout.rtl_type0);
+                    if (!font_err.ok()) {
+                        return font_err;
+                    }
+                    layout.have_rtl = true;
                 }
             }
         }
@@ -887,7 +1073,8 @@ Error layout_markdown(std::string_view markdown, WriteOptions& options, std::str
             "[0 0 " + pdf_number(kPageWidth) + " " + pdf_number(kPageHeight) + "]";
         const std::uint32_t page = layout.writer.add_object(
             "<< /Type /Page /Parent " + std::to_string(pages_obj) + " 0 R /MediaBox " + box +
-            " /CropBox " + box + " /Resources " + page_resources(layout.fonts, layout.cjk_type0) +
+            " /CropBox " + box + " /Resources " +
+            page_resources(layout.fonts, layout.cjk_type0, layout.rtl_type0) +
             " /Contents " +
             std::to_string(rec.content) + " 0 R" + annots + " >>");
         page_objs.push_back(page);

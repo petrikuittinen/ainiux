@@ -1,5 +1,7 @@
 #include "pdf/fonts.hpp"
 
+#include "pdf/rtl.hpp"
+
 #include <cstdint>
 
 namespace ainiux::pdf {
@@ -211,7 +213,7 @@ bool is_cjk_cp(unsigned cp) {
 }
 
 bool needs_embedded_cp(unsigned cp) {
-    if (is_cjk_cp(cp)) {
+    if (is_cjk_cp(cp) || is_hebrew_cp(cp) || is_arabic_cp(cp)) {
         return true;
     }
     if (cp >= 0x0100 && cp <= 0x024F) {
