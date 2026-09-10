@@ -11,6 +11,7 @@
 #include "context/context.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
+#include "pdf/pdf.hpp"
 #include "output/thinking.hpp"
 #include "ainiux/version.hpp"
 
@@ -44,9 +45,23 @@ bool streams_raw_markdown_output(const cli::Options& options) {
            options.output_format == markdown::OutputFormat::Markdown;
 }
 
-void write_rendered_assistant_output(const cli::Options& options,
-                                     const std::string& content,
-                                     std::ostream& out) {
+Error write_rendered_assistant_output(const cli::Options& options,
+                                      const std::string& content,
+                                      std::ostream& out) {
+    if (options.output_format == markdown::OutputFormat::Pdf) {
+        pdf::WriteOptions pdf_options;
+        std::string rendered;
+        Error err = pdf::from_markdown(content, pdf_options, rendered);
+        if (!err.ok()) {
+            return err;
+        }
+        if (!options.quiet && pdf_options.substituted_glyphs > 0) {
+            std::cerr << "warning: replaced " << pdf_options.substituted_glyphs
+                      << " character(s) that cannot be encoded in WinAnsi\n";
+        }
+        out << rendered;
+        return ok_error();
+    }
     const bool complete_html_document = options.output_format == markdown::OutputFormat::Html &&
                                         !options.output_path.empty() && options.output_path != "stdout";
     const std::string rendered = markdown::render(content, options.output_format, complete_html_document);
@@ -54,6 +69,7 @@ void write_rendered_assistant_output(const cli::Options& options,
     if (rendered.empty() || rendered.back() != '\n') {
         out << '\n';
     }
+    return ok_error();
 }
 
 }  // namespace
@@ -328,7 +344,10 @@ Error send_session_turn(provider::RequestContext& context,
             }
             out << "\n";
         } else {
-            write_rendered_assistant_output(context.options, visible_content, out);
+            Error render_error = write_rendered_assistant_output(context.options, visible_content, out);
+            if (!render_error.ok()) {
+                return render_error;
+            }
         }
     } else if (context.options.format == cli::OutputFormat::Json) {
         provider::ChatResult visible_chat = chat;

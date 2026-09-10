@@ -1,5 +1,6 @@
 #include "pdf/test_pdf.hpp"
 
+#include "html/html.hpp"
 #include "pdf/document.hpp"
 #include "pdf/pdf.hpp"
 #include "pdf/stream.hpp"
@@ -258,6 +259,150 @@ void test_td_word_gap_inserts_one_space() {
     check(markdown.find("Hello  World") == std::string::npos, "Td word gap does not double-space");
 }
 
+void test_from_markdown_print_margins_and_bold_italic() {
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err =
+        ainiux::pdf::from_markdown("# Title\n\n***bold italic*** word\n\n> quoted line\n", options, pdf);
+    check(err.ok(), "margin/style PDF: " + err.message);
+    check(pdf.find("/CropBox") == std::string::npos,
+          "page CropBox is omitted so viewers keep MediaBox as the paper");
+    check(pdf.find("/Helvetica-BoldOblique") != std::string::npos,
+          "bold-italic uses Helvetica-BoldOblique");
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "margin/style PDF opens: " + open_err.message);
+    std::string content;
+    const ainiux::Error content_err = document.page_content(0, content);
+    check(content_err.ok(), "page content decodes: " + content_err.message);
+    check(content.find("/FBI") != std::string::npos, "content selects the bold-italic font");
+    const size_t re = content.find(" re\n");
+    check(re != std::string::npos, "blockquote draws a bar rectangle");
+    const size_t line_start = content.rfind('\n', re);
+    const std::string rect = content.substr(line_start == std::string::npos ? 0 : line_start + 1,
+                                            re - (line_start == std::string::npos ? 0 : line_start + 1));
+    check(rect.find("72") != std::string::npos || rect.find("78") != std::string::npos,
+          "blockquote bar sits in the 1 inch left margin gutter, not on the page edge: " + rect);
+}
+
+void test_from_markdown_hello_roundtrip() {
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("# Title\n\nHello PDF.\n", options, pdf);
+    check(err.ok(), "markdown to PDF: " + err.message);
+    check(pdf.rfind("%PDF-1.4", 0) == 0, "written PDF starts with %PDF-1.4");
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "written PDF opens: " + open_err.message);
+    check(document.page_count() >= 1, "written PDF has a page");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "written PDF extracts: " + extract_err.message);
+    check(markdown.find("Title") != std::string::npos, "PDF extract contains heading");
+    check(markdown.find("Hello PDF") != std::string::npos, "PDF extract contains paragraph");
+}
+
+void test_from_markdown_thematic_break_is_page_break() {
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("Alpha\n\n---\n\nBeta\n", options, pdf);
+    check(err.ok(), "thematic break PDF: " + err.message);
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "thematic break PDF opens: " + open_err.message);
+    check(document.page_count() == 2, "thematic break yields two pages");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "thematic break extract: " + extract_err.message);
+    check(markdown.find("Alpha") != std::string::npos && markdown.find("Beta") != std::string::npos,
+          "both pages survive extract");
+}
+
+void test_from_markdown_llm_typical_needles() {
+    const std::string input = read_fixture("tests/fixtures/llm_typical.md");
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown(input, options, pdf);
+    check(err.ok(), "llm_typical markdown to PDF: " + err.message);
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "llm_typical PDF extract: " + extract_err.message);
+    check(markdown.find("LLM Typical Markdown Fixture") != std::string::npos, "PDF keeps H1");
+    check(markdown.find("unordered alpha") != std::string::npos, "PDF keeps list item");
+    check(markdown.find("def greet") != std::string::npos, "PDF keeps fenced code");
+    check(markdown.find("https://example.com/path?q=1") != std::string::npos, "PDF keeps link URL");
+    check(markdown.find("Bold") != std::string::npos || markdown.find("bold") != std::string::npos,
+          "PDF keeps table or inline bold");
+}
+
+void test_html_to_pdf_via_markdown() {
+    const std::string html = "<h1>Fetched</h1><p>Hello from HTML.</p><ul><li>one</li></ul>";
+    const std::string md = ainiux::html::convert(html, ainiux::html::OutputFormat::Markdown);
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown(md, options, pdf);
+    check(err.ok(), "HTML via markdown to PDF: " + err.message);
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "HTML PDF extract: " + extract_err.message);
+    check(markdown.find("Fetched") != std::string::npos, "HTML PDF keeps heading");
+    check(markdown.find("Hello from HTML") != std::string::npos, "HTML PDF keeps paragraph");
+    check(markdown.find("one") != std::string::npos, "HTML PDF keeps list item");
+}
+
+void test_pdf_md_pdf_latin_needles() {
+    const std::string bytes = read_fixture("tests/pdf_files/DeepSeek2501.12948v1.pdf");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "DeepSeek extract for reflow: " + extract_err.message);
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error write_err = ainiux::pdf::from_markdown(markdown, options, pdf);
+    check(write_err.ok(), "DeepSeek reflow write: " + write_err.message);
+    std::string again;
+    const ainiux::Error again_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, again);
+    check(again_err.ok(), "DeepSeek reflow extract: " + again_err.message);
+    check(again.find("DeepSeek") != std::string::npos, "reflow keeps DeepSeek");
+    check(again.find("reinforcement") != std::string::npos || again.find("Reinforcement") != std::string::npos,
+          "reflow keeps reinforcement");
+}
+
+void test_winansi_substitution() {
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("Hello 你好 world\n", options, pdf);
+    check(err.ok(), "CJK substitution still writes PDF: " + err.message);
+    check(options.substituted_glyphs > 0, "CJK glyphs are counted as substitutions");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "substitution PDF extracts: " + extract_err.message);
+    check(markdown.find("Hello") != std::string::npos && markdown.find("world") != std::string::npos,
+          "Latin text survives substitution");
+    check(markdown.find("?") != std::string::npos, "unencodable glyphs become question marks");
+}
+
+void test_empty_markdown_is_one_page() {
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("", options, pdf);
+    check(err.ok(), "empty markdown writes PDF: " + err.message);
+    ainiux::pdf::Document document;
+    const ainiux::Error open_err = ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document);
+    check(open_err.ok(), "empty PDF opens: " + open_err.message);
+    check(document.page_count() == 1, "empty markdown yields one page");
+}
+
+void test_pdf_write_cancel() {
+    ainiux::runtime::CancellationSource source;
+    source.cancel();
+    ainiux::pdf::WriteOptions options;
+    options.cancellation = source.token();
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown("# A\n\n---\n\n# B\n", options, pdf);
+    check(!err.ok() && err.code == ainiux::ErrorCode::Cancelled, "cancelled markdown-to-PDF returns Cancelled");
+    check(pdf.empty(), "cancelled write leaves no PDF bytes");
+}
+
 void test_to_markdown_deepseek_does_not_split_words() {
     const std::string bytes = read_fixture("tests/pdf_files/DeepSeek2501.12948v1.pdf");
     std::string markdown;
@@ -293,6 +438,15 @@ void run_all() {
     test_tj_does_not_space_before_comma();
     test_td_word_gap_inserts_one_space();
     test_to_markdown_deepseek_does_not_split_words();
+    test_from_markdown_print_margins_and_bold_italic();
+    test_from_markdown_hello_roundtrip();
+    test_from_markdown_thematic_break_is_page_break();
+    test_from_markdown_llm_typical_needles();
+    test_html_to_pdf_via_markdown();
+    test_pdf_md_pdf_latin_needles();
+    test_winansi_substitution();
+    test_empty_markdown_is_one_page();
+    test_pdf_write_cancel();
 }
 
 }  // namespace ainiux::test::pdf

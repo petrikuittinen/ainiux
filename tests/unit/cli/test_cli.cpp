@@ -434,7 +434,13 @@ void test_cli_output_format_parse() {
     check(parsed.error.ok(), "CLI jsond output-format args parse");
     check(parsed.options.format == ainiux::cli::OutputFormat::Ndjson, "jsond output-format maps to NDJSON format");
 
-    const char* bad_argv[] = {"ainiux", "-p", "hello", "--output-format", "pdf"};
+    const char* pdf_argv[] = {"ainiux", "-p", "hello", "--output-format", "pdf", "--output", "out.pdf"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(pdf_argv));
+    check(parsed.error.ok(), "CLI pdf output-format args parse");
+    check(parsed.options.output_format == ainiux::markdown::OutputFormat::Pdf, "pdf output format parsed");
+    check(parsed.options.rendered_output_format_explicit, "pdf output-format is a rendered format");
+
+    const char* bad_argv[] = {"ainiux", "-p", "hello", "--output-format", "docx"};
     parsed = ainiux::cli::parse_args(5, const_cast<char**>(bad_argv));
     check(!parsed.error.ok(), "CLI rejects bad output-format");
 }

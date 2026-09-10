@@ -625,7 +625,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     opts.output_format_explicit = true;
                     opts.rendered_output_format_explicit = true;
                 } else {
-                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, json, jsond, or ndjson"}};
+                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, json, jsond, or ndjson"}};
                 }
             } else if (opt == "--output") {
                 opts.output_path = value;
@@ -1367,8 +1367,8 @@ Usage:
   ainiux -c, --chat [BASE_URL|PROFILE] [options]
   ainiux [BASE_URL|PROFILE] -e, --editor [PATH] [--output PATH]
   ainiux -d, --dired [PATH]
-  ainiux --input PATH [--output-format md|html|plaintext|json|jsond] [--output PATH]
-  ainiux --fetch-url URL [--output-format md|html|plaintext|json|jsond] [--output PATH]
+  ainiux --input PATH [--output-format md|html|plaintext|pdf|json|jsond] [--output PATH]
+  ainiux --fetch-url URL [--output-format md|html|plaintext|pdf|json|jsond] [--output PATH]
   ainiux --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
   ainiux --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
   ainiux benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
@@ -1411,6 +1411,7 @@ Examples:
   ainiux -d
   ainiux -d src/
   ainiux --input page.html --output-format md
+  ainiux --input notes.md --output-format pdf --output notes.pdf
   ainiux --fetch-url https://example.com --output-format md
   ainiux --search "web scraping" --output-format plaintext
   ainiux lmstudio -p "Summarize" --attach notes.md --search "latest news"
@@ -1550,7 +1551,7 @@ Options:
   Output:
       --format text|json|ndjson|jsonl|jsond
                                 In image mode: png|jpeg|webp|auto (default png).
-      --output-format html|md|plaintext|json|jsond|ndjson
+      --output-format html|md|plaintext|pdf|json|jsond|ndjson
       --output PATH             Use 'stdout' to write to standard output.
                                 In image mode, omit to write the first unused imageN.png.
 

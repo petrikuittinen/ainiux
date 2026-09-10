@@ -140,10 +140,33 @@ markdown::OutputFormat document_output_format(const cli::Options& options,
     return markdown::OutputFormat::Plaintext;
 }
 
+std::string canonical_markdown_body(const std::string& body, InputKind kind) {
+    if (kind == InputKind::Html) {
+        return html::convert(body, html::OutputFormat::Markdown);
+    }
+    return body;
+}
+
+Error write_pdf_from_markdown(const std::string& markdown, bool quiet, std::string& pdf) {
+    pdf::WriteOptions options;
+    Error err = pdf::from_markdown(markdown, options, pdf);
+    if (!err.ok()) {
+        return err;
+    }
+    if (!quiet && options.substituted_glyphs > 0) {
+        std::cerr << "warning: replaced " << options.substituted_glyphs
+                  << " character(s) that cannot be encoded in WinAnsi\n";
+    }
+    return ok_error();
+}
+
 std::string render_document_body(const std::string& body,
                                  InputKind kind,
                                  markdown::OutputFormat output_format,
                                  bool complete_html_document) {
+    if (output_format == markdown::OutputFormat::Pdf) {
+        return "";
+    }
     if (kind == InputKind::Html) {
         if (output_format == markdown::OutputFormat::Plaintext) {
             return html::convert(body, html::OutputFormat::Text);
@@ -304,6 +327,9 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
             document.source = document_source_label(options);
             document.input_kind = InputKind::Pdf;
             document.output_format = document_output_format(options, document.input_kind, standalone);
+            if (document.output_format == markdown::OutputFormat::Pdf) {
+                return write_pdf_from_markdown(markdown, options.quiet, document.converted);
+            }
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -343,6 +369,10 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
     }
 
     document.output_format = document_output_format(options, document.input_kind, standalone);
+    if (document.output_format == markdown::OutputFormat::Pdf) {
+        return write_pdf_from_markdown(canonical_markdown_body(body, document.input_kind), options.quiet,
+                                       document.converted);
+    }
     const bool complete_html_document = standalone &&
                                         document.output_format == markdown::OutputFormat::Html &&
                                         !options.output_path.empty() && options.output_path != "stdout";
@@ -396,6 +426,12 @@ int run_document_extract(const cli::Options& options, std::ostream& out) {
     if (!err.ok()) {
         print_error(err);
         return exit_code_for(err.code);
+    }
+
+    if (document.output_format == markdown::OutputFormat::Pdf &&
+        options.format != cli::OutputFormat::Text) {
+        print_error({ErrorCode::BadArgs, "--output-format pdf cannot be combined with --format json or ndjson"});
+        return exit_code_for(ErrorCode::BadArgs);
     }
 
     if (options.format == cli::OutputFormat::Json) {

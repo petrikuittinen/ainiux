@@ -1,0 +1,692 @@
+#include "pdf/layout.hpp"
+
+#include "ainiux/version.hpp"
+#include "markdown/blocks.hpp"
+#include "pdf/fonts.hpp"
+#include "pdf/write.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+namespace ainiux::pdf {
+namespace {
+
+constexpr double kMm = 72.0 / 25.4;
+constexpr double kPageWidth = 210.0 * kMm;
+constexpr double kPageHeight = 11.0 * 72.0;
+// 1 inch body margins. CropBox stays equal to MediaBox so viewers (Edge) do not
+// clip the inset away and leave text on the paper edge.
+constexpr double kMargin = 72.0;
+constexpr double kPageLeft = kMargin;
+constexpr double kPageRight = kPageWidth - kMargin;
+constexpr double kPageBottom = kMargin;
+constexpr double kPageTop = kPageHeight - kMargin;
+constexpr double kPageHeader = kPageHeight - 36.0;
+constexpr double kPageFooter = 36.0;
+constexpr double kLineHeight = 1.4;
+constexpr double kSizeBody = 11.0;
+constexpr double kSizeCode = 10.0;
+constexpr double kSizeTable = 10.0;
+constexpr double kSizeHeadFoot = 9.0;
+constexpr double kHeadingSize[] = {18.0, 16.0, 15.0, 14.0, 13.0, 12.0};
+constexpr double kListPadding = 36.0;
+constexpr double kQuotePadding = 18.0;
+constexpr double kQuoteBarGap = 6.0;
+constexpr double kQuoteThickness = 3.0;
+constexpr double kCodePadding = 4.5;
+constexpr double kTablePadding = 4.5;
+constexpr int kMaxTableCols = 20;
+
+const char* kFontRes[] = {"FR", "FB", "FI", "FBI", "FM"};
+
+BaseFont font_for_style(unsigned style) {
+    if (style & static_cast<unsigned>(markdown::RunStyle::Code)) {
+        return BaseFont::Mono;
+    }
+    const bool bold = (style & static_cast<unsigned>(markdown::RunStyle::Bold)) != 0;
+    const bool italic = (style & static_cast<unsigned>(markdown::RunStyle::Italic)) != 0;
+    if (bold && italic) {
+        return BaseFont::BoldItalic;
+    }
+    if (bold) {
+        return BaseFont::Bold;
+    }
+    if (italic) {
+        return BaseFont::Italic;
+    }
+    return BaseFont::Regular;
+}
+
+struct Frag {
+    BaseFont font = BaseFont::Regular;
+    double size = kSizeBody;
+    std::string winansi;
+    std::string url;
+    double width = 0;
+    bool strike = false;
+    bool link = false;
+};
+
+struct LinkBox {
+    double x = 0;
+    double y = 0;
+    double w = 0;
+    double h = 0;
+    std::string url;
+};
+
+struct PageRec {
+    std::uint32_t content = 0;
+    std::vector<LinkBox> links;
+};
+
+struct Layout {
+    WriteOptions* options = nullptr;
+    DocumentWriter writer;
+    std::uint32_t encoding = 0;
+    std::uint32_t fonts[static_cast<int>(BaseFont::Count)]{};
+    std::string title;
+    std::string heading;
+    std::string content;
+    double y = kPageTop;
+    bool page_open = false;
+    std::size_t page_number = 0;
+    std::vector<PageRec> pages;
+    std::vector<LinkBox> links;
+    BaseFont current_font = BaseFont::Regular;
+    double current_size = 0;
+    bool in_text = false;
+
+    explicit Layout(WriteOptions& opts) : options(&opts) {}
+
+    Error cancelled() const {
+        if (options->cancellation.cancelled()) {
+            return {ErrorCode::Cancelled, "Markdown-to-PDF conversion cancelled"};
+        }
+        return ok_error();
+    }
+
+    void append_op(const std::string& line) {
+        content += line;
+        content.push_back('\n');
+    }
+
+    void end_text() {
+        if (in_text) {
+            append_op("ET");
+            in_text = false;
+        }
+    }
+
+    void begin_text() {
+        if (!in_text) {
+            append_op("BT");
+            in_text = true;
+            current_size = 0;
+        }
+    }
+
+    void set_fill_gray(double g) {
+        end_text();
+        append_op(pdf_number(g) + " g");
+    }
+
+    void set_fill_rgb(double r, double g, double b) {
+        append_op(pdf_number(r) + " " + pdf_number(g) + " " + pdf_number(b) + " rg");
+    }
+
+    void fill_rect(double x, double yb, double w, double h) {
+        end_text();
+        append_op(pdf_number(x) + " " + pdf_number(yb) + " " + pdf_number(w) + " " + pdf_number(h) +
+                  " re");
+        append_op("f");
+    }
+
+    Error close_page() {
+        if (!page_open) {
+            return ok_error();
+        }
+        end_text();
+        PageRec rec;
+        Error err = writer.add_stream("", content, true, rec.content);
+        if (!err.ok()) {
+            return err;
+        }
+        rec.links = std::move(links);
+        pages.push_back(std::move(rec));
+        content.clear();
+        links.clear();
+        page_open = false;
+        current_size = 0;
+        return ok_error();
+    }
+
+    Error new_page() {
+        Error err = cancelled();
+        if (!err.ok()) {
+            return err;
+        }
+        err = close_page();
+        if (!err.ok()) {
+            return err;
+        }
+        if (options->max_pages > 0 && pages.size() >= options->max_pages) {
+            return {ErrorCode::UnsupportedFeature,
+                    "PDF output exceeds --max-pages limit of " + std::to_string(options->max_pages)};
+        }
+        ++page_number;
+        page_open = true;
+        y = kPageTop;
+        if (page_number > 1 && !title.empty()) {
+            const std::string win = utf8_to_win_ansi(title, options->substituted_glyphs);
+            const double width = text_width(BaseFont::Regular, win, kSizeHeadFoot);
+            begin_text();
+            append_op("/FR " + pdf_number(kSizeHeadFoot) + " Tf");
+            append_op("0 g");
+            append_op("1 0 0 1 " + pdf_number((kPageWidth - width) / 2.0) + " " +
+                      pdf_number(kPageHeader - 2) + " Tm");
+            append_op("(" + pdf_escape_string(win) + ") Tj");
+            end_text();
+        }
+        begin_text();
+        append_op("/FR " + pdf_number(kSizeHeadFoot) + " Tf");
+        append_op("0 g");
+        if (!heading.empty()) {
+            const std::string win = utf8_to_win_ansi(heading, options->substituted_glyphs);
+            append_op("1 0 0 1 " + pdf_number(kPageLeft) + " " + pdf_number(kPageFooter) + " Tm");
+            append_op("(" + pdf_escape_string(win) + ") Tj");
+        }
+        const std::string page_text = std::to_string(page_number);
+        const double pw = text_width(BaseFont::Regular, page_text, kSizeHeadFoot);
+        append_op("1 0 0 1 " + pdf_number(kPageRight - pw) + " " + pdf_number(kPageFooter) + " Tm");
+        append_op("(" + pdf_escape_string(page_text) + ") Tj");
+        end_text();
+        current_size = 0;
+        return ok_error();
+    }
+
+    Error ensure_space(double need) {
+        if (!page_open) {
+            return new_page();
+        }
+        if (y - need < kPageBottom) {
+            return new_page();
+        }
+        return ok_error();
+    }
+
+    void show_frag(const Frag& frag, double x, double baseline) {
+        begin_text();
+        if (frag.link) {
+            set_fill_rgb(0, 0, 0.8);
+        } else {
+            append_op("0 g");
+        }
+        append_op(std::string("/") + kFontRes[static_cast<int>(frag.font)] + " " +
+                  pdf_number(frag.size) + " Tf");
+        current_font = frag.font;
+        current_size = frag.size;
+        append_op("1 0 0 1 " + pdf_number(x) + " " + pdf_number(baseline) + " Tm");
+        append_op("(" + pdf_escape_string(frag.winansi) + ") Tj");
+        if (frag.strike || frag.link) {
+            end_text();
+            append_op("0.5 w");
+            if (frag.link) {
+                append_op("0 0 0.8 RG");
+            } else {
+                append_op("0 G");
+            }
+            const double ly = frag.strike ? baseline + frag.size * 0.3 : baseline - 1.0;
+            append_op(pdf_number(x) + " " + pdf_number(ly) + " m " + pdf_number(x + frag.width) +
+                      " " + pdf_number(ly) + " l S");
+        }
+        if (!frag.url.empty()) {
+            LinkBox box;
+            box.x = x;
+            box.y = baseline - 1.0;
+            box.w = frag.width;
+            box.h = frag.size * kLineHeight;
+            box.url = frag.url;
+            links.push_back(std::move(box));
+        }
+    }
+
+    Frag make_frag(const markdown::Run& run, double size, BaseFont def_font) {
+        Frag frag;
+        unsigned style = run.style;
+        if ((style & static_cast<unsigned>(markdown::RunStyle::Code)) == 0) {
+            if (def_font == BaseFont::Italic || def_font == BaseFont::BoldItalic) {
+                style |= static_cast<unsigned>(markdown::RunStyle::Italic);
+            }
+            if (def_font == BaseFont::Bold || def_font == BaseFont::BoldItalic) {
+                style |= static_cast<unsigned>(markdown::RunStyle::Bold);
+            }
+        }
+        frag.font = font_for_style(style);
+        frag.size = (style & static_cast<unsigned>(markdown::RunStyle::Code)) ? std::min(size, kSizeCode + 1)
+                                                                               : size;
+        frag.winansi = utf8_to_win_ansi(run.text, options->substituted_glyphs);
+        frag.url = run.url;
+        frag.link = !run.url.empty();
+        frag.strike = (style & static_cast<unsigned>(markdown::RunStyle::Strike)) != 0;
+        frag.width = text_width(frag.font, frag.winansi, frag.size);
+        return frag;
+    }
+
+    std::vector<Frag> split_run(const markdown::Run& run, double size, BaseFont def_font) {
+        std::vector<Frag> out;
+        if (run.text.empty()) {
+            return out;
+        }
+        size_t start = 0;
+        while (start < run.text.size()) {
+            size_t end = start;
+            if (run.text[start] == ' ' || run.text[start] == '\t') {
+                while (end < run.text.size() && (run.text[end] == ' ' || run.text[end] == '\t')) {
+                    ++end;
+                }
+            } else {
+                while (end < run.text.size() && run.text[end] != ' ' && run.text[end] != '\t') {
+                    ++end;
+                }
+            }
+            markdown::Run piece = run;
+            piece.text = run.text.substr(start, end - start);
+            out.push_back(make_frag(piece, size, def_font));
+            start = end;
+        }
+        return out;
+    }
+
+    Error render_line(double left, const std::vector<Frag>& frags, double lineheight) {
+        Error err = ensure_space(lineheight);
+        if (!err.ok()) {
+            return err;
+        }
+        double x = left;
+        for (const Frag& frag : frags) {
+            const double fx = frag.width < 0 ? left + frag.width : x;
+            if (!frag.winansi.empty()) {
+                show_frag(frag, fx, y);
+            }
+            if (frag.width >= 0) {
+                x += frag.width;
+            }
+        }
+        y -= lineheight;
+        return ok_error();
+    }
+
+    Error format_runs(const std::vector<markdown::Run>& runs, double size, double left, double right,
+                      BaseFont def_font, const std::string& leader) {
+        std::vector<Frag> words;
+        for (const markdown::Run& run : runs) {
+            auto parts = split_run(run, size, def_font);
+            words.insert(words.end(), parts.begin(), parts.end());
+            if (run.hard_break_after && !words.empty()) {
+                words.back().url = words.back().url;
+            }
+        }
+        std::vector<Frag> line;
+        double lineheight = size * kLineHeight;
+        double used = 0;
+        const double width = right - left;
+        if (!leader.empty()) {
+            Frag lead;
+            lead.font = def_font;
+            lead.size = size;
+            lead.winansi = utf8_to_win_ansi(leader, options->substituted_glyphs);
+            lead.width = -text_width(lead.font, lead.winansi, lead.size);
+            line.push_back(lead);
+        }
+        auto flush = [&]() -> Error {
+            if (line.empty()) {
+                return ok_error();
+            }
+            Error err = render_line(left, line, lineheight);
+            line.clear();
+            used = 0;
+            return err;
+        };
+        for (size_t i = 0; i < words.size(); ++i) {
+            Frag word = words[i];
+            const bool space = !word.winansi.empty() && word.winansi[0] == ' ';
+            if (space && line.empty()) {
+                continue;
+            }
+            if (!line.empty() && used + word.width > width && !space) {
+                Error err = flush();
+                if (!err.ok()) {
+                    return err;
+                }
+            }
+            if (!space && word.width > width && line.empty()) {
+                Error err = render_line(left, std::vector<Frag>{word}, lineheight);
+                if (!err.ok()) {
+                    return err;
+                }
+                continue;
+            }
+            line.push_back(word);
+            used += word.width >= 0 ? word.width : 0;
+            if (i + 1 < runs.size() && runs[std::min(i, runs.size() - 1)].hard_break_after) {
+                Error err = flush();
+                if (!err.ok()) {
+                    return err;
+                }
+            }
+        }
+        return flush();
+    }
+
+    Error format_code(const std::string& text, double left, double right) {
+        std::vector<std::string> lines;
+        std::string cur;
+        for (char ch : text) {
+            if (ch == '\n') {
+                lines.push_back(cur);
+                cur.clear();
+            } else if (ch != '\r') {
+                cur.push_back(ch);
+            }
+        }
+        if (!cur.empty() || lines.empty()) {
+            lines.push_back(cur);
+        }
+        const double lineheight = kSizeCode * kLineHeight;
+        const double block_h = lineheight * static_cast<double>(std::max<std::size_t>(lines.size(), 1)) +
+                               2.0 * kCodePadding;
+        Error err = ensure_space(block_h);
+        if (!err.ok()) {
+            return err;
+        }
+        y -= kCodePadding;
+        const double top = y + kCodePadding;
+        set_fill_gray(0.93);
+        fill_rect(left - kCodePadding, top - block_h + kCodePadding, right - left + 2 * kCodePadding,
+                  block_h);
+        append_op("0 g");
+        for (const std::string& line : lines) {
+            err = ensure_space(lineheight);
+            if (!err.ok()) {
+                return err;
+            }
+            Frag frag;
+            frag.font = BaseFont::Mono;
+            frag.size = kSizeCode;
+            frag.winansi = utf8_to_win_ansi(line, options->substituted_glyphs);
+            frag.width = text_width(frag.font, frag.winansi, frag.size);
+            show_frag(frag, left, y);
+            y -= lineheight;
+        }
+        y -= kCodePadding;
+        return ok_error();
+    }
+
+    Error format_table(const markdown::Block& table, double left, double right) {
+        if (table.table_cells.empty()) {
+            return ok_error();
+        }
+        const size_t rows = table.table_cells.size();
+        size_t cols = 0;
+        for (const auto& row : table.table_cells) {
+            cols = std::max(cols, row.size());
+        }
+        cols = std::min(cols, static_cast<size_t>(kMaxTableCols));
+        if (cols == 0) {
+            return ok_error();
+        }
+        std::vector<double> widths(cols, 0);
+        for (const auto& row : table.table_cells) {
+            for (size_t c = 0; c < cols && c < row.size(); ++c) {
+                double w = 0;
+                for (const markdown::Run& run : row[c]) {
+                    w += make_frag(run, kSizeTable, BaseFont::Regular).width;
+                }
+                widths[c] = std::max(widths[c], w + 2 * kTablePadding);
+            }
+        }
+        double table_width = 0;
+        for (double w : widths) {
+            table_width += w;
+        }
+        const double avail = right - left;
+        if (table_width > avail && table_width > 0) {
+            const double scale = avail / table_width;
+            for (double& w : widths) {
+                w *= scale;
+            }
+        }
+        const double lineheight = kSizeTable * kLineHeight;
+        for (size_t r = 0; r < rows; ++r) {
+            Error err = ensure_space(lineheight + kTablePadding);
+            if (!err.ok()) {
+                return err;
+            }
+            double x = left;
+            const BaseFont row_font = r == 0 ? BaseFont::Bold : BaseFont::Regular;
+            for (size_t c = 0; c < cols; ++c) {
+                const double cell_right = x + widths[c];
+                std::vector<markdown::Run> runs;
+                if (c < table.table_cells[r].size()) {
+                    runs = table.table_cells[r][c];
+                }
+                const double saved_y = y;
+                err = format_runs(runs, kSizeTable, x + kTablePadding, cell_right - kTablePadding,
+                                  row_font, "");
+                if (!err.ok()) {
+                    return err;
+                }
+                y = saved_y;
+                x = cell_right;
+            }
+            y -= lineheight + kTablePadding;
+        }
+        return ok_error();
+    }
+
+    Error format_blocks(const std::vector<markdown::Block>& blocks, double left, double right,
+                        BaseFont def_font);
+};
+
+Error Layout::format_blocks(const std::vector<markdown::Block>& blocks, double left, double right,
+                            BaseFont def_font) {
+    for (const markdown::Block& block : blocks) {
+        Error err = cancelled();
+        if (!err.ok()) {
+            return err;
+        }
+        switch (block.kind) {
+            case markdown::BlockKind::Rule:
+                y = kPageBottom;
+                err = new_page();
+                if (!err.ok()) {
+                    return err;
+                }
+                break;
+            case markdown::BlockKind::Heading: {
+                int level = std::max(1, std::min(block.heading_level, 6));
+                const double size = kHeadingSize[level - 1];
+                std::string text;
+                for (const markdown::Run& run : block.runs) {
+                    text += run.text;
+                }
+                heading = text;
+                if (title.empty() && level == 1) {
+                    title = text;
+                }
+                err = ensure_space(size * kLineHeight * 2.0);
+                if (!err.ok()) {
+                    return err;
+                }
+                y -= size * 0.4;
+                err = format_runs(block.runs, size, left, right, BaseFont::Bold, "");
+                if (!err.ok()) {
+                    return err;
+                }
+                break;
+            }
+            case markdown::BlockKind::Paragraph:
+                err = ensure_space(kSizeBody * kLineHeight);
+                if (!err.ok()) {
+                    return err;
+                }
+                y -= kSizeBody * 0.4;
+                err = format_runs(block.runs, kSizeBody, left, right, def_font, "");
+                if (!err.ok()) {
+                    return err;
+                }
+                break;
+            case markdown::BlockKind::ListItem: {
+                const double indent = left + kListPadding + static_cast<double>(block.indent) * 0.5;
+                std::string leader;
+                if (block.ordered) {
+                    leader = std::to_string(block.list_index) + ". ";
+                } else {
+                    leader = "• ";
+                }
+                err = format_runs(block.runs, kSizeBody, indent, right, def_font, leader);
+                if (!err.ok()) {
+                    return err;
+                }
+                break;
+            }
+            case markdown::BlockKind::Quote: {
+                err = ensure_space(kSizeBody * kLineHeight);
+                if (!err.ok()) {
+                    return err;
+                }
+                const double saved_y = y;
+                err = format_blocks(block.children, left + kQuotePadding, right - kQuotePadding,
+                                    BaseFont::Italic);
+                if (!err.ok()) {
+                    return err;
+                }
+                end_text();
+                set_fill_gray(0.55);
+                const double top = saved_y - 2.0;
+                const double bottom = y + kSizeBody * 0.35;
+                const double bar_h = std::max(top - bottom, kSizeBody * 0.8);
+                fill_rect(left + kQuoteBarGap, bottom, kQuoteThickness, bar_h);
+                append_op("0 g");
+                break;
+            }
+            case markdown::BlockKind::Code:
+                err = format_code(block.text, left + kCodePadding, right - kCodePadding);
+                if (!err.ok()) {
+                    return err;
+                }
+                break;
+            case markdown::BlockKind::Table:
+                err = format_table(block, left, right);
+                if (!err.ok()) {
+                    return err;
+                }
+                break;
+            case markdown::BlockKind::Html:
+                err = format_runs(block.runs, kSizeBody, left, right, def_font, "");
+                if (!err.ok()) {
+                    return err;
+                }
+                break;
+        }
+    }
+    return ok_error();
+}
+
+std::string font_object(std::uint32_t encoding, BaseFont font) {
+    return "<< /Type /Font /Subtype /Type1 /BaseFont /" + std::string(base_font_name(font)) +
+           " /Encoding " + std::to_string(encoding) + " 0 R >>";
+}
+
+std::string page_resources(const std::uint32_t* fonts) {
+    std::string out = "<< /Font <<";
+    for (int i = 0; i < static_cast<int>(BaseFont::Count); ++i) {
+        out += " /";
+        out += kFontRes[i];
+        out += " ";
+        out += std::to_string(fonts[i]);
+        out += " 0 R";
+    }
+    out += " >> >>";
+    return out;
+}
+
+}  // namespace
+
+Error layout_markdown(std::string_view markdown, WriteOptions& options, std::string& pdf) {
+    pdf.clear();
+    options.substituted_glyphs = 0;
+    Layout layout(options);
+    layout.encoding = layout.writer.add_object("<< /Type /Encoding /BaseEncoding /WinAnsiEncoding >>");
+    for (int i = 0; i < static_cast<int>(BaseFont::Count); ++i) {
+        layout.fonts[i] =
+            layout.writer.add_object(font_object(layout.encoding, static_cast<BaseFont>(i)));
+    }
+
+    const std::vector<markdown::Block> blocks = markdown::parse_blocks(std::string(markdown));
+    Error err = layout.format_blocks(blocks, kPageLeft, kPageRight, BaseFont::Regular);
+    if (!err.ok()) {
+        return err;
+    }
+    if (!layout.page_open && layout.pages.empty()) {
+        err = layout.new_page();
+        if (!err.ok()) {
+            return err;
+        }
+    }
+    err = layout.close_page();
+    if (!err.ok()) {
+        return err;
+    }
+
+    const std::uint32_t pages_obj = layout.writer.reserve_object();
+    std::vector<std::uint32_t> page_objs;
+    page_objs.reserve(layout.pages.size());
+    for (PageRec& rec : layout.pages) {
+        std::string annots;
+        if (!rec.links.empty()) {
+            annots = " /Annots [";
+            for (const LinkBox& box : rec.links) {
+                const std::uint32_t annot = layout.writer.add_object(
+                    "<< /Type /Annot /Subtype /Link /Rect [" + pdf_number(box.x) + " " +
+                    pdf_number(box.y) + " " + pdf_number(box.x + box.w) + " " +
+                    pdf_number(box.y + box.h) + "] /Border [0 0 0] /A << /S /URI /URI (" +
+                    pdf_escape_string(utf8_to_win_ansi(box.url, options.substituted_glyphs)) +
+                    ") >> >>");
+                annots += " " + std::to_string(annot) + " 0 R";
+            }
+            annots += " ]";
+        }
+        const std::uint32_t page = layout.writer.add_object(
+            "<< /Type /Page /Parent " + std::to_string(pages_obj) + " 0 R /MediaBox [0 0 " +
+            pdf_number(kPageWidth) + " " + pdf_number(kPageHeight) + "] /Resources " +
+            page_resources(layout.fonts) + " /Contents " + std::to_string(rec.content) + " 0 R" +
+            annots + " >>");
+        page_objs.push_back(page);
+    }
+
+    std::string kids = "[";
+    for (std::uint32_t page : page_objs) {
+        kids += " " + std::to_string(page) + " 0 R";
+    }
+    kids += " ]";
+    layout.writer.set_object(pages_obj, "<< /Type /Pages /Kids " + kids + " /Count " +
+                                            std::to_string(page_objs.size()) + " >>");
+    const std::uint32_t pages = pages_obj;
+    const std::uint32_t catalog =
+        layout.writer.add_object("<< /Type /Catalog /Pages " + std::to_string(pages) + " 0 R >>");
+    const std::uint32_t info = layout.writer.add_object(
+        "<< /Producer (" + pdf_escape_string(app_version_label()) + ") /CreationDate (" +
+        pdf_creation_date() + ") >>");
+    pdf = layout.writer.finish(catalog, info);
+    if (options.max_bytes > 0 && pdf.size() > options.max_bytes) {
+        pdf.clear();
+        return {ErrorCode::UnsupportedFeature,
+                "PDF output exceeds size limit of " + std::to_string(options.max_bytes) + " bytes"};
+    }
+    return ok_error();
+}
+
+}  // namespace ainiux::pdf

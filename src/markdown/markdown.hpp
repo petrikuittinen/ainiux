@@ -8,6 +8,7 @@ enum class OutputFormat {
     Plaintext,
     Markdown,
     Html,
+    Pdf,
 };
 
 bool parse_output_format(const std::string& text, OutputFormat& out);

@@ -87,8 +87,8 @@ ainiux openai -m MODEL --prompt-file prompt.txt --format json --no-stream
 ```
 
 `--format text` (default) prints the reply. `--format json` prints one object.
-`--format ndjson` / `jsonl` prints events. `--output-format md|html|plaintext`
-renders assistant Markdown; that is not the same as `--format`.
+`--format ndjson` / `jsonl` prints events. `--output-format md|html|plaintext|pdf`
+renders assistant Markdown (PDF is binary); that is not the same as `--format`.
 
 Act / Plan (final answer on stdout; metrics on stderr unless `--quiet`):
 
@@ -109,6 +109,7 @@ Conversion / fetch / search:
 
 ```sh
 ainiux --input page.html --output-format md
+ainiux --input notes.md --output-format pdf --output notes.pdf
 ainiux --input report.pdf --output-format md --output report.md
 ainiux --fetch-url https://example.com --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
@@ -140,7 +141,8 @@ and a next step when one exists.
 
 `--attach` is bounded text or PNG/JPEG/GIF for capable Chat Completions models.
 `--input` on an image is the chat vision path, not `ainiux image`. `--input`
-on a `.pdf` converts to Markdown. DOCX is rejected.
+on a `.pdf` converts to Markdown. `--output-format pdf` writes a new PDF.
+DOCX is rejected.
 
 `--fetch-url` and `--search` are explicit. A URL inside `-p` is not fetched.
 Private/loopback fetch needs `--allow-private-url-fetch`.

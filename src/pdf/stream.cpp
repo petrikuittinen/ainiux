@@ -27,6 +27,20 @@ struct ZInflate {
     ZInflate& operator=(const ZInflate&) = delete;
 };
 
+struct ZDeflate {
+    z_stream stream{};
+    bool ok = false;
+
+    ZDeflate() { ok = deflateInit(&stream, Z_BEST_COMPRESSION) == Z_OK; }
+    ~ZDeflate() {
+        if (ok) {
+            deflateEnd(&stream);
+        }
+    }
+    ZDeflate(const ZDeflate&) = delete;
+    ZDeflate& operator=(const ZDeflate&) = delete;
+};
+
 int paeth(int a, int b, int c) {
     const int p = a + b - c;
     const int pa = std::abs(p - a);
@@ -173,6 +187,30 @@ Error inflate_flate(const std::uint8_t* data, std::size_t size, std::string& out
             return {ErrorCode::FileRead, "unable to decompress FlateDecode stream"};
         }
     } while (zinflate.stream.avail_in > 0 || zinflate.stream.avail_out == 0);
+    return ok_error();
+}
+
+Error deflate_flate(std::string_view raw, std::string& out) {
+    out.clear();
+    ZDeflate zdeflate;
+    if (!zdeflate.ok) {
+        return {ErrorCode::Internal, "unable to start FlateEncode"};
+    }
+    zdeflate.stream.next_in =
+        const_cast<Bytef*>(reinterpret_cast<const Bytef*>(raw.data()));
+    zdeflate.stream.avail_in = static_cast<uInt>(raw.size());
+    std::array<char, 4096> buffer{};
+    int status = Z_OK;
+    while (status != Z_STREAM_END) {
+        zdeflate.stream.next_out = reinterpret_cast<Bytef*>(buffer.data());
+        zdeflate.stream.avail_out = static_cast<uInt>(buffer.size());
+        status = deflate(&zdeflate.stream, Z_FINISH);
+        const std::size_t produced = buffer.size() - zdeflate.stream.avail_out;
+        out.append(buffer.data(), produced);
+        if (status != Z_OK && status != Z_STREAM_END && status != Z_BUF_ERROR) {
+            return {ErrorCode::Internal, "unable to compress FlateDecode stream"};
+        }
+    }
     return ok_error();
 }
 

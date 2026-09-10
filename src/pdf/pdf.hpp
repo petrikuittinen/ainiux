@@ -16,9 +16,17 @@ struct Options {
     runtime::CancellationToken cancellation;
 };
 
-// Canonical conversion is PDF → Markdown. Callers that want plaintext or HTML
-// run markdown::render on the result (so html-to-pdf is html→md→pdf).
+struct WriteOptions {
+    std::size_t max_bytes = 64 * 1024 * 1024;
+    std::size_t max_pages = 0;
+    runtime::CancellationToken cancellation;
+    std::size_t substituted_glyphs = 0;
+};
+
+// Canonical conversion is PDF ↔ Markdown. Callers that want plaintext or HTML
+// run markdown::render on the Markdown result (so html-to-pdf is html→md→pdf).
 Error to_markdown_file(const std::string& path, const Options& options, std::string& markdown);
 Error to_markdown_bytes(std::string_view pdf, const Options& options, std::string& markdown);
+Error from_markdown(std::string_view markdown, WriteOptions& options, std::string& pdf);
 
 }  // namespace ainiux::pdf

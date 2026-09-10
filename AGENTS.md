@@ -69,7 +69,7 @@ compiled `openai_images`, `replicate_predictions`, `fal_queue`, and
   for a later OpenAI-compatible adapter.
 
 Do not pretend these exist: REPL/TUI image-generation jobs, batch or streaming
-image output, multi-turn image editing, Markdown-to-PDF writing, DOCX conversion, `/loop`, sub-agents,
+image output, multi-turn image editing, DOCX conversion, `/loop`, sub-agents,
 a native Anthropic Messages adapter, multi-workspace server routing, or an
 ncurses UI. MCP tools do not imply MCP sub-agents or interactive MCP Guard
 chaining.

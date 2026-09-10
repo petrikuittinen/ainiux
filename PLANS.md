@@ -163,7 +163,7 @@ These items are intentional future work, not implied current behavior:
 - an OpenAI-compatible `/v1` adapter layered beside—not replacing—the Ainiux
   control API;
 - a native Anthropic Messages adapter and broader live capability probing;
-- PDF and DOCX input/output modules;
+- DOCX input/output, encrypted PDF read/write, and PDF write-side Unicode font embedding;
 - `/loop`, sub-agents, and a separately designed Agent skill/custom-command system;
 - optional core image downscaling/caching before vision requests, using shell-free
   bounded subprocesses and no mandatory image-codec dependency;

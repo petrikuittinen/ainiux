@@ -11,6 +11,7 @@
 namespace ainiux::pdf {
 
 Error inflate_flate(const std::uint8_t* data, std::size_t size, std::string& out, std::size_t max_out);
+Error deflate_flate(std::string_view raw, std::string& out);
 
 Error apply_png_predictor(std::string& data,
                           std::size_t columns,

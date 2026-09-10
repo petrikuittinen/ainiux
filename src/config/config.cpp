@@ -2531,7 +2531,7 @@ Error apply_document(const Document& document, cli::Options& options, bool user_
         } else if (name == "output.render_format") {
             err = require_type(entry, Value::Type::String);
             if (err.ok() && !ainiux::markdown::parse_output_format(entry.value.string, candidate.output_format)) {
-                err = schema_error(entry, "expected html, md, or plaintext");
+                err = schema_error(entry, "expected html, md, plaintext, or pdf");
             } else if (err.ok()) {
                 const bool rendered = candidate.output_format != ainiux::markdown::OutputFormat::Markdown;
                 candidate.output_format_explicit = rendered;

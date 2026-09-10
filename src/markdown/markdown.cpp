@@ -8,6 +8,7 @@
 
 #include "common.hpp"
 #include "ainiux/version.hpp"
+#include "pdf/pdf.hpp"
 
 namespace ainiux::markdown {
 namespace {
@@ -942,6 +943,10 @@ bool parse_output_format(const std::string& text, OutputFormat& out) {
         out = OutputFormat::Html;
         return true;
     }
+    if (normalized == "pdf") {
+        out = OutputFormat::Pdf;
+        return true;
+    }
     return false;
 }
 
@@ -953,6 +958,8 @@ const char* output_format_name(OutputFormat format) {
             return "md";
         case OutputFormat::Html:
             return "html";
+        case OutputFormat::Pdf:
+            return "pdf";
     }
     return "md";
 }
@@ -977,6 +984,14 @@ std::string render(const std::string& markdown, OutputFormat format, bool comple
             return markdown;
         case OutputFormat::Html:
             return complete_html_document ? to_html_document(markdown) : to_html_fragment(markdown);
+        case OutputFormat::Pdf: {
+            pdf::WriteOptions options;
+            std::string pdf;
+            if (!pdf::from_markdown(markdown, options, pdf).ok()) {
+                return {};
+            }
+            return pdf;
+        }
     }
     return markdown;
 }

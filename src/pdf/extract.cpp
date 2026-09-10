@@ -1,5 +1,6 @@
 #include "pdf/extract.hpp"
 
+#include "pdf/fonts.hpp"
 #include "pdf/limits.hpp"
 #include "pdf/token.hpp"
 
@@ -183,22 +184,6 @@ int glyph_unicode(const std::string& name) {
     return 0;
 }
 
-const int kWinAnsi[32] = {
-    0x20AC, 0x0000, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
-    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x0000, 0x017D, 0x0000,
-    0x0000, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
-    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x0000, 0x017E, 0x0178,
-};
-
-void fill_win_ansi(int encoding[256]) {
-    for (int i = 0; i < 256; ++i) {
-        encoding[i] = i;
-    }
-    for (int i = 0; i < 32; ++i) {
-        encoding[128 + i] = kWinAnsi[i];
-    }
-}
-
 struct FontDecoder {
     int encoding[256]{};
     std::unordered_map<std::uint32_t, std::string> to_unicode;
@@ -283,24 +268,12 @@ void apply_base_font_widths(const std::string& basefont, FontDecoder& font) {
         font.space_width = 600;
         return;
     }
-    static const short kHelvetica[95] = {
-        278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556,
-        556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778,
-        722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278,
-        278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
-        556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584};
-    static const short kTimes[95] = {
-        250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 250, 278, 500, 500, 500, 500,
-        500, 500, 500, 500, 500, 500, 278, 278, 564, 564, 564, 444, 921, 722, 667, 667, 722, 611, 556, 722,
-        722, 333, 389, 722, 611, 889, 722, 722, 556, 722, 667, 556, 611, 722, 722, 944, 722, 722, 611, 333,
-        278, 333, 469, 500, 333, 444, 500, 444, 500, 444, 333, 500, 500, 278, 278, 500, 278, 778, 500, 500,
-        500, 500, 333, 389, 278, 500, 500, 722, 500, 500, 444, 480, 200, 480, 541};
     if (name.find("Helvetica") != std::string::npos || name.find("Arial") != std::string::npos) {
-        apply_ascii_widths(font, kHelvetica, 95, 278, 556);
+        apply_ascii_widths(font, kHelveticaAscii, 95, 278, 556);
         return;
     }
     if (name.find("Times") != std::string::npos) {
-        apply_ascii_widths(font, kTimes, 95, 250, 500);
+        apply_ascii_widths(font, kTimesAscii, 95, 250, 500);
     }
 }
 

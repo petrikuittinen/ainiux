@@ -87,7 +87,7 @@
 
 - Extend interactive `/attach` to queue multiple heterogeneous attachments with clear per-item status; keep it separate from `/insert` text editing.
 
-1. PDF input (PDF-to-Markdown) and PDF output (Markdown-to-PDF).
+1. PDF Unicode write: embed a subsettable TTF (Type0 / Identity-H / ToUnicode) so CJK/Arabic survive Markdown→PDF. Encrypted PDF read/write remains later.
 2. MS Word input (`.docx`-to-Markdown) and MS Word output (Markdown-to-`.docx`).
 
-These formats are intentionally deferred. Do not treat PDF or DOCX binary data as prompt text.
+PDF↔Markdown is implemented (`--input file.pdf`, `--output-format pdf`). Do not treat DOCX binary data as prompt text.
