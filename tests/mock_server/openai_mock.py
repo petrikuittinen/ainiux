@@ -740,6 +740,14 @@ class Handler(BaseHTTPRequestHandler):
             and "Attachment Beta" in message.get("content", "")
             for message in messages
         )
+        attachment_pdf_seen = any(
+            isinstance(message, dict)
+            and isinstance(message.get("content"), str)
+            and "Input context from" in message.get("content", "")
+            and "Attachment Alpha" in message.get("content", "")
+            and "First attachment" in message.get("content", "")
+            for message in messages
+        )
         inserted_context_seen = any(
             isinstance(message, dict)
             and isinstance(message.get("content"), str)
@@ -771,6 +779,8 @@ class Handler(BaseHTTPRequestHandler):
             reply = "input-context-ok" if input_context_seen else "missing-input-context"
         elif last == "summarize-attachments":
             reply = "attachments-ok" if attachment_alpha_seen and attachment_beta_seen else "missing-attachments"
+        elif last == "summarize-pdf-attachment":
+            reply = "pdf-attachment-ok" if attachment_pdf_seen else "missing-pdf-attachment"
         elif last == "summarize-legacy-attachment":
             reply = "legacy-attachment-ok" if "ÿ" in all_text else "missing-legacy-attachment"
         elif last == "summarize-insert" or last.endswith("summarize-insert"):

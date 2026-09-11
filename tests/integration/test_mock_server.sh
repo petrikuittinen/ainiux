@@ -496,9 +496,9 @@ grep 'Attachment Alpha' "$attachment_chat_file" >/dev/null
 grep 'Attachment Beta' "$attachment_chat_file" >/dev/null
 attachment_pdf="$ROOT/build/attachment-paper.pdf"
 "$ROOT/ainiux" --no-config --input "$attachment_md" --output-format pdf --output "$attachment_pdf" --quiet
-pdf_attach_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" \
+pdf_attach_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-pdf-attachment" \
     --attach "$attachment_pdf")
-test "$pdf_attach_reply" = "attachments-ok"
+test "$pdf_attach_reply" = "pdf-attachment-ok"
 
 stdin_attachment_reply=$(printf 'Attachment Alpha and Attachment Beta from a pipeline\n' | \
     "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" --attach stdin)
@@ -570,7 +570,7 @@ if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
 fi
 grep 'could not open plaintext for reading' "$missing_attachment_err" >/dev/null
 
-for deferred in pdf docx; do
+for deferred in docx; do
     deferred_path="$ROOT/build/deferred.$deferred"
     printf 'not implemented' >"$deferred_path"
     deferred_err="$ROOT/build/deferred-$deferred.err"
