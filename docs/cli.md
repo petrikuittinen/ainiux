@@ -39,6 +39,7 @@ ainiux --input notes.md --output-format pdf --output notes.pdf
 ainiux --input page.html --output-format pdf --output page.pdf
 ainiux --input report.pdf --output-format md --output report.md
 ainiux --fetch-url https://example.com --output-format md
+ainiux --fetch-url https://example.com/report.pdf --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
 ```
@@ -67,15 +68,16 @@ Combine a prompt with converted input, repeatable attachments, fetches, or searc
 
 ```sh
 ainiux lmstudio -p "Summarize" --attach notes.md
+ainiux lmstudio -p "Summarize this paper" --attach report.pdf
 ainiux openai -m MODEL -p "Describe this" --input photo.png
 ainiux deepseek -m deepseek-v4-flash-vision-exp -p "Describe this" \
   --input tests/image_files/China_EV_sales_March_2024.png
 ainiux lmstudio -p "Compare the sources" --fetch-url https://example.com --search "related topic"
 ```
 
-Text inputs are bounded and validated. PNG, JPEG, and GIF are supported only when the selected Chat Completions model accepts image content. Raw base64 is not persisted in chat JSON. Use `--image-capability allow` only after verifying an unknown custom model.
+Text, Markdown, HTML, and PDF attachments are bounded and validated. PDF is converted to Markdown before it is sent. PNG, JPEG, and GIF are supported only when the selected Chat Completions model accepts image content. Raw base64 is not persisted in chat JSON. Use `--image-capability allow` only after verifying an unknown custom model.
 
-Fetching and searching are explicit. Prompt URLs are never fetched automatically. URL fetch applies byte and timeout limits and blocks private, loopback, link-local, multicast, and metadata addresses unless `--allow-private-url-fetch` is set. Search provider details are in [Configuration](configuration.md#web-search).
+Fetching and searching are explicit. Prompt URLs are never fetched automatically. URL fetch applies byte and timeout limits and blocks private, loopback, link-local, multicast, and metadata addresses unless `--allow-private-url-fetch` is set. HTML and `application/pdf` (or a `%PDF-` body served as `application/octet-stream`) are converted to Markdown. The default `--max-fetch-bytes` limit is 10 MiB (10485760); larger documents need an explicit higher cap. Search provider details are in [Configuration](configuration.md#web-search).
 
 ## Context management
 

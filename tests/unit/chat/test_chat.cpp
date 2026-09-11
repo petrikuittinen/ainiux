@@ -6,6 +6,7 @@
 #include "chat/media_store.hpp"
 #include "chat/settings.hpp"
 #include "chat/sqlite_store.hpp"
+#include "chat/transcript.hpp"
 #include "ainiux/model_setting.hpp"
 #include "json/json.hpp"
 #include "provider/model_selection.hpp"
@@ -1024,6 +1025,47 @@ void test_editor_model_selection_app_state() {
           "shared model-selection serialization preserves forward-compatible values");
 }
 
+void test_chat_transcript_pdf() {
+    std::vector<ainiux::provider::Message> messages;
+    std::string markdown;
+    ainiux::Error err = ainiux::chat::transcript_markdown(messages, "Empty",
+                                                          ainiux::chat::TranscriptScope::Thread,
+                                                          markdown);
+    check(!err.ok() && err.code == ainiux::ErrorCode::BadArgs,
+          "empty thread PDF export is rejected");
+
+    messages.push_back({"user", "Hello there"});
+    messages.push_back({"assistant", "Hi, how can I help?"});
+    ainiux::provider::Message pictured{"user", "See this"};
+    ainiux::provider::ImageInput image;
+    image.mime_type = "image/png";
+    image.display_name = "chart.png";
+    image.byte_size = 12;
+    pictured.images.push_back(std::move(image));
+    messages.push_back(std::move(pictured));
+    err = ainiux::chat::transcript_markdown(messages, "Demo thread",
+                                            ainiux::chat::TranscriptScope::Thread, markdown);
+    check(err.ok(), "thread markdown export succeeds");
+    check(markdown.find("# Demo thread") != std::string::npos, "thread title is a heading");
+    check(markdown.find("## User") != std::string::npos &&
+              markdown.find("## Assistant") != std::string::npos,
+          "roles become Markdown headings");
+    check(markdown.find("[image: chart.png]") != std::string::npos,
+          "images become placeholders in the PDF Markdown");
+
+    err = ainiux::chat::transcript_markdown(messages, "Demo thread",
+                                            ainiux::chat::TranscriptScope::LastMessage, markdown);
+    check(err.ok() && markdown.find("See this") != std::string::npos &&
+              markdown.find("Hello there") == std::string::npos,
+          "last-message export includes only the final message");
+
+    ainiux::pdf::WriteOptions write_options;
+    std::string pdf;
+    err = ainiux::chat::transcript_pdf(messages, "Demo thread",
+                                       ainiux::chat::TranscriptScope::Thread, write_options, pdf);
+    check(err.ok() && pdf.compare(0, 5, "%PDF-") == 0, "thread PDF export starts with a PDF header");
+}
+
 }  // namespace
 
 void run_all() {
@@ -1042,6 +1084,7 @@ void run_all() {
     test_chat_settings_helpers();
     test_editor_model_selection_app_state();
     test_generation_settings_metadata();
+    test_chat_transcript_pdf();
 }
 
 }  // namespace ainiux::test::chat

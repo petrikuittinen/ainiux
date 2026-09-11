@@ -3,7 +3,9 @@
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
+#include <cstdio>
 #include <string>
+#include <vector>
 
 namespace ainiux::test::fetch {
 
@@ -25,6 +27,8 @@ void test_safe_fetch_rejects_private_literal() {
 
 void test_fetch_validation_edge_cases() {
     ainiux::fetch::Options options;
+    check(options.max_bytes == 10L * 1024L * 1024L,
+          "shared URL fetch defaults to a 10 MiB response cap");
     std::string body;
     ainiux::Error err = ainiux::fetch::fetch_html("", options, body);
     check(!err.ok() && err.code == ainiux::ErrorCode::BadArgs &&
@@ -93,6 +97,78 @@ void test_windows1251_html_to_utf8() {
     check(utf8.find(u8"я") != std::string::npos, "declared windows-1251 uses the Cyrillic map");
 }
 
+std::string make_hello_pdf() {
+    const std::string content = "BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET\n";
+    const std::string obj4 =
+        "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "endstream";
+    std::vector<std::string> bodies = {
+        "",
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        "/Resources << /Font << /F1 5 0 R >> >> >>",
+        obj4,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    };
+    std::string out = "%PDF-1.4\n";
+    std::vector<std::size_t> offsets(bodies.size(), 0);
+    auto xref_line = [](std::size_t offset, int gen, char flag) {
+        char line[22];
+        std::snprintf(line, sizeof(line), "%010zu %05d %c \n", offset, gen, flag);
+        return std::string(line);
+    };
+    for (std::size_t i = 1; i < bodies.size(); ++i) {
+        offsets[i] = out.size();
+        out += std::to_string(i) + " 0 obj\n" + bodies[i] + "\nendobj\n";
+    }
+    const std::size_t xref = out.size();
+    out += "xref\n0 " + std::to_string(bodies.size()) + "\n";
+    out += xref_line(0, 65535, 'f');
+    for (std::size_t i = 1; i < bodies.size(); ++i) {
+        out += xref_line(offsets[i], 0, 'n');
+    }
+    out += "trailer\n<< /Size " + std::to_string(bodies.size()) + " /Root 1 0 R >>\n";
+    out += "startxref\n" + std::to_string(xref) + "\n%%EOF\n";
+    return out;
+}
+
+void test_pdf_fetch_classification() {
+    check(ainiux::fetch::media_type_is_pdf("application/pdf"), "application/pdf is a PDF type");
+    check(ainiux::fetch::media_type_is_pdf("application/x-pdf"), "application/x-pdf is a PDF type");
+    check(ainiux::fetch::fetched_media_type("application/pdf; charset=binary") == "application/pdf",
+          "PDF media type strips parameters");
+    check(ainiux::fetch::body_looks_like_pdf("%PDF-1.4\n"), "PDF magic is detected");
+    check(ainiux::fetch::body_looks_like_pdf("\n  %PDF-1.7\n"), "PDF magic ignores leading whitespace");
+    check(!ainiux::fetch::body_looks_like_pdf("<html>%PDF-"), "HTML with a PDF mention is not a PDF body");
+
+    const std::string pdf = make_hello_pdf();
+    std::string markdown;
+    ainiux::fetch::DocumentKind kind = ainiux::fetch::DocumentKind::Html;
+    ainiux::Error err =
+        ainiux::fetch::markdown_from_fetched_bytes(pdf, "application/pdf", markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Pdf, "application/pdf converts to Markdown");
+    check(markdown.find("Hello PDF") != std::string::npos, "converted PDF Markdown contains page text");
+
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes(pdf, "application/octet-stream", markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Pdf,
+          "octet-stream with %PDF- is sniffed as PDF");
+
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Pdf;
+    err = ainiux::fetch::markdown_from_fetched_bytes("<html><body>not a pdf</body></html>",
+                                                    "text/html", markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Html,
+          "HTML content-type is not treated as PDF even if the URL ended in .pdf");
+    check(markdown.find("not a pdf") != std::string::npos, "HTML still converts to Markdown");
+
+    markdown.clear();
+    err = ainiux::fetch::markdown_from_fetched_bytes(pdf, "image/png", markdown, kind);
+    check(!err.ok() && err.code == ainiux::ErrorCode::UnsupportedFeature,
+          "non-document content types are rejected");
+}
+
 void test_json_escape_rejects_raw_latin1() {
     // Safety net: even if a caller embeds ISO-8859-1, escape_string must not emit
     // raw 0xE4 into the JSON string.
@@ -111,6 +187,7 @@ void run_all() {
     test_fetch_validation_edge_cases();
     test_iso8859_1_html_to_utf8();
     test_windows1251_html_to_utf8();
+    test_pdf_fetch_classification();
     test_json_escape_rejects_raw_latin1();
 }
 

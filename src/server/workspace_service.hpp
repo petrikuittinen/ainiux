@@ -12,6 +12,8 @@ struct WorkspaceFileSnapshot {
     std::string path;
     std::string content;
     std::string revision;
+    std::string converted_from;
+    std::string suggested_path;
 };
 
 // Root-aware access to the one canonical workspace owned by a control listener.

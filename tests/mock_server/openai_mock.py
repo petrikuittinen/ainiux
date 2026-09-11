@@ -85,6 +85,32 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, "Benchmark reference text: 你好 مرحبا\n", "text/plain; charset=utf-8")
             return
+        if self.path in ("/report.pdf", "/octet.pdf"):
+            content = b"BT /F1 12 Tf 72 720 Td (Mock PDF Page) Tj ET\n"
+            bodies = [
+                b"",
+                b"<< /Type /Catalog /Pages 2 0 R >>",
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+                b"/Resources << /Font << /F1 5 0 R >> >> >>",
+                b"<< /Length %d >>\nstream\n" % len(content) + content + b"endstream",
+                b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            ]
+            pdf = bytearray(b"%PDF-1.4\n")
+            offsets = [0] * len(bodies)
+            for i in range(1, len(bodies)):
+                offsets[i] = len(pdf)
+                pdf += b"%d 0 obj\n" % i + bodies[i] + b"\nendobj\n"
+            xref = len(pdf)
+            pdf += b"xref\n0 %d\n" % len(bodies)
+            pdf += b"0000000000 65535 f \n"
+            for i in range(1, len(bodies)):
+                pdf += b"%010d 00000 n \n" % offsets[i]
+            pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\n" % len(bodies)
+            pdf += b"startxref\n%d\n%%%%EOF\n" % xref
+            ctype = "application/octet-stream" if self.path == "/octet.pdf" else "application/pdf"
+            self._send_bytes(200, bytes(pdf), ctype)
+            return
         if self.path == "/page":
             user_agent = self.headers.get("User-Agent", "")
             accept = self.headers.get("Accept", "")

@@ -30,6 +30,7 @@ enum class TuiEventType {
     InsertDone,
     AttachDone,
     FetchDone,
+    ChatPdfDone,
     SearchDone,
     ShellDone,
     ModelsDone,

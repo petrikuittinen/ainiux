@@ -306,6 +306,11 @@ page_text=$("$ROOT/ainiux" --fetch-url "$BASE/page" --allow-private-url-fetch --
 printf '%s\n' "$page_text" | grep -F 'Mock Page' >/dev/null
 printf '%s\n' "$page_text" | grep -F 'Hello bold and emphasis with docs (https://example.com/docs).' >/dev/null
 
+pdf_md=$("$ROOT/ainiux" --fetch-url "$BASE/report.pdf" --allow-private-url-fetch --output-format md --quiet)
+printf '%s\n' "$pdf_md" | grep -F 'Mock PDF Page' >/dev/null
+octet_pdf_md=$("$ROOT/ainiux" --fetch-url "$BASE/octet.pdf" --allow-private-url-fetch --output-format md --quiet)
+printf '%s\n' "$octet_pdf_md" | grep -F 'Mock PDF Page' >/dev/null
+
 local_html="$ROOT/build/local-input.html"
 cat >"$local_html" <<'HTML'
 <!doctype html>
@@ -489,6 +494,11 @@ attachment_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "su
 test "$attachment_reply" = "attachments-ok"
 grep 'Attachment Alpha' "$attachment_chat_file" >/dev/null
 grep 'Attachment Beta' "$attachment_chat_file" >/dev/null
+attachment_pdf="$ROOT/build/attachment-paper.pdf"
+"$ROOT/ainiux" --no-config --input "$attachment_md" --output-format pdf --output "$attachment_pdf" --quiet
+pdf_attach_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" \
+    --attach "$attachment_pdf")
+test "$pdf_attach_reply" = "attachments-ok"
 
 stdin_attachment_reply=$(printf 'Attachment Alpha and Attachment Beta from a pipeline\n' | \
     "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "summarize-attachments" --attach stdin)

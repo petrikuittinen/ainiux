@@ -34,7 +34,9 @@
 #include "json/json.hpp"
 #include "platform/filesystem.hpp"
 #include "server/auth.hpp"
+#include "server/chat_input_store.hpp"
 #include "server/chat_service.hpp"
+#include "pdf/pdf.hpp"
 #include "server/http_parser.hpp"
 #include "server/event_broker.hpp"
 #include "server/job_registry.hpp"
@@ -154,8 +156,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v21.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v27.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v23.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v29.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -205,7 +207,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v21.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v23.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -242,10 +244,10 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find("@import") == std::string::npos &&
               stylesheet.body.find("https://") == std::string::npos &&
               stylesheet.body.find("http://") == std::string::npos &&
-              stylesheet_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos,
+              stylesheet_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v27.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v29.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -271,6 +273,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("window.prompt") == std::string::npos &&
               javascript.body.find("cleanup-empty") != std::string::npos &&
               javascript.body.find("edit-message") != std::string::npos &&
+              javascript.body.find("function chatTurnBusy") != std::string::npos &&
               javascript.body.find("async function createNewChat") != std::string::npos &&
               javascript.body.find("async function cancelActiveAgentTurn") != std::string::npos &&
               javascript.body.find("key === \"r\"") != std::string::npos &&
@@ -322,7 +325,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript_headers.find("connect-src 'self'") != std::string::npos &&
               javascript_headers.find("Referrer-Policy: no-referrer") != std::string::npos &&
               javascript_headers.find("Permissions-Policy:") != std::string::npos &&
-              javascript_headers.find("X-Frame-Options: DENY") != std::string::npos,
+              javascript_headers.find("X-Frame-Options: DENY") != std::string::npos &&
+              javascript_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI JavaScript uses authenticated fetch/replay and hardened same-origin headers");
 
     Response editor_history = route_request(public_get("/ui/assets/editor-history-v2.js"), config, status);
@@ -334,7 +338,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               editor_history.body.find("export function editorHistoryDirection") != std::string::npos &&
               editor_history.body.find("innerHTML") == std::string::npos &&
               editor_history.body.find("fetch(") == std::string::npos &&
-              editor_history_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos &&
+              editor_history_headers.find("Cache-Control: no-store") != std::string::npos &&
               editor_history_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI editor history provides bounded undo, redo, and shortcut handling");
 
@@ -353,7 +357,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               highlighter.body.find("insertAdjacentHTML") == std::string::npos &&
               highlighter.body.find("DOMParser") == std::string::npos &&
               highlighter.body.find("fetch(") == std::string::npos &&
-              highlighter_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos &&
+              highlighter_headers.find("Cache-Control: no-store") != std::string::npos &&
               highlighter_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI Markdown module builds safe semantic DOM under immutable CSP headers");
 
@@ -374,7 +378,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               syntax.body.find("outerHTML") == std::string::npos &&
               syntax.body.find("DOMParser") == std::string::npos &&
               syntax.body.find("fetch(") == std::string::npos &&
-              syntax_headers.find("Cache-Control: public, max-age=31536000, immutable") != std::string::npos &&
+              syntax_headers.find("Cache-Control: no-store") != std::string::npos &&
               syntax_headers.find("script-src 'self'") != std::string::npos,
           "embedded WUI syntax module is dependency-free, DOM-safe, and immutable");
 
@@ -389,9 +393,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               indentation.body.find("export function reformatEditorSnapshot") != std::string::npos &&
               indentation.body.find("fetch(") == std::string::npos &&
               indentation.body.find("innerHTML") == std::string::npos &&
-              indentation_headers.find("Cache-Control: public, max-age=31536000, immutable") !=
+              indentation_headers.find("Cache-Control: no-store") !=
                   std::string::npos,
-          "embedded WUI indentation module is pure and immutable-cacheable");
+          "embedded WUI indentation module is pure and served no-store");
 
     Response selector = route_request(public_get("/ui/assets/selector-v3.js"), config, status);
     check(selector.status == 200 &&
@@ -415,8 +419,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               video_options.body.find("videoFileError") != std::string::npos &&
               video_options.body.find("cropVideoFileName") != std::string::npos &&
               video_options.body.find("videoInputStatus") != std::string::npos &&
-              video_options.cache_control.find("immutable") != std::string::npos,
-          "embedded video option module is pure and served as an immutable exact-path asset");
+              video_options.cache_control.find("no-store") != std::string::npos,
+          "embedded video option module is pure and served as an exact-path asset");
 
     const std::size_t chat_submit_start = javascript.body.find("async function sendChatMessage");
     const std::size_t chat_submit_end = javascript.body.find("async function finishChatJob");
@@ -475,6 +479,10 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/app-v18.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v19.css"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/app-v20.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v21.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v22.css"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v27.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v28.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/video-options-v1.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/video-options-v2.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/highlight-v4.js"), config, status).status == 404 &&
@@ -644,6 +652,130 @@ void test_image_catalog_uploads_and_job_references() {
               denial.status == 413,
           "ordinary JSON routes retain the 1 MiB request limit");
     jobs.shutdown();
+}
+
+void test_chat_input_uploads() {
+    JobService jobs({}, ".", 8U);
+    AuthConfig auth{"controller", {}};
+    std::atomic<std::size_t> active{0};
+    PublicStatus status{8766, 64, 8, &active};
+    status.jobs = &jobs;
+
+    http::Request text = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: text/plain\r\n"
+        "X-Ainiux-Filename: notes.txt\r\nContent-Length: 0\r\n\r\n");
+    text.body = "hello";
+    Response created = route_request(text, auth, status);
+    check(created.status == 201 && created.body.find("\"kind\":\"text\"") != std::string::npos &&
+              created.body.find("\"converted\":false") != std::string::npos &&
+              created.body.find("notes.txt") != std::string::npos,
+          "plaintext chat upload is stored as text");
+
+    http::Request html = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: text/html\r\n"
+        "X-Ainiux-Filename: page.html\r\nContent-Length: 0\r\n\r\n");
+    html.body = "<h1>Title</h1>";
+    Response html_created = route_request(html, auth, status);
+    check(html_created.status == 201 &&
+              html_created.body.find("\"converted\":true") != std::string::npos &&
+              html_created.body.find("text/markdown") != std::string::npos,
+          "HTML chat upload is converted to Markdown");
+
+    ainiux::pdf::WriteOptions write_options;
+    std::string pdf_bytes;
+    check(ainiux::pdf::from_markdown("# Paper\n\nHello PDF attach.\n", write_options, pdf_bytes).ok(),
+          "test PDF for chat upload is generated");
+    http::Request pdf = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: application/pdf\r\n"
+        "X-Ainiux-Filename: paper.pdf\r\nContent-Length: 0\r\n\r\n");
+    pdf.body = pdf_bytes;
+    Response pdf_created = route_request(pdf, auth, status);
+    check(pdf_created.status == 201 && pdf_created.body.find("\"converted\":true") != std::string::npos &&
+              pdf_created.body.find("\"kind\":\"text\"") != std::string::npos,
+          "PDF chat upload is converted to Markdown text");
+
+    Response denial;
+    check(!preflight_request_body(text, Limits::upload_body_bytes + 1U, auth, status, denial) &&
+              denial.status == 413,
+          "chat uploads use the 20 MiB body preflight, not the 1 MiB JSON cap");
+    jobs.shutdown();
+}
+
+void test_chat_job_hydrates_stored_attachments() {
+    namespace fs = std::filesystem;
+    const fs::path directory = fs::temp_directory_path() / "ainiux-chat-job-hydrate-test";
+    const fs::path database = directory / "ainiux.db";
+    std::error_code cleanup_error;
+    fs::remove_all(directory, cleanup_error);
+    fs::create_directories(directory, cleanup_error);
+    check(!cleanup_error, "chat job hydrate test creates an isolated database directory");
+
+    cli::Options options;
+    options.provider = "none";
+    JobService jobs(options, ".", 8U);
+    ChatService service(database.u8string(), options);
+    service.set_chat_inputs(&jobs.chat_inputs());
+    jobs.set_chat_threads(&service);
+
+    StoredChatInput uploaded;
+    check(jobs.add_chat_input("text/plain", "briefing.md",
+                              "# Attached briefing\n\nZoom on Tuesdays.\n", uploaded).ok(),
+          "chat job hydrate test stores a Markdown upload");
+
+    std::string created;
+    check(service.create("{\"revision\":0,\"provider\":\"none\"}", created).ok(),
+          "chat job hydrate test creates a thread");
+    const json::ParseResult created_json = json::parse(created);
+    const json::Value* created_thread = created_json.value.get("thread");
+    const json::Value* id_value = created_thread == nullptr ? nullptr : created_thread->get("id");
+    check(id_value != nullptr && id_value->type == json::Value::Type::Number,
+          "chat job hydrate test returns a numeric thread id");
+    if (id_value == nullptr || id_value->type != json::Value::Type::Number) {
+        jobs.shutdown();
+        fs::remove_all(directory, cleanup_error);
+        return;
+    }
+    const long long thread_id = static_cast<long long>(id_value->number);
+
+    std::string appended;
+    long long revision = 0;
+    check(service.append(thread_id,
+                         "{\"revision\":1,\"messages\":[{\"role\":\"user\","
+                         "\"content\":\"Who is behind this?\",\"input_ids\":[" +
+                             json::quote(uploaded.id) + "]}]}",
+                         appended, revision).ok() &&
+              revision == 2,
+          "append imports the Markdown upload into the stored user message");
+
+    std::vector<ainiux::provider::Message> loaded;
+    check(service.load_job_messages(thread_id, loaded).ok() && loaded.size() == 1 &&
+              loaded[0].content.find("Who is behind this?") != std::string::npos &&
+              loaded[0].content.find("Zoom on Tuesdays") != std::string::npos &&
+              loaded[0].text_attachments.empty(),
+          "job transcript inlines stored Markdown attachments for the provider");
+
+    const std::string long_content(19000, 'a');
+    ServiceSubmitResult follow = jobs.submit(
+        "chat",
+        "{\"provider\":\"none\",\"thread_id\":" + std::to_string(thread_id) +
+            ",\"messages\":[{\"role\":\"user\",\"content\":\"Who is behind this?\"},"
+            "{\"role\":\"assistant\",\"content\":\"" +
+            long_content +
+            "\"},{\"role\":\"user\",\"content\":\"When are the Zoom sessions?\"}]}",
+        "");
+    check(follow.validation_error.ok() && follow.submission.job != nullptr,
+          "chat jobs with thread_id ignore a long client transcript and load the store");
+
+    ServiceSubmitResult no_messages = jobs.submit(
+        "chat", "{\"provider\":\"none\",\"thread_id\":" + std::to_string(thread_id) + "}", "");
+    check(no_messages.validation_error.ok() && no_messages.submission.job != nullptr,
+          "chat jobs may omit messages when thread_id is present");
+
+    jobs.shutdown();
+    fs::remove_all(directory, cleanup_error);
 }
 
 void test_video_input_store_validates_media_and_lifetimes() {
@@ -874,6 +1006,21 @@ void test_job_routes_and_sse() {
               invalid_reasoning.validation_error.message.find("field 'reasoning'") !=
                   std::string::npos,
           "chat reasoning rejects values outside the bounded CLI grammar");
+
+    const std::string long_content(5000, 'x');
+    ServiceSubmitResult long_job = jobs.submit(
+        "chat",
+        "{\"provider\":\"none\",\"messages\":[{\"role\":\"user\",\"content\":\"" + long_content +
+            "\"}]}",
+        "");
+    check(long_job.validation_error.ok(),
+          "chat jobs accept message content larger than 4096 bytes");
+
+    ServiceSubmitResult thread_only = jobs.submit(
+        "chat", "{\"provider\":\"none\",\"thread_id\":1}", "");
+    check(thread_only.validation_error.code == ErrorCode::BadArgs &&
+              thread_only.validation_error.message.find("messages") != std::string::npos,
+          "chat jobs still require messages when no chat store is wired");
 
     const json::ParseResult creation = json::parse(created.body);
     const json::Value* job_value = creation.value.get("job");
@@ -1637,6 +1784,22 @@ void test_revision_safe_chat_thread_routes() {
               loaded.body.find("\"model\":\"model-b\"") != std::string::npos,
           "thread loading returns its committed transcript and provider/model selection");
 
+    Response thread_pdf = route_request(session_request(
+        "POST", thread_path + "/pdf", "{\"scope\":\"thread\"}"), auth, status);
+    check(thread_pdf.status == 200 &&
+              thread_pdf.content_type.find("application/pdf") != std::string::npos &&
+              thread_pdf.content_disposition.find("chat.pdf") != std::string::npos &&
+              thread_pdf.body.compare(0, 5, "%PDF-") == 0,
+          "chat PDF export returns a PDF for the whole thread");
+    Response last_pdf = route_request(session_request(
+        "POST", thread_path + "/pdf", "{\"scope\":\"last\"}"), auth, status);
+    check(last_pdf.status == 200 && last_pdf.body.compare(0, 5, "%PDF-") == 0 &&
+              last_pdf.content_disposition.find("last.pdf") != std::string::npos,
+          "last-message PDF export returns a PDF");
+    Response bad_scope = route_request(session_request(
+        "POST", thread_path + "/pdf", "{\"scope\":\"all\"}"), auth, status);
+    check(bad_scope.status == 400, "chat PDF export rejects an unknown scope");
+
     {
         chat::SqliteStore tui_store;
         Error error = tui_store.open(database.u8string());
@@ -2311,6 +2474,8 @@ void run_all() {
     test_embedded_web_ui_assets_and_browser_security();
     test_auth_and_routes();
     test_image_catalog_uploads_and_job_references();
+    test_chat_input_uploads();
+    test_chat_job_hydrates_stored_attachments();
     test_video_input_store_validates_media_and_lifetimes();
     test_event_replay_is_ordered_and_bounded();
     test_job_registry_idempotency_lane_and_cancellation();

@@ -359,9 +359,21 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .thinking-trace { color: var(--muted); }
 .composer { flex: 0 0 auto; display: grid; gap: 0.34rem; padding: 0.42rem 0.55rem 0.5rem; border-top: 1px solid var(--border); background: var(--panel); }
 .composer textarea { max-height: 10rem; resize: none; }
-.chat-composer { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
-.chat-composer textarea { grid-column: 1; }
-.chat-composer #chat-send { grid-column: 2; min-width: 5rem; }
+.chat-composer {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "chips chips chips" "input attach send";
+  align-items: end;
+}
+.chat-composer .chat-attach-list { grid-area: chips; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.chat-composer .chat-attach-list:empty { display: none; }
+.chat-attach-chip { display: inline-flex; align-items: center; gap: 0.28rem; max-width: 100%; padding: 0.18rem 0.4rem; border: 1px solid var(--border); border-radius: 999px; background: var(--code); font-size: 0.75rem; }
+.chat-attach-chip button { min-height: 1.2rem; padding: 0 0.28rem; font-size: 0.7rem; }
+.chat-composer .sr-only { grid-area: input; }
+.chat-composer textarea { grid-area: input; }
+.chat-composer #chat-attach-button { grid-area: attach; min-width: 4.5rem; }
+.chat-composer #chat-send { grid-area: send; min-width: 5rem; }
+.message-attachments { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+.message-attachments .chat-attach-chip button { display: none; }
 .model-identity { display: flex; align-items: center; gap: 0.75rem; min-width: 0; padding-block: 0.35rem; font-size: 0.89rem; }
 .model-identity a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); text-underline-offset: 0.2em; }
 .model-identity a:first-child { flex: 0 1 auto; max-width: 42%; }
@@ -504,8 +516,8 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
 .checkbox-row input { width: 1.1rem; min-height: 1.1rem; }
 .review-box { max-height: 45dvh; overflow: auto; padding: 0.6rem; border: 1px solid var(--border); background: var(--code); white-space: pre-wrap; }
 .error-text { color: var(--danger); }
-.toast-region { position: fixed; z-index: 210; right: max(0.6rem, env(safe-area-inset-right)); bottom: max(0.6rem, env(safe-area-inset-bottom)); display: grid; gap: 0.35rem; width: min(24rem, calc(100% - 1.2rem)); pointer-events: none; }
-.toast { padding: 0.55rem 0.7rem; border: 1px solid var(--border); background: var(--raised); box-shadow: var(--shadow); }
+.toast-region { position: fixed; z-index: 210; right: max(0.6rem, env(safe-area-inset-right)); top: calc(var(--topbar-height) + max(0.6rem, env(safe-area-inset-top))); display: grid; gap: 0.35rem; width: min(24rem, calc(100% - 1.2rem)); pointer-events: none; }
+.toast { padding: 0.55rem 0.7rem; border: 1px solid var(--border); background: var(--raised); box-shadow: var(--shadow); pointer-events: none; }
 .toast.error { border-color: var(--danger); }
 
 @media (max-width: 68rem) {

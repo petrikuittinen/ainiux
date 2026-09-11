@@ -7,10 +7,13 @@
 #include "cli/args.hpp"
 #include "json/json.hpp"
 #include "server/job_registry.hpp"
+#include "server/chat_input_store.hpp"
 #include "server/image_input_store.hpp"
 #include "server/video_input_store.hpp"
 
 namespace ainiux::server {
+
+class ChatService;
 
 struct ServiceSubmitResult {
     SubmitResult submission;
@@ -42,6 +45,13 @@ class JobService {
     bool remove_image_input(const std::string& id);
     Error add_video_input(std::string mime_type, std::string bytes, StoredVideoInput& output);
     bool remove_video_input(const std::string& id);
+    Error add_chat_input(std::string mime_type,
+                         std::string filename,
+                         std::string bytes,
+                         StoredChatInput& output);
+    bool remove_chat_input(const std::string& id);
+    ChatInputStore& chat_inputs() { return chat_inputs_; }
+    void set_chat_threads(ChatService* service) { chat_threads_ = service; }
     const std::string& workspace() const { return workspace_; }
     void shutdown() { registry_.shutdown(); }
 
@@ -82,6 +92,8 @@ class JobService {
     JobRegistry registry_;
     ImageInputStore image_inputs_;
     VideoInputStore video_inputs_;
+    ChatInputStore chat_inputs_;
+    ChatService* chat_threads_ = nullptr;
 };
 
 }  // namespace ainiux::server

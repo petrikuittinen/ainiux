@@ -643,12 +643,19 @@ void load_editor_from_path(EditorState& state,
     Error load_error = load_file(path, settings, loaded);
     if (load_error.ok()) {
         const bool mixed = loaded.mixed_linebreaks;
-        reset_editor_buffer(state, std::move(loaded), path);
+        const bool from_pdf = loaded.converted_from_pdf && !loaded.suggested_path.empty();
+        const std::string buffer_path = from_pdf ? loaded.suggested_path : path;
+        reset_editor_buffer(state, std::move(loaded), buffer_path);
+        if (from_pdf) {
+            state.dirty = true;
+            state.redetect_language();
+        }
         minibuffer_message(minibuffer,
                            mixed ? "Warning: mixed line endings in " + path +
                                        "; normalized and using " +
                                        linebreak_name(state.linebreak) + " for saves"
-                                 : "Loaded " + path);
+                           : from_pdf ? "Converted PDF to Markdown; saving will write " + buffer_path
+                                      : "Loaded " + path);
     } else {
         minibuffer_message(minibuffer, load_error.message);
     }

@@ -269,7 +269,7 @@ agent loops, approval decisions, or filesystem mutation logic in a UI.
 - Keep full-control and MCP-only secrets separate; never reuse provider keys.
   Enforce Host/Origin, TLS, remote-Yolo, authentication-scope, and bounded HTTP rules.
 - Browser source stays dependency-free under `src/web/`. Serve only exact versioned
-  asset routes with immutable caching, strict CSP, no CORS, and correct MIME types.
+  asset routes with no-store caching, strict CSP, no CORS, and correct MIME types.
 - Persist a controller token only after validation in origin-scoped localStorage;
   clear it on 401 or sign-out. Never put it in cookies, URLs, logs, or rendered DOM.
 - Build dynamic content with DOM APIs and `textContent`; raw model/tool HTML remains

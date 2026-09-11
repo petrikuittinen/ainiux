@@ -309,6 +309,14 @@ void test_cli_help_displays_version() {
           "CLI help documents -e short option for --editor");
     check(help.find("-d, --dired") != std::string::npos,
           "CLI help documents -d short option for --dired");
+    check(help.find("Read text/Markdown/HTML/PDF") != std::string::npos,
+          "CLI help documents PDF as a --input type");
+    check(help.find("Add text/Markdown/HTML/PDF") != std::string::npos,
+          "CLI help documents PDF as an --attach type");
+    check(help.find("Fetch HTML or PDF") != std::string::npos,
+          "CLI help documents PDF as a --fetch-url type");
+    check(help.find("--input report.pdf") != std::string::npos,
+          "CLI help includes a PDF conversion example");
     check(help.find("Mode:") != std::string::npos &&
               help.find("Prompt and generation:") != std::string::npos &&
               help.find("Provider and endpoint:") != std::string::npos &&
@@ -556,6 +564,8 @@ void test_cli_empty_and_unicode_edge_cases() {
     const char* argv[] = {"ainiux"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(1, const_cast<char**>(argv));
     check(parsed.error.ok(), "CLI parse succeeds with only the program name");
+    check(parsed.options.max_fetch_bytes == 10L * 1024L * 1024L,
+          "default --max-fetch-bytes is 10 MiB");
     check(parsed.options.max_input_bytes == 10485760,
           "default --max-input-bytes is 10 MiB");
 

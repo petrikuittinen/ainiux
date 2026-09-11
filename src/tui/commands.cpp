@@ -30,7 +30,9 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text.rfind("/highlight ", 0) == 0 ||
            text == "/scrollbar" || text.rfind("/scrollbar ", 0) == 0 ||
            text == "/shell" || text.rfind("/shell ", 0) == 0 ||
-           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0;
+           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0 ||
+           text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0 ||
+           text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0;
 }
 
 bool reasoning_change_needs_confirmation(const std::string& requested,
@@ -294,6 +296,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/attach [PATH|URL] (queue text or image for next prompt; bare shows list, DEL deletes;\n"
                 "  agent: images request-local for that turn only, not stored in project/media)\n"
                 "/fetch URL\n"
+                "/chat-to-pdf [PATH] (entire thread to PDF; default chat.pdf)\n"
+                "/last-to-pdf [PATH] (last message to PDF; default last.pdf)\n"
                 "/search QUERY\n"
                 "/shell COMMAND  or  !COMMAND (user shell; display-only notice)\n"
                 "/shell-stdout COMMAND  or  !!COMMAND (stdout → editable input draft)\n"
@@ -1077,6 +1081,22 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (text == "/fetch" || text.rfind("/fetch ", 0) == 0) {
         handlers.start_fetch(app::detail::trim_ascii(text.substr(6)));
+        return;
+    }
+    if (text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0) {
+        if (handlers.start_chat_pdf) {
+            handlers.start_chat_pdf(app::detail::trim_ascii(text.substr(12)), false);
+        } else {
+            ctx.status = "Chat PDF export is unavailable";
+        }
+        return;
+    }
+    if (text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0) {
+        if (handlers.start_chat_pdf) {
+            handlers.start_chat_pdf(app::detail::trim_ascii(text.substr(12)), true);
+        } else {
+            ctx.status = "Chat PDF export is unavailable";
+        }
         return;
     }
     if (text == "/search" || text.rfind("/search ", 0) == 0) {

@@ -14,7 +14,9 @@
 #include "json/json.hpp"
 #include "provider/provider.hpp"
 #include "platform/filesystem.hpp"
+#include "server/chat_input_store.hpp"
 #include "server/chat_service.hpp"
+#include "server/image_input_store.hpp"
 #include "server/embedded_assets.hpp"
 #include "server/limits.hpp"
 #include "server/mcp_adapter.hpp"
@@ -329,13 +331,15 @@ bool preflight_request_body(const http::Request& request,
                             Response& denial) {
     const bool image_upload = request.method == "POST" && request.path == "/ainiux/v1/images/inputs";
     const bool video_upload = request.method == "POST" && request.path == "/ainiux/v1/videos/inputs";
-    const bool upload = image_upload || video_upload;
+    const bool chat_upload = request.method == "POST" && request.path == "/ainiux/v1/chat/inputs";
+    const bool upload = image_upload || video_upload || chat_upload;
     const std::size_t limit = video_upload ? Limits::video_upload_body_bytes :
-                              image_upload ? Limits::upload_body_bytes : Limits::json_body_bytes;
+                              (image_upload || chat_upload) ? Limits::upload_body_bytes
+                                                           : Limits::json_body_bytes;
     if (content_length > limit) {
         denial = error_response(413, "content_too_large",
                                 video_upload ? "video reference upload exceeds the 200 MiB per-file limit" :
-                                upload ? "image upload exceeds the 20 MiB per-file limit"
+                                upload ? "upload exceeds the 20 MiB per-file limit"
                                        : "HTTP request body exceeds the 1 MiB JSON limit");
         return false;
     }
@@ -368,11 +372,17 @@ bool preflight_request_body(const http::Request& request,
                              mime == "image/heic" || mime == "image/heif" || mime == "video/mp4" ||
                              mime == "video/quicktime" || mime == "audio/mpeg" ||
                              mime == "audio/wav" || mime == "audio/x-wav";
-    if ((!video_upload && mime != "image/png" && mime != "image/jpeg") ||
-        (video_upload && !video_media)) {
+    const bool chat_media = mime == "image/png" || mime == "image/jpeg" || mime == "image/gif" ||
+                            mime == "application/pdf" || mime == "application/x-pdf" ||
+                            mime == "text/plain" || mime == "text/markdown" || mime == "text/html" ||
+                            mime == "application/octet-stream" || mime.empty();
+    if ((image_upload && mime != "image/png" && mime != "image/jpeg") ||
+        (video_upload && !video_media) ||
+        (chat_upload && !chat_media)) {
         denial = error_response(415, "unsupported_media_type",
                                 video_upload ? "video references require a supported image, MP4/MOV, MP3, or WAV Content-Type" :
-                                               "image input uploads require Content-Type: image/png or image/jpeg");
+                                chat_upload ? "chat uploads require PNG, JPEG, GIF, PDF, Markdown, plaintext, or HTML"
+                                               : "image input uploads require Content-Type: image/png or image/jpeg");
         return false;
     }
     return true;
@@ -411,9 +421,7 @@ Response route_request(const http::Request& request,
         Response web;
         web.content_type = std::string(asset.content_type);
         web.body.assign(asset.content.data(), asset.content.size());
-        web.cache_control = asset.immutable
-                                ? "public, max-age=31536000, immutable"
-                                : "no-store";
+        web.cache_control = "no-store";
         web.content_security_policy =
             "default-src 'none'; script-src 'self'; style-src 'self'; "
             "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; "
@@ -505,7 +513,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_inputs\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
@@ -582,6 +590,82 @@ Response route_request(const http::Request& request,
             !status.jobs->remove_image_input(id)) {
             return error_response(404, "image_input_not_found",
                                   "uploaded image input is missing or expired");
+        }
+        response.body = "{\"deleted\":true,\"id\":" + json::quote(id) + "}";
+        return response;
+    }
+
+    const std::string chat_inputs_path = "/ainiux/v1/chat/inputs";
+    if (request.path == chat_inputs_path) {
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed", "chat uploads accept POST only");
+            response.allow = "POST";
+            return response;
+        }
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "chat uploads do not accept query parameters");
+        }
+        if (status.jobs == nullptr) {
+            return error_response(503, "chat_unavailable", "the chat upload service is unavailable");
+        }
+        const auto content_type = request.headers.find("content-type");
+        const std::string mime = content_type == request.headers.end()
+                                     ? std::string() : ascii_lower(ascii_trim(content_type->second));
+        std::string filename;
+        const auto named = request.headers.find("x-ainiux-filename");
+        if (named != request.headers.end()) filename = named->second;
+        if (filename.empty()) {
+            const auto disposition = request.headers.find("content-disposition");
+            if (disposition != request.headers.end()) {
+                const std::string header = disposition->second;
+                const std::size_t marker = ascii_lower(header).find("filename=");
+                if (marker != std::string::npos) {
+                    filename = header.substr(marker + 9);
+                    if (!filename.empty() && filename.front() == '"') {
+                        filename.erase(filename.begin());
+                        const std::size_t close = filename.find('"');
+                        if (close != std::string::npos) filename.resize(close);
+                    } else {
+                        const std::size_t semi = filename.find(';');
+                        if (semi != std::string::npos) filename.resize(semi);
+                    }
+                }
+            }
+        }
+        StoredChatInput stored;
+        const Error error = status.jobs->add_chat_input(mime, filename, request.body, stored);
+        if (!error.ok()) {
+            if (error.code == ErrorCode::RateLimit) {
+                return error_response(429, "chat_input_capacity", error.message);
+            }
+            return error_response(error.code == ErrorCode::UnsupportedFeature ? 415 : 400,
+                                  "invalid_chat_input", error.message);
+        }
+        response.status = 201;
+        response.body = "{\"id\":" + json::quote(stored.id) +
+                        ",\"kind\":" + json::quote(stored.kind == ChatInputKind::Image ? "image" : "text") +
+                        ",\"mime_type\":" + json::quote(stored.mime_type) +
+                        ",\"display_name\":" + json::quote(stored.display_name) +
+                        ",\"converted\":" + std::string(stored.converted ? "true" : "false") +
+                        ",\"byte_size\":" + std::to_string(stored.bytes->size()) +
+                        ",\"expires_at\":" +
+                            json::quote(image_input_expiry_timestamp(stored.expires_at)) + "}";
+        return response;
+    }
+    if (request.path.rfind(chat_inputs_path + "/", 0) == 0) {
+        if (request.method != "DELETE") {
+            response = error_response(405, "method_not_allowed", "chat upload deletion accepts DELETE only");
+            response.allow = "DELETE";
+            return response;
+        }
+        if (!request.query.empty() || !request.body.empty()) {
+            return error_response(400, "invalid_request", "chat upload deletion does not accept a query or body");
+        }
+        const std::string id = request.path.substr(chat_inputs_path.size() + 1U);
+        if (id.empty() || id.find('/') != std::string::npos || status.jobs == nullptr ||
+            !status.jobs->remove_chat_input(id)) {
+            return error_response(404, "chat_input_not_found",
+                                  "uploaded chat input is missing or expired");
         }
         response.body = "{\"deleted\":true,\"id\":" + json::quote(id) + "}";
         return response;
@@ -765,7 +849,7 @@ Response route_request(const http::Request& request,
             (slash != std::string::npos && action.empty()) ||
             (!action.empty() && action != "messages" && action != "regenerate" &&
              action != "settings" && action != "abandon" && action != "edit-message" &&
-             action != "delete-message")) {
+             action != "delete-message" && action != "pdf")) {
             return error_response(404, "thread_route_not_found", "no chat thread route matches this path");
         }
         if ((action.empty() || action == "settings") && request.method == "GET") {
@@ -804,6 +888,7 @@ Response route_request(const http::Request& request,
                 : action == "abandon" ? "chat abandonment accepts POST only"
                 : action == "edit-message" ? "chat message editing accepts POST only"
                 : action == "delete-message" ? "chat message deletion accepts POST only"
+                : action == "pdf" ? "chat PDF export accepts POST only"
                                       : "message append accepts POST only");
             response.allow = "POST";
             return response;
@@ -818,7 +903,21 @@ Response route_request(const http::Request& request,
                                       ? "chat message editing requires Content-Type: application/json"
                                   : action == "delete-message"
                                       ? "chat message deletion requires Content-Type: application/json"
+                                  : action == "pdf"
+                                      ? "chat PDF export requires Content-Type: application/json"
                                       : "message append requires Content-Type: application/json");
+        }
+        if (action == "pdf") {
+            std::string pdf;
+            std::string filename;
+            long long current_revision = 0;
+            const Error error = status.chat_threads->export_pdf(
+                thread_id, request.body, pdf, filename, current_revision);
+            if (!error.ok()) return chat_thread_error(error, current_revision);
+            response.content_type = "application/pdf";
+            response.content_disposition = "attachment; filename=\"" + filename + "\"";
+            response.body = std::move(pdf);
+            return response;
         }
         std::string body;
         long long current_revision = 0;

@@ -558,28 +558,39 @@ Error load_insert_source(const std::string& source,
     loaded.url = is_http_url(source);
     loaded.source = loaded.url ? source : expand_user_path(source);
     if (loaded.url) {
-        Error err = fetch::fetch_html(source, options.fetch, loaded.content, cancellation);
+        fetch::FetchedDocument fetched;
+        Error err = fetch::fetch_document(source, options.fetch, fetched, cancellation);
         if (!err.ok()) {
             return err;
         }
-        err = validate_insert_text(loaded.content, "URL " + source);
-        if (!err.ok()) {
-            return err;
-        }
-        if (cancellation.cancelled()) {
-            return {ErrorCode::Cancelled, "URL insertion cancelled: " + source};
-        }
-        if (options.auto_convert_html_to_markdown) {
-            try {
-                loaded.content = html::convert(loaded.content, html::OutputFormat::Markdown);
-            } catch (const std::bad_alloc&) {
-                return {ErrorCode::Internal,
-                        "not enough memory to convert HTML from URL: " + source};
-            } catch (const std::length_error&) {
-                return {ErrorCode::UnsupportedFeature,
-                        "converted HTML is too large to insert from URL: " + source};
-            }
+        if (fetched.kind == fetch::DocumentKind::Pdf) {
+            loaded.content = std::move(fetched.markdown);
             loaded.converted_html = true;
+            err = validate_insert_text(loaded.content, "URL " + source);
+            if (!err.ok()) {
+                return err;
+            }
+        } else {
+            loaded.content = std::move(fetched.body);
+            err = validate_insert_text(loaded.content, "URL " + source);
+            if (!err.ok()) {
+                return err;
+            }
+            if (cancellation.cancelled()) {
+                return {ErrorCode::Cancelled, "URL insertion cancelled: " + source};
+            }
+            if (options.auto_convert_html_to_markdown) {
+                try {
+                    loaded.content = html::convert(loaded.content, html::OutputFormat::Markdown);
+                } catch (const std::bad_alloc&) {
+                    return {ErrorCode::Internal,
+                            "not enough memory to convert HTML from URL: " + source};
+                } catch (const std::length_error&) {
+                    return {ErrorCode::UnsupportedFeature,
+                            "converted HTML is too large to insert from URL: " + source};
+                }
+                loaded.converted_html = true;
+            }
         }
     } else {
         if (source.find("://") != std::string::npos) {

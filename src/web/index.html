@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v21.css">
-  <script type="module" src="/ui/assets/app-v27.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v23.css">
+  <script type="module" src="/ui/assets/app-v29.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -57,8 +57,11 @@
             </div>
             <div id="chat-messages" class="message-list empty-state" aria-live="polite">Choose or create a thread.</div>
             <form id="chat-form" class="composer chat-composer">
+              <div id="chat-attach-list" class="chat-attach-list" aria-live="polite"></div>
               <label class="sr-only" for="chat-input">Message</label>
-              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" required disabled aria-keyshortcuts="Alt+P Alt+M Control+R Alt+T Alt+W Escape"></textarea>
+              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" disabled aria-keyshortcuts="Alt+P Alt+M Control+R Alt+T Alt+W Escape"></textarea>
+              <input id="chat-attach-files" type="file" accept="image/png,image/jpeg,image/gif,application/pdf,text/markdown,text/plain,text/html,.md,.markdown,.txt,.html,.htm,.pdf,.png,.jpg,.jpeg,.gif" multiple hidden>
+              <button id="chat-attach-button" class="ghost" type="button" disabled title="Attach files">Attach</button>
               <div id="chat-model-controls" hidden>
                 <label>Provider <select id="chat-provider" class="provider-select"></select></label>
                 <label>Model <input id="chat-model" type="text" list="chat-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="chat-model-list"></datalist><small id="chat-model-status" class="field-hint" aria-live="polite"></small></label>

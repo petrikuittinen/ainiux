@@ -148,7 +148,7 @@ surface, not an unfinished milestone:
 - retain one fixed workspace, one serialized Agent mutation lane, bounded HTTP/SSE,
   exact relative-path containment, and revision-safe mutations;
 - keep the browser same-origin, dependency-free, CSP-safe, accessible, responsive,
-  and served only through exact immutable asset routes;
+  and served only through exact no-store asset routes;
 - preserve server-side credentials and prevent absolute paths, databases, project
   private state, environment data, or TLS material from crossing the wire.
 

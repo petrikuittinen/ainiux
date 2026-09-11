@@ -84,7 +84,7 @@ At invocation time, `--key-env`, `--key-file`, and `--key-stdin` provide generic
 - `[agent]` controls logs, backups, automatic compaction, strategy, optional command-output display, and the LLM HTTP response body cap (`max_response_bytes`, default `32M`; `0` is unlimited). The universal derived compaction threshold is 75% when `compact_limit` is unset.
 - `[media]` controls SQLite versus file-backed attachment size and cleanup ages.
 - `[editor]` controls undo, file size warnings, auto-save, indentation, line endings, alignment width, and AI continuation limits.
-- `[url_fetch]` controls byte limits and private-address permission.
+- `[url_fetch]` controls the response byte limit (`max_bytes`, default 10485760 / 10 MiB) and private-address permission.
 - `[web_search]` controls hosted-search preference (`builtin`), result count, provider, key-variable names, and optional endpoints.
 - `[tui]` controls colors, theme, color wire format (`color_mode`), highlighting, thinking display, agent input height, reasoning-preview body length (`agent_thinking_preview_max_chars`, default `120`, not counting the `💭 ` prefix), when the opening thinking row freezes if it has not already filled that budget (`agent_thinking_idle_preview_seconds`, default `30`; `0` freezes the opening clip as soon as it is complete), and how often the agent context chrome refreshes an in-flight reasoning token estimate during long thinks (`agent_thinking_token_refresh_seconds`, default `1`; `0` disables). Long thinks keep at most those two rows: the frozen opening clip and a live tail of the last ~max_chars of the think, frozen with the same `💭 ` prefix when reasoning ends.
 

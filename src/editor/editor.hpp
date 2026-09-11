@@ -371,6 +371,8 @@ struct LoadedFile {
     bool tab_style_detected = false;
     std::string source_encoding;
     bool converted = false;
+    bool converted_from_pdf = false;
+    std::string suggested_path;
     bool needs_encoding_choice = false;
     bool unrecognized_encoding = false;
     std::string raw_bytes;
@@ -400,6 +402,8 @@ Error finish_loaded_file(LoadedFile& file,
 Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check);
 Error save_file(const std::string& path, const PieceTable& text);
 Error save_file(const std::string& path, const PieceTable& text, LineBreak linebreak);
+// Same directory, .pdf/.PDF → .md. Other paths get ".md" appended.
+std::string sibling_markdown_path(const std::string& path);
 Error ensure_empty_file(const std::string& path);
 
 ainiux::app::EditorRunResult run_editor(const std::string& path,

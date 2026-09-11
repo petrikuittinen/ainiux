@@ -62,6 +62,38 @@ std::string make_simple_pdf() {
     return make_pdf_with_content("BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET\n");
 }
 
+std::string make_pdf_with_tounicode(const std::string& cmap, const std::string& content) {
+    const std::string content_obj =
+        "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "endstream";
+    const std::string cmap_obj =
+        "<< /Length " + std::to_string(cmap.size()) + " >>\nstream\n" + cmap + "endstream";
+    std::vector<std::string> bodies = {
+        "",
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        "/Resources << /Font << /F1 5 0 R >> >> >>",
+        content_obj,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>",
+        cmap_obj,
+    };
+    std::string out = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+    std::vector<std::size_t> offsets(bodies.size(), 0);
+    for (std::size_t i = 1; i < bodies.size(); ++i) {
+        offsets[i] = out.size();
+        out += std::to_string(i) + " 0 obj\n" + bodies[i] + "\nendobj\n";
+    }
+    const std::size_t xref = out.size();
+    out += "xref\n0 " + std::to_string(bodies.size()) + "\n";
+    out += xref_line(0, 65535, 'f');
+    for (std::size_t i = 1; i < bodies.size(); ++i) {
+        out += xref_line(offsets[i], 0, 'n');
+    }
+    out += "trailer\n<< /Size " + std::to_string(bodies.size()) + " /Root 1 0 R >>\n";
+    out += "startxref\n" + std::to_string(xref) + "\n%%EOF\n";
+    return out;
+}
+
 std::string flate_bytes(const std::string& raw) {
     uLongf bound = compressBound(static_cast<uLong>(raw.size()));
     std::string out(bound, '\0');
@@ -214,6 +246,37 @@ void test_to_markdown_extracts_simple_pdf() {
     const ainiux::Error err = ainiux::pdf::to_markdown_bytes(make_simple_pdf(), options, markdown);
     check(err.ok(), "to_markdown extracts simple PDF: " + err.message);
     check(markdown.find("Hello PDF") != std::string::npos, "simple PDF markdown contains Hello PDF");
+}
+
+void test_to_markdown_consumes_bfrange_destination_array() {
+    const std::string cmap =
+        "1 begincodespacerange\n"
+        "<0000> <FFFF>\n"
+        "endcodespacerange\n"
+        "1 beginbfrange\n"
+        "<0003> <0004> [<0020> <0041>]\n"
+        "endbfrange\n"
+        "1 beginbfchar\n"
+        "<0011> <0042>\n"
+        "endbfchar\n";
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(
+        make_pdf_with_tounicode(cmap, "BT /F1 12 Tf 72 720 Td <000300040011> Tj ET\n"),
+        ainiux::pdf::Options{}, markdown);
+    check(err.ok(), "array-form ToUnicode bfrange extracts: " + err.message);
+    check(markdown.find("AB") != std::string::npos,
+          "array-form ToUnicode bfrange consumes its closing bracket");
+}
+
+void test_to_markdown_rejects_unterminated_bfchar() {
+    const std::string cmap = "1 beginbfchar\n<0001> <0041>\n";
+    std::string markdown;
+    const ainiux::Error err = ainiux::pdf::to_markdown_bytes(
+        make_pdf_with_tounicode(cmap, "BT /F1 12 Tf 72 720 Td <0001> Tj ET\n"),
+        ainiux::pdf::Options{}, markdown);
+    check(err.ok(), "unterminated ToUnicode section produces a bounded page result");
+    check(markdown.find("unterminated ToUnicode bfchar section") != std::string::npos,
+          "unterminated ToUnicode bfchar reports an extraction error instead of looping");
 }
 
 void test_to_markdown_russian_needle() {
@@ -720,6 +783,8 @@ void run_all() {
     test_real_short_russian_pdf();
     test_open_corpus_page_counts();
     test_to_markdown_extracts_simple_pdf();
+    test_to_markdown_consumes_bfrange_destination_array();
+    test_to_markdown_rejects_unterminated_bfchar();
     test_to_markdown_russian_needle();
     test_to_markdown_hebrew_needles();
     test_to_markdown_arabic_needles();

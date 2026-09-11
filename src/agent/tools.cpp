@@ -6115,7 +6115,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (opts.timeout_seconds < 1) opts.timeout_seconds = 1;
         opts.follow_redirects = true;
         std::string body;
-        // Always convert HTML→Markdown (or keep text/plain). Never fetch_html for agent tools.
+        // Always convert HTML/PDF→Markdown (or keep text/plain). Never fetch_html for agent tools.
         const Error error = fetch::fetch_text(url, opts, body, cancellation);
         json::Value data = object_value();
         data.object["url"] = string_value(url);

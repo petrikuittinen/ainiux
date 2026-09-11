@@ -60,8 +60,8 @@ Error read_local_file(const std::string& path,
     return ok_error();
 }
 
-Error fetch_html_url(const cli::Options& options, std::string& body) {
-    Error err = fetch::fetch_html(options.fetch_url, fetch_options_for(options), body);
+Error fetch_document_url(const cli::Options& options, fetch::FetchedDocument& document) {
+    Error err = fetch::fetch_document(options.fetch_url, fetch_options_for(options), document);
     if (!err.ok()) {
         return err;
     }
@@ -300,8 +300,28 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
     std::string body;
     input::FileType input_type;
     if (!options.fetch_url.empty()) {
+        fetch::FetchedDocument fetched;
+        err = fetch_document_url(options, fetched);
+        if (!err.ok()) {
+            return err;
+        }
+        if (fetched.kind == fetch::DocumentKind::Pdf) {
+            document.source = document_source_label(options);
+            document.input_kind = InputKind::Pdf;
+            document.output_format = document_output_format(options, document.input_kind, standalone);
+            if (document.output_format == markdown::OutputFormat::Pdf) {
+                return write_pdf_from_markdown(fetched.markdown, options.quiet, options.pdf_font,
+                                               document.converted);
+            }
+            const bool complete_html_document =
+                standalone && document.output_format == markdown::OutputFormat::Html &&
+                !options.output_path.empty() && options.output_path != "stdout";
+            document.converted = render_document_body(fetched.markdown, document.input_kind,
+                                                      document.output_format, complete_html_document);
+            return ok_error();
+        }
         input_type = {InputKind::Html, "html", "text/html"};
-        err = fetch_html_url(options, body);
+        body = std::move(fetched.body);
     } else {
         err = local_input_type_for_options(options, input_type);
         if (!err.ok()) {

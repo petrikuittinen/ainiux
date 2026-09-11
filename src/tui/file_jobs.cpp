@@ -1,9 +1,12 @@
 #include "tui/file_jobs.hpp"
 
 #include "app/user_shell.hpp"
+#include "chat/media_store.hpp"
+#include "chat/transcript.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "input/input.hpp"
+#include "platform/filesystem.hpp"
 #include "provider/provider.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
@@ -11,6 +14,7 @@
 #include "tui/tui.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 #include <vector>
 
@@ -256,27 +260,13 @@ void TuiFileJobs::start_attach(const std::string& path) {
             event.text = path;
             event.attached_source = path;
             std::string body;
-            event.error = fetch::fetch_html(path, options, body, token);
+            event.error = fetch::fetch_markdown(path, options, body, token);
             if (event.error.ok()) {
                 if (text_limit > 0 && body.size() > static_cast<size_t>(text_limit)) {
                     event.error = {ErrorCode::UnsupportedFeature,
                                    "attachment from URL exceeds --max-input-bytes limit"};
                 } else {
-                    try {
-                        body = html::convert(body, html::OutputFormat::Markdown);
-                    } catch (const std::bad_alloc&) {
-                        event.error = {ErrorCode::Internal,
-                                       "not enough memory to convert HTML from URL: " + path};
-                    } catch (const std::length_error&) {
-                        event.error = {ErrorCode::UnsupportedFeature,
-                                       "converted HTML is too large to attach from URL: " + path};
-                    }
-                    if (event.error.ok() && text_limit > 0 &&
-                        body.size() > static_cast<size_t>(text_limit)) {
-                        event.error = {ErrorCode::UnsupportedFeature,
-                                       "converted attachment from URL exceeds --max-input-bytes limit"};
-                    }
-                    if (event.error.ok() && persist_attachment) {
+                    if (persist_attachment) {
                         chat::SqliteStore store;
                         event.error = store.open(media_database_path);
                         if (event.error.ok()) {
@@ -436,6 +426,69 @@ void TuiFileJobs::start_fetch(const std::string& url) {
         event_queue.push(std::move(event));
     });
     status = "Fetching " + url + "...";
+}
+
+void TuiFileJobs::start_chat_pdf(const std::string& path, bool last_message_only) {
+    if (busy()) {
+        return;
+    }
+    const chat::TranscriptScope scope = last_message_only ? chat::TranscriptScope::LastMessage
+                                                          : chat::TranscriptScope::Thread;
+    std::string output_path = path;
+    if (output_path.empty()) {
+        output_path = chat::default_transcript_pdf_path(scope);
+    }
+    output_path = expand_user_path(output_path);
+    chat::Session snapshot = session;
+    const std::string media_database_path = sqlite_path;
+    const bool persist_available = sqlite_available;
+    const long attachment_limit = context.options.max_input_bytes > 0
+                                      ? context.options.max_input_bytes
+                                      : 10485760;
+    const std::string font_path = context.options.pdf_font;
+    runtime::EventQueue<TuiEvent>& event_queue = events;
+    file_job.start([output_path, scope, snapshot = std::move(snapshot), media_database_path,
+                    persist_available, attachment_limit, font_path, &event_queue](
+                       runtime::CancellationToken token) mutable {
+        TuiEvent event;
+        event.type = TuiEventType::ChatPdfDone;
+        event.text = output_path;
+        if (token.cancelled()) {
+            event.error = {ErrorCode::Cancelled, "chat PDF export cancelled"};
+            event_queue.push(std::move(event));
+            return;
+        }
+        std::error_code exists_error;
+        if (std::filesystem::exists(std::filesystem::u8path(output_path), exists_error) &&
+            !exists_error) {
+            event.error = {ErrorCode::FileWrite,
+                           "refusing to overwrite existing file: " + output_path +
+                               "; pass a different path"};
+            event_queue.push(std::move(event));
+            return;
+        }
+        if (persist_available && !media_database_path.empty()) {
+            event.error = chat::hydrate_message_text_attachments(
+                media_database_path, snapshot.messages, static_cast<size_t>(attachment_limit),
+                token);
+            if (!event.error.ok()) {
+                event_queue.push(std::move(event));
+                return;
+            }
+        }
+        pdf::WriteOptions write_options;
+        write_options.font_path = font_path;
+        write_options.cancellation = token;
+        std::string pdf;
+        event.error = chat::transcript_pdf(snapshot.messages, snapshot.name, scope, write_options,
+                                           pdf);
+        if (event.error.ok()) {
+            event.error = platform::atomic_write_shared_create(output_path, pdf, true);
+        }
+        event_queue.push(std::move(event));
+    });
+    status = std::string(last_message_only ? "Writing last message to " : "Writing chat to ") +
+             output_path + "...";
 }
 
 void TuiFileJobs::start_search(const std::string& query) {

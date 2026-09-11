@@ -8,7 +8,9 @@
 
 #include "app/app.hpp"
 #include "app/operations.hpp"
+#include "chat/media_store.hpp"
 #include "config/model_catalog.hpp"
+#include "input/input.hpp"
 #include "editor/ai_continue.hpp"
 #include "editor/editor_assist.hpp"
 #include "platform/filesystem.hpp"
@@ -21,6 +23,7 @@
 #include "config/video_catalog.hpp"
 #include "server/workspace_service.hpp"
 #include "server/model_settings.hpp"
+#include "server/chat_service.hpp"
 #include "agent/project_settings.hpp"
 
 namespace ainiux::server {
@@ -144,7 +147,8 @@ JobService::JobService(cli::Options base_options, std::string workspace, std::si
       workspace_(std::move(workspace)),
       registry_(max_jobs),
       image_inputs_(Limits::image_upload_store_bytes),
-      video_inputs_(Limits::video_upload_store_bytes) {
+      video_inputs_(Limits::video_upload_store_bytes),
+      chat_inputs_(Limits::chat_upload_store_bytes) {
     base_options_.server = false;
     base_options_.quiet = true;
     base_options_.prompt.clear();
@@ -177,6 +181,17 @@ Error JobService::add_video_input(std::string mime_type, std::string bytes, Stor
     return video_inputs_.add(std::move(mime_type), std::move(bytes), output);
 }
 bool JobService::remove_video_input(const std::string& id) { return video_inputs_.erase(id); }
+
+Error JobService::add_chat_input(std::string mime_type,
+                                 std::string filename,
+                                 std::string bytes,
+                                 StoredChatInput& output) {
+    return chat_inputs_.add(std::move(mime_type), std::move(filename), std::move(bytes), output);
+}
+
+bool JobService::remove_chat_input(const std::string& id) {
+    return chat_inputs_.erase(id);
+}
 
 Error JobService::validate_common(const json::Value& root,
                                   const std::string& operation,
@@ -238,10 +253,44 @@ Error JobService::validate_common(const json::Value& root,
     return ok_error();
 }
 
+Error apply_chat_input_ids(ChatInputStore& store,
+                           const std::vector<std::string>& ids,
+                           provider::Message& message) {
+    std::vector<StoredChatInput> stored;
+    Error error = store.resolve(ids, stored);
+    if (!error.ok()) return error;
+    for (StoredChatInput& item : stored) {
+        if (item.kind == ChatInputKind::Image) {
+            provider::ImageInput image;
+            image.mime_type = item.mime_type;
+            image.display_name = item.display_name;
+            image.source_ref = item.display_name;
+            image.byte_size = static_cast<long long>(item.bytes->size());
+            image.base64_data = input::encode_base64(*item.bytes);
+            message.images.push_back(std::move(image));
+        } else {
+            provider::TextAttachment attachment;
+            attachment.markdown_content = *item.bytes;
+            attachment.display_name = item.display_name;
+            attachment.source_ref = item.display_name;
+            attachment.byte_size = static_cast<long long>(item.bytes->size());
+            message.text_attachments.push_back(std::move(attachment));
+        }
+    }
+    return ok_error();
+}
+
 JobOutcome JobService::run_chat_job(cli::Options options,
                                     std::vector<provider::Message> messages,
                                     runtime::CancellationToken cancellation,
                                     JobEvents events) const {
+    if (!messages.empty()) {
+        Error hydrate = chat::hydrate_message_text_attachments(
+            "", messages, static_cast<size_t>(options.max_input_bytes > 0 ? options.max_input_bytes
+                                                                          : 10485760),
+            cancellation);
+        if (!hydrate.ok()) return {public_operation_error(hydrate, {options.key}), {}};
+    }
     options.prompt = messages.back().content;
     provider::ContextResult built = provider::build_context(options);
     if (!built.error.ok()) return {public_operation_error(built.error, {options.key}), {}};
@@ -484,27 +533,88 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
 
     if (operation == "chat") {
         error = reject_unknown(parsed.value,
-                               {"provider", "model", "api", "reasoning", "messages", "settings"});
+                               {"provider", "model", "api", "reasoning", "messages", "settings",
+                                "input_ids", "thread_id"});
         if (!error.ok()) return {{}, error};
+        long long thread_id = 0;
+        if (const json::Value* thread = parsed.value.get("thread_id")) {
+            if (thread->type != json::Value::Type::Number || thread->number <= 0.0 ||
+                std::floor(thread->number) != thread->number) {
+                return {{}, field_error("thread_id", "must be a positive integer")};
+            }
+            thread_id = static_cast<long long>(thread->number);
+        }
         const json::Value* messages_value = parsed.value.get("messages");
-        if (messages_value == nullptr || !messages_value->is_array() || messages_value->array.empty()) {
+        const bool have_messages = messages_value != nullptr && messages_value->is_array() &&
+                                   !messages_value->array.empty();
+        if (thread_id == 0 && !have_messages) {
             return {{}, field_error("messages", "must be a non-empty array")};
         }
+        const bool load_thread = thread_id > 0 && chat_threads_ != nullptr;
         std::vector<provider::Message> messages;
-        for (const json::Value& item : messages_value->array) {
-            if (!item.is_object()) return {{}, field_error("messages", "entries must be objects")};
-            error = reject_unknown(item, {"role", "content"});
-            if (!error.ok()) return {{}, error};
-            std::string role;
-            std::string content;
-            error = required_string(item, "role", role, 32U);
-            if (!error.ok()) return {{}, error};
-            if (role != "system" && role != "user" && role != "assistant") {
-                return {{}, field_error("role", "must be 'system', 'user', or 'assistant'")};
+        std::vector<std::string> top_level_ids;
+        if (const json::Value* ids = parsed.value.get("input_ids")) {
+            if (!ids->is_array()) return {{}, field_error("input_ids", "must be an array of strings")};
+            for (const json::Value& id : ids->array) {
+                if (!id.is_string() || id.string.empty())
+                    return {{}, field_error("input_ids", "must contain upload identifier strings")};
+                top_level_ids.push_back(id.string);
             }
-            error = required_string(item, "content", content);
+        }
+        if (load_thread) {
+            // The stored transcript is the request. Ignore client `messages` so a
+            // long assistant reply cannot fail `content` length checks, and skip
+            // job `input_ids` because append already imported those files.
+            error = chat_threads_->load_job_messages(thread_id, messages);
             if (!error.ok()) return {{}, error};
-            messages.emplace_back(std::move(role), std::move(content));
+        } else if (have_messages) {
+            for (const json::Value& item : messages_value->array) {
+                if (!item.is_object()) return {{}, field_error("messages", "entries must be objects")};
+                error = reject_unknown(item, {"role", "content", "input_ids"});
+                if (!error.ok()) return {{}, error};
+                std::string role;
+                std::string content;
+                error = required_string(item, "role", role, 32U);
+                if (!error.ok()) return {{}, error};
+                if (role != "system" && role != "user" && role != "assistant") {
+                    return {{}, field_error("role", "must be 'system', 'user', or 'assistant'")};
+                }
+                error = optional_string(item, "content", content, Limits::json_body_bytes);
+                if (!error.ok()) return {{}, error};
+                std::vector<std::string> ids;
+                if (const json::Value* values = item.get("input_ids")) {
+                    if (!values->is_array())
+                        return {{}, field_error("input_ids", "must be an array of strings")};
+                    for (const json::Value& id : values->array) {
+                        if (!id.is_string() || id.string.empty())
+                            return {{}, field_error("input_ids",
+                                                    "must contain upload identifier strings")};
+                        ids.push_back(id.string);
+                    }
+                }
+                if (content.empty() && ids.empty() && top_level_ids.empty() && thread_id == 0) {
+                    return {{}, field_error("content", "must be a non-empty string")};
+                }
+                provider::Message message{std::move(role), std::move(content)};
+                if (!ids.empty()) {
+                    error = apply_chat_input_ids(chat_inputs_, ids, message);
+                    if (!error.ok()) return {{}, error};
+                }
+                messages.push_back(std::move(message));
+            }
+        }
+        if (messages.empty()) {
+            return {{}, field_error("messages", "must be a non-empty array")};
+        }
+        if (!load_thread && !top_level_ids.empty()) {
+            error = apply_chat_input_ids(chat_inputs_, top_level_ids, messages.back());
+            if (!error.ok()) return {{}, error};
+        }
+        if (!messages.back().images.empty()) {
+            provider::ContextResult built = provider::build_context(options);
+            if (!built.error.ok()) return {{}, built.error};
+            error = provider::validate_image_input(built.context);
+            if (!error.ok()) return {{}, error};
         }
         JobWork work = [this, options, messages = std::move(messages)](
                            runtime::CancellationToken token, JobEvents events) mutable {

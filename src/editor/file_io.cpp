@@ -2,10 +2,12 @@
 
 #include "common.hpp"
 #include "encoding/encoding.hpp"
+#include "pdf/pdf.hpp"
 #include "platform/filesystem.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -18,7 +20,41 @@ namespace {
 
 constexpr size_t kIndentDetectionLines = 20;
 
+bool ends_with_ci(const std::string& text, const std::string& suffix) {
+    if (text.size() < suffix.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < suffix.size(); ++i) {
+        const unsigned char a = static_cast<unsigned char>(text[text.size() - suffix.size() + i]);
+        const unsigned char b = static_cast<unsigned char>(suffix[i]);
+        if (std::tolower(a) != std::tolower(b)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool path_has_pdf_extension(const std::string& path) {
+    return ends_with_ci(path, ".pdf");
+}
+
+bool bytes_look_like_pdf(const std::string& bytes) {
+    size_t i = 0;
+    while (i < bytes.size() &&
+           (bytes[i] == ' ' || bytes[i] == '\t' || bytes[i] == '\r' || bytes[i] == '\n')) {
+        ++i;
+    }
+    return bytes.size() - i >= 5 && bytes.compare(i, 5, "%PDF-") == 0;
+}
+
 }  // namespace
+
+std::string sibling_markdown_path(const std::string& path) {
+    if (path_has_pdf_extension(path)) {
+        return path.substr(0, path.size() - 4) + ".md";
+    }
+    return path + ".md";
+}
 
 const char* tab_style_name(TabStyle style) {
     return style == TabStyle::Tab ? "tab" : "spaces";
@@ -333,6 +369,19 @@ Error load_file(const std::string& path,
     }
 
     out.raw_bytes = content;
+    if (path_has_pdf_extension(resolved) || bytes_look_like_pdf(content)) {
+        pdf::Options pdf_options;
+        pdf_options.max_bytes = content.size();
+        std::string markdown;
+        err = pdf::to_markdown_bytes(content, pdf_options, markdown);
+        if (!err.ok()) {
+            return err;
+        }
+        out.converted_from_pdf = true;
+        out.converted = true;
+        out.suggested_path = sibling_markdown_path(resolved);
+        return finalize_editor_content(std::move(markdown), settings, out);
+    }
     const encoding::DetectedEncoding detected = encoding::detect(content);
     if (detected.confident) {
         std::string utf8;
@@ -392,8 +441,18 @@ Error save_file(const std::string& path, const PieceTable& text, LineBreak lineb
     if (!out) {
         return {ErrorCode::FileWrite, "failed while serializing editor file: " + resolved};
     }
+    std::string payload = out.str();
+    if (path_has_pdf_extension(resolved)) {
+        pdf::WriteOptions pdf_options;
+        std::string pdf_bytes;
+        err = pdf::from_markdown(payload, pdf_options, pdf_bytes);
+        if (!err.ok()) {
+            return {err.code, err.message + ": " + resolved};
+        }
+        payload = std::move(pdf_bytes);
+    }
     // Editor buffers are ordinary project files: respect umask / existing mode.
-    Error save_error = platform::atomic_write_shared(resolved, out.str(), true);
+    Error save_error = platform::atomic_write_shared(resolved, payload, true);
     if (!save_error.ok()) {
         return {ErrorCode::FileWrite,
                 "failed while writing editor buffer: " + resolved + ": " +

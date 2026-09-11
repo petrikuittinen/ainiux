@@ -6,12 +6,17 @@
 #include <utility>
 #include <vector>
 
+#include "chat/media_store.hpp"
 #include "chat/settings.hpp"
+#include "chat/transcript.hpp"
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
+#include "platform/filesystem.hpp"
 #include "provider/provider.hpp"
 #include "search/search.hpp"
 #include "security/redact.hpp"
+
+#include <filesystem>
 
 namespace ainiux::app {
 
@@ -21,7 +26,8 @@ using InputKind = input::Kind;
 
 void print_repl_help() {
     std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert FILE_OR_URL, /attach PATH, "
-                 "/fetch URL, /search QUERY, /shell COMMAND, !COMMAND, /shell-stdout COMMAND, !!COMMAND, "
+                 "/fetch URL, /chat-to-pdf [PATH], /last-to-pdf [PATH], /search QUERY, /shell COMMAND, "
+                 "!COMMAND, /shell-stdout COMMAND, !!COMMAND, "
                  "/clear, /system TEXT, /model MODEL, /reasoning auto|VALUE|TOKENS\n"
                  "  /shell and ! show a full notice; /shell-stdout and !! print pure stdout "
                  "(TUI places that stdout in the input draft).\n";
@@ -31,7 +37,9 @@ bool allowed_for_read_only_session(const std::string& text) {
     return text == "/help" || text == "/quit" || text == "/exit" ||
            text.rfind("/save", 0) == 0 || text.rfind("/load", 0) == 0 ||
            text == "/shell" || text.rfind("/shell ", 0) == 0 ||
-           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0;
+           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0 ||
+           text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0 ||
+           text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0;
 }
 
 void run_repl_shell(const std::string& command,
@@ -362,6 +370,41 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                 session.messages.push_back({"user", input::text_context_message(fetched)});
                 if (!context.options.quiet) {
                     std::cerr << "Fetched and inserted URL: " << url << "\n";
+                }
+                continue;
+            }
+            if (text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0 ||
+                text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0) {
+                const bool last_only = text.rfind("/last-to-pdf", 0) == 0;
+                const std::string requested = detail::trim_ascii(
+                    text.substr(last_only ? 12 : 12));
+                const chat::TranscriptScope scope = last_only ? chat::TranscriptScope::LastMessage
+                                                              : chat::TranscriptScope::Thread;
+                std::string output_path = requested.empty()
+                                              ? std::string(chat::default_transcript_pdf_path(scope))
+                                              : expand_user_path(requested);
+                std::error_code exists_error;
+                if (std::filesystem::exists(std::filesystem::u8path(output_path), exists_error) &&
+                    !exists_error) {
+                    print_error({ErrorCode::FileWrite,
+                                 "refusing to overwrite existing file: " + output_path +
+                                     "; pass a different path"});
+                    continue;
+                }
+                pdf::WriteOptions write_options;
+                write_options.font_path = context.options.pdf_font;
+                std::string pdf;
+                Error err = chat::transcript_pdf(session.messages, session.name, scope, write_options,
+                                                 pdf);
+                if (err.ok()) {
+                    err = platform::atomic_write_shared_create(output_path, pdf, true);
+                }
+                if (!err.ok()) {
+                    print_error(err);
+                    continue;
+                }
+                if (!context.options.quiet) {
+                    std::cerr << "Wrote PDF " << output_path << "\n";
                 }
                 continue;
             }

@@ -9,6 +9,7 @@
 #include "encoding/encoding.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
+#include "pdf/pdf.hpp"
 
 namespace ainiux::fetch {
 namespace {
@@ -156,33 +157,89 @@ bool is_private_or_loopback_host(std::string host) {
     return false;
 }
 
-bool supported_html_content_type(std::string content_type) {
-    if (content_type.empty()) {
-        return true;
-    }
+enum class FetchAccept {
+    HtmlOnly,
+    HtmlOrPlain,
+    HtmlOrPdf,
+    Document,  // HTML, plaintext, or PDF
+};
+
+std::string media_type_of(std::string content_type) {
     content_type = ascii_lower(std::move(content_type));
     const size_t semi = content_type.find(';');
     if (semi != std::string::npos) {
         content_type = content_type.substr(0, semi);
     }
-    content_type = ascii_trim(std::move(content_type));
-    return content_type == "text/html" || content_type == "application/xhtml+xml";
+    return ascii_trim(std::move(content_type));
 }
 
-bool supported_plain_content_type(std::string content_type) {
-    content_type = ascii_lower(std::move(content_type));
-    const size_t semi = content_type.find(';');
-    if (semi != std::string::npos) {
-        content_type = content_type.substr(0, semi);
+bool classify_fetched_kind(const std::string& media_type,
+                           const std::string& body,
+                           FetchAccept accept,
+                           DocumentKind& kind) {
+    const bool allow_plain = accept == FetchAccept::HtmlOrPlain || accept == FetchAccept::Document;
+    const bool allow_pdf = accept == FetchAccept::HtmlOrPdf || accept == FetchAccept::Document;
+    if (media_type_is_pdf(media_type)) {
+        kind = DocumentKind::Pdf;
+        return allow_pdf;
     }
-    return ascii_trim(std::move(content_type)) == "text/plain";
+    if (media_type.empty() || media_type == "application/octet-stream") {
+        if (body_looks_like_pdf(body)) {
+            kind = DocumentKind::Pdf;
+            return allow_pdf;
+        }
+        kind = DocumentKind::Html;
+        return true;
+    }
+    if (media_type_is_html(media_type)) {
+        kind = DocumentKind::Html;
+        return true;
+    }
+    if (allow_plain && media_type_is_plain(media_type)) {
+        kind = DocumentKind::Plaintext;
+        return true;
+    }
+    return false;
+}
+
+const char* accept_header_for(FetchAccept accept) {
+    switch (accept) {
+        case FetchAccept::HtmlOrPlain:
+            return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "text/plain;q=0.8,application/pdf;q=0.7,image/avif,image/webp,*/*;q=0.8";
+        case FetchAccept::HtmlOrPdf:
+            return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "application/pdf;q=0.8,image/avif,image/webp,image/apng,*/*;q=0.8";
+        case FetchAccept::Document:
+            return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "text/plain;q=0.8,application/pdf;q=0.8,image/avif,image/webp,*/*;q=0.8";
+        case FetchAccept::HtmlOnly:
+        default:
+            return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "application/pdf;q=0.7,image/avif,image/webp,image/apng,*/*;q=0.8";
+    }
+}
+
+const char* unsupported_type_message(FetchAccept accept) {
+    switch (accept) {
+        case FetchAccept::HtmlOrPlain:
+            return "a supported text content type: ";
+        case FetchAccept::HtmlOrPdf:
+            return "an HTML or PDF content type: ";
+        case FetchAccept::Document:
+            return "a supported HTML, PDF, or text content type: ";
+        case FetchAccept::HtmlOnly:
+        default:
+            return "an HTML content type: ";
+    }
 }
 
 Error fetch_body(const std::string& url,
                  const Options& options,
-                 bool allow_plaintext,
+                 FetchAccept accept,
                  std::string& body,
                  std::string& content_type,
+                 DocumentKind& kind,
                  runtime::CancellationToken cancellation) {
     if (url.empty()) {
         return {ErrorCode::BadArgs, "URL fetch requires a non-empty URL"};
@@ -214,12 +271,7 @@ Error fetch_body(const std::string& url,
     request.method = "GET";
     request.url = url;
     request.headers.push_back(std::string("User-Agent: ") + kBrowserUserAgent);
-    request.headers.push_back(
-        allow_plaintext
-            ? "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-              "text/plain;q=0.8,image/avif,image/webp,*/*;q=0.8"
-            : "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-              "image/avif,image/webp,image/apng,*/*;q=0.8");
+    request.headers.push_back(accept_header_for(accept));
     request.headers.push_back("Accept-Language: en-US,en;q=0.9");
     request.headers.push_back("Upgrade-Insecure-Requests: 1");
     request.headers.push_back("Sec-Fetch-Dest: document");
@@ -241,17 +293,23 @@ Error fetch_body(const std::string& url,
 
     http::Result result = http::perform(request, {});
     if (!result.error.ok()) {
+        if (result.error.code == ErrorCode::FileRead &&
+            result.error.message.find("HTTP response exceeded maximum body size") !=
+                std::string::npos) {
+            return {ErrorCode::FileRead,
+                    result.error.message + " (limit " + std::to_string(options.max_bytes) +
+                        " bytes); increase --max-fetch-bytes for a trusted larger document"};
+        }
         return result.error;
     }
     if (result.response.status < 200 || result.response.status >= 300) {
         return {ErrorCode::HttpStatus,
                 "HTTP " + std::to_string(result.response.status) + " while fetching URL: " + url};
     }
-    if (!supported_html_content_type(result.response.content_type) &&
-        !(allow_plaintext && supported_plain_content_type(result.response.content_type))) {
+    if (!classify_fetched_kind(media_type_of(result.response.content_type), result.response.body,
+                               accept, kind)) {
         return {ErrorCode::UnsupportedFeature,
-                std::string("fetched URL did not return ") +
-                    (allow_plaintext ? "a supported text content type: " : "an HTML content type: ") + url +
+                std::string("fetched URL did not return ") + unsupported_type_message(accept) + url +
                     " (Content-Type: " + result.response.content_type + ")"};
     }
     content_type = result.response.content_type;
@@ -259,16 +317,122 @@ Error fetch_body(const std::string& url,
     return ok_error();
 }
 
+Error convert_pdf_body(const std::string& url,
+                       std::string body,
+                       const Options& options,
+                       std::string& markdown,
+                       runtime::CancellationToken cancellation) {
+    pdf::Options pdf_options;
+    pdf_options.max_bytes = options.max_bytes > 0 ? static_cast<std::size_t>(options.max_bytes)
+                                                  : body.size();
+    pdf_options.cancellation = cancellation;
+    Error err = pdf::to_markdown_bytes(body, pdf_options, markdown);
+    if (!err.ok()) {
+        return err;
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    }
+    return ok_error();
+}
+
 }  // namespace
+
+std::string fetched_media_type(std::string content_type) {
+    return media_type_of(std::move(content_type));
+}
+
+bool media_type_is_pdf(const std::string& media_type) {
+    return media_type == "application/pdf" || media_type == "application/x-pdf";
+}
+
+bool media_type_is_html(const std::string& media_type) {
+    return media_type.empty() || media_type == "text/html" ||
+           media_type == "application/xhtml+xml";
+}
+
+bool media_type_is_plain(const std::string& media_type) {
+    return media_type == "text/plain";
+}
+
+bool body_looks_like_pdf(std::string_view body) {
+    size_t i = 0;
+    while (i < body.size() &&
+           (body[i] == ' ' || body[i] == '\t' || body[i] == '\r' || body[i] == '\n')) {
+        ++i;
+    }
+    return body.size() - i >= 5 && body.substr(i, 5) == "%PDF-";
+}
+
+Error markdown_from_fetched_bytes(std::string_view body,
+                                  const std::string& content_type,
+                                  std::string& markdown,
+                                  DocumentKind& kind,
+                                  runtime::CancellationToken cancellation) {
+    markdown.clear();
+    const std::string media = media_type_of(content_type);
+    const bool sniffable = media.empty() || media == "application/octet-stream";
+    if (media_type_is_pdf(media) || (sniffable && body_looks_like_pdf(body))) {
+        kind = DocumentKind::Pdf;
+        pdf::Options pdf_options;
+        pdf_options.max_bytes = body.size();
+        pdf_options.cancellation = cancellation;
+        return pdf::to_markdown_bytes(body, pdf_options, markdown);
+    }
+    if (media_type_is_plain(media)) {
+        kind = DocumentKind::Plaintext;
+    } else if (media_type_is_html(media) || sniffable) {
+        kind = DocumentKind::Html;
+    } else {
+        return {ErrorCode::UnsupportedFeature,
+                "fetched body is not HTML, PDF, or plain text (Content-Type: " + content_type +
+                    ")"};
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "fetched conversion cancelled"};
+    }
+    const std::string utf8 = normalize_body_to_utf8(std::string(body), content_type);
+    markdown = kind == DocumentKind::Plaintext
+                   ? utf8
+                   : html::convert(utf8, html::OutputFormat::Markdown);
+    return ok_error();
+}
 
 Error fetch_html(const std::string& url,
                  const Options& options,
                  std::string& html_body,
                  runtime::CancellationToken cancellation) {
     std::string content_type;
-    Error err = fetch_body(url, options, false, html_body, content_type, cancellation);
+    DocumentKind kind = DocumentKind::Html;
+    Error err = fetch_body(url, options, FetchAccept::HtmlOnly, html_body, content_type, kind,
+                           cancellation);
     if (!err.ok()) return err;
+    if (kind != DocumentKind::Html) {
+        return {ErrorCode::UnsupportedFeature,
+                "fetched URL did not return an HTML content type: " + url +
+                    " (Content-Type: " + content_type + ")"};
+    }
     html_body = normalize_body_to_utf8(std::move(html_body), content_type);
+    return ok_error();
+}
+
+Error fetch_document(const std::string& url,
+                     const Options& options,
+                     FetchedDocument& document,
+                     runtime::CancellationToken cancellation) {
+    document = FetchedDocument{};
+    std::string body;
+    std::string content_type;
+    DocumentKind kind = DocumentKind::Html;
+    Error err = fetch_body(url, options, FetchAccept::HtmlOrPdf, body, content_type, kind,
+                           cancellation);
+    if (!err.ok()) return err;
+    document.kind = kind;
+    document.content_type = content_type;
+    if (kind == DocumentKind::Pdf) {
+        return convert_pdf_body(url, std::move(body), options, document.markdown, cancellation);
+    }
+    document.body = normalize_body_to_utf8(std::move(body), content_type);
     return ok_error();
 }
 
@@ -276,16 +440,19 @@ Error fetch_markdown(const std::string& url,
                      const Options& options,
                      std::string& markdown,
                      runtime::CancellationToken cancellation) {
-    std::string html_body;
-    Error err = fetch_html(url, options, html_body, cancellation);
+    FetchedDocument document;
+    Error err = fetch_document(url, options, document, cancellation);
     if (!err.ok()) {
         return err;
     }
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
     }
-    // fetch_html already normalized to UTF-8.
-    markdown = html::convert(html_body, html::OutputFormat::Markdown);
+    if (document.kind == DocumentKind::Pdf) {
+        markdown = std::move(document.markdown);
+        return ok_error();
+    }
+    markdown = html::convert(document.body, html::OutputFormat::Markdown);
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
     }
@@ -298,15 +465,20 @@ Error fetch_text(const std::string& url,
                  runtime::CancellationToken cancellation) {
     std::string body;
     std::string content_type;
-    Error err = fetch_body(url, options, true, body, content_type, cancellation);
+    DocumentKind kind = DocumentKind::Html;
+    Error err = fetch_body(url, options, FetchAccept::Document, body, content_type, kind,
+                           cancellation);
     if (!err.ok()) {
         return err;
+    }
+    if (kind == DocumentKind::Pdf) {
+        return convert_pdf_body(url, std::move(body), options, text, cancellation);
     }
     body = normalize_body_to_utf8(std::move(body), content_type);
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
     }
-    text = supported_plain_content_type(content_type)
+    text = kind == DocumentKind::Plaintext
                ? std::move(body)
                : html::convert(body, html::OutputFormat::Markdown);
     return ok_error();

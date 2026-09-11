@@ -2344,6 +2344,9 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.pop_last_message = pop_last_message;
     command_handlers.start_response_to_unanswered_user = start_response_to_unanswered_user;
     command_handlers.start_insert = [&](const std::string& path) { file_jobs.start_insert(path); };
+    command_handlers.start_chat_pdf = [&](const std::string& path, bool last_message_only) {
+        file_jobs.start_chat_pdf(path, last_message_only);
+    };
     command_handlers.start_attach = [&](const std::string& path) {
         if (path.empty()) {
             if (active_job != ActiveJob::None) {
@@ -3752,6 +3755,15 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     break;
                 }
+                case TuiEventType::ChatPdfDone:
+                    file_job.join();
+                    completed_file_job = true;
+                    if (event.error.ok()) {
+                        status = "Wrote PDF " + event.text;
+                    } else {
+                        set_status_maybe_agent_error(detail::error_line(event.error), true);
+                    }
+                    break;
                 case TuiEventType::FetchDone:
                     file_job.join();
                     completed_file_job = true;

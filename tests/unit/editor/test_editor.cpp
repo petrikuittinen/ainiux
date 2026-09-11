@@ -23,6 +23,7 @@
 #include "editor/split.hpp"
 #include "editor/statistics.hpp"
 #include "editor/text_layout.hpp"
+#include "pdf/pdf.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "platform/environment.hpp"
@@ -2372,6 +2373,55 @@ void test_editor_file_round_trip() {
     err = ainiux::editor::finish_loaded_file(deferred, settings, "iso-8859-1");
     check(err.ok() && deferred.text.str() == u8"Kesä" && deferred.converted,
           "editor finish_loaded_file converts a chosen encoding");
+}
+
+void test_editor_pdf_conversion() {
+    check(ainiux::editor::sibling_markdown_path("notes.PDF") == "notes.md",
+          "PDF sibling path replaces a case-insensitive .pdf suffix");
+    check(ainiux::editor::sibling_markdown_path("dir/paper.pdf") == "dir/paper.md",
+          "PDF sibling path keeps the directory");
+
+    const std::string md_path = "build/unit-editor-pdf-source.md";
+    const std::string pdf_path = "build/unit-editor-pdf-source.pdf";
+    const std::string saved_md = "build/unit-editor-pdf-converted.md";
+    const std::string saved_pdf = "build/unit-editor-pdf-reflow.pdf";
+    ainiux::editor::PieceTable markdown =
+        ainiux::editor::PieceTable::from_string("# Paper\n\nHello from a PDF buffer.\n");
+    check(ainiux::editor::save_file(md_path, markdown).ok(), "editor writes the PDF source Markdown");
+    ainiux::pdf::WriteOptions write_options;
+    std::string pdf_bytes;
+    check(ainiux::pdf::from_markdown(markdown.str(), write_options, pdf_bytes).ok() &&
+              pdf_bytes.compare(0, 5, "%PDF-") == 0,
+          "Markdown-to-PDF produces a PDF");
+    {
+        std::ofstream out(pdf_path, std::ios::binary | std::ios::trunc);
+        out.write(pdf_bytes.data(), static_cast<std::streamsize>(pdf_bytes.size()));
+    }
+
+    ainiux::editor::LoadedFile loaded;
+    ainiux::editor::EditorSettings settings;
+    ainiux::Error err = ainiux::editor::load_file(pdf_path, settings, loaded);
+    check(err.ok() && loaded.converted_from_pdf, "editor converts PDF input to Markdown");
+    check(loaded.suggested_path == "build/unit-editor-pdf-source.md",
+          "converted PDF suggests the sibling Markdown path");
+    check(loaded.text.str().find("Hello from a PDF buffer") != std::string::npos,
+          "converted PDF Markdown contains the original prose");
+
+    check(ainiux::editor::save_file(saved_md, loaded.text).ok(),
+          "saving converted PDF Markdown writes UTF-8");
+    std::ifstream md_in(saved_md, std::ios::binary);
+    const std::string md_bytes((std::istreambuf_iterator<char>(md_in)),
+                               std::istreambuf_iterator<char>());
+    check(md_bytes.find("%PDF-") == std::string::npos &&
+              md_bytes.find("Hello from a PDF buffer") != std::string::npos,
+          "sibling Markdown save does not write PDF bytes");
+
+    check(ainiux::editor::save_file(saved_pdf, loaded.text).ok(),
+          "saving a .pdf path writes a newly typeset PDF");
+    std::ifstream pdf_in(saved_pdf, std::ios::binary);
+    const std::string round_trip((std::istreambuf_iterator<char>(pdf_in)),
+                                 std::istreambuf_iterator<char>());
+    check(round_trip.compare(0, 5, "%PDF-") == 0, "explicit .pdf save starts with a PDF header");
 }
 
 void test_editor_linebreak_modes() {
@@ -5918,6 +5968,7 @@ void run_all() {
     test_editor_assist_helpers();
     test_editor_contextual_completion_modes();
     test_editor_file_round_trip();
+    test_editor_pdf_conversion();
     test_editor_linebreak_modes();
     test_editor_indentation_detection();
     test_editor_tab_indentation();

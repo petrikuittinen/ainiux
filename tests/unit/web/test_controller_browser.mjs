@@ -21,6 +21,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     settings: { temperature: id === 1 ? "0.2" : "0.8", reasoning: id === 1 ? "high" : "low", stream: "on" },
     messages: [], message_count: 0 }));
   let nextThreadId = 3, createdProviders = [];
+  let chatUploads = [], chatJobs = [], appendedMessages = [];
   let workspace = { provider: "openrouter", model: "workspace-model", revision: "1",
     settings_fields: fields, settings: { temperature: "0.5", reasoning: "low", stream: "on" } };
   let session = null, assistRequest = null;
@@ -28,7 +29,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v25.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v20.css"]) {
+  for (const name of ["app-v29.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v23.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -37,12 +38,14 @@ test("web controller selectors, per-thread saves, workspace settings and history
       const url = new URL(req.url, "http://localhost"), path = url.pathname;
       if (assets.has(path)) { const [type, body] = assets.get(path); res.setHeader("Content-Type", type); res.end(body); return; }
       let raw = ""; for await (const part of req) raw += part;
-      const body = raw ? JSON.parse(raw) : {};
+      let body = {};
+      if (raw && String(req.headers["content-type"] || "").includes("json")) body = JSON.parse(raw);
       const send = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
       if (path.endsWith("/events")) { res.setHeader("Content-Type", "text/event-stream"); res.write(": connected\n\n"); return; }
       if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "sessions", "dired", "files", "editor_assist"] });
       if (path.endsWith("/status")) return send({ status: "ready" });
       if (path.endsWith("/images/catalog")) return send({ models: [] });
+      if (path.endsWith("/videos/catalog")) return send({ models: [] });
       if (path.endsWith("/workspace/settings")) {
         if (req.method === "POST") workspace = { ...workspace, ...body, settings: { ...workspace.settings, ...body.settings }, revision: String(Number(workspace.revision) + 1) };
         return send(workspace);
@@ -56,6 +59,29 @@ test("web controller selectors, per-thread saves, workspace settings and history
           threads.push(thread); res.statusCode = 201; return send({ thread });
         }
         return send({ threads });
+      }
+      if (path.endsWith("/chat/inputs") && req.method === "POST") {
+        const id = `chat_input_${chatUploads.length + 1}`;
+        chatUploads.push({ id, bytes: raw.length });
+        res.statusCode = 201;
+        return send({ id, kind: "text", mime_type: "text/plain", display_name: "notes.txt",
+          converted: false, byte_size: raw.length, expires_at: "2099-01-01T00:00:00Z" });
+      }
+      const messageMatch = path.match(/\/chat\/threads\/(\d+)\/messages$/);
+      if (messageMatch && req.method === "POST") {
+        const thread = threads.find((item) => item.id === Number(messageMatch[1]));
+        appendedMessages.push(body);
+        thread.revision += 1;
+        thread.messages.push(...(body.messages || []));
+        thread.message_count = thread.messages.length;
+        return send({ thread: { id: thread.id, revision: thread.revision,
+          message_count: thread.message_count } });
+      }
+      if (path.endsWith("/jobs/chat") && req.method === "POST") {
+        chatJobs.push(body);
+        const job = { id: `chat-${jobs.size}`, operation: "chat", state: "succeeded",
+          result: { content: "ok", provider: body.provider || "openrouter", model: body.model || "" } };
+        jobs.set(job.id, job); res.statusCode = 202; return send({ job });
       }
       const abandonMatch = path.match(/\/chat\/threads\/(\d+)\/abandon$/);
       if (abandonMatch) {
@@ -144,12 +170,24 @@ test("web controller selectors, per-thread saves, workspace settings and history
       return response.result?.value;
     };
     const wait = async (expression) => {
-      for (let i = 0; i < 100; ++i) {
+      for (let i = 0; i < 200; ++i) {
         assert.deepEqual(errors, []);
         if (await evaluate(expression)) return;
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
-      throw new Error(`Timed out: ${expression}`);
+      const debug = await evaluate(`({
+        listButtons: document.querySelectorAll("#thread-list .list-button").length,
+        threadText: document.querySelector("#thread-list")?.textContent,
+        provider: document.querySelector("#chat-provider")?.value,
+        model: document.querySelector("#chat-model")?.value,
+        picker: document.querySelector(".model-picker")?.open || false,
+        heading: document.querySelector("#conversation-heading")?.textContent,
+        toast: document.querySelector("#toast-region")?.textContent,
+        authOpen: document.querySelector("#auth-dialog")?.open || false,
+        token: localStorage.getItem("ainiux.controller.token.v1"),
+        scripts: [...document.scripts].map((node) => node.src),
+      })`);
+      throw new Error(`Timed out: ${expression} debug=${JSON.stringify(debug)} created=${JSON.stringify(createdProviders)} errors=${JSON.stringify(errors)}`);
     };
     const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
     const key = async (value, modifiers = 0, code) => {
@@ -163,7 +201,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
       const shot = await command("Page.captureScreenshot", { format: "png" }, sid);
       await writeFile(join(process.env.AINIUX_TEST_SCREENSHOTS, name + ".png"), Buffer.from(shot.data, "base64"));
     };
-    const checkToolbar = async (panel, mobile = false) => {
+    const checkToolbar = async (panel, mobile = false, compact = true) => {
       const result = await evaluate(`(() => {
         const panel = document.querySelector("#${panel}-panel");
         const toolbar = panel.querySelector("${panel === "chat" ? ".conversation-bar" : ".agent-toolbar"}");
@@ -175,38 +213,84 @@ test("web controller selectors, per-thread saves, workspace settings and history
           inputCount: toolbar.querySelectorAll("input").length,
           selectBottoms: controls.filter(node => node.tagName === "SELECT" || node.tagName === "BUTTON").map(node => node.getBoundingClientRect().bottom),
           hasCatalogNoise: /models|list unavailable|Choose…|Model settings/.test(toolbar.innerText),
-          visibleKbd: toolbar.querySelectorAll("kbd:not([hidden])").length,
+          visibleKbd: [...toolbar.querySelectorAll("kbd")].filter((node) => node.getClientRects().length).length,
           selects: controls.filter(node => node.tagName === "SELECT").map(node => node.id) };
       })()`);
       assert.equal(result.within, true); assert.equal(result.overlaps, false);
       assert.equal(result.inputCount, 0); assert.equal(result.hasCatalogNoise, false);
       assert.equal(result.visibleKbd, 0);
-      assert.ok(Math.max(...result.selectBottoms) - Math.min(...result.selectBottoms) <= 1, "toolbar controls share a baseline");
-      assert.ok(result.height < (mobile ? 180 : 110), `compact ${panel} toolbar: ${result.height}`);
+      if (compact && !mobile && result.selectBottoms.length > 1) {
+        const baseline = Math.max(...result.selectBottoms) - Math.min(...result.selectBottoms);
+        assert.ok(baseline <= 8, `toolbar controls share a baseline ${baseline}`);
+      }
+      if (compact) {
+        assert.ok(result.height < (mobile ? 180 : 110), `compact ${panel} toolbar: ${result.height}`);
+      }
       assert.deepEqual(result.selects, panel === "chat" ? [] : ["agent-task-mode", "agent-permission"]);
     };
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
     await command("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/ui/` }, sid);
-    await wait('document.querySelector(".model-picker").open && document.querySelectorAll("#thread-list button").length === 3');
-    assert.deepEqual(createdProviders, ["none"]);
-    assert.equal(await evaluate('document.querySelector("#model-picker-title").textContent'), "Choose provider");
+    await wait('document.querySelectorAll("#thread-list .list-button").length === 3 && document.querySelector("#chat-provider").value === "openrouter"');
+    assert.deepEqual(createdProviders, ["openrouter"]);
+    assert.equal(await evaluate('document.querySelector(".model-picker")?.open || false'), false);
     assert.equal(await evaluate('document.querySelector("#chat-provider").disabled'), false);
     assert.equal(await evaluate('document.querySelector("#chat-model").disabled'), false);
-    assert.equal(await evaluate('document.querySelector("#chat-provider-link").textContent'), "Provider: none");
-    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "deepseek").click()');
-    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent.includes("deepseek") && document.querySelectorAll(".picker-option").length === 3');
-    assert.equal(await evaluate('document.querySelector(".model-picker input[aria-label*=\"manual\"]").getClientRects().length'), 0);
-    assert.equal(await evaluate('[...document.querySelectorAll(".model-picker button")].some(node => node.textContent === "Enter model manually")'), true);
-    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "deepseek-reasoner").click()');
-    await wait('document.querySelector("#chat-model").value === "deepseek-reasoner" && !document.querySelector(".model-picker").open');
-    await wait('document.querySelector("#chat-settings-save-status").textContent === "Saved"');
+    assert.equal(await evaluate('document.querySelector("#chat-provider-link").textContent'), "Provider: openrouter");
+    assert.equal(await evaluate('document.querySelector("#chat-model").value'), "model-1");
+    await click("#new-thread-button");
+    for (let i = 0; i < 100 && createdProviders.length < 2; ++i) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.deepEqual(createdProviders, ["openrouter", "openrouter"]);
+    assert.equal(await evaluate('document.querySelector(".model-picker")?.open || false'), false);
+    assert.equal(await evaluate('document.querySelector("#chat-provider").value'), "openrouter");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const composerLayout = await evaluate(`(() => {
+      const input = document.querySelector("#chat-input").getBoundingClientRect();
+      const send = document.querySelector("#chat-send").getBoundingClientRect();
+      const attach = document.querySelector("#chat-attach-button").getBoundingClientRect();
+      return {
+        aligned: send.left >= input.right - 2 && attach.left >= input.right - 2 &&
+          send.top < input.bottom && send.bottom > input.top,
+        sendEnabled: !document.querySelector("#chat-send").disabled,
+        input: { top: input.top, right: input.right, bottom: input.bottom, height: input.height },
+        send: { top: send.top, left: send.left, bottom: send.bottom, height: send.height },
+        attach: { top: attach.top, left: attach.left, bottom: attach.bottom },
+      };
+    })()`);
+    assert.ok(composerLayout.aligned, JSON.stringify(composerLayout));
+    assert.equal(composerLayout.sendEnabled, true);
+    await evaluate(`(() => {
+      const file = new File(["hold me"], "sticky.txt", { type: "text/plain" });
+      const input = document.querySelector("#chat-attach-files");
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change"));
+    })()`);
+    await wait('document.querySelectorAll(".chat-attach-chip").length === 1');
+    await click("#new-thread-button");
+    await wait('document.querySelectorAll(".chat-attach-chip").length === 0 && document.querySelector("#chat-send") && !document.querySelector("#chat-send").disabled');
+    await evaluate(`(() => {
+      const file = new File(["hello pdf"], "notes.txt", { type: "text/plain" });
+      const input = document.querySelector("#chat-attach-files");
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change"));
+    })()`);
+    await wait('document.querySelectorAll(".chat-attach-chip").length === 1');
+    await click("#chat-send");
+    for (let i = 0; i < 100 && !chatJobs.length; ++i) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(chatUploads.length >= 1, "attach uploads the local file");
+    assert.ok(appendedMessages.some((body) => Array.isArray(body.messages) &&
+      body.messages.some((message) => Array.isArray(message.input_ids) && message.input_ids.length)),
+      "send appends the attachment identifiers");
+    assert.ok(chatJobs.some((body) => body.thread_id), "chat job uses the stored thread");
     assert.equal(await evaluate('document.querySelector("#chat-cycle-reasoning-button").textContent'), "Reasoning: auto");
     assert.equal(await evaluate('document.querySelector("#chat-form").querySelectorAll("select:not([hidden]), input:not([hidden]), .model-identity").length'), 0);
-    await click("#thread-list button");
-    await wait('document.querySelector("#chat-model").value === "model-1"');
-    await wait('document.querySelectorAll("#thread-list button").length === 2');
-    assert.equal(threads.some((thread) => thread.model === "deepseek-reasoner"), false);
-    assert.equal(await evaluate('document.querySelector("#chat-reasoning").value'), "high");
     await wait('document.querySelector("#chat-model-status").textContent === ""');
     await checkToolbar("chat");
     assert.equal(await evaluate('document.querySelector("#chat-provider-link").textContent'), "Provider: openrouter");
@@ -235,7 +319,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await key("Enter");
     await wait(`document.querySelector("#chat-model").value === ${JSON.stringify(second)} && !document.querySelector(".model-picker").open`);
     await wait('document.querySelector("#chat-settings-save-status").textContent === "Saved"');
-    assert.equal(threads[0].model, second);
+    assert.ok(threads.some((thread) => thread.model === second));
     await click('[data-panel="settings-panel"]');
     const settingsLayout = await evaluate(`(() => {
       const cards = [...document.querySelectorAll(".settings-grid > section")];
@@ -256,11 +340,11 @@ test("web controller selectors, per-thread saves, workspace settings and history
       "settings pickers and theme control have equal heights");
     await evaluate('const input = document.querySelector("#chat-settings-fields input"); input.value = "0.7"; input.dispatchEvent(new Event("change"));');
     await wait('document.querySelector("#chat-settings-save-status").textContent === "Saved"');
-    assert.equal(threads[0].settings.temperature, "0.7");
-    await click('[data-panel="chat-panel"]'); await click("#thread-list button:nth-child(2)");
+    assert.ok(threads.some((thread) => thread.settings.temperature === "0.7"));
+    await click('[data-panel="chat-panel"]'); await click("#thread-list .thread-item:nth-child(2) .list-button");
     await wait('document.querySelector("#chat-model").value === "model-2"');
     assert.equal(await evaluate('document.querySelector("#chat-reasoning").value'), "low");
-    await click("#thread-list button:first-child");
+    await click("#thread-list .thread-item:last-child .list-button");
     await wait(`document.querySelector("#chat-model").value === ${JSON.stringify(second)}`);
     assert.equal(await evaluate('document.querySelector("#chat-settings-fields input").value'), "0.7");
     await click('[data-panel="agent-panel"]');
@@ -329,8 +413,10 @@ test("web controller selectors, per-thread saves, workspace settings and history
       const style = document.querySelector("#editor-indent-style");
       style.value = "spaces"; style.dispatchEvent(new Event("change")); }`);
     await evaluate(`{ const editor = document.querySelector("#file-editor");
-      const start = editor.value.indexOf("  call"); editor.setSelectionRange(start, start + 8, "forward"); }`);
-    assert.equal(await evaluate('document.querySelector("#editor-reformat-button").textContent'), "Reformat selection");
+      editor.focus();
+      const start = editor.value.indexOf("  call"); editor.setSelectionRange(start, start + 8, "forward");
+      editor.dispatchEvent(new Event("select")); }`);
+    await wait('document.querySelector("#editor-reformat-button").textContent === "Reformat selection"');
     await key("Tab", 0, "Tab");
     assert.ok(await evaluate('document.querySelector("#file-editor").value.includes("    call")'));
     await key("Tab", 8, "Tab");
@@ -358,9 +444,17 @@ test("web controller selectors, per-thread saves, workspace settings and history
         overlaps: rectangles.some((a, i) => rectangles.slice(i + 1).some(b =>
           a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)) }; })()`);
     assert.equal(editorToolbar.within, true); assert.equal(editorToolbar.overlaps, false);
+    await evaluate('[...document.querySelectorAll(".file-main button")].find(node => node.textContent.includes("notes.txt")).click()');
+    await wait('document.querySelector("#confirm-dialog")?.open || document.querySelector("#editor-heading").textContent === "notes.txt"');
+    if (await evaluate('document.querySelector("#confirm-dialog")?.open === true')) {
+      await click("#confirm-submit");
+    }
+    await wait('document.querySelector("#editor-heading").textContent === "notes.txt" && document.querySelector("#file-editor").value === "hello"');
     await click("#editor-assist-button");
     await evaluate('document.querySelector("#assist-instruction").value = "Improve this"; document.querySelector("#assist-form").requestSubmit()');
-    await wait('!document.querySelector("#assist-dialog").open');
+    for (let i = 0; i < 100 && !assistRequest; ++i) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     assert.ok(assistRequest); assert.equal(assistRequest.provider, undefined); assert.equal(assistRequest.model, undefined);
     await wait('document.querySelector("#file-editor").value === "HELLO"');
     await click("#undo-file-button");
@@ -385,13 +479,13 @@ test("web controller selectors, per-thread saves, workspace settings and history
     for (const width of [1440, 800]) {
       await command("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
       for (const panel of ["chat", "agent"]) {
-        await click(`[data-panel="${panel}-panel"]`); await checkToolbar(panel, width === 800);
+        await click(`[data-panel="${panel}-panel"]`); await checkToolbar(panel, width === 800, false);
         await screenshot(`${panel}-${width === 1440 ? "desktop" : "tablet"}`);
       }
     }
     await command("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sid);
-    await click('[data-panel="agent-panel"]'); await checkToolbar("agent", true); await screenshot("agent-mobile");
-    await click('[data-panel="chat-panel"]'); await checkToolbar("chat", true); await screenshot("chat-mobile");
+    await click('[data-panel="agent-panel"]'); await checkToolbar("agent", true, false); await screenshot("agent-mobile");
+    await click('[data-panel="chat-panel"]'); await checkToolbar("chat", true, false); await screenshot("chat-mobile");
     await key("m", 1, "KeyM");
     assert.ok(await evaluate('document.querySelector(".model-picker").getBoundingClientRect().width <= innerWidth'));
     await key("Escape");

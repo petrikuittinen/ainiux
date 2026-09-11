@@ -39,8 +39,9 @@ const state = {
   chatInitialized: false,
   startingNewChat: false,
   chatEdit: null,
-  chatPending: false,
+  chatBusy: new Set(),
   chatPendingJobId: "",
+  chatPendingJobByThread: new Map(),
   chatStreams: new Map(),
   chatRegenerateQueued: false,
   showThinkingTraces: false,
@@ -63,6 +64,7 @@ const state = {
   imageError: "",
   imageCatalog: null,
   imageInputs: [],
+  chatInputs: [],
   videoJobId: "",
   videoSubmitting: false,
   videoResult: null,
@@ -83,6 +85,7 @@ const picker = createSelector(document);
 const pickerButtons = new Map();
 const threadSettingsSaves = new Map();
 const threadSettingsSnapshots = new Map();
+const chatSendAborts = new Map();
 let threadLoadSequence = 0;
 let workspaceSavePending = false;
 let workspaceModelPickerQueued = "";
@@ -188,6 +191,61 @@ function handleThemeCommand(text) {
   }
   applyTheme(match[1].toLowerCase(), true);
   return true;
+}
+
+function handleChatSlashCommand(text) {
+  if (handleThemeCommand(text)) return true;
+  const pdf = text.match(/^\/(chat-to-pdf|last-to-pdf)\s*$/i);
+  if (!pdf) return false;
+  if (!state.thread) {
+    toast("Select a chat thread first", "error");
+    return true;
+  }
+  if (!supports("chat_pdf")) {
+    toast("This server does not export chat PDFs", "error");
+    return true;
+  }
+  void downloadChatPdf(pdf[1].toLowerCase() === "last-to-pdf" ? "last" : "thread");
+  return true;
+}
+
+async function downloadChatPdf(scope) {
+  try {
+    const response = await fetch(
+      `${API_ROOT}/chat/threads/${encodeURIComponent(state.thread.id)}/pdf`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${state.token}`,
+          Accept: "application/pdf",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ revision: state.thread.revision, scope }),
+        credentials: "omit",
+        cache: "no-store",
+        referrerPolicy: "no-referrer",
+      });
+    if (!response.ok) {
+      let message = "Could not export the chat PDF";
+      try {
+        const payload = await response.json();
+        if (payload?.error?.message) message = payload.error.message;
+      } catch (_) {}
+      if (response.status === 401) invalidateAuthentication();
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = scope === "last" ? "last.pdf" : "chat.pdf";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(scope === "last" ? "Downloaded last.pdf" : "Downloaded chat.pdf");
+  } catch (error) {
+    toast(errorMessage(error), "error");
+  }
 }
 
 function toast(message, kind = "info") {
@@ -410,6 +468,7 @@ async function api(path, options = {}) {
       referrerPolicy: "no-referrer",
     });
   } catch (error) {
+    if (error && error.name === "AbortError") throw error;
     if (state.authenticated) markConnectionLost();
     throw error;
   }
@@ -566,6 +625,57 @@ function startStream(key, path, onMessage, onExpired, isDone, after = 0) {
 function supports(operation) {
   return Boolean(state.connected && state.capabilities && Array.isArray(state.capabilities.operations) &&
     state.capabilities.operations.includes(operation));
+}
+
+function chatTurnBusy(threadId = state.thread && state.thread.id) {
+  return threadId != null && state.chatBusy.has(threadId);
+}
+
+function beginChatTurn(threadId) {
+  state.chatBusy.add(threadId);
+}
+
+function endChatTurn(threadId, abort = false) {
+  if (threadId == null) {
+    if (abort) {
+      for (const controller of chatSendAborts.values()) controller.abort();
+    }
+    chatSendAborts.clear();
+    state.chatBusy.clear();
+    state.chatPendingJobByThread.clear();
+    state.chatPendingJobId = "";
+    return;
+  }
+  if (abort) {
+    const controller = chatSendAborts.get(threadId);
+    if (controller) controller.abort();
+  }
+  chatSendAborts.delete(threadId);
+  state.chatBusy.delete(threadId);
+  state.chatPendingJobByThread.delete(threadId);
+  const currentId = state.thread && state.thread.id;
+  state.chatPendingJobId = currentId != null
+    ? (state.chatPendingJobByThread.get(currentId) || "") : "";
+}
+
+function syncChatSendButton() {
+  const send = byId("chat-send");
+  if (!send) return;
+  const blocked = !state.thread || state.thread.read_only === true || !supports("chat");
+  const busy = !blocked && chatTurnBusy(state.thread.id);
+  send.disabled = blocked;
+  send.textContent = busy ? "Cancel" : "Send";
+}
+
+function headerFileName(name) {
+  const value = String(name || "");
+  try {
+    const headers = new Headers();
+    headers.set("X-Ainiux-Filename", value);
+    return value;
+  } catch (_) {
+    return encodeURIComponent(value);
+  }
 }
 
 function modelControls() {
@@ -904,7 +1014,7 @@ async function saveWorkspaceSettings(patch) {
 }
 
 function updateSettingsAvailability() {
-  const chatDisabled = !state.connected || !state.thread || state.thread.read_only || state.chatPending;
+  const chatDisabled = !state.connected || !state.thread || state.thread.read_only || chatTurnBusy();
   for (const id of ["chat-provider", "chat-model", "chat-reasoning"]) byId(id).disabled = chatDisabled;
   for (const input of document.querySelectorAll("#chat-settings-fields input, #chat-settings-fields select, [data-chat-setting]")) input.disabled = chatDisabled;
   const workspaceDisabled = !state.connected || workspaceSavePending || Boolean(state.session && state.session.status !== "ready");
@@ -1310,8 +1420,9 @@ function applyCapabilities() {
   populateProviders();
   refreshModelControls();
   byId("new-thread-button").disabled = !supports("chat_threads");
-  byId("chat-send").disabled = !state.thread || state.thread.read_only === true ||
-    state.chatPending || !supports("chat");
+  syncChatSendButton();
+  byId("chat-attach-button").disabled = !state.thread || state.thread.read_only === true ||
+    !supports("chat_inputs");
   for (const control of byId("agent-panel").querySelectorAll("select, input, textarea, button")) {
     control.disabled = !supports("sessions");
   }
@@ -1397,6 +1508,7 @@ function markConnectionLost() {
   if (wasConnected) {
     stopAllStreams();
     resetLoadingModelCatalogs();
+    endChatTurn(null, true);
   }
   setConnectionStatus("Reconnecting…", "reconnecting");
   byId("disconnect-button").hidden = false;
@@ -1415,7 +1527,7 @@ async function restoreBrowserState() {
       await loadThreads();
       await cleanupEmptyThreads(threadId || 0);
       if (threadId) await loadThread(threadId);
-      else if (!state.chatInitialized) await createNewChat({ provider: "none" }, true);
+      else if (!state.chatInitialized) await startNewChat();
     })());
   }
   if (supports("sessions")) {
@@ -1505,6 +1617,7 @@ function forgetAuthentication(message = "") {
   stopAgentClock();
   releaseAllImageInputs();
   releaseAllVideoInputs();
+  releaseChatInputs();
   if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
   state.videoObjectUrl = "";
   state.token = "";
@@ -1519,6 +1632,7 @@ function forgetAuthentication(message = "") {
   state.chatInitialized = false;
   state.startingNewChat = false;
   state.chatEdit = null;
+  endChatTurn(null, true);
   state.chatMetrics.clear();
   state.session = null;
   state.modelCatalogs.clear();
@@ -1759,13 +1873,14 @@ function updateJob(snapshot, context) {
   return merged;
 }
 
-async function submitJob(operation, payload, context = null) {
+async function submitJob(operation, payload, context = null, signal) {
   const idempotency = typeof crypto.randomUUID === "function"
     ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const response = await api(`${API_ROOT}/jobs/${operation}`, {
     method: "POST",
     headers: { "Idempotency-Key": `wui-${idempotency}` },
     body: payload,
+    signal,
   });
   if (context) context.jobId = response.job.id;
   const job = updateJob(response.job, context);
@@ -1894,7 +2009,26 @@ function renderThreads() {
   }
 }
 
-function appendChatMessage(container, role, content, streaming = false, ordinal = null) {
+function appendAttachmentChips(parent, attachments, removable = false) {
+  if (!Array.isArray(attachments) || !attachments.length) return;
+  const row = element("div", "message-attachments");
+  for (const attachment of attachments) {
+    const chip = element("span", "chat-attach-chip");
+    const label = [attachment.display_name || attachment.kind || "attachment"];
+    if (attachment.byte_size) label.push(formatBytes(attachment.byte_size));
+    chip.append(element("span", "", label.join(" · ")));
+    if (removable) {
+      const remove = element("button", "ghost", "Remove");
+      remove.type = "button";
+      remove.addEventListener("click", () => void removeChatInput(attachment));
+      chip.append(remove);
+    }
+    row.append(chip);
+  }
+  parent.append(row);
+}
+
+function appendChatMessage(container, role, content, streaming = false, ordinal = null, attachments = []) {
   const card = element("article", `message ${role || "system"}${streaming ? " streaming" : ""}`);
   if (streaming) card.id = "chat-stream-message";
   const output = element("div", "message-content");
@@ -1921,8 +2055,9 @@ function appendChatMessage(container, role, content, streaming = false, ordinal 
     queueMicrotask(() => textarea.focus());
   } else {
     renderChatContent(output, role, content, streaming);
+    appendAttachmentChips(output, attachments);
     card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"), output);
-    const writable = state.thread && state.thread.read_only !== true && !state.chatPending;
+    const writable = state.thread && state.thread.read_only !== true && !chatTurnBusy();
     if (!streaming && (role === "assistant" || role === "user") && writable && ordinal != null) {
       const actions = element("div", "message-actions");
       if (role === "assistant") {
@@ -1972,7 +2107,8 @@ function renderChat() {
     byId("chat-metrics").textContent = "";
     setEmpty(messages, state.startingNewChat ? "Starting new chat…" : "Choose or create a thread.");
     byId("chat-input").disabled = true;
-    byId("chat-send").disabled = true;
+    syncChatSendButton();
+    renderChatAttachList();
     renderChatToolbar();
     return;
   }
@@ -1985,7 +2121,8 @@ function renderChat() {
   else {
     clear(messages);
     for (const message of transcript) {
-      appendChatMessage(messages, message.role, message.content, false, message.ordinal);
+      appendChatMessage(messages, message.role, message.content, false, message.ordinal,
+        message.attachments);
     }
     if (stream) appendChatMessage(messages, "assistant", stream.streamText, true);
     messages.scrollTop = messages.scrollHeight;
@@ -1993,7 +2130,9 @@ function renderChat() {
   const readOnly = state.thread.read_only === true;
   if (readOnly) byId("thread-meta").textContent += " · read-only";
   byId("chat-input").disabled = readOnly;
-  byId("chat-send").disabled = readOnly || state.chatPending || !supports("chat");
+  byId("chat-attach-button").disabled = readOnly || !supports("chat_inputs");
+  syncChatSendButton();
+  renderChatAttachList();
   renderChatToolbar();
   renderThreads();
 }
@@ -2016,7 +2155,10 @@ async function loadThread(threadId) {
     const response = await api(`${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}`);
     if (sequence !== threadLoadSequence) return;
     state.thread = response.thread;
-    if (!previous || previous.id !== threadId) state.chatEdit = null;
+    if (!previous || previous.id !== threadId) {
+      state.chatEdit = null;
+      releaseChatInputs();
+    }
     threadSettingsSnapshots.set(threadId, state.thread);
     applyThreadModelSettings(state.thread);
     renderChat();
@@ -2050,7 +2192,7 @@ function threadHasConversation(thread) {
 
 async function deleteThread(thread) {
   if (!thread || thread.read_only === true) return;
-  if (state.chatPending && state.thread && state.thread.id === thread.id) {
+  if (chatTurnBusy(thread.id)) {
     toast("Wait for the current response to finish before deleting this chat", "error");
     return;
   }
@@ -2078,7 +2220,7 @@ async function deleteThread(thread) {
     await loadThreads();
     if (!wasCurrent) return;
     if (state.threads.length) await loadThread(state.threads[0].id);
-    else await createNewChat({ provider: "none" }, true);
+    else await startNewChat();
   } catch (error) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
       toast("The chat thread changed in another client. Reload it before deleting.", "error");
@@ -2183,8 +2325,26 @@ async function abandonUnusedThread(thread) {
   }
 }
 
+function lastChatRouting() {
+  const usable = (thread) => thread && typeof thread.provider === "string" &&
+    thread.provider && thread.provider !== "none";
+  if (usable(state.thread)) {
+    return { provider: state.thread.provider, model: state.thread.model || "" };
+  }
+  const listed = state.threads.find((thread) => usable(thread));
+  if (listed) return { provider: listed.provider, model: listed.model || "" };
+  return {};
+}
+
+async function startNewChat() {
+  const routing = lastChatRouting();
+  const values = routing.provider ? routing : { provider: "none" };
+  return createNewChat(values, !routing.provider);
+}
+
 async function createNewChat(values = {}, promptForRouting = false) {
   const previous = state.thread;
+  releaseChatInputs();
   state.startingNewChat = true;
   state.thread = null;
   renderChat();
@@ -2201,14 +2361,10 @@ async function createNewChat(values = {}, promptForRouting = false) {
     await loadThreads();
     renderChat();
     if (previous) void abandonUnusedThread(previous);
-    const control = modelControls().find((item) => item.providerId === "chat-provider");
-    if (promptForRouting) {
-      // First-run setup deliberately starts unconfigured. Let the user choose
-      // the provider first; the provider callback opens its model catalog.
+    const provider = state.thread.provider || "";
+    if (promptForRouting && (!provider || provider === "none")) {
+      const control = modelControls().find((item) => item.providerId === "chat-provider");
       openModelPicker(control, "provider");
-    } else if (values.provider !== undefined || values.model !== undefined) {
-      if (state.thread.provider === "none") openModelPicker(control, "provider");
-      else if (!state.thread.model) openModelPicker(control, "model");
     }
     return state.thread;
   } catch (error) {
@@ -2239,7 +2395,7 @@ function applyThreadModelSettings(thread) {
   renderChatToolbar(); renderModelSettings("chat"); updateSettingsAvailability();
 }
 
-async function appendThreadMessages(threadId, revision, messages, metadata = null) {
+async function appendThreadMessages(threadId, revision, messages, metadata = null, signal) {
   const body = { revision, messages };
   if (metadata) {
     body.provider = metadata.provider;
@@ -2248,7 +2404,79 @@ async function appendThreadMessages(threadId, revision, messages, metadata = nul
   return api(`${API_ROOT}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
     method: "POST",
     body,
+    signal,
   });
+}
+
+function renderChatAttachList() {
+  const list = byId("chat-attach-list");
+  if (!list) return;
+  clear(list);
+  for (const input of state.chatInputs) {
+    const chip = element("span", "chat-attach-chip");
+    chip.append(element("span", "", `${input.file.name} · ${formatBytes(input.file.size)}`));
+    const remove = element("button", "ghost", "Remove");
+    remove.type = "button";
+    remove.addEventListener("click", () => void removeChatInput(input));
+    chip.append(remove);
+    list.append(chip);
+  }
+}
+
+async function removeChatInput(input) {
+  state.chatInputs = state.chatInputs.filter((item) => item !== input);
+  if (input.uploadId && state.token) {
+    await api(`${API_ROOT}/chat/inputs/${encodeURIComponent(input.uploadId)}`, {
+      method: "DELETE",
+    }).catch(() => {});
+  }
+  renderChat();
+}
+
+function releaseChatInputs() {
+  const token = state.token;
+  for (const input of state.chatInputs) {
+    if (input.uploadId && token) {
+      void fetch(`${API_ROOT}/chat/inputs/${encodeURIComponent(input.uploadId)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+        credentials: "omit",
+        cache: "no-store",
+        referrerPolicy: "no-referrer",
+      }).catch(() => {});
+    }
+  }
+  state.chatInputs = [];
+  renderChatAttachList();
+}
+
+function queueChatFiles(fileList) {
+  const files = [...fileList];
+  for (const file of files) {
+    if (state.chatInputs.length >= 16) {
+      toast("Chat accepts at most 16 attachments", "error");
+      break;
+    }
+    state.chatInputs.push({ file, uploadId: "" });
+  }
+  renderChat();
+}
+
+async function uploadChatInputs(signal, inputs = state.chatInputs) {
+  for (const input of inputs) {
+    if (input.uploadId) continue;
+    const stored = await api(`${API_ROOT}/chat/inputs`, {
+      method: "POST",
+      rawBody: input.file,
+      contentType: input.file.type || "application/octet-stream",
+      headers: { "X-Ainiux-Filename": headerFileName(input.file.name) },
+      signal,
+    });
+    input.uploadId = stored.id;
+    input.kind = stored.kind;
+    input.converted = stored.converted;
+  }
+  return inputs.map((input) => input.uploadId);
 }
 
 function showConflict(message, action) {
@@ -2258,37 +2486,53 @@ function showConflict(message, action) {
 }
 
 async function sendChatMessage(text) {
-  if (!state.thread || state.chatPending) return;
+  if (!state.thread || chatTurnBusy(state.thread.id)) return;
   const requestedId = state.thread.id;
-  try { await threadSettingsSaves.get(requestedId); } catch (_) { return; }
+  try { await threadSettingsSaves.get(requestedId); }
+  catch (error) {
+    toast(errorMessage(error), "error");
+    return;
+  }
   if (state.thread?.id !== requestedId) return;
-  state.chatPending = true;
-  renderChat();
+  const provider = state.thread.provider || "";
+  if (!provider || provider === "none") {
+    toast("Choose a provider before sending", "error");
+    const control = modelControls().find((item) => item.providerId === "chat-provider");
+    openModelPicker(control, "provider");
+    return;
+  }
   const threadId = state.thread.id;
+  const controller = new AbortController();
+  chatSendAborts.set(threadId, controller);
+  beginChatTurn(threadId);
+  renderChat();
   let sendingThread = state.thread;
   try {
     const selected = {
       provider: sendingThread.provider || "",
       model: sendingThread.model || "",
     };
+    const pendingInputs = [...state.chatInputs];
+    const attachedName = pendingInputs[0]?.file?.name || "";
+    const inputIds = pendingInputs.length ? await uploadChatInputs(controller.signal, pendingInputs) : [];
+    const userMessage = { role: "user", content: text };
+    if (inputIds.length) userMessage.input_ids = inputIds;
     const appended = await appendThreadMessages(threadId, sendingThread.revision,
-      [{ role: "user", content: text }], selected);
+      [userMessage], selected, controller.signal);
     sendingThread = { ...sendingThread, ...appended.thread,
       messages: [...sendingThread.messages, { role: "user", content: text }] };
     if (!sendingThread.name || sendingThread.name === "New chat") {
       const firstLine = text.split(/\r?\n/, 1)[0].trim();
-      sendingThread.name = [...firstLine].slice(0, 40).join("") || "New chat";
+      sendingThread.name = [...firstLine].slice(0, 40).join("") ||
+        attachedName || "New chat";
     }
     if (state.thread?.id === threadId) state.thread = sendingThread;
     threadSettingsSnapshots.set(threadId, sendingThread);
-    const transcript = sendingThread.messages.slice(-64).map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
     const payload = optionalPayload({
       ...selected,
       settings: sendingThread.settings || {},
-      messages: transcript,
+      input_ids: inputIds,
+      thread_id: threadId,
     });
     const context = {
       type: "chat",
@@ -2299,19 +2543,25 @@ async function sendChatMessage(text) {
     };
     state.chatStreams.set(threadId, context);
     renderChat();
-    const job = await submitJob("chat", payload, context);
-    state.chatPendingJobId = job.id;
-    if (state.thread?.id === threadId) byId("chat-input").value = "";
+    const job = await submitJob("chat", payload, context, controller.signal);
+    state.chatPendingJobByThread.set(threadId, job.id);
+    if (state.thread?.id === threadId) state.chatPendingJobId = job.id;
+    if (state.thread?.id === threadId) {
+      byId("chat-input").value = "";
+      releaseChatInputs();
+    }
     renderChat();
   } catch (error) {
-    state.chatPending = false;
-    state.chatPendingJobId = "";
+    endChatTurn(threadId, false);
     state.chatStreams.delete(threadId);
     renderChat();
+    if (error && error.name === "AbortError") return;
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict("The chat thread changed in another client. Reload it before sending again.",
         () => loadThread(threadId));
     } else toast(errorMessage(error), "error");
+  } finally {
+    if (chatSendAborts.get(threadId) === controller) chatSendAborts.delete(threadId);
   }
 }
 
@@ -2320,15 +2570,15 @@ async function regenerateChat() {
     toast("Select a writable chat thread before regenerating", "error");
     return;
   }
-  if (state.chatPending) {
-    if (!state.chatPendingJobId) return;
+  const threadId = state.thread.id;
+  if (chatTurnBusy(threadId)) {
+    const jobId = state.chatPendingJobByThread.get(threadId) || state.chatPendingJobId;
+    if (!jobId) return;
     state.chatRegenerateQueued = true;
-    await cancelJob(state.chatPendingJobId);
+    await cancelJob(jobId);
     toast("Cancelling the current response before regenerating");
     return;
   }
-
-  const threadId = state.thread.id;
   try {
     await threadSettingsSaves.get(threadId);
     if (state.thread?.id !== threadId) return;
@@ -2361,19 +2611,15 @@ async function regenerateChat() {
 }
 
 async function sendChatMessageFromTranscript(prompt) {
-  if (!state.thread || state.chatPending) return;
+  if (!state.thread || chatTurnBusy(state.thread.id)) return;
   const threadId = state.thread.id;
-  state.chatPending = true;
-  const transcript = state.thread.messages.slice(-64).map((message) => ({
-    role: message.role,
-    content: message.content,
-  }));
+  beginChatTurn(threadId);
   const payload = optionalPayload({
     provider: byId("chat-provider").value,
     model: byId("chat-model").value.trim(),
     reasoning: byId("chat-reasoning").value,
     settings: state.thread.settings || {},
-    messages: transcript,
+    thread_id: threadId,
   });
   const context = {
     type: "chat",
@@ -2386,10 +2632,10 @@ async function sendChatMessageFromTranscript(prompt) {
   renderChat();
   try {
     const job = await submitJob("chat", payload, context);
-    state.chatPendingJobId = job.id;
+    state.chatPendingJobByThread.set(threadId, job.id);
+    if (state.thread?.id === threadId) state.chatPendingJobId = job.id;
   } catch (error) {
-    state.chatPending = false;
-    state.chatPendingJobId = "";
+    endChatTurn(threadId, false);
     state.chatStreams.delete(threadId);
     renderChat();
     throw error;
@@ -2400,8 +2646,7 @@ async function sendChatMessageFromTranscript(prompt) {
 async function finishChatJob(job, context) {
   const regenerate = state.chatRegenerateQueued;
   state.chatRegenerateQueued = false;
-  state.chatPending = false;
-  state.chatPendingJobId = "";
+  endChatTurn(context.threadId, false);
   if (job.state !== "succeeded" || !job.result || typeof job.result.content !== "string") {
     state.chatStreams.delete(context.threadId);
     renderChat();
@@ -2933,9 +3178,16 @@ async function cancelActiveAgentTurn() {
 }
 
 async function interruptCurrentTask() {
-  if (activePanelId() === "chat-panel" && state.chatPendingJobId) {
+  const threadId = state.thread && state.thread.id;
+  if (activePanelId() === "chat-panel" && threadId != null && chatTurnBusy(threadId)) {
     state.chatRegenerateQueued = false;
-    await cancelJob(state.chatPendingJobId);
+    const jobId = state.chatPendingJobByThread.get(threadId) || state.chatPendingJobId;
+    if (jobId) await cancelJob(jobId);
+    else {
+      endChatTurn(threadId, true);
+      renderChat();
+      toast("Send cancelled");
+    }
     return;
   }
   if (activePanelId() === "agent-panel" && await cancelActiveAgentTurn()) return;
@@ -3287,10 +3539,21 @@ async function loadFile(path) {
       })) return;
   try {
     const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`);
+    const converted = response.converted_from === "application/pdf";
+    const openPath = converted && response.suggested_path ? response.suggested_path : response.path;
+    let revision = response.revision;
+    if (converted && response.suggested_path) {
+      try {
+        const sibling = await api(`${API_ROOT}/files?path=${wirePath(response.suggested_path)}`);
+        revision = sibling.revision;
+      } catch (_) {
+        revision = "";
+      }
+    }
     const indentation = detectIndentation(response.content || "", 4, "spaces");
-    state.file = { ...response, dirty: false, history: null, pendingEditorInput: null,
+    state.file = { ...response, path: openPath, dirty: converted, history: null, pendingEditorInput: null,
       initialEditorPositionPending: true, tabWidth: indentation.tabWidth,
-      tabStyle: indentation.tabStyle };
+      tabStyle: indentation.tabStyle, revision };
     const editor = byId("file-editor");
     editor.value = response.content || "";
     editor.setSelectionRange(0, 0, "none");
@@ -3303,9 +3566,10 @@ async function loadFile(path) {
     editor.disabled = true;
     byId("file-edit-layer").hidden = true;
     renderFileHighlight();
-    byId("editor-heading").textContent = response.path;
+    byId("editor-heading").textContent = openPath;
     updateEditorMeta();
     renderDirectory();
+    if (converted) toast("Converted PDF to Markdown; Save writes the sibling .md file");
   } catch (error) {
     toast(errorMessage(error), "error");
   }
@@ -3315,12 +3579,18 @@ async function saveFile() {
   if (!state.file || !state.file.dirty) return;
   const path = state.file.path;
   try {
-    const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`, {
-      method: "PUT",
-      body: { revision: state.file.revision, content: byId("file-editor").value },
-    });
+    const content = byId("file-editor").value;
+    const response = state.file.revision
+      ? await api(`${API_ROOT}/files?path=${wirePath(path)}`, {
+          method: "PUT",
+          body: { revision: state.file.revision, content },
+        })
+      : await api(`${API_ROOT}/files`, {
+          method: "POST",
+          body: { path, content, parent_revision: state.directory.revision },
+        });
     state.file.revision = response.file.revision;
-    state.file.content = byId("file-editor").value;
+    state.file.content = content;
     state.file.dirty = false;
     updateEditorMeta();
     showFileViewer();
@@ -3536,7 +3806,7 @@ function bindEvents() {
     }
     if (event.key === "Escape") {
       if (modal && modal.id !== "guard-dialog") return;
-      if ((state.chatPendingJobId || (state.session && state.session.turn_id) ||
+      if ((chatTurnBusy() || state.chatPendingJobId || (state.session && state.session.turn_id) ||
           [...state.jobs.values()].some((job) => !TERMINAL_STATES.has(job.state)))) {
         event.preventDefault();
         void interruptCurrentTask();
@@ -3743,7 +4013,9 @@ function bindEvents() {
   byId("video-download-button").addEventListener("click", downloadGeneratedVideo);
   byId("edit-file-button").addEventListener("click", beginFileEdit);
 
-  byId("new-thread-button").addEventListener("click", () => openDialog(byId("new-thread-dialog")));
+  byId("new-thread-button").addEventListener("click", () => void startNewChat().catch((error) => {
+    toast(errorMessage(error), "error");
+  }));
   byId("chat-regenerate-button").addEventListener("click", () => void regenerateChat());
   byId("chat-cycle-reasoning-button").addEventListener("click", cycleChatReasoning);
   byId("chat-thinking-button").addEventListener("click", toggleChatThinking);
@@ -3752,11 +4024,12 @@ function bindEvents() {
     event.preventDefault();
     closeDialog(byId("new-thread-dialog"));
     try {
+      const routing = lastChatRouting();
       await createNewChat(optionalPayload({
         name: byId("thread-name-input").value.trim(),
-        provider: byId("thread-provider").value,
-        model: byId("thread-model").value.trim(),
-      }), true);
+        provider: byId("thread-provider").value || routing.provider || "none",
+        model: byId("thread-model").value.trim() || routing.model || "",
+      }), !(byId("thread-provider").value || routing.provider));
       byId("thread-name-input").value = "";
     } catch (error) {
       toast(errorMessage(error), "error");
@@ -3765,12 +4038,29 @@ function bindEvents() {
   });
   byId("chat-form").addEventListener("submit", (event) => {
     event.preventDefault();
+    if (chatTurnBusy()) {
+      void interruptCurrentTask();
+      return;
+    }
     const text = byId("chat-input").value.trim();
-    if (handleThemeCommand(text)) {
+    if (handleChatSlashCommand(text)) {
       byId("chat-input").value = "";
       return;
     }
-    if (text) void sendChatMessage(text);
+    if (text || state.chatInputs.length) void sendChatMessage(text);
+  });
+  byId("chat-attach-button").addEventListener("click", () => byId("chat-attach-files").click());
+  byId("chat-attach-files").addEventListener("change", (event) => {
+    queueChatFiles(event.target.files || []);
+    event.target.value = "";
+  });
+  const composer = byId("chat-form");
+  composer.addEventListener("dragover", (event) => {
+    event.preventDefault();
+  });
+  composer.addEventListener("drop", (event) => {
+    event.preventDefault();
+    if (event.dataTransfer?.files?.length) queueChatFiles(event.dataTransfer.files);
   });
   byId("chat-input").addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey ||
@@ -3796,7 +4086,7 @@ function bindEvents() {
   byId("agent-turn-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = byId("agent-turn-input").value.trim();
-    if (handleThemeCommand(text)) {
+    if (handleChatSlashCommand(text)) {
       byId("agent-turn-input").value = "";
       return;
     }

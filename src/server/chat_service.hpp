@@ -6,6 +6,8 @@
 #include "chat/sqlite_store.hpp"
 #include "common.hpp"
 #include "cli/args.hpp"
+#include "provider/provider.hpp"
+#include "server/chat_input_store.hpp"
 
 namespace ainiux::server {
 
@@ -15,6 +17,7 @@ namespace ainiux::server {
 class ChatService {
    public:
     explicit ChatService(std::string database_path = {}, cli::Options defaults = {});
+    void set_chat_inputs(ChatInputStore* store) { chat_inputs_ = store; }
 
     ChatService(const ChatService&) = delete;
     ChatService& operator=(const ChatService&) = delete;
@@ -49,6 +52,12 @@ class ChatService {
                          const std::string& request_body,
                          std::string& body,
                          long long& current_revision);
+    Error export_pdf(long long thread_id,
+                     const std::string& request_body,
+                     std::string& pdf,
+                     std::string& filename,
+                     long long& current_revision);
+    Error load_job_messages(long long thread_id, std::vector<provider::Message>& messages);
 
    private:
     Error ensure_open();
@@ -57,6 +66,7 @@ class ChatService {
     std::string database_path_;
     chat::SqliteStore store_;
     cli::Options defaults_;
+    ChatInputStore* chat_inputs_ = nullptr;
 };
 
 }  // namespace ainiux::server

@@ -1414,7 +1414,9 @@ Examples:
   ainiux -d src/
   ainiux --input page.html --output-format md
   ainiux --input notes.md --output-format pdf --output notes.pdf
+  ainiux --input report.pdf --output-format md --output report.md
   ainiux --fetch-url https://example.com --output-format md
+  ainiux --fetch-url https://example.com/report.pdf --output-format md
   ainiux --search "web scraping" --output-format plaintext
   ainiux lmstudio -p "Summarize" --attach notes.md --search "latest news"
   printf 'piped text' | ainiux --input stdin --output stdout
@@ -1560,16 +1562,18 @@ Options:
                                 In image mode, omit to write the first unused imageN.png.
 
   Input and attachments:
-      --input PATH              Read text/Markdown/HTML, or attach PNG/JPEG/GIF with -p;
-                                'stdin' reads UTF-8 plaintext from standard input.
+      --input PATH              Read text/Markdown/HTML/PDF, or attach PNG/JPEG/GIF with -p;
+                                PDF is converted to Markdown. 'stdin' reads UTF-8 plaintext.
       --encoding NAME           Decode --input/--attach text as NAME instead of UTF-8.
                                 Built-in: utf-8, utf-16, windows-1250/1251/1252,
                                 iso-8859-1/2, koi8-r/u. CJK names (gbk, big5, …)
                                 use iconv when installed.
-      --attach PATH             Add text/Markdown/HTML or PNG/JPEG/GIF; repeatable;
-                                'stdin' reads UTF-8 plaintext from standard input.
+      --attach PATH             Add text/Markdown/HTML/PDF or PNG/JPEG/GIF; repeatable;
+                                PDF is converted to Markdown. 'stdin' reads UTF-8 plaintext.
                                 In image mode: PNG/JPEG references only (repeatable, max 16).
-      --fetch-url URL           Fetch HTML for extraction, or as prompt context with -p.
+      --fetch-url URL           Fetch HTML or PDF for extraction, or as prompt context with -p.
+                                PDF (application/pdf) is converted to Markdown.
+                                Downloads are capped by --max-fetch-bytes (default 10 MiB).
       --search QUERY            Run a web search and use results as prompt context with -p.
                                 Hosted model search is used instead when the catalog
                                 marks the selected model web_search=on.
@@ -1583,7 +1587,7 @@ Options:
                                 MAXIMUM_WEB_SEARCH_RESULTS.
       --html-format text|markdown
                                 Compatibility alias for old HTML extraction commands.
-      --max-fetch-bytes N       Default 1048576.
+      --max-fetch-bytes N       Default 10485760 (10 MiB).
       --max-input-bytes N       Maximum bytes per text input/attachment; default 10485760 (10 MiB).
       --max-image-bytes N       Maximum image file size; default 20971520.
       --max-agent-response-bytes N

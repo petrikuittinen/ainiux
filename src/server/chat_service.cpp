@@ -11,7 +11,10 @@
 
 #include "json/json.hpp"
 #include "provider/provider.hpp"
+#include "chat/media_store.hpp"
 #include "chat/settings.hpp"
+#include "chat/transcript.hpp"
+#include "server/limits.hpp"
 #include "server/model_settings.hpp"
 
 namespace ainiux::server {
@@ -187,9 +190,26 @@ Error parse_create(const std::string& input, chat::Session& session) {
     return optional_string(parsed.value, "model", kMaxMetadataBytes, session.model);
 }
 
+Error parse_id_array(const json::Value* value, std::vector<std::string>& ids) {
+    ids.clear();
+    if (value == nullptr) return ok_error();
+    if (!value->is_array()) return invalid("input_ids must be an array of strings");
+    if (value->array.size() > Limits::chat_input_count) {
+        return invalid("input_ids accepts at most 16 files");
+    }
+    for (const json::Value& item : value->array) {
+        if (!item.is_string() || item.string.empty()) {
+            return invalid("input_ids must contain upload identifier strings");
+        }
+        ids.push_back(item.string);
+    }
+    return ok_error();
+}
+
 Error parse_append(const std::string& input,
                    long long& revision,
                    std::vector<provider::Message>& messages,
+                   std::vector<std::vector<std::string>>& input_ids,
                    std::optional<std::string>& provider_name,
                    std::optional<std::string>& model) {
     const json::ParseResult parsed = json::parse(input);
@@ -220,10 +240,12 @@ Error parse_append(const std::string& input,
         return invalid("messages must contain 1 through 64 items");
     }
     messages.clear();
+    input_ids.clear();
     messages.reserve(array->array.size());
+    input_ids.reserve(array->array.size());
     for (const json::Value& value : array->array) {
         if (!value.is_object()) return invalid("each message must be an object");
-        if (!known_fields(value, {"role", "content"}, unknown)) {
+        if (!known_fields(value, {"role", "content", "input_ids"}, unknown)) {
             return invalid("unknown message field: " + unknown);
         }
         const json::Value* role = value.get("role");
@@ -233,10 +255,21 @@ Error parse_append(const std::string& input,
              role->string != "assistant")) {
             return invalid("message role must be system, user, or assistant");
         }
-        if (content == nullptr || !content->is_string() || content->string.size() > kMaxMessageBytes) {
+        std::string text;
+        if (content != nullptr) {
+            if (!content->is_string() || content->string.size() > kMaxMessageBytes) {
+                return invalid("message content must be a string no larger than 1 MiB");
+            }
+            text = content->string;
+        }
+        std::vector<std::string> ids;
+        Error error = parse_id_array(value.get("input_ids"), ids);
+        if (!error.ok()) return error;
+        if (text.empty() && ids.empty()) {
             return invalid("message content must be a string no larger than 1 MiB");
         }
-        messages.push_back({role->string, content->string});
+        messages.push_back({role->string, std::move(text)});
+        input_ids.push_back(std::move(ids));
     }
     return ok_error();
 }
@@ -459,10 +492,11 @@ Error ChatService::append(long long thread_id,
                           std::string& body,
                           long long& current_revision) {
     std::vector<provider::Message> messages;
+    std::vector<std::vector<std::string>> input_ids;
     std::optional<std::string> provider_name;
     std::optional<std::string> model;
     long long expected_revision = 0;
-    Error error = parse_append(request_body, expected_revision, messages,
+    Error error = parse_append(request_body, expected_revision, messages, input_ids,
                                provider_name, model);
     if (!error.ok()) return error;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -470,6 +504,33 @@ Error ChatService::append(long long thread_id,
     current_revision = 0;
     error = ensure_open();
     if (!error.ok()) return error;
+    const size_t inline_limit = defaults_.media_max_size_to_store_to_db > 0
+                                    ? static_cast<size_t>(defaults_.media_max_size_to_store_to_db)
+                                    : 65536U;
+    for (size_t index = 0; index < messages.size(); ++index) {
+        if (input_ids[index].empty()) continue;
+        if (chat_inputs_ == nullptr) {
+            return invalid("chat uploads are unavailable");
+        }
+        std::vector<StoredChatInput> stored;
+        error = chat_inputs_->resolve(input_ids[index], stored);
+        if (!error.ok()) return error;
+        for (StoredChatInput& item : stored) {
+            if (item.kind == ChatInputKind::Image) {
+                provider::ImageInput image;
+                error = store_.import_media(*item.bytes, item.mime_type, item.display_name,
+                                            item.display_name, image);
+                if (!error.ok()) return error;
+                messages[index].images.push_back(std::move(image));
+            } else {
+                provider::TextAttachment attachment;
+                error = store_.import_text_attachment(*item.bytes, inline_limit, item.display_name,
+                                                      item.display_name, attachment);
+                if (!error.ok()) return error;
+                messages[index].text_attachments.push_back(std::move(attachment));
+            }
+        }
+    }
     long long message_count = 0;
     error = store_.append_messages(thread_id, expected_revision, messages,
                                    provider_name, model,
@@ -661,6 +722,90 @@ Error ChatService::rewind_last_answer(long long thread_id,
            ",\"revision\":" + std::to_string(session.revision) +
            ",\"message_count\":" + std::to_string(session.messages.size()) + "},"
            "\"prompt\":" + json::quote(prompt) + "}";
+    return ok_error();
+}
+
+Error ChatService::export_pdf(long long thread_id,
+                              const std::string& request_body,
+                              std::string& pdf,
+                              std::string& filename,
+                              long long& current_revision) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pdf.clear();
+    filename.clear();
+    current_revision = 0;
+    Error error = ensure_open();
+    if (!error.ok()) return error;
+    const json::ParseResult parsed = json::parse(request_body);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return invalid("chat PDF export body must be one JSON object");
+    }
+    std::string unknown;
+    if (!known_fields(parsed.value, {"revision", "scope"}, unknown)) {
+        return invalid("unknown chat PDF export field: " + unknown);
+    }
+    std::string scope_name = "thread";
+    error = optional_string(parsed.value, "scope", kMaxMetadataBytes, scope_name);
+    if (!error.ok()) return error;
+    if (scope_name.empty()) scope_name = "thread";
+    chat::TranscriptScope scope = chat::TranscriptScope::Thread;
+    if (scope_name == "last") {
+        scope = chat::TranscriptScope::LastMessage;
+    } else if (scope_name != "thread") {
+        return invalid("scope must be 'thread' or 'last'");
+    }
+    chat::Session session;
+    chat::LoadSessionOptions options;
+    options.max_messages = kMaxLoadedMessages;
+    options.max_content_bytes = kMaxLoadedContentBytes;
+    options.max_attachments_per_message = kMaxAttachmentsPerMessage;
+    options.metadata_only_attachments = false;
+    options.load_compactions = false;
+    options.update_last_thread = false;
+    error = store_.load_session(thread_id, session, options);
+    if (!error.ok()) return safe_store_error(error, "load the chat thread");
+    current_revision = session.revision;
+    error = chat::hydrate_message_text_attachments(store_.path(), session.messages,
+                                                   kMaxLoadedContentBytes);
+    if (!error.ok()) return error;
+    pdf::WriteOptions write_options;
+    write_options.font_path = defaults_.pdf_font;
+    error = chat::transcript_pdf(session.messages, session.name, scope, write_options, pdf);
+    if (!error.ok()) return error;
+    filename = chat::default_transcript_pdf_path(scope);
+    return ok_error();
+}
+
+Error ChatService::load_job_messages(long long thread_id,
+                                     std::vector<provider::Message>& messages) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    messages.clear();
+    Error error = ensure_open();
+    if (!error.ok()) return error;
+    chat::Session session;
+    chat::LoadSessionOptions options;
+    options.max_messages = kMaxMessagesPerAppend;
+    options.max_content_bytes = kMaxLoadedContentBytes;
+    options.max_attachments_per_message = kMaxAttachmentsPerMessage;
+    options.metadata_only_attachments = false;
+    options.load_compactions = false;
+    options.update_last_thread = false;
+    error = store_.load_session(thread_id, session, options);
+    if (!error.ok()) return safe_store_error(error, "load the chat thread");
+    if (session.messages.empty()) {
+        return invalid("chat thread has no messages");
+    }
+    const std::size_t text_limit = defaults_.max_input_bytes > 0
+                                       ? static_cast<std::size_t>(defaults_.max_input_bytes)
+                                       : kMaxLoadedContentBytes;
+    error = chat::hydrate_message_text_attachments(store_.path(), session.messages, text_limit);
+    if (!error.ok()) return error;
+    const std::size_t image_limit = defaults_.max_image_bytes > 0
+                                        ? static_cast<std::size_t>(defaults_.max_image_bytes)
+                                        : Limits::upload_body_bytes;
+    error = chat::hydrate_message_images(store_.path(), session.messages, image_limit);
+    if (!error.ok()) return error;
+    messages = std::move(session.messages);
     return ok_error();
 }
 

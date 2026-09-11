@@ -11,43 +11,43 @@ bool is_web_ui_path(std::string_view path) {
 
 bool find_embedded_asset(std::string_view path, EmbeddedAsset& asset) {
     if (path == "/ui" || path == "/ui/" || path == "/ui/index.html") {
-        asset = {"text/html; charset=utf-8", web::kIndexHtml, false};
+        asset = {"text/html; charset=utf-8", web::kIndexHtml};
         return true;
     }
     if (path == web::kStylesheetPath) {
-        asset = {"text/css; charset=utf-8", web::kStylesheet, true};
+        asset = {"text/css; charset=utf-8", web::kStylesheet};
         return true;
     }
     if (path == web::kJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web::kJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web::kJavascript};
         return true;
     }
     if (path == web::kHighlightJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web::kHighlightJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web::kHighlightJavascript};
         return true;
     }
     if (path == web::kSyntaxJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web::kSyntaxJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web::kSyntaxJavascript};
         return true;
     }
     if (path == web::kImageOptionsJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web::kImageOptionsJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web::kImageOptionsJavascript};
         return true;
     }
     if (path == web::kVideoOptionsJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web::kVideoOptionsJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web::kVideoOptionsJavascript};
         return true;
     }
     if (path == web::kEditorHistoryJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web_history::kJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web_history::kJavascript};
         return true;
     }
     if (path == web::kEditorIndentationJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web::kEditorIndentationJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web::kEditorIndentationJavascript};
         return true;
     }
     if (path == web::kSelectorJavascriptPath) {
-        asset = {"text/javascript; charset=utf-8", web::kSelectorJavascript, true};
+        asset = {"text/javascript; charset=utf-8", web::kSelectorJavascript};
         return true;
     }
     return false;

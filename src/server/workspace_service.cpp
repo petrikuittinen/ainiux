@@ -11,8 +11,10 @@
 #include <vector>
 
 #include "editor/dired.hpp"
+#include "editor/editor.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
+#include "pdf/pdf.hpp"
 #include "platform/filesystem.hpp"
 #include "security/hash.hpp"
 #include "server/limits.hpp"
@@ -294,8 +296,31 @@ Error snapshot_file(const std::string& root,
     error = revision_for_path(path, false, size, &content, revision);
     if (!error.ok()) return error;
     snapshot.path = normalized_wire_path(relative);
-    snapshot.content = std::move(content);
     snapshot.revision = std::move(revision);
+    const std::string lower_path = ascii_lower(snapshot.path);
+    const bool pdf_path = lower_path.size() >= 4 &&
+                          lower_path.compare(lower_path.size() - 4, 4, ".pdf") == 0;
+    bool pdf_magic = false;
+    if (!pdf_path) {
+        size_t i = 0;
+        while (i < content.size() &&
+               (content[i] == ' ' || content[i] == '\t' || content[i] == '\r' || content[i] == '\n')) {
+            ++i;
+        }
+        pdf_magic = content.size() - i >= 5 && content.compare(i, 5, "%PDF-") == 0;
+    }
+    if (pdf_path || pdf_magic) {
+        pdf::Options pdf_options;
+        pdf_options.max_bytes = content.size();
+        std::string markdown;
+        error = pdf::to_markdown_bytes(content, pdf_options, markdown);
+        if (!error.ok()) return error;
+        snapshot.content = std::move(markdown);
+        snapshot.converted_from = "application/pdf";
+        snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
+        return ok_error();
+    }
+    snapshot.content = std::move(content);
     return ok_error();
 }
 
@@ -673,7 +698,12 @@ Error WorkspaceService::read(const std::string& relative_path, std::string& body
            ",\"revision\":" + json::quote(snapshot.revision) +
            ",\"content\":" + json::quote(snapshot.content) +
            ",\"size\":" + std::to_string(snapshot.content.size()) +
-           ",\"truncated\":false}";
+           ",\"truncated\":false";
+    if (!snapshot.converted_from.empty()) {
+        body += ",\"converted_from\":" + json::quote(snapshot.converted_from) +
+                ",\"suggested_path\":" + json::quote(snapshot.suggested_path);
+    }
+    body += "}";
     return ok_error();
 }
 

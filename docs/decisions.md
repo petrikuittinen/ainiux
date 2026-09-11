@@ -306,6 +306,14 @@ SQLite schema v4 adds inline attachment content. Canonical Markdown no larger th
 
 DOCX remains an unsupported binary type. PDF input converts to Markdown in `src/pdf/` rather than inserting binary prompt text. Markdown-to-PDF writing uses the same module (`pdf::from_markdown`) with `--output-format pdf`.
 
+`--fetch-url`, `/fetch`, `/attach URL`, `/insert URL`, and agent `fetch` accept `application/pdf` (and `application/x-pdf`). A missing or `application/octet-stream` type is sniffed for a `%PDF-` header; a `.pdf` URL that returns HTML is still HTML. PDF bytes are not charset-decoded. The download cap remains `--max-fetch-bytes`; its default is 10 MiB, matching the local document-input default while retaining an explicit bound for untrusted responses.
+
+Opening a PDF in the standalone or WebUI editor converts it to Markdown and retargets Save to the sibling `.md`. Saving a buffer to a `.pdf` path runs Markdown→PDF. The original PDF is never overwritten with Markdown bytes.
+
+`/chat-to-pdf` and `/last-to-pdf` render the in-memory (or loaded) transcript through `chat::transcript_pdf`. Images become `[image: name]` placeholders. The WebUI downloads `application/pdf`; TUI/REPL refuse to overwrite an existing path.
+
+WebUI chat file input follows the image-generation upload pattern: opaque IDs in a memory-only `ChatInputStore`, not workspace paths. HTML and PDF convert to Markdown at upload time. Text attachments use the existing SQLite/media import path so they are not inlined into the 1 MiB message content cap.
+
 Interactive `/insert FILE_OR_URL` and `/attach PATH` use separate runtime paths. `/attach` retains the provider-context/image behavior. `/insert` performs a bounded UTF-8 read for any local file ending or an explicitly requested safe HTTP(S) fetch, then sends text through the owning UI event queue for one cursor insertion. HTML-to-Markdown conversion defaults on and can be disabled to retain raw HTML. Editor insertion records the target buffer identity, revision, and cursor, and discards stale results rather than applying them to changed or closed buffers. `/fetch URL` remains the chat-history context command. Workers check cancellation and never mutate UI or chat state directly.
 
 ## Web Search First Slice
@@ -316,7 +324,7 @@ Provider selection is client-side and independent from LLM provider profiles. Co
 
 The module reuses the existing libcurl HTTP wrapper. Google HTML scraping was removed: modern Google search pages return JavaScript-only shells to non-browser clients, so free Google SERP access is not reliable without a browser stack or a paid API. DuckDuckGo HTML is the supported keyless path (title, URL, snippet). Result URLs longer than 512 bytes are truncated (prefer dropping query/fragment). Agent-mode `web_search` hard-caps at 3 results so models do not fetch large SERPs. URL fetch sends a desktop Firefox User-Agent plus browser-like Accept/Sec-Fetch headers. A more reliable free search provider remains open work (see TODO.md).
 
-Agent `fetch` always converts HTML to Markdown (or keeps `text/plain`) via `fetch_text` + `src/html/`. Raw HTML is never returned in tool results: full pages carry scripts/styles/hidden markup (prompt-injection risk) and waste tokens. CLI `--fetch-url` may still print HTML for local export. Legacy `extract_text=false` is ignored if a model still sends it. Tool `max_bytes` caps the **Markdown output** the model sees; the raw download uses a larger ceiling so HTML→MD is not aborted on bloated pages. HTTP redirects are followed (bounded) with the same private-address socket checks on each hop—trailing-slash 301s from WordPress-style hosts are common and previously failed as bare “HTTP 301”.
+Agent `fetch` always converts HTML or PDF to Markdown (or keeps `text/plain`) via `fetch_text`. Raw HTML is never returned in tool results: full pages carry scripts/styles/hidden markup (prompt-injection risk) and waste tokens. CLI `--fetch-url` may still print HTML for local export. Legacy `extract_text=false` is ignored if a model still sends it. Tool `max_bytes` caps the **Markdown output** the model sees; the raw download uses a larger ceiling so HTML→MD is not aborted on bloated pages. HTTP redirects are followed (bounded) with the same private-address socket checks on each hop—trailing-slash 301s from WordPress-style hosts are common and previously failed as bare “HTTP 301”.
 
 ## Request-Only Context Policies
 
@@ -573,11 +581,12 @@ edits.
 The final control-server slice serves a same-origin application from `/ui/`.
 Source HTML, CSS, and small JavaScript ES modules live under `src/web/`; the
 Makefile converts them into a generated C++ string table consumed by
-`server/embedded_assets`. Versioned asset URLs receive immutable caching while
-the HTML shell remains no-store. Exact lookup replaces filesystem-backed static
-serving, so neither the configured workspace nor install tree becomes web
-content. This adds no browser framework, package manager, Node.js runtime,
-bundler, CDN, font, or JavaScript library.
+`server/embedded_assets`. Versioned asset URLs identify exact embedded files;
+every `/ui/` response is `no-store` so a rebuilt binary is visible on reload
+without waiting for a filename bump or a year of browser cache. Exact lookup
+replaces filesystem-backed static serving, so neither the configured workspace
+nor install tree becomes web content. This adds no browser framework, package
+manager, Node.js runtime, bundler, CDN, font, or JavaScript library.
 
 Static boot assets are intentionally readable without a token; they contain no
 runtime configuration. Host and Origin checks still run first, and every
@@ -611,8 +620,9 @@ attributes to the JavaScript/CSS lexers, while HTML-only and XML remain
 markup-only. Highlight output is constructed exclusively from text nodes and
 role-named spans; unknown fences remain literal, and bounded source, line, and
 token work prevents pathological model output from monopolizing rendering.
-Versioned asset URLs advance with each immutable-cache change. No runtime or
-package dependency is introduced.
+Versioned asset URLs still change when a file is replaced, but caching is
+`no-store` so in-progress WebUI work is not trapped behind an immutable
+year-long cache. No runtime or package dependency is introduced.
 
 Browser indentation is a separate pure ES module rather than controller logic.
 It mirrors native first-20-line detection, selection expansion and UTF-16

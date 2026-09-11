@@ -53,7 +53,7 @@ API job operation list.
 `GET /ui/` loads the controller without a bearer token so a browser can show
 the connection form. `/ui` and `/ui/index.html` return the same no-store HTML
 shell. Its exact versioned stylesheet and ES-module paths live below
-`/ui/assets/` and use immutable caching; unknown asset paths, query strings,
+`/ui/assets/` and are `no-store` like the HTML shell; unknown asset paths, query strings,
 bodies, directory requests, and non-GET methods are rejected. Assets are
 compiled into the executable rather than read from the served workspace.
 
@@ -192,6 +192,9 @@ POST   /ainiux/v1/chat/threads/:thread_id/regenerate
 POST   /ainiux/v1/chat/threads/:thread_id/abandon
 POST   /ainiux/v1/chat/threads/:thread_id/edit-message
 POST   /ainiux/v1/chat/threads/:thread_id/delete-message
+POST   /ainiux/v1/chat/threads/:thread_id/pdf
+POST   /ainiux/v1/chat/inputs
+DELETE /ainiux/v1/chat/inputs/:input_id
 ```
 
 Listing returns at most 200 newest summaries with `id`, `revision`, `name`,
@@ -266,7 +269,29 @@ Thread responses expose at most 64 attachments per message, with kind, MIME
 type, display name, and byte size only; `attachments_truncated` reports an
 omission. Managed-media identifiers, inline attachment bodies, original
 source references, database paths, base URLs, usage internals, and provider
-credentials are omitted. Remote attachment input is not accepted.
+credentials are omitted.
+
+Browser chat uploads use a raw body on `POST /ainiux/v1/chat/inputs` with
+`Content-Type` `image/png`, `image/jpeg`, `image/gif`, `application/pdf`,
+`text/plain`, `text/markdown`, or `text/html`. An optional `X-Ainiux-Filename`
+(or `Content-Disposition` filename) classifies generic types. PDF and HTML are
+converted to Markdown immediately. The response is an opaque `id`, `kind`
+(`image` or `text`), MIME type, display name, converted flag, byte size, and
+expiry. Inputs are memory-only, expire after one hour, and can be deleted
+early. Append a user message with `input_ids` so the thread imports images into
+managed media and Markdown into text attachments. Chat jobs accept the same
+`input_ids` on the last user message or as a top-level array. When `thread_id`
+is present and the chat store is available, the job loads that stored transcript
+and hydrates attachments for the provider, so later turns still see an attached
+PDF. Client `messages` are not length-checked or used in that case, and job
+`input_ids` are not re-applied because append already imported the files. Raw
+PDF, HTML, and base64 image bodies never appear in thread JSON. When a job
+supplies `messages` without a loadable `thread_id`, each `content` field may be
+up to the 1 MiB JSON body limit; it is not capped at 4096 bytes.
+
+`POST /ainiux/v1/chat/threads/:thread_id/pdf` accepts
+`{"scope":"thread"|"last"}` and returns `application/pdf`. Read-only threads
+may export. Empty threads return an error rather than an empty PDF.
 
 Regenerate accepts `{"revision":N}`. It atomically removes messages after the
 latest user prompt and returns that prompt plus the advanced thread revision;
@@ -342,7 +367,7 @@ Events use monotonically increasing integer IDs and this stable envelope:
 Submit a JSON object to one of these routes:
 
 ```text
-POST /ainiux/v1/jobs/chat   {provider?, model?, api?, reasoning?, messages:[{role,content}]}
+POST /ainiux/v1/jobs/chat   {provider?, model?, api?, reasoning?, thread_id?, messages:[{role,content,input_ids?}], input_ids?:[]}
 POST /ainiux/v1/jobs/models {provider?, api?}
 POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}

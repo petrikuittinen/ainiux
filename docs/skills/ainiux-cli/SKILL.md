@@ -139,13 +139,15 @@ and a next step when one exists.
 
 ## Attachments and safety
 
-`--attach` is bounded text or PNG/JPEG/GIF for capable Chat Completions models.
-`--input` on an image is the chat vision path, not `ainiux image`. `--input`
-on a `.pdf` converts to Markdown. `--output-format pdf` writes a new PDF.
-DOCX is rejected.
+`--attach` is bounded text, Markdown, HTML, PDF (converted to Markdown), or
+PNG/JPEG/GIF for capable Chat Completions models. `--input` on an image is the
+chat vision path, not `ainiux image`. `--input` on a `.pdf` converts to
+Markdown. `--output-format pdf` writes a new PDF. DOCX is rejected.
 
 `--fetch-url` and `--search` are explicit. A URL inside `-p` is not fetched.
-Private/loopback fetch needs `--allow-private-url-fetch`.
+HTML and `application/pdf` responses are accepted; PDF is converted to
+Markdown. Private/loopback fetch needs `--allow-private-url-fetch`. Raise
+`--max-fetch-bytes` for PDFs larger than the 10 MiB default.
 
 `run` / `plan` may mutate the current workspace. They do not get a y/n prompt
 in this headless path; destructive Guard Ask is denied. Prefer `plan` when the

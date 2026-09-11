@@ -231,7 +231,7 @@ struct Options {
     bool has_max_output_tokens = false;
     long connect_timeout_seconds = 10;
     long timeout_seconds = 0;
-    long max_fetch_bytes = 1048576;
+    long max_fetch_bytes = 10L * 1024L * 1024L;
     int max_web_search_results = 3;
     bool max_web_search_results_explicit = false;
     long max_input_bytes = 10485760;

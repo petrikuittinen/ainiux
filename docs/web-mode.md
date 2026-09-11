@@ -44,7 +44,9 @@ browser URLs.
 The controller capability-detects the server before enabling features. It
 provides:
 
-- concurrency-safe ordinary chat threads with live streamed model responses;
+- concurrency-safe ordinary chat threads with live streamed model responses,
+  local file attachments (PNG/JPEG/GIF, PDF, Markdown, plaintext, HTML; PDF and
+  HTML convert to Markdown), and `/chat-to-pdf` / `/last-to-pdf` downloads;
 - safe client-side Markdown rendering for Chat and Agent prose, including
   semantic headings, responsive GFM tables, clickable HTTP(S) links, and the
   full TUI set of highlighted fenced-code languages;
@@ -65,7 +67,8 @@ provides:
   HTML5 MP4 playback, and authenticated download;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
-- a bounded UTF-8 editor with optimistic saves, conflict recovery, detected
+- a bounded UTF-8 editor with optimistic saves, conflict recovery, PDF-to-Markdown
+  conversion when opening `.pdf` (Save writes the sibling `.md`), detected
   per-file indentation controls, Tab/Shift+Tab indent and outdent, adaptive
   selection/file reformatting, and bounded undo/redo. Use `Ctrl+U` or `Ctrl+Z` to
   undo and `Ctrl+Y` to redo; `Alt+U`/`Alt+Z` and `Alt+Y` are browser-safe
@@ -95,11 +98,19 @@ download action, then revokes that URL on reset or sign-out. FAL and Replicate
 keys, queue/prediction control URLs, CDN/Files input URLs, and provider output
 URLs never enter browser JSON.
 
-Chat submission first persists the user message, runs the shared asynchronous
-chat job, and appends the assistant result only if the thread revision still
-matches. On a conflict, the completed result remains visible in Chat and the UI asks
-the user to reload. File drafts likewise remain visible until the user chooses
-whether to keep the draft or reload the current server copy.
+Composer attachments belong to the current draft only: opening another thread
+or New chat clears them. Send is disabled only for the thread that has an
+in-flight turn; other threads stay usable, and Escape cancels a stuck send
+even before a job id exists.
+
+Chat submission first persists the user message (and any converted attachments),
+runs the shared asynchronous chat job with that thread id, and appends the
+assistant result only if the thread revision still matches. The browser does
+not resend the transcript as job `content`; the server hydrates stored Markdown
+attachments, including a converted PDF, so later turns still see the file. On a
+conflict, the completed result remains visible in Chat and the UI asks the user
+to reload. File drafts likewise remain visible until the user chooses whether to
+keep the draft or reload the current server copy.
 
 An unnamed thread initially appears as “New chat”; its first non-empty user
 prompt supplies the stored title. Thread rows show the locally formatted
@@ -110,8 +121,9 @@ for confirmation first in an in-page dialog (never `alert`/`confirm`/`prompt`).
 Read-only threads cannot be deleted.
 On the first authenticated browser load, the controller sweeps leftover empty
 threads, then creates and selects a new thread even when older conversations
-exist. It immediately prompts for a provider when the effective provider is
-`none`, or for a model when only the model is missing. A thread left without
+exist. New chat, including that first empty thread, reuses the last used
+provider and model when one is available. It prompts for a provider only when
+none has been chosen yet. A thread left without
 user or assistant content is revision-safely abandoned when another thread is
 selected or created; reconnection reloads the active thread instead of creating
 another one and keeps that thread while sweeping other empties.
@@ -272,9 +284,9 @@ The WUI is a same-origin client of `/ainiux/v1`; it does not contact providers
 or third parties directly. Browser responses apply a restrictive CSP with
 same-origin scripts, styles, and connections, `data:` only for returned image
 jobs, no framing, no referrers, and disabled sensitive browser features.
-Versioned CSS/JavaScript assets are immutable-cacheable; the HTML shell is
-`no-store`. Only exact embedded asset paths are served—there is no filesystem
-or directory-backed static serving.
+Versioned CSS/JavaScript and the HTML shell are all `no-store`. Only exact
+embedded asset paths are served—there is no filesystem or directory-backed
+static serving.
 
 All model, tool, file, and error text is inserted through constructed DOM nodes,
 `createTextNode`, and `textContent`; model-provided HTML is never interpreted as

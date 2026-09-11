@@ -16,6 +16,8 @@ struct Limits {
     static constexpr std::size_t image_job_upload_bytes = 40U * 1024U * 1024U;
     static constexpr std::size_t image_upload_store_bytes = 160U * 1024U * 1024U;
     static constexpr std::size_t image_input_count = 16U;
+    static constexpr std::size_t chat_input_count = 16U;
+    static constexpr std::size_t chat_upload_store_bytes = 160U * 1024U * 1024U;
     static constexpr std::size_t video_upload_body_bytes = 200U * 1024U * 1024U;
     static constexpr std::size_t video_job_upload_bytes = 1024U * 1024U * 1024U;
     static constexpr std::size_t video_upload_store_bytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;

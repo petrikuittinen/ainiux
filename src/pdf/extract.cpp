@@ -384,6 +384,7 @@ void finish_font_metrics(const Value& font_dict, FontDecoder& font) {
 }
 
 Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
+    constexpr std::uint64_t max_mappings = 1U << 20;
     Tokenizer tokens(Cursor{reinterpret_cast<const std::uint8_t*>(cmap.data()), cmap.size(), 0});
     std::string dest_hex;
     auto dest_utf8 = [](const std::string& bytes) {
@@ -413,6 +414,9 @@ Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
                 if (!err.ok()) {
                     return err;
                 }
+                if (src.kind == TokenKind::Eof) {
+                    return {ErrorCode::FileRead, "unterminated ToUnicode bfchar section"};
+                }
                 if (src.kind == TokenKind::Keyword && src.text == "endbfchar") {
                     break;
                 }
@@ -421,7 +425,13 @@ Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
                 if (!err.ok()) {
                     return err;
                 }
+                if (dst.kind == TokenKind::Eof) {
+                    return {ErrorCode::FileRead, "truncated ToUnicode bfchar mapping"};
+                }
                 if (src.kind == TokenKind::Hex && dst.kind == TokenKind::Hex) {
+                    if (font.to_unicode.size() >= max_mappings) {
+                        return {ErrorCode::FileRead, "Too many ToUnicode mappings"};
+                    }
                     font.to_unicode[code_from_bytes(src.text)] = dest_utf8(dst.text);
                     font.code_width = std::max(font.code_width, static_cast<int>(src.text.size()));
                 }
@@ -433,6 +443,9 @@ Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
                 if (!err.ok()) {
                     return err;
                 }
+                if (src1.kind == TokenKind::Eof) {
+                    return {ErrorCode::FileRead, "unterminated ToUnicode bfrange section"};
+                }
                 if (src1.kind == TokenKind::Keyword && src1.text == "endbfrange") {
                     break;
                 }
@@ -442,20 +455,34 @@ Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
                 if (!err.ok()) {
                     return err;
                 }
+                if (src2.kind == TokenKind::Eof) {
+                    return {ErrorCode::FileRead, "truncated ToUnicode bfrange mapping"};
+                }
                 err = tokens.next(dst);
                 if (!err.ok()) {
                     return err;
+                }
+                if (dst.kind == TokenKind::Eof) {
+                    return {ErrorCode::FileRead, "truncated ToUnicode bfrange mapping"};
                 }
                 if (src1.kind != TokenKind::Hex || src2.kind != TokenKind::Hex) {
                     continue;
                 }
                 const std::uint32_t start = code_from_bytes(src1.text);
                 const std::uint32_t end = code_from_bytes(src2.text);
+                if (end < start) {
+                    return {ErrorCode::FileRead, "invalid descending ToUnicode bfrange"};
+                }
+                const std::uint64_t range_size =
+                    static_cast<std::uint64_t>(end) - static_cast<std::uint64_t>(start) + 1U;
+                if (range_size > max_mappings || font.to_unicode.size() > max_mappings - range_size) {
+                    return {ErrorCode::FileRead, "Too many ToUnicode mappings"};
+                }
                 font.code_width = std::max(font.code_width, static_cast<int>(src1.text.size()));
                 if (dst.kind == TokenKind::Hex) {
                     std::string current = dst.text;
-                    for (std::uint32_t code = start; code <= end; ++code) {
-                        font.to_unicode[code] = dest_utf8(current);
+                    for (std::uint64_t code = start; code <= end; ++code) {
+                        font.to_unicode[static_cast<std::uint32_t>(code)] = dest_utf8(current);
                         if (!current.empty()) {
                             auto last = static_cast<unsigned char>(current.back());
                             if (last < 255) {
@@ -464,20 +491,31 @@ Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
                         }
                     }
                 } else if (dst.kind == TokenKind::ArrayStart) {
-                    std::uint32_t code = start;
-                    while (code <= end) {
+                    std::uint64_t index = 0;
+                    while (true) {
                         Token item;
                         err = tokens.next(item);
                         if (!err.ok()) {
                             return err;
                         }
+                        if (item.kind == TokenKind::Eof) {
+                            return {ErrorCode::FileRead,
+                                    "unterminated ToUnicode bfrange destination array"};
+                        }
                         if (item.kind == TokenKind::ArrayEnd) {
                             break;
                         }
-                        if (item.kind == TokenKind::Hex) {
-                            font.to_unicode[code] = dest_utf8(item.text);
+                        if (item.kind != TokenKind::Hex || index >= range_size) {
+                            return {ErrorCode::FileRead,
+                                    "invalid ToUnicode bfrange destination array"};
                         }
-                        ++code;
+                        font.to_unicode[static_cast<std::uint32_t>(
+                            static_cast<std::uint64_t>(start) + index)] = dest_utf8(item.text);
+                        ++index;
+                    }
+                    if (index != range_size) {
+                        return {ErrorCode::FileRead,
+                                "incomplete ToUnicode bfrange destination array"};
                     }
                 }
             }

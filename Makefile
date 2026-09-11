@@ -73,8 +73,8 @@ MODELS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_models_config.hpp
 IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
 VIDEOS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_videos_config.hpp
 WEB_INDEX := src/web/index.html
-WEB_STYLESHEET := src/web/css/app-v21.css
-WEB_JAVASCRIPT := src/web/js/app-v27.js
+WEB_STYLESHEET := src/web/css/app-v23.css
+WEB_JAVASCRIPT := src/web/js/app-v29.js
 WEB_SELECTOR_JAVASCRIPT := src/web/js/selector-v3.js
 WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v5.js
 WEB_SYNTAX_JAVASCRIPT := src/web/js/syntax-v4.js
@@ -237,8 +237,8 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGH
 	@mkdir -p $(dir $@)
 	@{ \
 		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
-			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v21.css";' \
-			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v27.js";' \
+			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v23.css";' \
+			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v29.js";' \
 			'inline constexpr std::string_view kSelectorJavascriptPath = "/ui/assets/selector-v3.js";' \
 			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v5.js";' \
 			'inline constexpr std::string_view kSyntaxJavascriptPath = "/ui/assets/syntax-v4.js";' \

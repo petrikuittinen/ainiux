@@ -196,8 +196,8 @@ security boundaries. A 401 or “Sign out / Forget authentication” clears the
 token; network/timeout/5xx failures retain it. The WUI never uses cookies, URLs,
 logs, or rendered DOM as token storage. Assets are
 embedded and served only at exact versioned paths, so the WUI cannot become a
-workspace file server. The HTML shell is no-store, versioned CSS/JavaScript is
-immutable-cacheable, CORS stays disabled, and strict Host/Origin validation
+workspace file server. The HTML shell and versioned CSS/JavaScript are
+`no-store`, CORS stays disabled, and strict Host/Origin validation
 precedes even public asset routing.
 
 Browser CSP limits scripts, styles, and API/event connections to the same
@@ -246,12 +246,12 @@ The first v0.5 input/URL-fetching slice is explicit: `--input PATH` reads suppor
 
 Defaults:
 
-- response body cap: 1 MiB unless `--max-fetch-bytes N` is set
+- response body cap: 10 MiB unless `--max-fetch-bytes N` is set
 - connect timeout: existing `--connect-timeout` default
 - total timeout for fetch mode: 30 seconds unless `--timeout N` is set
 - redirects: followed by default (max 5); each hop still blocks private/loopback/metadata addresses via the socket-open check
 - request headers: sends browser-style `User-Agent`, `Accept`, `Accept-Language`, `Sec-Fetch-*`, and `Upgrade-Insecure-Requests` headers
-- content type: accepts empty content type, `text/html`, `application/xhtml+xml`, and (for text fetch) `text/plain`
+- content type: accepts empty content type, `text/html`, `application/xhtml+xml`, `application/pdf`, and (for text fetch) `text/plain`; generic bodies with a `%PDF-` header are also recognized as PDF
 - body encoding: non-UTF-8 bodies are converted from Content-Type / HTML meta charset when the name is built-in (UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U) or allowlisted for `iconv` (GBK, Big5, Shift_JIS, …). HTML `iso-8859-1` follows the browser Windows-1252 map. Unknown names fall back to Windows-1252 so tool JSON stays valid UTF-8. The `iconv` path uses a shell-free subprocess and an allowlist of encoding names only.
 - private/loopback/link-local/multicast/common metadata literal hosts and resolved socket addresses are refused unless `--allow-private-url-fetch` is set
 - agent `fetch` `max_bytes` limits the **returned Markdown/text** size; raw HTML may download under a larger safety ceiling before conversion

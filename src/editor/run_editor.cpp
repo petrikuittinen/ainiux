@@ -234,6 +234,17 @@ app::EditorRunResult run_editor(const std::string& path,
             state.linebreak = loaded.linebreak;
             state.tab_width = loaded.tab_width;
             state.tab_style = loaded.tab_style;
+            if (loaded.converted_from_pdf && !loaded.suggested_path.empty()) {
+                state.release_file_session();
+                state.set_path(loaded.suggested_path);
+                std::error_code sibling_error;
+                const bool sibling_exists = std::filesystem::exists(
+                    std::filesystem::u8path(loaded.suggested_path), sibling_error) &&
+                    !sibling_error;
+                (void)state.begin_file_session(loaded.suggested_path, sibling_exists);
+                state.dirty = true;
+                state.redetect_language();
+            }
             if (loaded.mixed_linebreaks) {
                 initial_linebreak_warning =
                     "Warning: mixed line endings in " + load_path +
@@ -242,6 +253,8 @@ app::EditorRunResult run_editor(const std::string& path,
             if (recover_autosave) {
                 state.dirty = true;
                 status = "Recovered auto-save";
+            } else if (loaded.converted_from_pdf && !loaded.suggested_path.empty()) {
+                status = "Converted PDF to Markdown; saving will write " + loaded.suggested_path;
             } else if (loaded.converted && !loaded.source_encoding.empty()) {
                 status = "Converted from " + loaded.source_encoding + "; saving will write UTF-8";
             } else {
@@ -997,10 +1010,13 @@ app::EditorRunResult run_editor(const std::string& path,
                                "Choose encoding for " + open_path + " · saving will write UTF-8");
             return;
         }
+        const std::string buffer_path =
+            loaded.converted_from_pdf && !loaded.suggested_path.empty() ? loaded.suggested_path
+                                                                        : open_path;
         EditorState next;
         next.set_undo_limit(settings.undo_limit);
-        next.set_path(open_path);
-        const Error lock_error = next.begin_file_session(open_path, true);
+        next.set_path(buffer_path);
+        const Error lock_error = next.begin_file_session(buffer_path, true);
         sync_active_buffer();
         const bool mixed_linebreaks = loaded.mixed_linebreaks;
         next.text = std::move(loaded.text);
@@ -1013,9 +1029,12 @@ app::EditorRunResult run_editor(const std::string& path,
         next.preferred_column = 0;
         next.scroll_line = 0;
         next.scroll_column = 0;
-        next.dirty = recovered_from_autosave;
+        next.dirty = recovered_from_autosave || loaded.converted_from_pdf;
         next.clear_selection();
         next.clear_undo_history();
+        if (loaded.converted_from_pdf) {
+            next.redetect_language();
+        }
         buffers.push_back(next);
         active_buffer = buffers.size() - 1;
         state = next;
@@ -1031,6 +1050,9 @@ app::EditorRunResult run_editor(const std::string& path,
                                    linebreak_name(next.linebreak) + " for saves");
         } else if (recovered_from_autosave) {
             minibuffer_message(minibuffer, "Recovered auto-save for " + open_path);
+        } else if (loaded.converted_from_pdf) {
+            minibuffer_message(minibuffer,
+                               "Converted PDF to Markdown; saving will write " + buffer_path);
         } else if (loaded.converted && !loaded.source_encoding.empty()) {
             minibuffer_message(minibuffer,
                                "Opened " + open_path + " (converted from " +

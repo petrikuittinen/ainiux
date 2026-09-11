@@ -1139,6 +1139,7 @@ void test_config_reads_common_template() {
     check(err.ok(), "every common config setting passes schema validation");
     check(options.provider == "openai" && options.stream && options.tui_theme == "dark" &&
               !options.show_thinking_traces && !options.allow_private_url_fetch &&
+              options.max_fetch_bytes == 10L * 1024L * 1024L &&
               options.max_web_search_results == 3 && options.web_search_provider == "auto" &&
               options.editor_undo_limit == 5 &&
               options.editor_huge_file_size_warning == 1073741824LL &&
