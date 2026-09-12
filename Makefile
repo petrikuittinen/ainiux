@@ -137,7 +137,7 @@ APP_LINK_EXTRA :=
 APP_LINK_FLAGS :=
 endif
 
-.PHONY: all clean optimized test test-full test-unit test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
+.PHONY: all clean optimized test test-full test-unit test-pdf test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
 
 all: $(BIN)
 
@@ -330,6 +330,9 @@ ifeq ($(WINDOWS_NATIVE),1)
 	$(MAKE) test-integration-sqlite
 	$(MAKE) test-windows-conpty
 endif
+
+test-pdf: $(TEST_BIN)
+	$(TEST_BIN) --pdf-only
 
 test-unit: $(TEST_BIN)
 	$(TEST_BIN)

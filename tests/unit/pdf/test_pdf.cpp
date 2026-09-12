@@ -189,6 +189,30 @@ void test_bad_header() {
     check(!err.ok() && err.message.find("header") != std::string::npos, "non-PDF bytes fail on header");
 }
 
+void test_error_fixtures_fail_cleanly() {
+    struct Case {
+        const char* path;
+        const char* message;
+    };
+    const Case cases[] = {
+        {"tests/fixtures/pdf_errors/error-unsupported-version-3.0.pdf", "Bad PDF header"},
+        {"tests/fixtures/pdf_errors/error-missing-root.pdf", "Missing Root object"},
+        {"tests/fixtures/pdf_errors/error-dangling-pages-reference.pdf", "missing PDF object 2"},
+    };
+    for (const Case& item : cases) {
+        const std::string bytes = read_fixture(item.path);
+        std::string markdown = "must be cleared";
+        const ainiux::Error err =
+            ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
+        check(!err.ok(), std::string(item.path) + " is rejected");
+        check(err.code == ainiux::ErrorCode::FileRead,
+              std::string(item.path) + " returns FileRead");
+        check(err.message.find(item.message) != std::string::npos,
+              std::string(item.path) + " reports " + item.message + ": " + err.message);
+        check(markdown.empty(), std::string(item.path) + " produces no partial Markdown");
+    }
+}
+
 void test_cancelled_open() {
     ainiux::runtime::CancellationSource source;
     source.cancel();
@@ -218,7 +242,6 @@ void test_open_corpus_page_counts() {
     };
     const Case cases[] = {
         {"tests/pdf_files/ru-llm-eval-short-note.pdf", 1},
-        {"tests/pdf_files/ru-transformers-short-note.pdf", 2},
         {"tests/pdf_files/arabic-prose-sample.pdf", 8},
         {"tests/pdf_files/hebrew-prose-sample.pdf", 1},
         {"tests/pdf_files/chinese-proverbs-collection.pdf", 46},
@@ -227,7 +250,6 @@ void test_open_corpus_page_counts() {
         {"tests/pdf_files/Nvidia-Quarterly-Presentation-final-1.pdf", 17},
         {"tests/pdf_files/dgx-spark.pdf", 81},
         {"tests/pdf_files/fortum-tammi-kesakuun-2026-puolivuosikatsaus.pdf", 61},
-        {"tests/pdf_files/State-of-AI.pdf", 36},
     };
     for (const Case& item : cases) {
         const std::string bytes = read_fixture(item.path);
@@ -546,10 +568,10 @@ void test_from_markdown_coalesces_line_into_one_show() {
 }
 
 void test_to_markdown_does_not_insert_thematic_rules() {
-    const std::string bytes = read_fixture("tests/pdf_files/ru-transformers-short-note.pdf");
+    const std::string bytes = read_fixture("tests/pdf_files/arabic-prose-sample.pdf");
     std::string markdown;
     const ainiux::Error err = ainiux::pdf::to_markdown_bytes(bytes, ainiux::pdf::Options{}, markdown);
-    check(err.ok(), "two-page extract: " + err.message);
+    check(err.ok(), "multi-page extract: " + err.message);
     check(markdown.find("\n---\n") == std::string::npos,
           "PDF extract does not insert --- page separators");
 }
@@ -779,6 +801,7 @@ void run_all() {
     test_open_simple_pdf();
     test_open_missing_startxref_repairs();
     test_bad_header();
+    test_error_fixtures_fail_cleanly();
     test_cancelled_open();
     test_real_short_russian_pdf();
     test_open_corpus_page_counts();
@@ -814,6 +837,7 @@ void run_all() {
     test_pdf_md_pdf_arabic_needles();
     test_empty_markdown_is_one_page();
     test_pdf_write_cancel();
+    run_adversarial();
 }
 
 }  // namespace ainiux::test::pdf

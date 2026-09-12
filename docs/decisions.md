@@ -252,6 +252,18 @@ PDF conversion is canonical **PDF ↔ Markdown**. `src/pdf/` reimplements pdfio-
 
 Text spacing follows pdfio’s rule that a `TJ` number is a horizontal displacement, not a character, and uses one geometric gap check after reconstructing `x` from `/Widths`, CID `/W`/`/DW`, or compact Core-14 fallbacks. Ainiux does **not** emit a space character from the `TJ` number itself (pdfio `pdf2text`’s `|n| > 100 → putchar(' ')`). A leftover gap above about 0.12 em is treated as a word space so TeX justified glue (~0.24 em) stays split while letter kerning (~0.02 em) stays joined. The font’s `/Widths` space glyph is not used as a threshold: some Type1 subsets store 0.5 em at code 32. `scripts/ainiux/pdf_compare.py` scores this against `pdftotext` and is not a runtime dependency.
 
+PDF parser hardening keeps validation at object/range/stream boundaries. Active
+load flags plus an RAII depth guard prevent recursive indirect lengths from
+overflowing the stack; per-object page visitation prevents exponential traversal.
+Object storage uses fixed 32-object, uniquely owned blocks: dictionary pointers
+survive nested loads that grow the object table, with constant-time lookup and
+without a separate allocation per object. Object streams are expanded once and
+use their declared, checked offsets without replacing live objects. Text spans
+are checked for finite geometry, sorted with a strict comparator, then grouped
+by anchored baseline tolerance; a tolerance inside the comparator itself is
+non-transitive and violates the sorting contract. No per-glyph safety scan or
+external PDF dependency is introduced.
+
 ## Markdown Output Rendering
 
 Assistant output rendering lives in a separate `src/markdown/` module so provider code, HTML extraction, and UI code do not grow Markdown-specific branches. The first writer is intentionally line-oriented and dependency-free: it supports ATX headings, paragraphs, fenced and indented code blocks, bold, italic, `++underline++`, Markdown links, ordered/unordered nested lists, simple pipe tables, raw HTML blocks, HTML fragments, and plaintext stripping. `--output-format md` preserves the existing raw Markdown streaming path. `--output-format html` and `--output-format plaintext` render after the full assistant reply is available because a correct fragment/document needs complete block context. HTML written to `stdout` is a fragment; HTML written through `--output PATH` is wrapped as a complete document with doctype, charset, viewport, head, and body.

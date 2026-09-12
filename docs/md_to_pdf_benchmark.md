@@ -19,6 +19,10 @@ Python libraries lived in a throwaway venv and are not product dependencies.
 The first WeasyPrint file (`chinese-tang-poems-traditional.pdf`) includes
 library and fontconfig init (~1.5 s); later 1-page files were ~45 ms.
 
+`State-of-AI.pdf` and `ru-transformers-short-note.pdf` were removed from the
+repository after this snapshot to reduce checkout size. Their historical
+measurements remain in the table below.
+
 ## Results
 
 | File | MD size | Ainiux | Ainiux p/s | WeasyPrint | WeasyPrint p/s | reportlab | reportlab p/s | vs WeasyPrint | vs reportlab |

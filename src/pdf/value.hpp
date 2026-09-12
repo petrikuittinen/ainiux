@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -41,6 +42,9 @@ struct Value {
 const Value* dict_get(const Value& dict, const char* key);
 bool dict_name(const Value& dict, const char* key, std::string& out);
 bool dict_number(const Value& dict, const char* key, double& out);
+// Validate before casting: out-of-range floating-to-integer conversions are UB.
+bool number_to_integer(double number, std::int64_t& out);
+bool parse_unsigned_integer(std::string_view text, std::uint64_t limit, std::uint64_t& out);
 bool dict_int(const Value& dict, const char* key, std::int64_t& out);
 bool dict_bool(const Value& dict, const char* key, bool& out);
 const Value* dict_dict(const Value& dict, const char* key);

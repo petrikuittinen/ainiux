@@ -41,7 +41,7 @@ struct Cursor {
         return data[pos];
     }
     int peek_at(std::size_t offset) const {
-        if (pos + offset >= size) {
+        if (pos >= size || offset >= size - pos) {
             return -1;
         }
         return data[pos + offset];
@@ -74,6 +74,12 @@ class Tokenizer {
 
     Cursor& cursor() { return cursor_; }
     const Cursor& cursor() const { return cursor_; }
+
+    // Reuse lookahead capacity when parsing independently bounded object slices.
+    void reset(Cursor cursor) {
+        cursor_ = cursor;
+        stack_.clear();
+    }
 
     void push(Token token);
     Error next(Token& token);

@@ -336,6 +336,17 @@ The default `--image-capability auto` mode requires both a provider profile whos
 
 PDF input is converted to Markdown locally; raw PDF bytes are not sent as prompt text. Markdown-to-PDF writing is local (Core-14 / WinAnsi plus an optional subsetted system/`--font` TrueType for CJK, Hebrew, and Arabic, no network, images as alt text only). DOCX is not read as text or uploaded.
 
+The PDF reader enforces its input-byte limit for both files and in-memory inputs.
+Indirect object loads have a 32-level nesting bound and cycle detection; page-tree
+nodes are visited at most once, and a requested page limit stops traversal early.
+Numeric references, stream lengths, xref/object-stream offsets, font ranges, and
+predictor arithmetic are checked before narrowing or indexing. Decoded streams
+and combined page content are capped at 64 MiB; Flate input must reach its end
+marker. CID widths are restricted to 16-bit codes and at most 1,048,576 assignments
+per font. Invalid text geometry is rejected before sorting. These are targeted
+parser bounds, not a sandbox or a guarantee against every malformed PDF. Existing
+xref recovery and explicit `[page N: ...]` extraction diagnostics remain supported.
+
 ## Benchmark Datasets
 
 Benchmark prompts and any fetched reference text are sent to the selected model provider. The built-in 50-case corpus performs no URL fetches. A custom JSONL case may specify `fetch_url`; this is an explicit network operation using the same response-size, timeout, proxy, TLS, private-address, and resolved-socket restrictions as other URL fetching. Benchmark text fetching accepts UTF-8 `text/plain`, `text/html`, or `application/xhtml+xml`; HTML is converted to Markdown before it enters context. The supplied `benchmarks/long-context.jsonl` contacts Project Gutenberg and must be selected explicitly.

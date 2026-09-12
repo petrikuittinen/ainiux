@@ -1,0 +1,3 @@
+# Cross-reference offsets and stream lengths are byte counts; keep exact bytes.
+# Classic xref entries require their trailing space before LF.
+*.pdf -text whitespace=-blank-at-eol

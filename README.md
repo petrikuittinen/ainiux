@@ -6,7 +6,7 @@ Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compati
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.33**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.34**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -100,7 +100,7 @@ families used most heavily while developing and testing the current agent,
 reasoning, tool-calling, and local OpenAI-compatible server paths. Exact model
 availability and identifiers still depend on the selected provider or local server.
 
-## Current v1.33 capabilities
+## Current v1.34 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -135,7 +135,7 @@ ainiux video --provider xai -m grok-imagine-video-1.5 -p "a red cube rotating" -
 ainiux video --provider gemini -m gemini-omni-1.1-flash -p "a red cube rotating" --resolution 360p
 ```
 
-Text, Markdown, HTML, and PDF can be attached with `--attach`. `--input file.pdf` converts PDF to Markdown (then HTML, plaintext, or PDF with `--output-format`). `--input notes.md --output-format pdf` writes a new PDF (CJK, Hebrew, and Arabic use a subsetted system or `--font` TrueType). HTML-to-PDF is HTML→Markdown→PDF. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. DOCX conversion is not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
+Text, Markdown, HTML, and PDF can be attached with `--attach`. Ainiux's PDF↔Markdown conversion is deliberately **super fast**: it is a local, single-process C++17 reader/writer with bounded streaming, no Python runtime or external PDF service, and fast enough to process thousands of pages per second on typical text PDFs. `--input file.pdf` converts PDF to Markdown (then HTML, plaintext, or PDF with `--output-format`); `--input notes.md --output-format pdf` writes a new PDF. The retained ten-document corpus converts in about 0.28 seconds from the CLI, while the hardened in-process reader processes the same corpus in about 0.12 seconds (measured on ARM64; results vary by hardware and document). CJK, Hebrew, and Arabic use a subsetted system or `--font` TrueType. HTML-to-PDF is HTML→Markdown→PDF. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. DOCX conversion is not yet implemented. URL fetching happens only when explicitly requested with `--fetch-url` or `/fetch`; a URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
 
 Web search supports API providers and keyless fallbacks:
 
@@ -438,7 +438,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.33 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.34 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
 
 For the complete current option list, run:
 

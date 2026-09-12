@@ -2,6 +2,8 @@
 
 #include "pdf/limits.hpp"
 
+#include <cmath>
+#include <charconv>
 #include <cstdlib>
 
 namespace ainiux::pdf {
@@ -13,7 +15,7 @@ bool parse_number_text(const std::string& text, double& out) {
     }
     char* end = nullptr;
     out = std::strtod(text.c_str(), &end);
-    return end != text.c_str() && *end == '\0';
+    return end != text.c_str() && *end == '\0' && std::isfinite(out);
 }
 
 Error read_array(Tokenizer& tokens, Value& value, int depth);
@@ -51,13 +53,42 @@ bool dict_number(const Value& dict, const char* key, double& out) {
     return true;
 }
 
+bool number_to_integer(double number, std::int64_t& out) {
+    // INT64_MAX rounds up to 2^63 as a double, so the upper bound is exclusive.
+    // These comparisons also reject NaN and both infinities.
+    if (!(number >= -0x1p63 && number < 0x1p63)) {
+        return false;
+    }
+    const auto integer = static_cast<std::int64_t>(number);
+    if (static_cast<double>(integer) != number) {
+        return false;
+    }
+    out = integer;
+    return true;
+}
+
+bool parse_unsigned_integer(std::string_view text, std::uint64_t limit, std::uint64_t& out) {
+    if (!text.empty() && text.front() == '+') {
+        text.remove_prefix(1);
+    }
+    if (text.empty()) {
+        return false;
+    }
+    std::uint64_t integer = 0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), integer);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || integer > limit) {
+        return false;
+    }
+    out = integer;
+    return true;
+}
+
 bool dict_int(const Value& dict, const char* key, std::int64_t& out) {
     double number = 0;
     if (!dict_number(dict, key, number)) {
         return false;
     }
-    out = static_cast<std::int64_t>(number);
-    return true;
+    return number_to_integer(number, out);
 }
 
 bool dict_bool(const Value& dict, const char* key, bool& out) {
@@ -147,10 +178,12 @@ Error read_value(Tokenizer& tokens, Value& value, int depth) {
                     return err;
                 }
                 if (r.kind == TokenKind::Keyword && r.text == "R") {
-                    double n = 0;
-                    double g = 0;
-                    if (!parse_number_text(token.text, n) || !parse_number_text(generation.text, g) || n < 1 ||
-                        g < 0) {
+                    // References use integer syntax. Parse directly to avoid
+                    // both floating-point rounding and two strtod calls.
+                    std::uint64_t n = 0;
+                    std::uint64_t g = 0;
+                    if (!parse_unsigned_integer(token.text, UINT32_MAX, n) || n == 0 ||
+                        !parse_unsigned_integer(generation.text, UINT16_MAX, g)) {
                         return {ErrorCode::FileRead, "invalid PDF indirect reference"};
                     }
                     value.type = ValueType::Ref;

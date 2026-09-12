@@ -23,7 +23,7 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Browser controller](web-mode.md) | Use the embedded responsive vanilla-JavaScript WUI for chat, jobs, agent/Guard, images, and revision-safe workspace work |
 | [Security](security.md) | Credential, persistence, fetch, attachment, image/video generation, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
-| [Version history](version-history.md) | Compact v0.0–v1.33 release timeline plus unreleased work |
+| [Version history](version-history.md) | Compact v0.0–v1.34 release timeline plus unreleased work |
 
 ## Architecture and implementation references
 

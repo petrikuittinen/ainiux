@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 namespace ainiux::pdf {
@@ -158,9 +159,12 @@ Error apply_named_filter(const std::string& name, std::string& data, std::size_t
 }  // namespace
 
 Error inflate_flate(const std::uint8_t* data, std::size_t size, std::string& out, std::size_t max_out) {
+    out.clear();
     if (data == nullptr || size == 0) {
-        out.clear();
-        return ok_error();
+        return {ErrorCode::FileRead, "empty FlateDecode stream"};
+    }
+    if (size > std::numeric_limits<uInt>::max()) {
+        return {ErrorCode::FileRead, "FlateDecode input exceeds size limit"};
     }
     ZInflate zinflate;
     if (!zinflate.ok) {
@@ -176,18 +180,18 @@ Error inflate_flate(const std::uint8_t* data, std::size_t size, std::string& out
         zinflate.stream.avail_out = static_cast<uInt>(buffer.size());
         status = inflate(&zinflate.stream, Z_NO_FLUSH);
         const std::size_t produced = buffer.size() - zinflate.stream.avail_out;
-        if (out.size() + produced > max_out) {
+        if (produced > max_out - out.size()) {
             return {ErrorCode::FileRead, "decoded PDF stream exceeds size limit"};
         }
         out.append(buffer.data(), produced);
         if (status == Z_STREAM_END) {
             return ok_error();
         }
-        if (status != Z_OK && status != Z_BUF_ERROR) {
+        if (status != Z_OK) {
             return {ErrorCode::FileRead, "unable to decompress FlateDecode stream"};
         }
     } while (zinflate.stream.avail_in > 0 || zinflate.stream.avail_out == 0);
-    return ok_error();
+    return {ErrorCode::FileRead, "truncated FlateDecode stream"};
 }
 
 Error deflate_flate(std::string_view raw, std::string& out) {
@@ -218,15 +222,25 @@ Error apply_png_predictor(std::string& data, std::size_t columns, int colors, in
     if (columns == 0 || colors <= 0 || bits_per_component <= 0) {
         return {ErrorCode::FileRead, "invalid PNG predictor parameters"};
     }
-    const std::size_t row =
-        (static_cast<std::size_t>(bits_per_component) * static_cast<std::size_t>(colors) * columns + 7) / 8;
-    if (row == 0) {
+    const auto max_size = std::numeric_limits<std::size_t>::max();
+    const auto bits = static_cast<std::size_t>(bits_per_component);
+    if (static_cast<std::size_t>(colors) > (max_size - 7) / bits) {
+        return {ErrorCode::FileRead, "invalid PNG predictor pixel size"};
+    }
+    const auto pixel_bits = bits * static_cast<std::size_t>(colors);
+    if (columns > (max_size - 7) / pixel_bits) {
+        return {ErrorCode::FileRead, "invalid PNG predictor row size"};
+    }
+    const std::size_t row = (pixel_bits * columns + 7) / 8;
+    if (row == 0 || row > kMaxDecodedStream) {
         return {ErrorCode::FileRead, "invalid PNG predictor row size"};
     }
     const std::size_t stride = row + 1;
-    const std::size_t bpp =
-        std::max<std::size_t>(1, (static_cast<std::size_t>(bits_per_component) * static_cast<std::size_t>(colors) + 7) / 8);
-    if (data.size() < stride) {
+    const std::size_t bpp = (pixel_bits + 7) / 8;
+    if (data.size() % stride != 0) {
+        return {ErrorCode::FileRead, "truncated PNG predictor row"};
+    }
+    if (data.empty()) {
         return ok_error();
     }
     const std::size_t rows = data.size() / stride;
@@ -296,20 +310,25 @@ Error decode_stream_bytes(std::string_view raw, const Value& dict, std::string& 
         return ok_error();
     }
     std::int64_t predictor = 1;
-    dict_int(*parms, "Predictor", predictor);
+    if (dict_get(*parms, "Predictor") != nullptr && !dict_int(*parms, "Predictor", predictor)) {
+        return {ErrorCode::FileRead, "invalid PDF Predictor"};
+    }
     if (predictor <= 1) {
         return ok_error();
     }
     std::int64_t columns = 1;
     std::int64_t colors = 1;
     std::int64_t bpc = 8;
-    dict_int(*parms, "Columns", columns);
-    dict_int(*parms, "Colors", colors);
-    dict_int(*parms, "BitsPerComponent", bpc);
+    if ((dict_get(*parms, "Columns") != nullptr && !dict_int(*parms, "Columns", columns)) ||
+        (dict_get(*parms, "Colors") != nullptr && !dict_int(*parms, "Colors", colors)) ||
+        (dict_get(*parms, "BitsPerComponent") != nullptr && !dict_int(*parms, "BitsPerComponent", bpc)) ||
+        columns <= 0 || static_cast<std::uint64_t>(columns) > std::numeric_limits<std::size_t>::max() ||
+        colors <= 0 || colors > std::numeric_limits<int>::max() || bpc <= 0 || bpc > 16) {
+        return {ErrorCode::FileRead, "invalid PNG predictor parameters"};
+    }
     if (predictor >= 10) {
-        return apply_png_predictor(out, static_cast<std::size_t>(std::max<std::int64_t>(columns, 1)),
-                                   static_cast<int>(std::max<std::int64_t>(colors, 1)),
-                                   static_cast<int>(std::max<std::int64_t>(bpc, 1)));
+        return apply_png_predictor(out, static_cast<std::size_t>(columns), static_cast<int>(colors),
+                                   static_cast<int>(bpc));
     }
     return {ErrorCode::UnsupportedFeature, "unsupported Predictor " + std::to_string(predictor)};
 }

@@ -285,13 +285,19 @@ double width_of(const FontDecoder& font, std::uint32_t code) {
     return font.default_width > 0 ? font.default_width : 500.0;
 }
 
-void load_simple_widths(Document& document, const Value& font_dict, FontDecoder& font) {
+Error load_simple_widths(Document& document, const Value& font_dict, FontDecoder& font) {
     std::int64_t first = 0;
     std::int64_t last = 255;
-    dict_int(font_dict, "FirstChar", first);
-    dict_int(font_dict, "LastChar", last);
+    if ((dict_get(font_dict, "FirstChar") != nullptr && !dict_int(font_dict, "FirstChar", first)) ||
+        (dict_get(font_dict, "LastChar") != nullptr && !dict_int(font_dict, "LastChar", last)) ||
+        first < 0 || first > 255 || last < first || last > 255) {
+        return {ErrorCode::FileRead, "Invalid PDF font character range"};
+    }
     const Value* widths = dict_resolved(document, font_dict, "Widths");
     if (widths != nullptr && widths->type == ValueType::Array) {
+        if (widths->array.size() > static_cast<std::size_t>(256 - first)) {
+            return {ErrorCode::FileRead, "Too many PDF simple font widths"};
+        }
         for (std::size_t i = 0; i < widths->array.size(); ++i) {
             if (widths->array[i].type != ValueType::Number) {
                 continue;
@@ -309,17 +315,18 @@ void load_simple_widths(Document& document, const Value& font_dict, FontDecoder&
             font.default_width = missing;
         }
     }
+    return ok_error();
 }
 
-void load_cid_widths(Document& document, const Value& font_dict, FontDecoder& font) {
+Error load_cid_widths(Document& document, const Value& font_dict, FontDecoder& font) {
     font.default_width = 1000;
     const Value* descendants = dict_resolved(document, font_dict, "DescendantFonts");
     if (descendants == nullptr || descendants->type != ValueType::Array || descendants->array.empty()) {
-        return;
+        return ok_error();
     }
     const Value* cid = resolve_value(document, &descendants->array[0]);
     if (cid == nullptr || cid->type != ValueType::Dict) {
-        return;
+        return ok_error();
     }
     double dw = 0;
     if (dict_number(*cid, "DW", dw) && dw > 0) {
@@ -327,21 +334,32 @@ void load_cid_widths(Document& document, const Value& font_dict, FontDecoder& fo
     }
     const Value* w = dict_resolved(document, *cid, "W");
     if (w == nullptr || w->type != ValueType::Array) {
-        return;
+        return ok_error();
     }
     const std::vector<Value>& items = w->array;
+    // CIDs are 16-bit. Bound total work as well as each range so overlapping
+    // ranges cannot multiply a small input into billions of hash insertions.
+    std::size_t remaining = 1U << 20;
+    auto cid_number = [](const Value& value, std::int64_t& number) {
+        return value.type == ValueType::Number && number_to_integer(value.number, number) &&
+               number >= 0 && number <= 65535;
+    };
     for (std::size_t i = 0; i < items.size();) {
-        if (items[i].type != ValueType::Number) {
-            ++i;
-            continue;
+        std::int64_t first = 0;
+        if (!cid_number(items[i], first)) {
+            return {ErrorCode::FileRead, "Invalid PDF CID width range"};
         }
-        const std::uint32_t first = static_cast<std::uint32_t>(items[i].number);
         ++i;
         if (i >= items.size()) {
-            break;
+            return {ErrorCode::FileRead, "Truncated PDF CID width range"};
         }
         if (items[i].type == ValueType::Array) {
-            std::uint32_t code = first;
+            const auto count = items[i].array.size();
+            if (count > static_cast<std::size_t>(65536 - first) || count > remaining) {
+                return {ErrorCode::FileRead, "Too many PDF CID widths"};
+            }
+            remaining -= count;
+            auto code = static_cast<std::uint32_t>(first);
             for (const Value& width : items[i].array) {
                 if (width.type == ValueType::Number) {
                     font.widths[code] = width.number;
@@ -351,16 +369,25 @@ void load_cid_widths(Document& document, const Value& font_dict, FontDecoder& fo
             ++i;
         } else if (items[i].type == ValueType::Number && i + 1 < items.size() &&
                    items[i + 1].type == ValueType::Number) {
-            const std::uint32_t last = static_cast<std::uint32_t>(items[i].number);
+            std::int64_t last = 0;
+            if (!cid_number(items[i], last) || last < first) {
+                return {ErrorCode::FileRead, "Invalid PDF CID width range"};
+            }
+            const auto count = static_cast<std::size_t>(last - first + 1);
+            if (count > remaining) {
+                return {ErrorCode::FileRead, "Too many PDF CID widths"};
+            }
+            remaining -= count;
             const double width = items[i + 1].number;
-            for (std::uint32_t code = first; code <= last; ++code) {
+            for (auto code = static_cast<std::uint32_t>(first); code <= static_cast<std::uint32_t>(last); ++code) {
                 font.widths[code] = width;
             }
             i += 2;
         } else {
-            ++i;
+            return {ErrorCode::FileRead, "Invalid PDF CID width entry"};
         }
     }
+    return ok_error();
 }
 
 void finish_font_metrics(const Value& font_dict, FontDecoder& font) {
@@ -534,20 +561,25 @@ Error parse_tounicode(const std::string& cmap, FontDecoder& font) {
     return ok_error();
 }
 
-void apply_differences(const Value& encoding_dict, int encoding[256]) {
+Error apply_differences(const Value& encoding_dict, int encoding[256]) {
     const Value* diffs = dict_array(encoding_dict, "Differences");
     if (diffs == nullptr) {
-        return;
+        return ok_error();
     }
     int next = 0;
     for (const Value& item : diffs->array) {
         if (item.type == ValueType::Number) {
-            next = static_cast<int>(item.number);
+            std::int64_t code = 0;
+            if (!number_to_integer(item.number, code) || code < 0 || code > 255) {
+                return {ErrorCode::FileRead, "Invalid PDF font encoding difference"};
+            }
+            next = static_cast<int>(code);
         } else if (item.type == ValueType::Name && next >= 0 && next < 256) {
             encoding[next] = glyph_unicode(item.text);
             ++next;
         }
     }
+    return ok_error();
 }
 
 Error load_font(Document& document, const Value& font_dict, FontDecoder& font) {
@@ -571,7 +603,10 @@ Error load_font(Document& document, const Value& font_dict, FontDecoder& font) {
         if (encoding_dict != nullptr) {
             std::string base;
             dict_name(*encoding_dict, "BaseEncoding", base);
-            apply_differences(*encoding_dict, font.encoding);
+            Error err = apply_differences(*encoding_dict, font.encoding);
+            if (!err.ok()) {
+                return err;
+            }
         }
     }
     Ref to_unicode;
@@ -585,10 +620,10 @@ Error load_font(Document& document, const Value& font_dict, FontDecoder& font) {
             }
         }
     }
-    if (subtype == "Type0") {
-        load_cid_widths(document, font_dict, font);
-    } else {
-        load_simple_widths(document, font_dict, font);
+    Error err = subtype == "Type0" ? load_cid_widths(document, font_dict, font)
+                                    : load_simple_widths(document, font_dict, font);
+    if (!err.ok()) {
+        return err;
     }
     finish_font_metrics(font_dict, font);
     return ok_error();
@@ -743,6 +778,7 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
     std::vector<Span> spans;
     bool in_text = false;
     bool saw_image = false;
+    bool geometry_valid = true;
 
     auto ensure_font = [&](const std::string& name) -> Error {
         auto it = fonts.find(name);
@@ -820,6 +856,13 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
         span.space_width = (current->space_width / 1000.0) * span.size * scale;
         if (span.space_width < 0.5) {
             span.space_width = 0.25 * span.size;
+        }
+        // Check once per text span, not per glyph. Both invalid operands and
+        // overflow of otherwise finite matrix operands can produce NaN/Inf.
+        if (!std::isfinite(span.x) || !std::isfinite(span.y) || !std::isfinite(span.end_x) ||
+            !std::isfinite(span.size) || !std::isfinite(span.space_width)) {
+            geometry_valid = false;
+            return;
         }
         span.text = std::move(decoded);
         spans.push_back(std::move(span));
@@ -963,6 +1006,9 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
         (void)in_text;
     }
 
+    if (!geometry_valid) {
+        return {ErrorCode::FileRead, "Non-finite PDF text geometry"};
+    }
     if (spans.empty()) {
         if (saw_image) {
             text = "[scanned page " + std::to_string(index + 1) + ": no extractable text]";
@@ -971,11 +1017,27 @@ Error extract_page(Document& document, std::size_t index, std::string& text) {
     }
 
     std::stable_sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) {
-        if (std::fabs(a.y - b.y) > 2.0) {
+        if (a.y != b.y) {
             return a.y > b.y;
         }
         return a.x < b.x;
     });
+    // A tolerance inside a sort comparator is not transitive (and violates the
+    // sorting algorithm's contract). Group near-equal baselines after a strict
+    // sort, then order each anchored group left-to-right. Exact baselines need
+    // no second sort, which is the common case.
+    for (std::size_t first = 0; first < spans.size();) {
+        std::size_t end = first + 1;
+        while (end < spans.size() && spans[first].y - spans[end].y <= 2.0) {
+            ++end;
+        }
+        if (spans[first].y != spans[end - 1].y) {
+            std::stable_sort(spans.begin() + static_cast<std::ptrdiff_t>(first),
+                             spans.begin() + static_cast<std::ptrdiff_t>(end),
+                             [](const Span& a, const Span& b) { return a.x < b.x; });
+        }
+        first = end;
+    }
 
     std::string line;
     double line_y = spans.front().y;

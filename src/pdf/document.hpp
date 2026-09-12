@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,6 +21,7 @@ struct Object {
     std::uint32_t objstm_number = 0;
     bool compressed = false;
     bool loaded = false;
+    std::uint8_t state = 0;
     Value value;
     std::size_t stream_offset = 0;
     std::size_t stream_length = 0;
@@ -30,7 +33,7 @@ class Document {
     static Error open_bytes(std::string bytes, const Options& options, Document& out);
 
     std::string_view version() const { return version_; }
-    std::size_t object_count() const { return objects_.empty() ? 0 : objects_.size() - 1; }
+    std::size_t object_count() const { return object_slots_ == 0 ? 0 : object_slots_ - 1; }
     std::size_t page_count() const { return pages_.size(); }
     const Value* trailer() const { return trailer_.type == ValueType::Dict ? &trailer_ : nullptr; }
 
@@ -59,9 +62,16 @@ class Document {
     std::string bytes_;
     std::string version_;
     Value trailer_;
-    std::vector<Object> objects_;
+    // Nested loads retain Value pointers across table growth. Small fixed blocks
+    // keep addresses stable and indexing O(1), without per-object allocation or
+    // moving already parsed dictionaries when the object-number table grows.
+    static constexpr std::size_t kObjectBlockSize = 32;
+    std::vector<std::unique_ptr<std::array<Object, kObjectBlockSize>>> object_blocks_;
+    std::size_t object_slots_ = 0;
     std::vector<std::uint32_t> pages_;
     std::vector<std::uint32_t> obj_streams_;
+    std::size_t load_depth_ = 0;
+    runtime::CancellationToken cancellation_;
     bool cancelled(const Options& options) const;
 };
 

@@ -1,11 +1,39 @@
 # PDF conversion speed snapshots
 
-Point-in-time timings over `tests/pdf_files/`. Extract was measured on
+Point-in-time timings over `tests/pdf_files/`. The original cross-tool extract was measured on
 2026-09-09; Markdown-to-PDF write on 2026-09-10. No rebuild: both used the
 existing stripped `./ainiux` binary. Each converter ran **once** per file.
 Times are `time.perf_counter()` seconds. Speedup is `other / ainiux` (how many
 times faster Ainiux was). Python libraries lived in a throwaway venv and are
 not product dependencies.
+
+`State-of-AI.pdf` and `ru-transformers-short-note.pdf` were removed from the
+repository after this snapshot to reduce checkout size. Their historical
+measurements remain in the tables below.
+
+## Parser hardening comparison (2026-09-12)
+
+Compared the pre-hardening reader with the hardened reader over all ten retained
+PDFs, using identical GCC `-std=c++17 -O3 -DNDEBUG` builds on this ARM64 host,
+pinned to the same Cortex-X925 core. Each of five paired passes used two warmups
+and 20 timed conversions per file; before/after order alternated. Timing covers
+`Document::open_bytes` plus `extract_markdown`, including the input copy but
+excluding disk reads, process startup, and destruction after extraction. These
+in-process measurements are not directly comparable to the older CLI table.
+
+Median aggregate time was **112.4 ms before / 118.3 ms after**, about **5.2%**
+overhead (5.9 ms across the entire corpus). Bounds checks remain at object,
+range, stream, and text-span boundaries, not inside the glyph-decoding loop.
+Stable 32-object allocation blocks, cached object-stream expansion, reusable
+tokenizer lookahead, and direct integer-reference parsing limit the extra cost.
+
+All ten PDFs converted without page-error diagnostics. Nine Markdown outputs
+were byte-identical. The DeepSeek paper changed only around one formula block:
+strict baseline ordering replaces the previous non-transitive sort comparator.
+The focused PDF units and all 24 isolated adversarial groups passed, including
+the former stack-overflow and timeout fixtures; the adversarial groups also
+passed AddressSanitizer, UndefinedBehaviorSanitizer (including float-to-integer
+overflow), and leak detection. The full integration/slow suites were not run.
 
 ## PDF-to-Markdown extract (2026-09-09)
 
