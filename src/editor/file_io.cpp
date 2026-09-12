@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 #include "encoding/encoding.hpp"
+#include "docx/docx.hpp"
 #include "pdf/pdf.hpp"
 #include "platform/filesystem.hpp"
 
@@ -38,6 +39,10 @@ bool path_has_pdf_extension(const std::string& path) {
     return ends_with_ci(path, ".pdf");
 }
 
+bool path_has_docx_extension(const std::string& path) {
+    return ends_with_ci(path, ".docx");
+}
+
 bool bytes_look_like_pdf(const std::string& bytes) {
     size_t i = 0;
     while (i < bytes.size() &&
@@ -47,11 +52,18 @@ bool bytes_look_like_pdf(const std::string& bytes) {
     return bytes.size() - i >= 5 && bytes.compare(i, 5, "%PDF-") == 0;
 }
 
+bool bytes_look_like_docx(const std::string& bytes) {
+    return bytes.size() >= 4 && bytes.compare(0, 4, "PK\x03\x04", 4) == 0;
+}
+
 }  // namespace
 
 std::string sibling_markdown_path(const std::string& path) {
     if (path_has_pdf_extension(path)) {
         return path.substr(0, path.size() - 4) + ".md";
+    }
+    if (path_has_docx_extension(path)) {
+        return path.substr(0, path.size() - 5) + ".md";
     }
     return path + ".md";
 }
@@ -378,7 +390,21 @@ Error load_file(const std::string& path,
             return err;
         }
         out.converted_from_pdf = true;
+        out.converted_source = LoadedFile::ConvertedSource::Pdf;
         out.converted = true;
+        out.suggested_path = sibling_markdown_path(resolved);
+        return finalize_editor_content(std::move(markdown), settings, out);
+    }
+    if (path_has_docx_extension(resolved) || bytes_look_like_docx(content)) {
+        docx::ReadOptions docx_options;
+        docx_options.max_bytes = content.size();
+        std::string markdown;
+        docx::Diagnostics diagnostics;
+        err = docx::to_markdown_bytes(content, docx_options, markdown, &diagnostics);
+        if (!err.ok()) return err;
+        out.converted_source = LoadedFile::ConvertedSource::Docx;
+        out.converted = true;
+        out.conversion_warnings = std::move(diagnostics.messages);
         out.suggested_path = sibling_markdown_path(resolved);
         return finalize_editor_content(std::move(markdown), settings, out);
     }
@@ -450,6 +476,12 @@ Error save_file(const std::string& path, const PieceTable& text, LineBreak lineb
             return {err.code, err.message + ": " + resolved};
         }
         payload = std::move(pdf_bytes);
+    } else if (path_has_docx_extension(resolved)) {
+        docx::WriteOptions docx_options;
+        std::string docx_bytes;
+        err = docx::from_markdown(payload, docx_options, docx_bytes);
+        if (!err.ok()) return {err.code, err.message + ": " + resolved};
+        payload = std::move(docx_bytes);
     }
     // Editor buffers are ordinary project files: respect umask / existing mode.
     Error save_error = platform::atomic_write_shared(resolved, payload, true);

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "html/html.hpp"
+#include "docx/docx.hpp"
 #include "input/input.hpp"
 #include "pdf/pdf.hpp"
 #include "platform/filesystem.hpp"
@@ -58,6 +59,7 @@ Error ChatInputStore::add(std::string mime_type,
     bool converted = false;
     std::string stored_mime = media;
     std::string payload = std::move(bytes);
+    std::vector<std::string> warnings;
 
     input::FileType type;
     const bool named = !filename.empty() && input::classify_file_type(filename, type).ok();
@@ -78,6 +80,17 @@ Error ChatInputStore::add(std::string mime_type,
         payload = std::move(markdown);
         stored_mime = "text/markdown";
         converted = true;
+    } else if (media == docx::kMimeType || (named && type.kind == input::Kind::Docx)) {
+        docx::ReadOptions docx_options;
+        docx_options.max_bytes = Limits::upload_body_bytes;
+        docx::Diagnostics diagnostics;
+        std::string markdown;
+        Error error = docx::to_markdown_bytes(payload, docx_options, markdown, &diagnostics);
+        if (!error.ok()) return error;
+        payload = std::move(markdown);
+        stored_mime = "text/markdown";
+        converted = true;
+        warnings = std::move(diagnostics.messages);
     } else if (media == "text/html" || (named && type.kind == input::Kind::Html)) {
         try {
             payload = html::convert(payload, html::OutputFormat::Markdown);
@@ -94,7 +107,7 @@ Error ChatInputStore::add(std::string mime_type,
         if (media == "text/markdown") stored_mime = "text/markdown";
     } else {
         return {ErrorCode::UnsupportedFeature,
-                "chat uploads accept PNG, JPEG, GIF, PDF, Markdown, plaintext, or HTML"};
+                "chat uploads accept PNG, JPEG, GIF, PDF, DOCX, Markdown, plaintext, or HTML"};
     }
 
     {
@@ -135,9 +148,9 @@ Error ChatInputStore::add(std::string mime_type,
         if (id.empty()) {
             return {ErrorCode::Internal, "could not allocate a unique chat upload identifier"};
         }
-        entries_.emplace(id, Entry{kind, stored_mime, filename, converted, body, expires});
+        entries_.emplace(id, Entry{kind, stored_mime, filename, converted, warnings, body, expires});
     }
-    output = {id, kind, stored_mime, filename, converted, std::move(body), expires};
+    output = {id, kind, stored_mime, filename, converted, std::move(warnings), std::move(body), expires};
     return ok_error();
 }
 
@@ -156,7 +169,8 @@ Error ChatInputStore::resolve(const std::vector<std::string>& ids,
             return {ErrorCode::FileRead, "uploaded chat input is missing or expired: " + id};
         }
         output.push_back({id, found->second.kind, found->second.mime_type, found->second.display_name,
-                          found->second.converted, found->second.bytes, found->second.expires_at});
+                          found->second.converted, found->second.warnings, found->second.bytes,
+                          found->second.expires_at});
     }
     return ok_error();
 }

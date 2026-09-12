@@ -1,0 +1,47 @@
+{
+  "fixtures": [
+    {
+      "file": "minimal.docx",
+      "producer": "Ainiux v1.34 deterministic writer",
+      "golden": "minimal.md",
+      "warnings": []
+    },
+    {
+      "file": "headings-lists-links.docx",
+      "producer": "LibreOffice 24.2.7.2 (Office Open XML Text filter)",
+      "golden": "headings-lists-links.md",
+      "warnings": []
+    },
+    {
+      "file": "formatting.docx",
+      "producer": "LibreOffice 24.2.7.2 (Office Open XML Text filter)",
+      "golden": "formatting.md",
+      "warnings": []
+    },
+    {
+      "file": "tables.docx",
+      "producer": "LibreOffice 24.2.7.2 (Office Open XML Text filter)",
+      "golden": "tables.md",
+      "warnings": ["merged table cells were flattened into a rectangular Markdown table"]
+    },
+    {
+      "file": "multilingual.docx",
+      "producer": "LibreOffice 24.2.7.2 (Office Open XML Text filter)",
+      "golden": "multilingual.md",
+      "warnings": []
+    },
+    {
+      "file": "strict-prefixes.docx",
+      "producer": "Python 3 standard-library hand-authored OPC generator",
+      "golden": "strict-prefixes.md",
+      "warnings": []
+    },
+    {
+      "file": "image-placeholder.docx",
+      "producer": "Python 3 standard-library hand-authored OPC generator",
+      "golden": "image-placeholder.md",
+      "warnings": ["embedded images were replaced with visible Markdown placeholders"]
+    }
+  ],
+  "synthetic_cases": "Strict namespaces, arbitrary prefixes, stored/deflated entries, image placeholders, unsupported stories, malformed XML, traversal, duplicate names, CRC, descriptors, Zip64 metadata, and expansion limits are hand-authored in tests/unit/docx/test_docx.cpp."
+}

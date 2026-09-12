@@ -210,6 +210,10 @@ void test_enospc_editor_save() {
     const bool mentions_close = err.message.find("failed while closing editor file after writing") != std::string::npos;
     check(write_failed && (mentions_open || mentions_write || mentions_close),
           "ENOSPC mock blocks editor save");
+
+    err = ainiux::editor::save_file("build/mock-enospc/editor.docx", table);
+    check(!err.ok() && err.code == ainiux::ErrorCode::FileWrite,
+          "ENOSPC mock blocks atomic editor DOCX output after in-memory conversion");
 }
 
 }  // namespace

@@ -163,7 +163,10 @@ void test_markdown_empty_unicode_and_format_parsing() {
     check(ainiux::markdown::parse_output_format("pdf", format) &&
               format == ainiux::markdown::OutputFormat::Pdf,
           "Markdown output format parser accepts pdf");
-    check(!ainiux::markdown::parse_output_format("docx", format),
+    check(ainiux::markdown::parse_output_format("docx", format) &&
+              format == ainiux::markdown::OutputFormat::Docx,
+          "Markdown output format parser accepts docx");
+    check(!ainiux::markdown::parse_output_format("epub", format),
           "Markdown output format parser rejects unsupported formats");
     check(!ainiux::markdown::parse_output_format("", format),
           "Markdown output format parser rejects empty format names");

@@ -87,8 +87,8 @@ ainiux openai -m MODEL --prompt-file prompt.txt --format json --no-stream
 ```
 
 `--format text` (default) prints the reply. `--format json` prints one object.
-`--format ndjson` / `jsonl` prints events. `--output-format md|html|plaintext|pdf`
-renders assistant Markdown (PDF is binary); that is not the same as `--format`.
+`--format ndjson` / `jsonl` prints events. `--output-format md|html|plaintext|pdf|docx`
+renders assistant Markdown (PDF and DOCX are binary); that is not the same as `--format`.
 
 Act / Plan (final answer on stdout; metrics on stderr unless `--quiet`):
 
@@ -111,6 +111,8 @@ Conversion / fetch / search:
 ainiux --input page.html --output-format md
 ainiux --input notes.md --output-format pdf --output notes.pdf
 ainiux --input report.pdf --output-format md --output report.md
+ainiux --input report.docx --output-format md --output report.md
+ainiux --input notes.md --output-format docx --output notes.docx
 ainiux --fetch-url https://example.com --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
@@ -139,10 +141,12 @@ and a next step when one exists.
 
 ## Attachments and safety
 
-`--attach` is bounded text, Markdown, HTML, PDF (converted to Markdown), or
+`--attach` is bounded text, Markdown, HTML, PDF/DOCX (converted to Markdown), or
 PNG/JPEG/GIF for capable Chat Completions models. `--input` on an image is the
-chat vision path, not `ainiux image`. `--input` on a `.pdf` converts to
-Markdown. `--output-format pdf` writes a new PDF. DOCX is rejected.
+chat vision path, not `ainiux image`. `--input` on `.pdf` or `.docx` converts to
+Markdown. `--output-format pdf` or `docx` writes a new normalized document.
+DOCX images become visible omission placeholders and conversion warnings go to
+stderr unless `--quiet`; raw package bytes are never sent to the model.
 
 `--fetch-url` and `--search` are explicit. A URL inside `-p` is not fetched.
 HTML and `application/pdf` responses are accepted; PDF is converted to

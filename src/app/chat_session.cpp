@@ -9,6 +9,7 @@
 #include "chat/settings.hpp"
 #include "ainiux/model_setting.hpp"
 #include "context/context.hpp"
+#include "docx/docx.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "pdf/pdf.hpp"
@@ -68,6 +69,14 @@ Error write_rendered_assistant_output(const cli::Options& options,
             std::cerr << "warning: replaced " << pdf_options.substituted_glyphs
                       << " character(s) that cannot be encoded in the PDF fonts\n";
         }
+        out << rendered;
+        return ok_error();
+    }
+    if (options.output_format == markdown::OutputFormat::Docx) {
+        docx::WriteOptions docx_options;
+        std::string rendered;
+        Error err = docx::from_markdown(content, docx_options, rendered);
+        if (!err.ok()) return err;
         out << rendered;
         return ok_error();
     }

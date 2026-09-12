@@ -3680,6 +3680,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         const Error insert_error = input.insert(event.inserted_text);
                         if (insert_error.ok()) {
                             status = "Inserted " + event.text + " at cursor";
+                            if (!event.warnings.empty()) status += ". Warning: " + event.warnings.front();
                         } else {
                             set_status_maybe_agent_error(detail::error_line(insert_error), true);
                         }
@@ -3735,6 +3736,8 @@ app::TuiRunResult run(provider::RequestContext context,
                                 (context.options.agent ? "; included on next agent turn" : "") +
                                 ")",
                             false);
+                        for (const std::string& warning : event.warnings)
+                            attach_user_notice("Warning: " + warning, false);
                     } else if (event.error.ok()) {
                         // Fallback for any legacy inserted_message path
                         if (!event.inserted_message.content.empty()) {

@@ -12,6 +12,7 @@
 
 #include "editor/dired.hpp"
 #include "editor/editor.hpp"
+#include "docx/docx.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "pdf/pdf.hpp"
@@ -318,6 +319,21 @@ Error snapshot_file(const std::string& root,
         snapshot.content = std::move(markdown);
         snapshot.converted_from = "application/pdf";
         snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
+        return ok_error();
+    }
+    const bool docx_path = lower_path.size() >= 5 &&
+                           lower_path.compare(lower_path.size() - 5, 5, ".docx") == 0;
+    if (docx_path) {
+        docx::ReadOptions docx_options;
+        docx_options.max_bytes = content.size();
+        docx::Diagnostics diagnostics;
+        std::string markdown;
+        error = docx::to_markdown_bytes(content, docx_options, markdown, &diagnostics);
+        if (!error.ok()) return error;
+        snapshot.content = std::move(markdown);
+        snapshot.converted_from = docx::kMimeType;
+        snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
+        snapshot.warnings = std::move(diagnostics.messages);
         return ok_error();
     }
     snapshot.content = std::move(content);
@@ -702,6 +718,12 @@ Error WorkspaceService::read(const std::string& relative_path, std::string& body
     if (!snapshot.converted_from.empty()) {
         body += ",\"converted_from\":" + json::quote(snapshot.converted_from) +
                 ",\"suggested_path\":" + json::quote(snapshot.suggested_path);
+        body += ",\"warnings\":[";
+        for (std::size_t i = 0; i < snapshot.warnings.size(); ++i) {
+            if (i != 0) body.push_back(',');
+            body += json::quote(snapshot.warnings[i]);
+        }
+        body.push_back(']');
     }
     body += "}";
     return ok_error();

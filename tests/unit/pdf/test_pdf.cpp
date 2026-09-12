@@ -588,7 +588,8 @@ void test_from_markdown_llm_typical_needles() {
     check(markdown.find("LLM Typical Markdown Fixture") != std::string::npos, "PDF keeps H1");
     check(markdown.find("unordered alpha") != std::string::npos, "PDF keeps list item");
     check(markdown.find("def greet") != std::string::npos, "PDF keeps fenced code");
-    check(markdown.find("https://example.com/path?q=1") != std::string::npos, "PDF keeps link URL");
+    check(pdf.find("/URI (https://example.com/path?q=1)") != std::string::npos,
+          "PDF keeps link URL as a hyperlink annotation");
     check(markdown.find("Bold") != std::string::npos || markdown.find("bold") != std::string::npos,
           "PDF keeps table or inline bold");
 }

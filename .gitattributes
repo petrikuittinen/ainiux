@@ -1,0 +1,3 @@
+tests/docx_files/*.docx binary
+tests/docx_files/**/*.docx binary
+tests/docx_files/*.md whitespace=-blank-at-eol

@@ -37,6 +37,7 @@
 #include "server/chat_input_store.hpp"
 #include "server/chat_service.hpp"
 #include "pdf/pdf.hpp"
+#include "docx/docx.hpp"
 #include "server/http_parser.hpp"
 #include "server/event_broker.hpp"
 #include "server/job_registry.hpp"
@@ -173,6 +174,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("<kbd>Ctrl+R</kbd>") == std::string::npos &&
               index.body.find("<kbd>Alt+T</kbd>") == std::string::npos &&
               index.body.find("id=\"chat-form\" class=\"composer chat-composer\"") != std::string::npos &&
+              index.body.find("application/vnd.openxmlformats-officedocument.wordprocessingml.document") !=
+                  std::string::npos &&
+              index.body.find(".docx") != std::string::npos &&
               index.body.find("id=\"agent-list\"") == std::string::npos &&
               index.body.find("id=\"new-agent-dialog\"") == std::string::npos &&
               index.body.find("id=\"image-output\"") != std::string::npos &&
@@ -289,6 +293,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("function renderEditHighlight") != std::string::npos &&
               javascript.body.find("addEventListener(\"scroll\", syncEditorHighlightScroll)") != std::string::npos &&
               javascript.body.find("function renderChatContent") != std::string::npos &&
+              javascript.body.find("stored.warnings || []") != std::string::npos &&
+              javascript.body.find("Boolean(response.converted_from)") != std::string::npos &&
+              javascript.body.find("response.warnings || []") != std::string::npos &&
               javascript.body.find("function scheduleAgentRender") != std::string::npos &&
               javascript.body.find("async function ensureWorkspaceAgent") != std::string::npos &&
               javascript.body.find("const followTail =") != std::string::npos &&
@@ -696,6 +703,24 @@ void test_chat_input_uploads() {
     check(pdf_created.status == 201 && pdf_created.body.find("\"converted\":true") != std::string::npos &&
               pdf_created.body.find("\"kind\":\"text\"") != std::string::npos,
           "PDF chat upload is converted to Markdown text");
+
+    ainiux::docx::WriteOptions docx_write_options;
+    std::string docx_bytes;
+    check(ainiux::docx::from_markdown("# Letter\n\nHello DOCX attach.\n", docx_write_options,
+                                     docx_bytes).ok(),
+          "test DOCX for chat upload is generated");
+    http::Request docx = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\n"
+        "Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n"
+        "X-Ainiux-Filename: letter.docx\r\nContent-Length: 0\r\n\r\n");
+    docx.body = docx_bytes;
+    Response docx_created = route_request(docx, auth, status);
+    check(docx_created.status == 201 &&
+              docx_created.body.find("\"converted\":true") != std::string::npos &&
+              docx_created.body.find("\"warnings\":[]") != std::string::npos &&
+              docx_created.body.find("text/markdown") != std::string::npos,
+          "DOCX chat upload stores only converted Markdown and bounded warnings");
 
     Response denial;
     check(!preflight_request_body(text, Limits::upload_body_bytes + 1U, auth, status, denial) &&

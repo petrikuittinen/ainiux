@@ -625,7 +625,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     opts.output_format_explicit = true;
                     opts.rendered_output_format_explicit = true;
                 } else {
-                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, json, jsond, or ndjson"}};
+                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, docx, json, jsond, or ndjson"}};
                 }
             } else if (opt == "--font") {
                 opts.pdf_font = value;
@@ -1555,21 +1555,21 @@ Options:
   Output:
       --format text|json|ndjson|jsonl|jsond
                                 In image mode: png|jpeg|webp|auto (default png).
-      --output-format html|md|plaintext|pdf|json|jsond|ndjson
+      --output-format html|md|plaintext|pdf|docx|json|jsond|ndjson
       --font PATH               TrueType (.ttf/.ttc with glyf) for CJK/Hebrew/Arabic PDF output.
                                 Also AINIUX_PDF_FONT, then a small system-font allowlist.
       --output PATH             Use 'stdout' to write to standard output.
                                 In image mode, omit to write the first unused imageN.png.
 
   Input and attachments:
-      --input PATH              Read text/Markdown/HTML/PDF, or attach PNG/JPEG/GIF with -p;
-                                PDF is converted to Markdown. 'stdin' reads UTF-8 plaintext.
+      --input PATH              Read text/Markdown/HTML/PDF/DOCX, or attach PNG/JPEG/GIF with -p;
+                                PDF/DOCX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
       --encoding NAME           Decode --input/--attach text as NAME instead of UTF-8.
                                 Built-in: utf-8, utf-16, windows-1250/1251/1252,
                                 iso-8859-1/2, koi8-r/u. CJK names (gbk, big5, …)
                                 use iconv when installed.
-      --attach PATH             Add text/Markdown/HTML/PDF or PNG/JPEG/GIF; repeatable;
-                                PDF is converted to Markdown. 'stdin' reads UTF-8 plaintext.
+      --attach PATH             Add text/Markdown/HTML/PDF/DOCX or PNG/JPEG/GIF; repeatable;
+                                PDF/DOCX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
                                 In image mode: PNG/JPEG references only (repeatable, max 16).
       --fetch-url URL           Fetch HTML or PDF for extraction, or as prompt context with -p.
                                 PDF (application/pdf) is converted to Markdown.

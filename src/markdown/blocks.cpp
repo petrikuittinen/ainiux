@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <vector>
 
 namespace ainiux::markdown {
@@ -84,6 +85,15 @@ void append_run(std::vector<Run>& runs, std::string text, unsigned style, const 
     runs.push_back(std::move(run));
 }
 
+void append_image_placeholder(std::vector<Run>& runs, std::string alt, unsigned style) {
+    Run run;
+    run.text = alt.empty() ? "[image omitted]" : "[image omitted: " + alt + "]";
+    run.style = style;
+    run.image_placeholder = true;
+    run.image_alt = std::move(alt);
+    runs.push_back(std::move(run));
+}
+
 void parse_inlines(const std::string& input, unsigned style, const std::string& url,
                    std::vector<Run>& out, int depth) {
     if (depth > 32) {
@@ -91,6 +101,11 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
         return;
     }
     for (size_t i = 0; i < input.size();) {
+        if (input[i] == '\\' && i + 1 < input.size()) {
+            append_run(out, input.substr(i + 1, 1), style, url);
+            i += 2;
+            continue;
+        }
         if (input[i] == '`') {
             const size_t close = input.find('`', i + 1);
             if (close != std::string::npos) {
@@ -99,6 +114,22 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
                 i = close + 1;
                 continue;
             }
+        }
+        const std::string lower_tail = ascii_lower(input.substr(i, std::min<size_t>(6, input.size() - i)));
+        size_t break_length = 0;
+        if (lower_tail.rfind("<br>", 0) == 0) break_length = 4;
+        else if (lower_tail.rfind("<br/>", 0) == 0) break_length = 5;
+        else if (lower_tail.rfind("<br />", 0) == 0) break_length = 6;
+        if (break_length != 0) {
+            if (out.empty()) {
+                Run run;
+                run.hard_break_after = true;
+                out.push_back(std::move(run));
+            } else {
+                out.back().hard_break_after = true;
+            }
+            i += break_length;
+            continue;
         }
         if (input.compare(i, 3, "***") == 0 || input.compare(i, 3, "___") == 0) {
             const std::string marker = input.substr(i, 3);
@@ -126,7 +157,7 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
             if (label_end != std::string::npos && input.compare(label_end, 2, "](") == 0) {
                 const size_t url_end = input.find(')', label_end + 2);
                 if (url_end != std::string::npos) {
-                    append_run(out, input.substr(i + 2, label_end - i - 2), style, url);
+                    append_image_placeholder(out, input.substr(i + 2, label_end - i - 2), style);
                     i = url_end + 1;
                     continue;
                 }
@@ -139,9 +170,6 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
                 if (url_end != std::string::npos) {
                     const std::string href = input.substr(label_end + 2, url_end - label_end - 2);
                     parse_inlines(input.substr(i + 1, label_end - i - 1), style, href, out, depth + 1);
-                    if (!href.empty()) {
-                        append_run(out, " (" + href + ")", style, "");
-                    }
                     i = url_end + 1;
                     continue;
                 }
@@ -160,8 +188,21 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
         if (input.compare(i, 2, "++") == 0) {
             const size_t close = input.find("++", i + 2);
             if (close != std::string::npos) {
-                parse_inlines(input.substr(i + 2, close - i - 2), style, url, out, depth + 1);
+                parse_inlines(input.substr(i + 2, close - i - 2),
+                              style | static_cast<unsigned>(RunStyle::Underline), url, out, depth + 1);
                 i = close + 2;
+                continue;
+            }
+        }
+        if (input.compare(i, 14, "[image omitted") == 0) {
+            const size_t close = input.find(']', i + 14);
+            if (close != std::string::npos) {
+                std::string alt;
+                if (input.compare(i, 16, "[image omitted: ") == 0 && close > i + 16) {
+                    alt = input.substr(i + 16, close - i - 16);
+                }
+                append_image_placeholder(out, std::move(alt), style);
+                i = close + 1;
                 continue;
             }
         }
@@ -178,7 +219,7 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
         size_t j = i + 1;
         while (j < input.size()) {
             const char ch = input[j];
-            if (ch == '`' || ch == '*' || ch == '_' || ch == '~' || ch == '[' || ch == '!' ||
+            if (ch == '\\' || ch == '`' || ch == '*' || ch == '_' || ch == '~' || ch == '[' || ch == '!' ||
                 ch == '+') {
                 break;
             }
@@ -200,6 +241,7 @@ struct ListMarker {
     bool ordered = false;
     size_t indent = 0;
     size_t text_start = 0;
+    int start_value = 1;
 };
 
 bool parse_header(const std::string& line, int& level, std::string& text) {
@@ -253,6 +295,14 @@ bool parse_list_marker(const std::string& line, ListMarker& marker) {
             marker.ordered = true;
             marker.indent = indent;
             marker.text_start = end + 2;
+            try {
+                const unsigned long long value = std::stoull(line.substr(pos, end - pos));
+                marker.start_value = value > static_cast<unsigned long long>(std::numeric_limits<int>::max())
+                                         ? std::numeric_limits<int>::max()
+                                         : static_cast<int>(value);
+            } catch (...) {
+                marker.start_value = 1;
+            }
             return true;
         }
     }
@@ -363,15 +413,19 @@ std::vector<std::string> split_table_row(std::string line) {
         line.pop_back();
     }
     std::vector<std::string> cells;
-    size_t start = 0;
-    while (start <= line.size()) {
-        const size_t bar = line.find('|', start);
-        const size_t end = bar == std::string::npos ? line.size() : bar;
-        cells.push_back(trim(line.substr(start, end - start)));
-        if (bar == std::string::npos) {
-            break;
+    std::string cell;
+    for (size_t i = 0; i <= line.size(); ++i) {
+        if (i == line.size() || line[i] == '|') {
+            cells.push_back(trim(std::move(cell)));
+            cell.clear();
+            continue;
         }
-        start = bar + 1;
+        if (line[i] == '\\' && i + 1 < line.size() && line[i + 1] == '|') {
+            cell += "\\|";
+            ++i;
+        } else {
+            cell.push_back(line[i]);
+        }
     }
     return cells;
 }
@@ -408,7 +462,7 @@ bool is_table_start(const std::vector<std::string>& lines, size_t index) {
         return false;
     }
     const std::vector<std::string> header = split_table_row(lines[index]);
-    return header.size() >= 2 && is_table_separator_line(lines[index + 1]);
+    return !header.empty() && is_table_separator_line(lines[index + 1]);
 }
 
 bool is_raw_html_block(const std::string& line) {
@@ -548,12 +602,12 @@ std::vector<Block> parse_blocks(const std::string& markdown) {
             }
             last_list_indent = indent;
             last_ordered = list.ordered;
-            ++ordered_index;
+            ordered_index = list.ordered ? list.start_value : ordered_index + 1;
             Block block;
             block.kind = BlockKind::ListItem;
             block.ordered = list.ordered;
             block.indent = indent;
-            block.list_index = ordered_index;
+            block.list_index = list.ordered ? list.start_value : ordered_index;
             block.runs = parse_inline_line(trim(lines[i].substr(list.text_start)));
             blocks.push_back(std::move(block));
             ++i;
@@ -575,14 +629,13 @@ std::vector<Block> parse_blocks(const std::string& markdown) {
         while (i < lines.size() && !is_block_start(lines, i)) {
             std::vector<Run> line_runs = parse_inline_line(strip_hard_break_suffix(lines[i]));
             const bool hard = line_has_hard_break(lines[i]);
-            if (!block.runs.empty() && !hard) {
+            if (!block.runs.empty() && !block.runs.back().hard_break_after) {
                 append_run(block.runs, " ", 0, "");
-            } else if (!block.runs.empty() && hard && !block.runs.empty()) {
-                block.runs.back().hard_break_after = true;
             }
             for (Run& run : line_runs) {
                 block.runs.push_back(std::move(run));
             }
+            if (hard && !block.runs.empty()) block.runs.back().hard_break_after = true;
             ++i;
         }
         if (!block.runs.empty()) {

@@ -448,7 +448,13 @@ void test_cli_output_format_parse() {
     check(parsed.options.output_format == ainiux::markdown::OutputFormat::Pdf, "pdf output format parsed");
     check(parsed.options.rendered_output_format_explicit, "pdf output-format is a rendered format");
 
-    const char* bad_argv[] = {"ainiux", "-p", "hello", "--output-format", "docx"};
+    const char* docx_argv[] = {"ainiux", "-p", "hello", "--output-format", "docx", "--output", "out.docx"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(docx_argv));
+    check(parsed.error.ok() && parsed.options.output_format == ainiux::markdown::OutputFormat::Docx &&
+              parsed.options.rendered_output_format_explicit,
+          "CLI docx output-format args parse as binary rendered output");
+
+    const char* bad_argv[] = {"ainiux", "-p", "hello", "--output-format", "epub"};
     parsed = ainiux::cli::parse_args(5, const_cast<char**>(bad_argv));
     check(!parsed.error.ok(), "CLI rejects bad output-format");
 }

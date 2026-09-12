@@ -296,6 +296,8 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                 session.messages.push_back({"user", input::text_context_message(document)});
                 if (!context.options.quiet) {
                     std::cerr << "Inserted content from " << source << "\n";
+                    for (const std::string& warning : inserted.warnings)
+                        std::cerr << "warning: " << warning << "\n";
                 }
                 continue;
             }

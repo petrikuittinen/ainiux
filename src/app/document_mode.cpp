@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "encoding/encoding.hpp"
+#include "docx/docx.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
@@ -81,6 +82,8 @@ const char* input_kind_name(InputKind kind) {
             return "html";
         case InputKind::Pdf:
             return "pdf";
+        case InputKind::Docx:
+            return "docx";
         case InputKind::Image:
             return "image";
     }
@@ -134,7 +137,7 @@ markdown::OutputFormat document_output_format(const cli::Options& options,
     if (kind == InputKind::Html) {
         return legacy_html_output_format(options);
     }
-    if (kind == InputKind::Markdown || kind == InputKind::Pdf) {
+    if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx) {
         return markdown::OutputFormat::Markdown;
     }
     return markdown::OutputFormat::Plaintext;
@@ -177,11 +180,22 @@ Error write_pdf_from_markdown(const std::string& markdown, bool quiet, const std
     return ok_error();
 }
 
+void warn_docx_diagnostics(bool quiet, const docx::Diagnostics& diagnostics) {
+    if (quiet) return;
+    for (const std::string& message : diagnostics.messages) std::cerr << "warning: " << message << "\n";
+}
+
+Error write_docx_from_markdown(const std::string& markdown, std::string& bytes) {
+    docx::WriteOptions options;
+    return docx::from_markdown(markdown, options, bytes);
+}
+
 std::string render_document_body(const std::string& body,
                                  InputKind kind,
                                  markdown::OutputFormat output_format,
                                  bool complete_html_document) {
-    if (output_format == markdown::OutputFormat::Pdf) {
+    if (output_format == markdown::OutputFormat::Pdf ||
+        output_format == markdown::OutputFormat::Docx) {
         return "";
     }
     if (kind == InputKind::Html) {
@@ -194,7 +208,7 @@ std::string render_document_body(const std::string& body,
         }
         return markdown;
     }
-    if (kind == InputKind::Markdown || kind == InputKind::Pdf) {
+    if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx) {
         return markdown::render(body, output_format, complete_html_document);
     }
     if (kind == InputKind::Image) {
@@ -313,6 +327,8 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
                 return write_pdf_from_markdown(fetched.markdown, options.quiet, options.pdf_font,
                                                document.converted);
             }
+            if (document.output_format == markdown::OutputFormat::Docx)
+                return write_docx_from_markdown(fetched.markdown, document.converted);
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -367,11 +383,35 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
             if (document.output_format == markdown::OutputFormat::Pdf) {
                 return write_pdf_from_markdown(markdown, options.quiet, options.pdf_font, document.converted);
             }
+            if (document.output_format == markdown::OutputFormat::Docx)
+                return write_docx_from_markdown(markdown, document.converted);
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
             document.converted =
                 render_document_body(markdown, document.input_kind, document.output_format, complete_html_document);
+            return ok_error();
+        }
+        if (input_type.kind == InputKind::Docx) {
+            docx::ReadOptions docx_options;
+            docx_options.max_bytes = static_cast<size_t>(options.max_input_bytes);
+            std::string markdown;
+            docx::Diagnostics diagnostics;
+            err = docx::to_markdown_file(local_input_path(options), docx_options, markdown, &diagnostics);
+            if (!err.ok()) return err;
+            warn_docx_diagnostics(options.quiet, diagnostics);
+            document.source = document_source_label(options);
+            document.input_kind = InputKind::Docx;
+            document.output_format = document_output_format(options, document.input_kind, standalone);
+            if (document.output_format == markdown::OutputFormat::Pdf)
+                return write_pdf_from_markdown(markdown, options.quiet, options.pdf_font, document.converted);
+            if (document.output_format == markdown::OutputFormat::Docx)
+                return write_docx_from_markdown(markdown, document.converted);
+            const bool complete_html_document = standalone &&
+                document.output_format == markdown::OutputFormat::Html &&
+                !options.output_path.empty() && options.output_path != "stdout";
+            document.converted = render_document_body(markdown, document.input_kind,
+                                                      document.output_format, complete_html_document);
             return ok_error();
         }
         err = read_local_file(local_input_path(options), input_type.name,
@@ -410,6 +450,8 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
         return write_pdf_from_markdown(canonical_markdown_body(body, document.input_kind), options.quiet,
                                        options.pdf_font, document.converted);
     }
+    if (document.output_format == markdown::OutputFormat::Docx)
+        return write_docx_from_markdown(canonical_markdown_body(body, document.input_kind), document.converted);
     const bool complete_html_document = standalone &&
                                         document.output_format == markdown::OutputFormat::Html &&
                                         !options.output_path.empty() && options.output_path != "stdout";
@@ -448,6 +490,11 @@ Error load_text_context_file(const cli::Options& options,
     document.output_format = loaded.kind == InputKind::Plaintext ? markdown::OutputFormat::Plaintext
                                                                  : markdown::OutputFormat::Markdown;
     document.converted = std::move(loaded.content);
+    document.warnings = std::move(loaded.warnings);
+    if (!options.quiet) {
+        for (const std::string& warning : document.warnings)
+            std::cerr << "warning: " << warning << "\n";
+    }
     return ok_error();
 }
 
@@ -465,9 +512,10 @@ int run_document_extract(const cli::Options& options, std::ostream& out) {
         return exit_code_for(err.code);
     }
 
-    if (document.output_format == markdown::OutputFormat::Pdf &&
+    if ((document.output_format == markdown::OutputFormat::Pdf ||
+         document.output_format == markdown::OutputFormat::Docx) &&
         options.format != cli::OutputFormat::Text) {
-        print_error({ErrorCode::BadArgs, "--output-format pdf cannot be combined with --format json or ndjson"});
+        print_error({ErrorCode::BadArgs, "binary --output-format pdf or docx cannot be combined with --format json or ndjson"});
         return exit_code_for(ErrorCode::BadArgs);
     }
 

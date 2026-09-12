@@ -83,11 +83,11 @@
 - Continue safe URL-fetching hardening for control-server and WebUI callers.
 - Harden the TUI foundation with interactive resize tests, model-output rendering tests, scrollback polish, better Unicode cell-width handling, and broader command coverage.
 
-## Deferred Document Conversion
+## Document Conversion Follow-ups
 
 - Extend interactive `/attach` to queue multiple heterogeneous attachments with clear per-item status; keep it separate from `/insert` text editing.
 
 1. PDF Unicode write: CJK, Hebrew, and Arabic Markdown→PDF via a subsetted system/`--font` TrueType (Type0 / Identity-H) is implemented. Arabic uses Presentation Forms-B joining, not HarfBuzz. Emoji color fonts, CFF/OTF CJK, and encrypted PDF read/write remain later.
-2. MS Word input (`.docx`-to-Markdown) and MS Word output (Markdown-to-`.docx`).
+2. DOCX↔Markdown is implemented for the supported Markdown-native subset. Recurring headers/footers, footnotes/endnotes/comments, macros/templates, media extraction/insertion, lossless package editing, remote DOCX fetch, transcript-to-DOCX commands, and WebUI DOCX downloads remain deferred.
 
-PDF↔Markdown is implemented (`--input file.pdf`, `--output-format pdf`, `--attach file.pdf`, `--fetch-url` of `application/pdf`, editor PDF→sibling `.md`, and `/chat-to-pdf` / `/last-to-pdf`). Do not treat DOCX binary data as prompt text.
+PDF↔Markdown is implemented (`--input file.pdf`, `--output-format pdf`, `--attach file.pdf`, `--fetch-url` of `application/pdf`, editor PDF→sibling `.md`, and `/chat-to-pdf` / `/last-to-pdf`). DOCX conversions use canonical Markdown and never treat package or media bytes as prompt text.

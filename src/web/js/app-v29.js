@@ -2475,6 +2475,7 @@ async function uploadChatInputs(signal, inputs = state.chatInputs) {
     input.uploadId = stored.id;
     input.kind = stored.kind;
     input.converted = stored.converted;
+    for (const warning of stored.warnings || []) toast(warning, "warning");
   }
   return inputs.map((input) => input.uploadId);
 }
@@ -3539,7 +3540,8 @@ async function loadFile(path) {
       })) return;
   try {
     const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`);
-    const converted = response.converted_from === "application/pdf";
+    const converted = Boolean(response.converted_from);
+    for (const warning of response.warnings || []) toast(warning, "warning");
     const openPath = converted && response.suggested_path ? response.suggested_path : response.path;
     let revision = response.revision;
     if (converted && response.suggested_path) {

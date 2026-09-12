@@ -273,11 +273,14 @@ credentials are omitted.
 
 Browser chat uploads use a raw body on `POST /ainiux/v1/chat/inputs` with
 `Content-Type` `image/png`, `image/jpeg`, `image/gif`, `application/pdf`,
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document`,
 `text/plain`, `text/markdown`, or `text/html`. An optional `X-Ainiux-Filename`
-(or `Content-Disposition` filename) classifies generic types. PDF and HTML are
-converted to Markdown immediately. The response is an opaque `id`, `kind`
-(`image` or `text`), MIME type, display name, converted flag, byte size, and
-expiry. Inputs are memory-only, expire after one hour, and can be deleted
+(or `Content-Disposition` filename) classifies generic types. PDF, DOCX, and HTML
+are converted to Markdown immediately. The response is an opaque `id`, `kind`
+(`image` or `text`), MIME type, display name, converted flag, byte size, expiry,
+and an additive bounded `warnings` array. DOCX bytes and embedded media are
+discarded after conversion and never persisted as chat text. Inputs are
+memory-only, expire after one hour, and can be deleted
 early. Append a user message with `input_ids` so the thread imports images into
 managed media and Markdown into text attachments. Chat jobs accept the same
 `input_ids` on the last user message or as a top-level array. When `thread_id`

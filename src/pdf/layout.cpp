@@ -74,6 +74,7 @@ struct Frag {
     std::string url;
     double width = 0;
     bool strike = false;
+    bool underline = false;
     bool link = false;
     bool empty() const { return winansi.empty() && cids.empty(); }
 };
@@ -293,7 +294,7 @@ struct Layout {
         } else {
             append_op("(" + pdf_escape_string(frag.winansi) + ") Tj");
         }
-        if (frag.strike || frag.link) {
+        if (frag.strike || frag.underline || frag.link) {
             end_text();
             append_op("0.5 w");
             if (frag.link) {
@@ -334,6 +335,7 @@ struct Layout {
         frag.url = run.url;
         frag.link = !run.url.empty();
         frag.strike = (style & static_cast<unsigned>(markdown::RunStyle::Strike)) != 0;
+        frag.underline = (style & static_cast<unsigned>(markdown::RunStyle::Underline)) != 0;
         frag.width = text_width(frag.font, frag.winansi, frag.size);
         return frag;
     }
@@ -363,6 +365,7 @@ struct Layout {
         frag.url = run.url;
         frag.link = !run.url.empty();
         frag.strike = (style & static_cast<unsigned>(markdown::RunStyle::Strike)) != 0;
+        frag.underline = (style & static_cast<unsigned>(markdown::RunStyle::Underline)) != 0;
         return frag;
     }
 
@@ -418,6 +421,7 @@ struct Layout {
 
     static bool same_paint(const Frag& a, const Frag& b) {
         return a.font == b.font && a.size == b.size && a.link == b.link && a.strike == b.strike &&
+               a.underline == b.underline &&
                a.url == b.url && a.cid_kind == b.cid_kind;
     }
 

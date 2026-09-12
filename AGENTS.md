@@ -21,7 +21,7 @@ core modules rather than being reimplemented by each UI or protocol surface.
 
 ## Current baseline
 
-Current release: **v1.33**. Linux and other POSIX-like source builds are the
+Current release: **v1.34**. Linux and other POSIX-like source builds are the
 primary supported path, Apple Silicon macOS source builds are supported, and a
 native Windows 10 1903+/Windows 11 x64 MSYS2 UCRT64 implementation is present.
 Windows remains unreleased until the parity gate in `docs/windows.md` passes.
@@ -68,11 +68,15 @@ compiled `openai_images`, `replicate_predictions`, `fal_queue`, and
 - The control API is Ainiux-native under `/ainiux/v1/`; `/v1/` remains reserved
   for a later OpenAI-compatible adapter.
 
+DOCX input/output is local canonical-Markdown conversion, not lossless package
+editing. It does not preserve images, recurring headers/footers, notes, comments,
+macros, themes, or arbitrary Word layout. WebUI DOCX downloads and transcript-to-
+DOCX commands remain unimplemented.
+
 Do not pretend these exist: REPL/TUI image-generation jobs, batch or streaming
-image output, multi-turn image editing, DOCX conversion, `/loop`, sub-agents,
-a native Anthropic Messages adapter, multi-workspace server routing, or an
-ncurses UI. MCP tools do not imply MCP sub-agents or interactive MCP Guard
-chaining.
+image output, multi-turn image editing, `/loop`, sub-agents, a native Anthropic
+Messages adapter, multi-workspace server routing, or an ncurses UI. MCP tools do
+not imply MCP sub-agents or interactive MCP Guard chaining.
 
 ## Implementation stance
 

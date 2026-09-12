@@ -105,6 +105,7 @@ struct TuiEvent {
     std::string attached_source;
     provider::TextAttachment text_attachment;
     bool text_attachment_ready = false;
+    std::vector<std::string> warnings;
     // Agent turn completion: already-timed tool rows + wall-clock ordering stamps.
     bool agent_turn = false;
     std::vector<std::string> agent_tool_lines;

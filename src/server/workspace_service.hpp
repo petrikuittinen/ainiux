@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "common.hpp"
 
@@ -14,6 +15,7 @@ struct WorkspaceFileSnapshot {
     std::string revision;
     std::string converted_from;
     std::string suggested_path;
+    std::vector<std::string> warnings;
 };
 
 // Root-aware access to the one canonical workspace owned by a control listener.

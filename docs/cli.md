@@ -38,13 +38,17 @@ ainiux --input notes.md --output-format plaintext
 ainiux --input notes.md --output-format pdf --output notes.pdf
 ainiux --input page.html --output-format pdf --output page.pdf
 ainiux --input report.pdf --output-format md --output report.md
+ainiux --input report.docx --output-format md --output report.md
+ainiux --input notes.md --output-format docx --output notes.docx
 ainiux --fetch-url https://example.com --output-format md
 ainiux --fetch-url https://example.com/report.pdf --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
 ```
 
-Text, Markdown, HTML, and PDF are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. Canonical PDF conversion is PDF ↔ Markdown, and it is **super fast**: conversion is local, single-process C++17 with bounded streaming and no external PDF runtime. PDF input is converted to Markdown (then to HTML, plaintext, or a newly typeset PDF with `--output-format`). HTML-to-PDF is HTML→Markdown→PDF. The writer uses PDF 1.4, Core-14 Helvetica/Courier (including BoldOblique), 1 inch print margins, and WinAnsi for Latin. CJK (Han/Kana/Hangul), Hebrew, and Arabic are embedded from a TrueType glyf font: `--font PATH`, then `AINIUX_PDF_FONT`, then a small system allowlist (DroidSansFallback, Noto Naskh Arabic, Noto Sans Hebrew, WenQuanYi, Microsoft YaHei, …). Arabic is shaped to Presentation Forms-B and RTL paragraphs are right-aligned; Hebrew does not join. CFF OpenType CJK collections such as NotoSansCJK `.ttc` are skipped; pass a `.ttf`. Other characters outside those encodings are replaced with `?` and counted on stderr. A `---` thematic break is a hairline rule, not a page break; PDF-to-Markdown joins source pages with a blank line so a round-trip reflows instead of copying original page boundaries. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. DOCX is still rejected rather than inserted as binary prompt text. `.pdf` and `.PDF` are both accepted.
+Text, Markdown, HTML, PDF, and DOCX are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. PDF and DOCX use Markdown as the canonical interchange, so PDF→DOCX, DOCX→PDF, and HTML↔DOCX are staged through Markdown. Both converters are local C++17; DOCX uses only the already-linked zlib. A `.docx` input defaults to Markdown. `--output-format docx` writes binary OPC/ZIP output and, like PDF, cannot be combined with `--format json` or `ndjson`. Generated DOCX is deterministic and normalized: headings 1–6, quotes, nested ordered/unordered lists, tables, links, bold, italic, strike, `++underline++`, tabs, and hard breaks are preserved; fonts, point sizes, RGB colors, alignment, and ordinary indentation are accepted without text loss but omitted at the Markdown boundary. Images become visible `[image omitted: ALT]` or `[image omitted]` text, and headers, footers, footnotes, endnotes, and comments are omitted with bounded warnings on stderr unless `--quiet`. This is conversion, not lossless Word editing.
+
+The PDF writer uses PDF 1.4, Core-14 Helvetica/Courier (including BoldOblique), 1 inch print margins, and WinAnsi for Latin. CJK (Han/Kana/Hangul), Hebrew, and Arabic are embedded from a TrueType glyf font: `--font PATH`, then `AINIUX_PDF_FONT`, then a small system allowlist (DroidSansFallback, Noto Naskh Arabic, Noto Sans Hebrew, WenQuanYi, Microsoft YaHei, …). Arabic is shaped to Presentation Forms-B and RTL paragraphs are right-aligned; Hebrew does not join. CFF OpenType CJK collections such as NotoSansCJK `.ttc` are skipped; pass a `.ttf`. Other characters outside those encodings are replaced with `?` and counted on stderr. A `---` thematic break is a hairline rule, not a page break; PDF-to-Markdown joins source pages with a blank line so a round-trip reflows instead of copying original page boundaries. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. `.pdf`/`.PDF` and `.docx`/`.DOCX` are accepted case-insensitively. Remote `--fetch-url` DOCX is not supported.
 
 ```sh
 ainiux --input report.pdf --output-format md --output report.md
@@ -53,6 +57,9 @@ ainiux --input notes.pdf --output-format html --output notes.html
 ainiux --input notes.md --output-format pdf --output notes.pdf
 ainiux --input notes.md --output-format pdf --font /usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf --output notes.pdf
 ainiux --input report.pdf --output-format pdf --output report-reflow.pdf
+ainiux --input report.docx --output-format html --output report.html
+ainiux --input report.docx --output-format pdf --output report.pdf
+ainiux --input report.pdf --output-format docx --output report.docx
 ```
 
 The default `--max-input-bytes` limit is 10 MiB (10485760). Larger PDFs need an explicit higher cap.

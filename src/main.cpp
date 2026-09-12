@@ -1,6 +1,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "provider/provider.hpp"
 #include "provider/model_selection.hpp"
 #include "platform/environment.hpp"
+#include "platform/filesystem.hpp"
 #if defined(_WIN32)
 #include "platform/windows_utf.hpp"
 #endif
@@ -424,6 +426,26 @@ int ainiux_main(int argc, char** argv) {
     }
     if (ainiux::app::has_document_source(options) &&
         !ainiux::app::wants_document_prompt_context(options)) {
+        if (!options.output_path.empty() && options.output_path != "stdout") {
+            std::ostringstream converted(std::ios::out | std::ios::binary);
+            const int result = ainiux::app::run_document_extract(options, converted);
+            if (result != 0) return result;
+            if (!converted) {
+                ainiux::app::print_error({ainiux::ErrorCode::FileWrite,
+                                          "failed while buffering converted document output"});
+                return ainiux::app::exit_code_for(ainiux::ErrorCode::FileWrite);
+            }
+            const std::string path = ainiux::expand_user_path(options.output_path);
+            const ainiux::Error error =
+                ainiux::platform::atomic_write_shared(path, converted.str(), true);
+            if (!error.ok()) {
+                ainiux::app::print_error({ainiux::ErrorCode::FileWrite,
+                                          "could not atomically write converted output: " + path +
+                                              ": " + error.message});
+                return ainiux::app::exit_code_for(ainiux::ErrorCode::FileWrite);
+            }
+            return 0;
+        }
         std::ofstream out_file;
         ainiux::Error output_error;
         std::ostream* out = ainiux::app::output_stream(options, out_file, output_error);

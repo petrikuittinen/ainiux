@@ -9,6 +9,7 @@ enum class OutputFormat {
     Markdown,
     Html,
     Pdf,
+    Docx,
 };
 
 bool parse_output_format(const std::string& text, OutputFormat& out);

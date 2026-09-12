@@ -14,6 +14,7 @@ enum class Kind {
     Markdown,
     Html,
     Pdf,
+    Docx,
     Image,
 };
 
@@ -33,6 +34,7 @@ struct TextContext {
     std::string source;
     Kind kind = Kind::Plaintext;
     std::string content;
+    std::vector<std::string> warnings;
 };
 
 struct InsertSourceOptions {
@@ -47,6 +49,7 @@ struct InsertSource {
     std::string content;
     bool url = false;
     bool converted_html = false;
+    std::vector<std::string> warnings;
 };
 
 Error classify_file_type(const std::string& path, FileType& type);
@@ -88,6 +91,7 @@ Error read_local_text_file_for_attach(const std::string& path,
                                       size_t max_bytes,
                                       std::string& content,
                                       runtime::CancellationToken cancellation = runtime::CancellationToken(),
-                                      const std::string& encoding_name = {});
+                                      const std::string& encoding_name = {},
+                                      std::vector<std::string>* warnings = nullptr);
 
 }  // namespace ainiux::input

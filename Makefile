@@ -137,7 +137,7 @@ APP_LINK_EXTRA :=
 APP_LINK_FLAGS :=
 endif
 
-.PHONY: all clean optimized test test-full test-unit test-pdf test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
+.PHONY: all clean optimized test test-full test-unit test-pdf test-docx test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
 
 all: $(BIN)
 
@@ -333,6 +333,9 @@ endif
 
 test-pdf: $(TEST_BIN)
 	$(TEST_BIN) --pdf-only
+
+test-docx: $(TEST_BIN)
+	$(TEST_BIN) --docx-only
 
 test-unit: $(TEST_BIN)
 	$(TEST_BIN)

@@ -234,7 +234,10 @@ app::EditorRunResult run_editor(const std::string& path,
             state.linebreak = loaded.linebreak;
             state.tab_width = loaded.tab_width;
             state.tab_style = loaded.tab_style;
-            if (loaded.converted_from_pdf && !loaded.suggested_path.empty()) {
+            const std::string conversion_warning = loaded.conversion_warnings.empty()
+                                                       ? std::string()
+                                                       : ". Warning: " + loaded.conversion_warnings.front();
+            if (loaded.converted_source != LoadedFile::ConvertedSource::None && !loaded.suggested_path.empty()) {
                 state.release_file_session();
                 state.set_path(loaded.suggested_path);
                 std::error_code sibling_error;
@@ -253,8 +256,10 @@ app::EditorRunResult run_editor(const std::string& path,
             if (recover_autosave) {
                 state.dirty = true;
                 status = "Recovered auto-save";
-            } else if (loaded.converted_from_pdf && !loaded.suggested_path.empty()) {
-                status = "Converted PDF to Markdown; saving will write " + loaded.suggested_path;
+            } else if (loaded.converted_source != LoadedFile::ConvertedSource::None && !loaded.suggested_path.empty()) {
+                status = "Converted " + std::string(loaded.converted_source == LoadedFile::ConvertedSource::Pdf
+                                                        ? "PDF" : "DOCX") +
+                         " to Markdown; saving will write " + loaded.suggested_path + conversion_warning;
             } else if (loaded.converted && !loaded.source_encoding.empty()) {
                 status = "Converted from " + loaded.source_encoding + "; saving will write UTF-8";
             } else {
@@ -1011,8 +1016,11 @@ app::EditorRunResult run_editor(const std::string& path,
             return;
         }
         const std::string buffer_path =
-            loaded.converted_from_pdf && !loaded.suggested_path.empty() ? loaded.suggested_path
+            loaded.converted_source != LoadedFile::ConvertedSource::None && !loaded.suggested_path.empty() ? loaded.suggested_path
                                                                         : open_path;
+        const std::string conversion_warning = loaded.conversion_warnings.empty()
+                                                   ? std::string()
+                                                   : ". Warning: " + loaded.conversion_warnings.front();
         EditorState next;
         next.set_undo_limit(settings.undo_limit);
         next.set_path(buffer_path);
@@ -1029,10 +1037,10 @@ app::EditorRunResult run_editor(const std::string& path,
         next.preferred_column = 0;
         next.scroll_line = 0;
         next.scroll_column = 0;
-        next.dirty = recovered_from_autosave || loaded.converted_from_pdf;
+        next.dirty = recovered_from_autosave || loaded.converted_source != LoadedFile::ConvertedSource::None;
         next.clear_selection();
         next.clear_undo_history();
-        if (loaded.converted_from_pdf) {
+        if (loaded.converted_source != LoadedFile::ConvertedSource::None) {
             next.redetect_language();
         }
         buffers.push_back(next);
@@ -1050,9 +1058,11 @@ app::EditorRunResult run_editor(const std::string& path,
                                    linebreak_name(next.linebreak) + " for saves");
         } else if (recovered_from_autosave) {
             minibuffer_message(minibuffer, "Recovered auto-save for " + open_path);
-        } else if (loaded.converted_from_pdf) {
+        } else if (loaded.converted_source != LoadedFile::ConvertedSource::None) {
             minibuffer_message(minibuffer,
-                               "Converted PDF to Markdown; saving will write " + buffer_path);
+                               "Converted " + std::string(loaded.converted_source == LoadedFile::ConvertedSource::Pdf
+                                                            ? "PDF" : "DOCX") +
+                                   " to Markdown; saving will write " + buffer_path + conversion_warning);
         } else if (loaded.converted && !loaded.source_encoding.empty()) {
             minibuffer_message(minibuffer,
                                "Opened " + open_path + " (converted from " +
@@ -2617,7 +2627,10 @@ app::EditorRunResult run_editor(const std::string& path,
         }
         minibuffer_message(minibuffer,
                            "Inserted " + insert_session.source + " at cursor" +
-                               (event.inserted.converted_html ? " as Markdown" : ""));
+                               (event.inserted.converted_html ? " as Markdown" : "") +
+                               (event.inserted.warnings.empty()
+                                    ? std::string()
+                                    : ". Warning: " + event.inserted.warnings.front()));
         return true;
     };
 

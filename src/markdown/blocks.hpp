@@ -11,6 +11,7 @@ enum class RunStyle : unsigned {
     Italic = 2,
     Code = 4,
     Strike = 8,
+    Underline = 16,
 };
 
 inline constexpr unsigned operator|(RunStyle a, RunStyle b) {
@@ -22,6 +23,8 @@ struct Run {
     unsigned style = 0;
     std::string url;
     bool hard_break_after = false;
+    bool image_placeholder = false;
+    std::string image_alt;
 };
 
 enum class BlockKind {

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "encoding/encoding.hpp"
+#include "docx/docx.hpp"
 #include "html/html.hpp"
 #include "pdf/pdf.hpp"
 
@@ -360,6 +361,10 @@ Error classify_file_type(const std::string& path, FileType& type) {
         type = {Kind::Pdf, "pdf", "application/pdf"};
         return ok_error();
     }
+    if (ends_with(lower, ".docx")) {
+        type = {Kind::Docx, "docx", docx::kMimeType};
+        return ok_error();
+    }
     if (ends_with(lower, ".png")) {
         type = {Kind::Image, "image", "image/png"};
         return ok_error();
@@ -376,7 +381,7 @@ Error classify_file_type(const std::string& path, FileType& type) {
     // if (ends_with(lower, ".webp")) type = {Kind::Image, "image", "image/webp"};
     return {ErrorCode::UnsupportedFeature,
             "unsupported input file type for " + resolved +
-                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .png, .jpg, .jpeg, "
+                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .docx, .png, .jpg, .jpeg, "
                 "and .gif "
                 "(case-insensitive)"};
 }
@@ -465,7 +470,7 @@ Error load_text_context_file(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text insertion supports .txt, .md, .html, and .pdf files; attach images to a prompt instead: " +
+                "text insertion supports .txt, .md, .html, .pdf, and .docx files; attach images to a prompt instead: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {
@@ -482,6 +487,24 @@ Error load_text_context_file(const std::string& path,
         if (!pdf_err.ok()) {
             return pdf_err;
         }
+        context = std::move(loaded);
+        return ok_error();
+    }
+    if (type.kind == Kind::Docx) {
+        if (resolved == "stdin") {
+            return {ErrorCode::UnsupportedFeature, "DOCX input from stdin is not supported; pass a .docx path"};
+        }
+        docx::ReadOptions docx_options;
+        docx_options.max_bytes = max_bytes;
+        docx_options.cancellation = cancellation;
+        TextContext loaded;
+        loaded.source = "file " + resolved;
+        loaded.kind = Kind::Docx;
+        docx::Diagnostics diagnostics;
+        Error docx_error = docx::to_markdown_file(resolved, docx_options, loaded.content,
+                                                  &diagnostics);
+        if (!docx_error.ok()) return docx_error;
+        loaded.warnings = std::move(diagnostics.messages);
         context = std::move(loaded);
         return ok_error();
     }
@@ -603,11 +626,33 @@ Error load_insert_source(const std::string& source,
         }
         FileType type;
         const Error type_error = classify_file_type(loaded.source, type);
+        if (type_error.ok() && type.kind == Kind::Pdf) {
+            pdf::Options pdf_options;
+            pdf_options.max_bytes = options.max_file_bytes;
+            pdf_options.cancellation = cancellation;
+            std::string converted;
+            err = pdf::to_markdown_bytes(loaded.content, pdf_options, converted);
+            if (!err.ok()) return err;
+            loaded.content = std::move(converted);
+            loaded.converted_html = true;
+        } else if (type_error.ok() && type.kind == Kind::Docx) {
+            docx::ReadOptions docx_options;
+            docx_options.max_bytes = options.max_file_bytes;
+            docx_options.cancellation = cancellation;
+            std::string converted;
+            docx::Diagnostics diagnostics;
+            err = docx::to_markdown_bytes(loaded.content, docx_options, converted, &diagnostics);
+            if (!err.ok()) return err;
+            loaded.content = std::move(converted);
+            loaded.converted_html = true;
+            loaded.warnings = std::move(diagnostics.messages);
+        } else {
         const bool html_hints = type_error.ok() && type.kind == Kind::Html;
         err = decode_local_text(loaded.content, "file " + loaded.source, options.encoding_name,
                                 html_hints, cancellation);
         if (!err.ok()) {
             return err;
+        }
         }
     }
     Error normalize_error = normalize_insert_linebreaks(loaded.content,
@@ -626,7 +671,8 @@ Error load_insert_source(const std::string& source,
 
 std::string text_context_message(const TextContext& context) {
     std::string message = "Input context from " + context.source + "\nFormat: ";
-    if (context.kind == Kind::Markdown || context.kind == Kind::Html || context.kind == Kind::Pdf) {
+    if (context.kind == Kind::Markdown || context.kind == Kind::Html || context.kind == Kind::Pdf ||
+        context.kind == Kind::Docx) {
         message += "md";
     } else {
         message += "plaintext";
@@ -640,7 +686,9 @@ Error read_local_text_file_for_attach(const std::string& path,
                                       size_t max_bytes,
                                       std::string& content,
                                       runtime::CancellationToken cancellation,
-                                      const std::string& encoding_name) {
+                                      const std::string& encoding_name,
+                                      std::vector<std::string>* warnings) {
+    if (warnings != nullptr) warnings->clear();
     const std::string resolved = expand_user_path(path);
     if (resolved == "stdin" || resolved == "-") {
         return {ErrorCode::BadArgs,
@@ -653,7 +701,7 @@ Error read_local_text_file_for_attach(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text attach supports .txt, .md, .html, and .pdf files; images use the pending image queue: " +
+                "text attach supports .txt, .md, .html, .pdf, and .docx files; images use the pending image queue: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {
@@ -661,6 +709,15 @@ Error read_local_text_file_for_attach(const std::string& path,
         pdf_options.max_bytes = max_bytes;
         pdf_options.cancellation = cancellation;
         return pdf::to_markdown_file(resolved, pdf_options, content);
+    }
+    if (type.kind == Kind::Docx) {
+        docx::ReadOptions docx_options;
+        docx_options.max_bytes = max_bytes;
+        docx_options.cancellation = cancellation;
+        docx::Diagnostics diagnostics;
+        Error docx_error = docx::to_markdown_file(resolved, docx_options, content, &diagnostics);
+        if (docx_error.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
+        return docx_error;
     }
 
     std::ifstream file(std::filesystem::u8path(resolved), std::ios::binary);

@@ -30,6 +30,7 @@ struct LoadedDocument {
     input::Kind input_kind = input::Kind::Plaintext;
     markdown::OutputFormat output_format = markdown::OutputFormat::Markdown;
     std::string converted;
+    std::vector<std::string> warnings;
     provider::ImageInput image;
 };
 

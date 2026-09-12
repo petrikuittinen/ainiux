@@ -374,6 +374,7 @@ bool preflight_request_body(const http::Request& request,
                              mime == "audio/wav" || mime == "audio/x-wav";
     const bool chat_media = mime == "image/png" || mime == "image/jpeg" || mime == "image/gif" ||
                             mime == "application/pdf" || mime == "application/x-pdf" ||
+                            mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
                             mime == "text/plain" || mime == "text/markdown" || mime == "text/html" ||
                             mime == "application/octet-stream" || mime.empty();
     if ((image_upload && mime != "image/png" && mime != "image/jpeg") ||
@@ -381,7 +382,7 @@ bool preflight_request_body(const http::Request& request,
         (chat_upload && !chat_media)) {
         denial = error_response(415, "unsupported_media_type",
                                 video_upload ? "video references require a supported image, MP4/MOV, MP3, or WAV Content-Type" :
-                                chat_upload ? "chat uploads require PNG, JPEG, GIF, PDF, Markdown, plaintext, or HTML"
+                                chat_upload ? "chat uploads require PNG, JPEG, GIF, PDF, DOCX, Markdown, plaintext, or HTML"
                                                : "image input uploads require Content-Type: image/png or image/jpeg");
         return false;
     }
@@ -642,11 +643,18 @@ Response route_request(const http::Request& request,
                                   "invalid_chat_input", error.message);
         }
         response.status = 201;
+        std::string warnings_json = "[";
+        for (std::size_t i = 0; i < stored.warnings.size(); ++i) {
+            if (i != 0) warnings_json.push_back(',');
+            warnings_json += json::quote(stored.warnings[i]);
+        }
+        warnings_json.push_back(']');
         response.body = "{\"id\":" + json::quote(stored.id) +
                         ",\"kind\":" + json::quote(stored.kind == ChatInputKind::Image ? "image" : "text") +
                         ",\"mime_type\":" + json::quote(stored.mime_type) +
                         ",\"display_name\":" + json::quote(stored.display_name) +
                         ",\"converted\":" + std::string(stored.converted ? "true" : "false") +
+                        ",\"warnings\":" + warnings_json +
                         ",\"byte_size\":" + std::to_string(stored.bytes->size()) +
                         ",\"expires_at\":" +
                             json::quote(image_input_expiry_timestamp(stored.expires_at)) + "}";

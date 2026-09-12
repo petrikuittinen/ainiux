@@ -205,6 +205,7 @@ void TuiFileJobs::start_insert(const std::string& source) {
         event.error = input::load_insert_source(source, options, loaded, token);
         if (event.error.ok()) {
             event.inserted_text = std::move(loaded.content);
+            event.warnings = std::move(loaded.warnings);
         }
         event_queue.push(std::move(event));
     });
@@ -350,7 +351,7 @@ void TuiFileJobs::start_attach(const std::string& path) {
             // Convert once at import; Markdown is the native replay format.
             std::string body;
             event.error = input::read_local_text_file_for_attach(path, static_cast<size_t>(text_limit), body, token,
-                                                                input_encoding);
+                                                                input_encoding, &event.warnings);
             if (event.error.ok()) {
                 if (type.kind == input::Kind::Html) {
                     try {

@@ -643,10 +643,16 @@ void load_editor_from_path(EditorState& state,
     Error load_error = load_file(path, settings, loaded);
     if (load_error.ok()) {
         const bool mixed = loaded.mixed_linebreaks;
-        const bool from_pdf = loaded.converted_from_pdf && !loaded.suggested_path.empty();
-        const std::string buffer_path = from_pdf ? loaded.suggested_path : path;
+        const bool from_document = loaded.converted_source != LoadedFile::ConvertedSource::None &&
+                                   !loaded.suggested_path.empty();
+        const std::string source_name = loaded.converted_source == LoadedFile::ConvertedSource::Pdf
+                                            ? "PDF" : "DOCX";
+        const std::string conversion_warning = loaded.conversion_warnings.empty()
+                                                   ? std::string()
+                                                   : ". Warning: " + loaded.conversion_warnings.front();
+        const std::string buffer_path = from_document ? loaded.suggested_path : path;
         reset_editor_buffer(state, std::move(loaded), buffer_path);
-        if (from_pdf) {
+        if (from_document) {
             state.dirty = true;
             state.redetect_language();
         }
@@ -654,7 +660,7 @@ void load_editor_from_path(EditorState& state,
                            mixed ? "Warning: mixed line endings in " + path +
                                        "; normalized and using " +
                                        linebreak_name(state.linebreak) + " for saves"
-                           : from_pdf ? "Converted PDF to Markdown; saving will write " + buffer_path
+                           : from_document ? "Converted " + source_name + " to Markdown; saving will write " + buffer_path + conversion_warning
                                       : "Loaded " + path);
     } else {
         minibuffer_message(minibuffer, load_error.message);

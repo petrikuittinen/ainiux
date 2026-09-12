@@ -24,6 +24,7 @@
 #include "editor/statistics.hpp"
 #include "editor/text_layout.hpp"
 #include "pdf/pdf.hpp"
+#include "docx/docx.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "platform/environment.hpp"
@@ -2422,6 +2423,34 @@ void test_editor_pdf_conversion() {
     const std::string round_trip((std::istreambuf_iterator<char>(pdf_in)),
                                  std::istreambuf_iterator<char>());
     check(round_trip.compare(0, 5, "%PDF-") == 0, "explicit .pdf save starts with a PDF header");
+}
+
+void test_editor_docx_conversion() {
+    check(ainiux::editor::sibling_markdown_path("Letter.DOCX") == "Letter.md",
+          "DOCX sibling path replaces a case-insensitive suffix");
+    const std::string docx_path = "build/unit-editor-docx-source.docx";
+    const std::string saved_docx = "build/unit-editor-docx-save.docx";
+    ainiux::editor::PieceTable source =
+        ainiux::editor::PieceTable::from_string("# Letter\n\nHello from a DOCX buffer.\n");
+    check(ainiux::editor::save_file(docx_path, source).ok(),
+          "editor explicitly saves Markdown as DOCX");
+    ainiux::editor::LoadedFile loaded;
+    ainiux::editor::EditorSettings settings;
+    ainiux::Error err = ainiux::editor::load_file(docx_path, settings, loaded);
+    check(err.ok() && loaded.converted_source ==
+                          ainiux::editor::LoadedFile::ConvertedSource::Docx &&
+              loaded.suggested_path == "build/unit-editor-docx-source.md" &&
+              loaded.text.str().find("Hello from a DOCX buffer") != std::string::npos,
+          "editor opens DOCX as a Markdown buffer aimed at the sibling path");
+    check(ainiux::editor::save_file(saved_docx, loaded.text).ok(),
+          "editor writes a normalized DOCX on an explicit .docx save");
+    std::ifstream input(saved_docx, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+    std::string markdown;
+    check(ainiux::docx::to_markdown_bytes(bytes, {}, markdown).ok() &&
+              markdown.find("Hello from a DOCX buffer") != std::string::npos,
+          "explicit editor DOCX output is a readable package");
 }
 
 void test_editor_linebreak_modes() {
@@ -5969,6 +5998,7 @@ void run_all() {
     test_editor_contextual_completion_modes();
     test_editor_file_round_trip();
     test_editor_pdf_conversion();
+    test_editor_docx_conversion();
     test_editor_linebreak_modes();
     test_editor_indentation_detection();
     test_editor_tab_indentation();

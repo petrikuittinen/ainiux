@@ -66,7 +66,7 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 |-----|--------|
 | `Ctrl+S` | Save (prompts for path on scratch buffers) |
 | `Ctrl+Shift+S` | Save as (prompts for path; asks before overwriting an existing file) |
-| `Ctrl+O` | Open another file buffer. Opening a `.pdf` converts it to Markdown and aims Save at the sibling `.md`. Saving explicitly to a `.pdf` path writes a newly typeset PDF. |
+| `Ctrl+O` | Open another file buffer. Opening `.pdf` or `.docx` converts it to Markdown and aims Save at the sibling `.md`. Saving explicitly to `.pdf` newly typesets a PDF; saving explicitly to `.docx` writes a new normalized Word package atomically. |
 | `Ctrl+N` | Open a new empty buffer |
 | `Ctrl+L` | List open buffers; Enter chooses, `/` search, `.` sort, Tab/Insert new, type to jump, Esc cancels |
 | `Ctrl+P` | Open provider picker (same as bare `/provider`) |

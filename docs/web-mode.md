@@ -45,8 +45,9 @@ The controller capability-detects the server before enabling features. It
 provides:
 
 - concurrency-safe ordinary chat threads with live streamed model responses,
-  local file attachments (PNG/JPEG/GIF, PDF, Markdown, plaintext, HTML; PDF and
-  HTML convert to Markdown), and `/chat-to-pdf` / `/last-to-pdf` downloads;
+  local file attachments (PNG/JPEG/GIF, PDF, DOCX, Markdown, plaintext, HTML;
+  documents convert to Markdown), bounded upload warnings, and `/chat-to-pdf` /
+  `/last-to-pdf` downloads;
 - safe client-side Markdown rendering for Chat and Agent prose, including
   semantic headings, responsive GFM tables, clickable HTTP(S) links, and the
   full TUI set of highlighted fenced-code languages;
@@ -67,8 +68,9 @@ provides:
   HTML5 MP4 playback, and authenticated download;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
-- a bounded UTF-8 editor with optimistic saves, conflict recovery, PDF-to-Markdown
-  conversion when opening `.pdf` (Save writes the sibling `.md`), detected
+- a bounded UTF-8 editor with optimistic saves, conflict recovery, PDF/DOCX-to-
+  Markdown conversion when opening `.pdf` or `.docx` (Save writes the sibling
+  `.md`; WebUI DOCX export remains deferred), detected
   per-file indentation controls, Tab/Shift+Tab indent and outdent, adaptive
   selection/file reformatting, and bounded undo/redo. Use `Ctrl+U` or `Ctrl+Z` to
   undo and `Ctrl+Y` to redo; `Alt+U`/`Alt+Z` and `Alt+Y` are browser-safe
@@ -107,7 +109,7 @@ Chat submission first persists the user message (and any converted attachments),
 runs the shared asynchronous chat job with that thread id, and appends the
 assistant result only if the thread revision still matches. The browser does
 not resend the transcript as job `content`; the server hydrates stored Markdown
-attachments, including a converted PDF, so later turns still see the file. On a
+attachments, including converted PDF and DOCX input, so later turns still see the file. On a
 conflict, the completed result remains visible in Chat and the UI asks the user
 to reload. File drafts likewise remain visible until the user chooses whether to
 keep the draft or reload the current server copy.

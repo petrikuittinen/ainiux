@@ -23,6 +23,7 @@ struct StoredChatInput {
     std::string mime_type;
     std::string display_name;
     bool converted = false;
+    std::vector<std::string> warnings;
     std::shared_ptr<const std::string> bytes;
     std::chrono::system_clock::time_point expires_at;
 };
@@ -48,6 +49,7 @@ class ChatInputStore {
         std::string mime_type;
         std::string display_name;
         bool converted = false;
+        std::vector<std::string> warnings;
         std::shared_ptr<const std::string> bytes;
         std::chrono::system_clock::time_point expires_at;
     };

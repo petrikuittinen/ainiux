@@ -52,13 +52,13 @@ Core commands include `/help`, `/new`, `/list`, `/edit`, `/provider`, `/model`, 
 
 `/setting` opens a full-history settings widget grouped into Model, Display, and General. Arrow keys move between rows; left/right cycle choices such as `reasoning` (from `models.conf`) and on/off flags; numbers and strings are typed in place. Enter accepts the current row, Esc cancels that row, `s` saves to the thread (and the agent project when in `-a`), and `q` quits without saving. `/setting NAME=VALUE` remains available for scripts and power users. Temperature must be 0.0–1.0 unless the matched catalog record sets `temperature_max` (Gemini families use 2.0).
 
-`/insert` places text into the input. `/attach` adds provider context or a supported image; PDF, HTML, Markdown, and plaintext are converted to Markdown (PDF and HTML by default). `/fetch` accepts HTML or `application/pdf` (PDF becomes Markdown). `/chat-to-pdf [PATH]` writes the thread to PDF (`chat.pdf` by default). `/last-to-pdf [PATH]` writes the last message (`last.pdf`). Existing files are not overwritten. `/search` is an explicit network operation. A URL typed in ordinary prompt text is not fetched.
+`/insert` places text into the input. `/attach` adds provider context or a supported image; DOCX, PDF, HTML, Markdown, and plaintext are converted to Markdown. Raw DOCX/PDF bytes are never submitted as prompt text. `/fetch` accepts HTML or `application/pdf` (PDF becomes Markdown); remote DOCX fetch is not supported. `/chat-to-pdf [PATH]` writes the thread to PDF (`chat.pdf` by default). `/last-to-pdf [PATH]` writes the last message (`last.pdf`). Existing files are not overwritten. Transcript-to-DOCX commands remain deferred. `/search` is an explicit network operation. A URL typed in ordinary prompt text is not fetched.
 
 Editor-only `/width`, `/alignment-width`, `/left-align`, `/right-align`, `/center-align`, and `/justify` commands are rejected in chat and agent history. They operate on editor buffers only.
 
 ## Attachments and media
 
-Text, Markdown, HTML, and PDF are converted into bounded canonical Markdown. PNG, JPEG, and GIF attachments require a compatible Chat Completions model. DOCX is not supported. Managed media cleanup never turns missing content into silent empty context; affected threads are marked read-only.
+Text, Markdown, HTML, PDF, and DOCX are converted into bounded canonical Markdown. DOCX image placeholders remain visible and conversion warnings appear in status; raw package/media bytes are not retained as chat text. PNG, JPEG, and GIF attachments require a compatible Chat Completions model. Managed media cleanup never turns missing content into silent empty context; affected threads are marked read-only.
 
 ## Themes, highlighting, and thinking
 
