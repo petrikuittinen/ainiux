@@ -95,9 +95,12 @@ struct OptionalBool {
 
 struct RunProperties {
     OptionalBool bold;
+    OptionalBool complex_bold;
     OptionalBool italic;
+    OptionalBool complex_italic;
     OptionalBool underline;
     OptionalBool strike;
+    OptionalBool complex_script;
     std::string style_id;
 };
 
@@ -119,9 +122,12 @@ void merge(OptionalBool& base, const OptionalBool& derived) {
 
 void merge(RunProperties& base, const RunProperties& derived) {
     merge(base.bold, derived.bold);
+    merge(base.complex_bold, derived.complex_bold);
     merge(base.italic, derived.italic);
+    merge(base.complex_italic, derived.complex_italic);
     merge(base.underline, derived.underline);
     merge(base.strike, derived.strike);
+    merge(base.complex_script, derived.complex_script);
     if (!derived.style_id.empty()) base.style_id = derived.style_id;
 }
 
@@ -166,10 +172,13 @@ struct Styles {
 
 void set_run_property(const XmlEvent& event, RunProperties& properties) {
     OptionalBool* target = nullptr;
-    if (is_word(event, "b") || is_word(event, "bCs")) target = &properties.bold;
-    else if (is_word(event, "i") || is_word(event, "iCs")) target = &properties.italic;
+    if (is_word(event, "b")) target = &properties.bold;
+    else if (is_word(event, "bCs")) target = &properties.complex_bold;
+    else if (is_word(event, "i")) target = &properties.italic;
+    else if (is_word(event, "iCs")) target = &properties.complex_italic;
     else if (is_word(event, "strike") || is_word(event, "dstrike")) target = &properties.strike;
     else if (is_word(event, "u")) target = &properties.underline;
+    else if (is_word(event, "cs") || is_word(event, "rtl")) target = &properties.complex_script;
     if (target != nullptr) {
         target->set = true;
         target->value = bool_value(attr_local(event, "val"));
@@ -431,10 +440,18 @@ struct Block {
     Table table;
 };
 
-unsigned effective_run_style(const RunProperties& properties) {
+bool has_rtl(std::string_view text);
+
+unsigned effective_run_style(const RunProperties& properties, std::string_view text) {
     unsigned style = 0;
-    if (properties.bold.set && properties.bold.value) style |= static_cast<unsigned>(markdown::RunStyle::Bold);
-    if (properties.italic.set && properties.italic.value) style |= static_cast<unsigned>(markdown::RunStyle::Italic);
+    const bool complex = (properties.complex_script.set && properties.complex_script.value) ||
+                         has_rtl(text);
+    const OptionalBool& bold = complex && properties.complex_bold.set
+                                   ? properties.complex_bold : properties.bold;
+    const OptionalBool& italic = complex && properties.complex_italic.set
+                                     ? properties.complex_italic : properties.italic;
+    if (bold.set && bold.value) style |= static_cast<unsigned>(markdown::RunStyle::Bold);
+    if (italic.set && italic.value) style |= static_cast<unsigned>(markdown::RunStyle::Italic);
     if (properties.underline.set && properties.underline.value)
         style |= static_cast<unsigned>(markdown::RunStyle::Underline);
     if (properties.strike.set && properties.strike.value)
@@ -696,7 +713,7 @@ class DocumentReader {
                 merge(effective, run_found->second.run);
         }
         merge(effective, direct_run_);
-        run_.style = effective_run_style(effective);
+        run_.style = effective_run_style(effective, run_.text);
         if (paragraph_semantic == "code" || run_semantic == "code" || run_semantic == "codechar")
             run_.style |= static_cast<unsigned>(markdown::RunStyle::Code);
         if (!explicit_link_.empty()) run_.url = explicit_link_;
@@ -807,40 +824,93 @@ std::string markdown_link_target(std::string target) {
     return out;
 }
 
+bool image_placeholder_text(const markdown::Run& run) {
+    return (run.text == "[image omitted]" ||
+            (run.text.rfind("[image omitted: ", 0) == 0 && !run.text.empty() &&
+             run.text.back() == ']')) &&
+           run.url.empty() && run.style == 0;
+}
+
+void append_markdown_piece(std::string_view text,
+                           unsigned style,
+                           const std::string& url,
+                           bool table_cell,
+                           std::string& out) {
+    if (text.empty()) return;
+    const unsigned code = static_cast<unsigned>(markdown::RunStyle::Code);
+    std::size_t first = 0;
+    std::size_t last = text.size();
+    if ((style & code) == 0) {
+        while (first < last && text[first] == ' ') ++first;
+        while (last > first && text[last - 1] == ' ') --last;
+    }
+    out += markdown_escape(text.substr(0, first), table_cell);
+    if (first == last) {
+        out += markdown_escape(text.substr(first), table_cell);
+        return;
+    }
+    std::string body = markdown_escape(text.substr(first, last - first), table_cell);
+    const unsigned bold = static_cast<unsigned>(markdown::RunStyle::Bold);
+    const unsigned italic = static_cast<unsigned>(markdown::RunStyle::Italic);
+    const unsigned strike = static_cast<unsigned>(markdown::RunStyle::Strike);
+    const unsigned underline = static_cast<unsigned>(markdown::RunStyle::Underline);
+    if ((style & code) != 0) {
+        const std::string marker = body.find('`') == std::string::npos ? "`" : "``";
+        body = marker + body + marker;
+    } else {
+        if ((style & underline) != 0) body = "++" + body + "++";
+        if ((style & strike) != 0) body = "~~" + body + "~~";
+        if ((style & italic) != 0) body = "*" + body + "*";
+        if ((style & bold) != 0) body = "**" + body + "**";
+    }
+    if (!url.empty()) body = "[" + body + "](" + markdown_link_target(url) + ")";
+    out += body;
+    out += markdown_escape(text.substr(last), table_cell);
+}
+
+void append_markdown_text(std::string_view text,
+                          unsigned style,
+                          const std::string& url,
+                          bool table_cell,
+                          std::string& out) {
+    std::size_t start = 0;
+    for (;;) {
+        const std::size_t tab = text.find('\t', start);
+        const std::size_t end = tab == std::string_view::npos ? text.size() : tab;
+        append_markdown_piece(text.substr(start, end - start), style, url, table_cell, out);
+        if (tab == std::string_view::npos) break;
+        out.push_back('\t');
+        start = tab + 1;
+    }
+}
+
 std::string markdown_runs(const std::vector<markdown::Run>& runs, bool table_cell = false) {
     std::string out;
-    for (const markdown::Run& run : runs) {
+    for (std::size_t index = 0; index < runs.size(); ++index) {
+        const markdown::Run& run = runs[index];
         if (run.image_placeholder) {
             out += run.image_alt.empty() ? "[image omitted]"
                                          : "[image omitted: " + markdown_escape(run.image_alt, table_cell) + "]";
             if (run.hard_break_after) out += table_cell ? "<br>" : "  \n";
             continue;
         }
-        if ((run.text == "[image omitted]" ||
-             (run.text.rfind("[image omitted: ", 0) == 0 && run.text.back() == ']')) &&
-            run.url.empty() && run.style == 0) {
+        if (image_placeholder_text(run)) {
             out += run.text;
             if (run.hard_break_after) out += table_cell ? "<br>" : "  \n";
             continue;
         }
-        std::string body = markdown_escape(run.text, table_cell);
-        const unsigned code = static_cast<unsigned>(markdown::RunStyle::Code);
-        const unsigned bold = static_cast<unsigned>(markdown::RunStyle::Bold);
-        const unsigned italic = static_cast<unsigned>(markdown::RunStyle::Italic);
-        const unsigned strike = static_cast<unsigned>(markdown::RunStyle::Strike);
-        const unsigned underline = static_cast<unsigned>(markdown::RunStyle::Underline);
-        if ((run.style & code) != 0) {
-            const std::string marker = body.find('`') == std::string::npos ? "`" : "``";
-            body = marker + body + marker;
-        } else {
-            if ((run.style & underline) != 0) body = "++" + body + "++";
-            if ((run.style & strike) != 0) body = "~~" + body + "~~";
-            if ((run.style & italic) != 0) body = "*" + body + "*";
-            if ((run.style & bold) != 0) body = "**" + body + "**";
+        std::string text = run.text;
+        bool hard_break_after = run.hard_break_after;
+        while (!hard_break_after && index + 1 < runs.size()) {
+            const markdown::Run& next = runs[index + 1];
+            if (next.image_placeholder || image_placeholder_text(next) ||
+                next.style != run.style || next.url != run.url) break;
+            text += next.text;
+            hard_break_after = next.hard_break_after;
+            ++index;
         }
-        if (!run.url.empty()) body = "[" + body + "](" + markdown_link_target(run.url) + ")";
-        out += body;
-        if (run.hard_break_after) out += table_cell ? "<br>" : "  \n";
+        append_markdown_text(text, run.style, run.url, table_cell, out);
+        if (hard_break_after) out += table_cell ? "<br>" : "  \n";
     }
     return out;
 }
@@ -1318,8 +1388,10 @@ class DocumentWriter {
         if (!run.url.empty()) xml += "<w:rStyle w:val=\"Hyperlink\"/>";
         if ((run.style & static_cast<unsigned>(markdown::RunStyle::Code)) != 0)
             xml += "<w:rStyle w:val=\"CodeChar\"/>";
-        if ((run.style & static_cast<unsigned>(markdown::RunStyle::Bold)) != 0) xml += "<w:b/>";
-        if ((run.style & static_cast<unsigned>(markdown::RunStyle::Italic)) != 0) xml += "<w:i/>";
+        if ((run.style & static_cast<unsigned>(markdown::RunStyle::Bold)) != 0)
+            xml += "<w:b/><w:bCs/>";
+        if ((run.style & static_cast<unsigned>(markdown::RunStyle::Italic)) != 0)
+            xml += "<w:i/><w:iCs/>";
         if ((run.style & static_cast<unsigned>(markdown::RunStyle::Strike)) != 0) xml += "<w:strike/>";
         if ((run.style & static_cast<unsigned>(markdown::RunStyle::Underline)) != 0) xml += "<w:u w:val=\"single\"/>";
         if (has_rtl(run.text)) xml += "<w:rtl/>";

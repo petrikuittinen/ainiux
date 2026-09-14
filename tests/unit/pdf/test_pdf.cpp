@@ -62,6 +62,36 @@ std::string make_simple_pdf() {
     return make_pdf_with_content("BT /F1 12 Tf 72 720 Td (Hello PDF) Tj ET\n");
 }
 
+std::string make_pdf_with_content_container(const std::string& page_contents,
+                                            const std::string& container) {
+    const std::string first = "BT /F1 12 Tf 72 720 Td (First stream) Tj ET\n";
+    const std::string second = "BT /F1 12 Tf 72 700 Td (Second stream) Tj ET\n";
+    std::vector<std::string> bodies = {
+        "",
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents " +
+            page_contents + " /Resources << /Font << /F1 5 0 R >> >> >>",
+        "<< /Length " + std::to_string(first.size()) + " >>\nstream\n" + first + "endstream",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Length " + std::to_string(second.size()) + " >>\nstream\n" + second + "endstream",
+        container,
+    };
+    std::string out = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+    std::vector<std::size_t> offsets(bodies.size(), 0);
+    for (std::size_t i = 1; i < bodies.size(); ++i) {
+        offsets[i] = out.size();
+        out += std::to_string(i) + " 0 obj\n" + bodies[i] + "\nendobj\n";
+    }
+    const std::size_t xref = out.size();
+    out += "xref\n0 " + std::to_string(bodies.size()) + "\n";
+    out += xref_line(0, 65535, 'f');
+    for (std::size_t i = 1; i < bodies.size(); ++i) out += xref_line(offsets[i], 0, 'n');
+    out += "trailer\n<< /Size " + std::to_string(bodies.size()) + " /Root 1 0 R >>\n";
+    out += "startxref\n" + std::to_string(xref) + "\n%%EOF\n";
+    return out;
+}
+
 std::string make_pdf_with_tounicode(const std::string& cmap, const std::string& content) {
     const std::string content_obj =
         "<< /Length " + std::to_string(content.size()) + " >>\nstream\n" + content + "endstream";
@@ -268,6 +298,42 @@ void test_to_markdown_extracts_simple_pdf() {
     const ainiux::Error err = ainiux::pdf::to_markdown_bytes(make_simple_pdf(), options, markdown);
     check(err.ok(), "to_markdown extracts simple PDF: " + err.message);
     check(markdown.find("Hello PDF") != std::string::npos, "simple PDF markdown contains Hello PDF");
+}
+
+void test_direct_and_indirect_page_content_arrays() {
+    const std::string pdfs[] = {
+        make_pdf_with_content_container("[4 0 R 6 0 R]", "null"),
+        make_pdf_with_content_container("7 0 R", "[4 0 R 6 0 R]"),
+    };
+    for (const std::string& pdf : pdfs) {
+        ainiux::pdf::Document document;
+        const ainiux::Error open =
+            ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document);
+        check(open.ok(), "content-array PDF opens: " + open.message);
+        std::string content;
+        const ainiux::Error page = document.page_content(0, content);
+        check(page.ok(), "direct or indirect page content array decodes: " + page.message);
+        const std::size_t first = content.find("First stream");
+        const std::size_t second = content.find("Second stream");
+        check(first != std::string::npos && second != std::string::npos && first < second,
+              "page content streams retain array order");
+        std::string markdown;
+        const ainiux::Error converted =
+            ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+        check(converted.ok() && markdown.find("First stream") != std::string::npos &&
+                  markdown.find("Second stream") != std::string::npos,
+              "content-array streams both reach Markdown");
+    }
+
+    const std::string malformed = make_pdf_with_content_container("7 0 R", "[4 0 R 42]");
+    ainiux::pdf::Document document;
+    check(ainiux::pdf::Document::open_bytes(malformed, ainiux::pdf::Options{}, document).ok(),
+          "malformed content-array PDF opens before page extraction");
+    std::string content;
+    const ainiux::Error page = document.page_content(0, content);
+    check(page.code == ainiux::ErrorCode::FileRead &&
+              page.message.find("non-reference") != std::string::npos,
+          "malformed content array reports a bounded page error");
 }
 
 void test_to_markdown_consumes_bfrange_destination_array() {
@@ -807,6 +873,7 @@ void run_all() {
     test_real_short_russian_pdf();
     test_open_corpus_page_counts();
     test_to_markdown_extracts_simple_pdf();
+    test_direct_and_indirect_page_content_arrays();
     test_to_markdown_consumes_bfrange_destination_array();
     test_to_markdown_rejects_unterminated_bfchar();
     test_to_markdown_russian_needle();

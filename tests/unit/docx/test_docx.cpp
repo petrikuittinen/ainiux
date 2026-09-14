@@ -128,6 +128,49 @@ void test_style_and_numbering_inheritance() {
           "explicit lvlRestart=0 preserves a nested counter across parent advances");
 }
 
+void test_fragmented_emphasis_and_complex_script_properties() {
+    const std::string relationships =
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"s\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
+        "</Relationships>";
+    const std::string styles =
+        "<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+        "<w:style w:type=\"paragraph\" w:styleId=\"ComplexOnly\"><w:name w:val=\"Complex only\"/>"
+        "<w:rPr><w:bCs/><w:iCs/></w:rPr></w:style></w:styles>";
+    const std::string document =
+        "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>"
+        "<w:p><w:pPr><w:pStyle w:val=\"ComplexOnly\"/></w:pPr>"
+        "<w:r><w:t>Latin </w:t></w:r><w:r><w:t>fragments</w:t></w:r></w:p>"
+        "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Tekijä</w:t><w:tab/></w:r>"
+        "<w:r><w:rPr><w:b/></w:rPr><w:t>N</w:t></w:r>"
+        "<w:r><w:rPr><w:b/></w:rPr><w:t>iklas Mälton</w:t><w:tab/></w:r>"
+        "<w:r><w:rPr><w:b/></w:rPr><w:t>Vuosi 20</w:t></w:r>"
+        "<w:r><w:rPr><w:b/></w:rPr><w:t>24</w:t></w:r></w:p>"
+        "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">Label </w:t></w:r>"
+        "<w:r><w:t>Value</w:t></w:r></w:p>"
+        "<w:p><w:pPr><w:pStyle w:val=\"ComplexOnly\"/></w:pPr>"
+        "<w:r><w:t>العربية</w:t></w:r></w:p>"
+        "</w:body></w:document>";
+    const std::string package = custom_package(
+        document, relationships, {{"custom/styles.xml", styles, true}});
+    std::string markdown;
+    const Error error = ainiux::docx::to_markdown_bytes(package, {}, markdown);
+    check(error.ok(), "fragmented emphasis DOCX converts: " + error.message);
+    check(markdown.find("Latin fragments") != std::string::npos &&
+              markdown.find("**Latin") == std::string::npos &&
+              markdown.find("*Latin") == std::string::npos,
+          "complex-script bold and italic do not style Latin text");
+    check(markdown.find("**Tekijä**\t**Niklas Mälton**\t**Vuosi 2024**") !=
+              std::string::npos,
+          "fragmented bold runs coalesce around tab-separated fields");
+    check(markdown.find("**Label** Value") != std::string::npos,
+          "trailing whitespace stays outside emphasis delimiters");
+    check(markdown.find("***العربية***") != std::string::npos,
+          "complex-script properties still style complex-script text");
+    check(markdown.find("****") == std::string::npos,
+          "fragmented emphasis does not emit adjacent delimiter pairs");
+}
+
 void test_round_trip() {
     const std::string source =
         "# Heading\n\n"
@@ -451,6 +494,7 @@ void run_all() {
     test_round_trip();
     test_strict_namespaces_images_and_merges();
     test_style_and_numbering_inheritance();
+    test_fragmented_emphasis_and_complex_script_properties();
     test_interoperability_fixtures();
     test_error_fixture_corpus();
     test_zip_shapes_and_failures();

@@ -882,27 +882,41 @@ Error Document::page_content(std::size_t index, std::string& decoded) {
     }
     std::vector<Ref> contents;
     const Value* contents_value = page_inherited(index, "Contents");
-    Ref single;
-    if (contents_value != nullptr && contents_value->type == ValueType::Ref) {
-        contents.push_back(contents_value->ref);
-    } else if (dict_ref(*page, "Contents", single)) {
-        contents.push_back(single);
-    } else {
-        const Value* arr = contents_value != nullptr && contents_value->type == ValueType::Array
-                               ? contents_value
-                               : dict_array(*page, "Contents");
-        if (arr != nullptr) {
-            for (const Value& item : arr->array) {
-                if (item.type == ValueType::Ref) {
-                    contents.push_back(item.ref);
-                }
-            }
+    if (contents_value == nullptr) return ok_error();
+    if (contents_value->type == ValueType::Ref) {
+        const Ref container = contents_value->ref;
+        Error err = load_object(container.number);
+        if (!err.ok()) return err;
+        Object* object = find_object(container.number);
+        if (object == nullptr)
+            return {ErrorCode::FileRead, "missing PDF Contents object " +
+                                             std::to_string(container.number)};
+        if (object->stream_offset != 0) {
+            contents.push_back(container);
+        } else if (object->value.type == ValueType::Array) {
+            contents_value = &object->value;
+        } else {
+            return {ErrorCode::FileRead, "PDF Contents object " +
+                                             std::to_string(container.number) +
+                                             " is neither a stream nor an array"};
         }
     }
-    if (contents.empty()) {
-        return ok_error();
+    if (contents_value->type == ValueType::Array) {
+        if (contents_value->array.size() > kMaxObjStmObjects)
+            return {ErrorCode::FileRead, "PDF page contains too many content streams"};
+        for (const Value& item : contents_value->array) {
+            if (item.type == ValueType::Null) continue;
+            if (item.type != ValueType::Ref)
+                return {ErrorCode::FileRead,
+                        "PDF Contents array contains a non-reference value"};
+            contents.push_back(item.ref);
+        }
+    } else if (contents.empty()) {
+        return {ErrorCode::FileRead, "PDF page Contents is neither a stream nor an array"};
     }
     for (const Ref& ref : contents) {
+        if (cancellation_.cancelled())
+            return {ErrorCode::Cancelled, "PDF page content load cancelled"};
         Error err = load_object(ref.number);
         if (!err.ok()) {
             return err;
