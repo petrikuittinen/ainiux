@@ -6,7 +6,7 @@ Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compati
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.34**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.35**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -100,7 +100,7 @@ families used most heavily while developing and testing the current agent,
 reasoning, tool-calling, and local OpenAI-compatible server paths. Exact model
 availability and identifiers still depend on the selected provider or local server.
 
-## Current v1.34 capabilities
+## Current v1.35 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -137,7 +137,7 @@ ainiux video --provider xai -m grok-imagine-video-1.5 -p "a red cube rotating" -
 ainiux video --provider gemini -m gemini-omni-1.1-flash -p "a red cube rotating" --resolution 360p
 ```
 
-Text, Markdown, HTML, PDF, and DOCX can be attached with `--attach`. Ainiux's PDF↔Markdown conversion is deliberately **super fast**: it is a local, single-process C++17 reader/writer with bounded streaming, no Python runtime or external PDF service, and fast enough to process thousands of pages per second on typical text PDFs. DOCX conversion is likewise local C++17 and dependency-free beyond the already-linked zlib. PDF, DOCX, and HTML compound conversions pass through canonical Markdown: for example, `--input report.docx --output-format pdf` extracts Markdown and newly typesets it, while `--input notes.md --output-format docx` creates a compact normalized Word package. Headings, quotes, lists, tables, links, common emphasis, tabs, and hard breaks are retained; fonts, sizes, colors, alignment, and ordinary paragraph indentation normalize at the Markdown boundary. Embedded images become visible `[image omitted]` placeholders and unsupported Word story parts are omitted with warnings. CJK, Hebrew, and Arabic use a subsetted system or `--font` TrueType for PDF output. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. URL fetching happens only when explicitly requested with `--fetch-url`, `/fetch`, `/attach URL`, `/insert URL`, or the agent fetch tool; remote PDF and DOCX are converted locally to Markdown. A URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
+Text, Markdown, HTML, PDF, and DOCX can be attached with `--attach`. Ainiux's PDF↔Markdown conversion is deliberately **super fast**: it is a local, single-process C++17 reader/writer with bounded streaming, no Python runtime or external PDF service, and fast enough to process thousands of pages per second on typical text PDFs. Ainiux also has very fast DOCX-to-Markdown and Markdown-to-DOCX conversion: the local C++17 converter is dependency-free beyond the already-linked zlib, and the reproducible [v1.35 benchmark](docs/docx_conversion_benchmark.md) records its end-to-end speed and canonical-semantic fidelity against Python libraries. PDF, DOCX, and HTML compound conversions pass through canonical Markdown: for example, `--input report.docx --output-format pdf` extracts Markdown and newly typesets it, while `--input notes.md --output-format docx` creates a compact normalized Word package. Headings, quotes, lists, tables, links, common emphasis, tabs, and hard breaks are retained; fonts, sizes, colors, alignment, and ordinary paragraph indentation normalize at the Markdown boundary. Embedded image preservation is not supported yet: DOCX input images become visible `[image omitted]` placeholders, and Markdown images are not embedded in generated DOCX files. Unsupported Word story parts are omitted with warnings. CJK, Hebrew, and Arabic use a subsetted system or `--font` TrueType for PDF output. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. URL fetching happens only when explicitly requested with `--fetch-url`, `/fetch`, `/attach URL`, `/insert URL`, or the agent fetch tool; remote PDF and DOCX are converted locally to Markdown. A URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
 
 Web search supports API providers and keyless fallbacks:
 
@@ -440,7 +440,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.34 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.35 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
 
 For the complete current option list, run:
 
