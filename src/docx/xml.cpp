@@ -17,7 +17,7 @@ namespace {
 constexpr const char* kXmlNamespace = "http://www.w3.org/XML/1998/namespace";
 
 Error xml_error(std::string message) {
-    return {ErrorCode::FileRead, "invalid DOCX XML: " + std::move(message)};
+    return {ErrorCode::FileRead, "invalid OOXML XML: " + std::move(message)};
 }
 
 void append_utf8(std::string& out, std::uint32_t cp) {
@@ -45,6 +45,34 @@ bool valid_xml_codepoint(std::uint32_t cp) {
            (cp >= 0x10000U && cp <= 0x10ffffU);
 }
 
+Error decode_utf16(std::string_view input, bool little, std::size_t start, std::string& utf8) {
+    if ((input.size() - start) % 2U != 0) return xml_error("UTF-16 input has an odd byte count");
+    utf8.reserve(input.size());
+    auto unit = [&](std::size_t pos) {
+        const std::uint16_t a = static_cast<unsigned char>(input[pos]);
+        const std::uint16_t b = static_cast<unsigned char>(input[pos + 1]);
+        return static_cast<std::uint16_t>(little ? a | (b << 8U) : (a << 8U) | b);
+    };
+    for (std::size_t pos = start; pos < input.size(); pos += 2) {
+        const std::uint16_t first = unit(pos);
+        std::uint32_t cp = first;
+        if (first >= 0xd800U && first <= 0xdbffU) {
+            if (pos + 3 >= input.size()) return xml_error("UTF-16 high surrogate is truncated");
+            const std::uint16_t second = unit(pos + 2);
+            if (second < 0xdc00U || second > 0xdfffU)
+                return xml_error("UTF-16 high surrogate is not paired");
+            cp = 0x10000U + ((static_cast<std::uint32_t>(first) - 0xd800U) << 10U) +
+                 (static_cast<std::uint32_t>(second) - 0xdc00U);
+            pos += 2;
+        } else if (first >= 0xdc00U && first <= 0xdfffU) {
+            return xml_error("UTF-16 low surrogate is unpaired");
+        }
+        if (!valid_xml_codepoint(cp)) return xml_error("UTF-16 contains an invalid XML character");
+        append_utf8(utf8, cp);
+    }
+    return ok_error();
+}
+
 Error normalized_utf8(std::string_view input, std::string& utf8) {
     utf8.clear();
     try {
@@ -54,30 +82,18 @@ Error normalized_utf8(std::string_view input, std::string& utf8) {
              (static_cast<unsigned char>(input[0]) == 0xfeU &&
               static_cast<unsigned char>(input[1]) == 0xffU))) {
             const bool little = static_cast<unsigned char>(input[0]) == 0xffU;
-            if ((input.size() - 2U) % 2U != 0) return xml_error("UTF-16 input has an odd byte count");
-            utf8.reserve(input.size());
-            auto unit = [&](std::size_t pos) {
-                const std::uint16_t a = static_cast<unsigned char>(input[pos]);
-                const std::uint16_t b = static_cast<unsigned char>(input[pos + 1]);
-                return static_cast<std::uint16_t>(little ? a | (b << 8U) : (a << 8U) | b);
-            };
-            for (std::size_t pos = 2; pos < input.size(); pos += 2) {
-                const std::uint16_t first = unit(pos);
-                std::uint32_t cp = first;
-                if (first >= 0xd800U && first <= 0xdbffU) {
-                    if (pos + 3 >= input.size()) return xml_error("UTF-16 high surrogate is truncated");
-                    const std::uint16_t second = unit(pos + 2);
-                    if (second < 0xdc00U || second > 0xdfffU)
-                        return xml_error("UTF-16 high surrogate is not paired");
-                    cp = 0x10000U + ((static_cast<std::uint32_t>(first) - 0xd800U) << 10U) +
-                         (static_cast<std::uint32_t>(second) - 0xdc00U);
-                    pos += 2;
-                } else if (first >= 0xdc00U && first <= 0xdfffU) {
-                    return xml_error("UTF-16 low surrogate is unpaired");
-                }
-                if (!valid_xml_codepoint(cp)) return xml_error("UTF-16 contains an invalid XML character");
-                append_utf8(utf8, cp);
-            }
+            Error error = decode_utf16(input, little, 2, utf8);
+            if (!error.ok()) return error;
+        } else if (input.size() >= 4 && input.size() % 2U == 0 &&
+                   static_cast<unsigned char>(input[0]) == 0x00U &&
+                   static_cast<unsigned char>(input[1]) == 0x3cU) {
+            Error error = decode_utf16(input, false, 0, utf8);
+            if (!error.ok()) return error;
+        } else if (input.size() >= 4 && input.size() % 2U == 0 &&
+                   static_cast<unsigned char>(input[0]) == 0x3cU &&
+                   static_cast<unsigned char>(input[1]) == 0x00U) {
+            Error error = decode_utf16(input, true, 0, utf8);
+            if (!error.ok()) return error;
         } else {
             std::size_t start = input.size() >= 3 &&
                                         static_cast<unsigned char>(input[0]) == 0xefU &&
@@ -109,7 +125,7 @@ Error normalized_utf8(std::string_view input, std::string& utf8) {
             }
         }
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to decode DOCX XML"};
+        return {ErrorCode::Internal, "not enough memory to decode OOXML XML"};
     }
     return ok_error();
 }
@@ -179,7 +195,7 @@ Error decode_entities(std::string_view raw, std::string& decoded) {
             pos = semi + 1;
         }
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to decode DOCX XML entities"};
+        return {ErrorCode::Internal, "not enough memory to decode OOXML XML entities"};
     }
     return ok_error();
 }
@@ -243,7 +259,7 @@ Error scan_xml(std::string_view bytes,
     try {
         while (pos < xml.size()) {
             if ((pos & 0xffffU) == 0 && cancellation.cancelled())
-                return {ErrorCode::Cancelled, "DOCX XML scan cancelled"};
+                return {ErrorCode::Cancelled, "OOXML XML scan cancelled"};
             if (xml[pos] != '<') {
                 const std::size_t end = xml.find('<', pos);
                 const std::size_t stop = end == std::string::npos ? xml.size() : end;
@@ -402,7 +418,7 @@ Error scan_xml(std::string_view bytes,
             }
         }
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory while scanning DOCX XML"};
+        return {ErrorCode::Internal, "not enough memory while scanning OOXML XML"};
     } catch (const std::length_error&) {
         return xml_error("XML structure is too large");
     }

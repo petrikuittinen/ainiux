@@ -257,8 +257,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 state.dirty = true;
                 status = "Recovered auto-save";
             } else if (loaded.converted_source != LoadedFile::ConvertedSource::None && !loaded.suggested_path.empty()) {
-                status = "Converted " + std::string(loaded.converted_source == LoadedFile::ConvertedSource::Pdf
-                                                        ? "PDF" : "DOCX") +
+                status = "Converted " + std::string(converted_source_name(loaded.converted_source)) +
                          " to Markdown; saving will write " + loaded.suggested_path + conversion_warning;
             } else if (loaded.converted && !loaded.source_encoding.empty()) {
                 status = "Converted from " + loaded.source_encoding + "; saving will write UTF-8";
@@ -1060,8 +1059,7 @@ app::EditorRunResult run_editor(const std::string& path,
             minibuffer_message(minibuffer, "Recovered auto-save for " + open_path);
         } else if (loaded.converted_source != LoadedFile::ConvertedSource::None) {
             minibuffer_message(minibuffer,
-                               "Converted " + std::string(loaded.converted_source == LoadedFile::ConvertedSource::Pdf
-                                                            ? "PDF" : "DOCX") +
+                               "Converted " + std::string(converted_source_name(loaded.converted_source)) +
                                    " to Markdown; saving will write " + buffer_path + conversion_warning);
         } else if (loaded.converted && !loaded.source_encoding.empty()) {
             minibuffer_message(minibuffer,

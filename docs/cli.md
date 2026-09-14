@@ -40,16 +40,19 @@ ainiux --input page.html --output-format pdf --output page.pdf
 ainiux --input report.pdf --output-format md --output report.md
 ainiux --input report.docx --output-format md --output report.md
 ainiux --input notes.md --output-format docx --output notes.docx
+ainiux --input sheet.xlsx --output-format md --output sheet.md
+ainiux --input notes.md --output-format xlsx --output notes.xlsx
 ainiux --fetch-url https://example.com --output-format md
 ainiux --fetch-url https://example.com/report.pdf --output-format md
 ainiux --fetch-url https://example.com/report.docx --output-format md
+ainiux --fetch-url https://example.com/sheet.xlsx --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
 ```
 
-Text, Markdown, HTML, PDF, and DOCX are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. PDF and DOCX use Markdown as the canonical interchange, so PDF→DOCX, DOCX→PDF, and HTML↔DOCX are staged through Markdown. Both converters are local C++17; DOCX uses only the already-linked zlib. A local or fetched `.docx` input defaults to Markdown. `--output-format docx` writes binary OPC/ZIP output and, like PDF, cannot be combined with `--format json` or `ndjson`. Generated DOCX is deterministic and normalized: headings 1–6, quotes, nested ordered/unordered lists, tables, links, bold, italic, strike, `++underline++`, tabs, and hard breaks are preserved; fonts, point sizes, RGB colors, alignment, and ordinary indentation are accepted without text loss but omitted at the Markdown boundary. Images become visible `[image omitted: ALT]` or `[image omitted]` text, and headers, footers, footnotes, endnotes, and comments are omitted with bounded warnings on stderr unless `--quiet`. This is conversion, not lossless Word editing.
+Text, Markdown, HTML, PDF, DOCX, and XLSX are supported. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. PDF, DOCX, and XLSX use Markdown as the canonical interchange, so PDF→DOCX, DOCX→PDF, HTML↔DOCX, and XLSX↔Markdown are staged through Markdown. The converters are local C++17; DOCX and XLSX use only the already-linked zlib. A local or fetched `.docx` or `.xlsx` input defaults to Markdown. `--output-format docx` or `xlsx` writes binary OPC/ZIP output and, like PDF, cannot be combined with `--format json` or `ndjson`. Generated XLSX is a newly typeset workbook from GitHub-flavored tables (one table per worksheet; a heading immediately above a table becomes the sheet name). Cell drawings, charts, comments, pivots, macros, encryption, and Excel layout are omitted. Legacy `.xls` is rejected. Generated DOCX is deterministic and normalized: headings 1–6, quotes, nested ordered/unordered lists, tables, links, bold, italic, strike, `++underline++`, tabs, and hard breaks are preserved; fonts, point sizes, RGB colors, alignment, and ordinary indentation are accepted without text loss but omitted at the Markdown boundary. Images become visible `[image omitted: ALT]` or `[image omitted]` text, and headers, footers, footnotes, endnotes, and comments are omitted with bounded warnings on stderr unless `--quiet`. This is conversion, not lossless Word editing.
 
-The PDF writer uses PDF 1.4, Core-14 Helvetica/Courier (including BoldOblique), 1 inch print margins, and WinAnsi for Latin. CJK (Han/Kana/Hangul), Hebrew, and Arabic are embedded from a TrueType glyf font: `--font PATH`, then `AINIUX_PDF_FONT`, then a small system allowlist (DroidSansFallback, Noto Naskh Arabic, Noto Sans Hebrew, WenQuanYi, Microsoft YaHei, …). Arabic is shaped to Presentation Forms-B and RTL paragraphs are right-aligned; Hebrew does not join. CFF OpenType CJK collections such as NotoSansCJK `.ttc` are skipped; pass a `.ttf`. Other characters outside those encodings are replaced with `?` and counted on stderr. A `---` thematic break is a hairline rule, not a page break; PDF-to-Markdown joins source pages with a blank line so a round-trip reflows instead of copying original page boundaries. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. `.pdf`/`.PDF` and `.docx`/`.DOCX` are accepted case-insensitively.
+The PDF writer uses PDF 1.4, Core-14 Helvetica/Courier (including BoldOblique), 1 inch print margins, and WinAnsi for Latin. CJK (Han/Kana/Hangul), Hebrew, and Arabic are embedded from a TrueType glyf font: `--font PATH`, then `AINIUX_PDF_FONT`, then a small system allowlist (DroidSansFallback, Noto Naskh Arabic, Noto Sans Hebrew, WenQuanYi, Microsoft YaHei, …). Arabic is shaped to Presentation Forms-B and RTL paragraphs are right-aligned; Hebrew does not join. CFF OpenType CJK collections such as NotoSansCJK `.ttc` are skipped; pass a `.ttf`. Other characters outside those encodings are replaced with `?` and counted on stderr. A `---` thematic break is a hairline rule, not a page break; PDF-to-Markdown joins source pages with a blank line so a round-trip reflows instead of copying original page boundaries. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. `.pdf`/`.PDF`, `.docx`/`.DOCX`, and `.xlsx`/`.XLSX` are accepted case-insensitively.
 
 ```sh
 ainiux --input report.pdf --output-format md --output report.md
@@ -61,6 +64,8 @@ ainiux --input report.pdf --output-format pdf --output report-reflow.pdf
 ainiux --input report.docx --output-format html --output report.html
 ainiux --input report.docx --output-format pdf --output report.pdf
 ainiux --input report.pdf --output-format docx --output report.docx
+ainiux --input sheet.xlsx --output-format md --output sheet.md
+ainiux --input notes.md --output-format xlsx --output notes.xlsx
 ```
 
 The default `--max-input-bytes` limit is 10 MiB (10485760). Larger PDFs need an explicit higher cap.
@@ -78,14 +83,14 @@ Combine a prompt with converted input, repeatable attachments, fetches, or searc
 ainiux lmstudio -p "Summarize" --attach notes.md
 ainiux lmstudio -p "Summarize this paper" --attach report.pdf
 ainiux openai -m MODEL -p "Describe this" --input photo.png
-ainiux deepseek -m deepseek-v4-flash-vision-exp -p "Describe this" \
+ainiux deepseek -m deepseek-flash -p "Describe this" \
   --input tests/image_files/China_EV_sales_March_2024.png
 ainiux lmstudio -p "Compare the sources" --fetch-url https://example.com --search "related topic"
 ```
 
 Text, Markdown, HTML, PDF, and DOCX attachments are bounded and validated. PDF and DOCX are converted to Markdown before they are sent. PNG, JPEG, and GIF are supported only when the selected Chat Completions model accepts image content. Raw base64 is not persisted in chat JSON. Use `--image-capability allow` only after verifying an unknown custom model.
 
-Fetching and searching are explicit. Prompt URLs are never fetched automatically. URL fetch applies byte and timeout limits and blocks private, loopback, link-local, multicast, and metadata addresses unless `--allow-private-url-fetch` is set. HTML, `application/pdf`, and `application/vnd.openxmlformats-officedocument.wordprocessingml.document` are converted to Markdown. PDF and DOCX served as `application/octet-stream` are recognized from bounded content signatures; DOCX served as `application/zip` is likewise inspected before conversion. The default `--max-fetch-bytes` limit is 10 MiB (10485760); larger documents need an explicit higher cap. Search provider details are in [Configuration](configuration.md#web-search).
+Fetching and searching are explicit. Prompt URLs are never fetched automatically. URL fetch applies byte and timeout limits and blocks private, loopback, link-local, multicast, and metadata addresses unless `--allow-private-url-fetch` is set. HTML, `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, and `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` are converted to Markdown. PDF, DOCX, and XLSX served as `application/octet-stream` are recognized from bounded content signatures; `application/zip` is inspected for Word (`word/`) or workbook (`xl/`) parts before conversion. The default `--max-fetch-bytes` limit is 10 MiB (10485760); larger documents need an explicit higher cap. Search provider details are in [Configuration](configuration.md#web-search).
 
 ## Context management
 
@@ -102,7 +107,7 @@ ainiux deepseek -m MODEL -p "Hello"
 ainiux http://localhost:8000/v1 -m MODEL -p "Hello"
 ```
 
-Override individual paths with `--base-url`, `--chat-url`, `--models-url`, or `--responses-url`. Official `--provider openai` defaults to Responses. `--api chat`, `openai_chat`, and a user `api = chat` setting stay on Chat Completions. `--api responses` and `--responses` still select Responses explicitly. Custom URLs stay on Chat Completions. Selecting a chat-only provider such as Gemini uses Chat Completions even if the previous provider used Responses. Endpoint normalization is deterministic and reports surprising rewrites unless `--quiet` is set.
+Override individual paths with `--base-url`, `--chat-url`, `--models-url`, or `--responses-url`. Official `--provider openai` is the only profile that defaults to Responses. `--api chat`, `openai_chat`, and a user `api = chat` setting stay on Chat Completions. `--api responses` and `--responses` still select Responses explicitly. xAI, DeepSeek, custom URLs, and every other provider stay on Chat Completions. Selecting a chat-only provider such as Gemini uses Chat Completions even if the previous provider used Responses. Catalog `web_search = on` does not switch the API. Endpoint normalization is deterministic and reports surprising rewrites unless `--quiet` is set.
 
 `--search QUERY` with a model request uses hosted provider `web_search` when `models.conf` marks the model `web_search=on` and the current adapter can emit that tool. Chat Completions sessions for GPT-5, Grok 4, and DeepSeek V4 / Vision stay on client search. `--no-builtin-web-search` forces the client Tavily/Firecrawl/Exa/Searxng/DuckDuckGo path. Standalone `--search` without a model request still uses client search.
 

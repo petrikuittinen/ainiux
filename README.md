@@ -83,7 +83,7 @@ ainiux -d src/
 Start an interactive project agent with `-a`:
 
 ```sh
-ainiux deepseek -m "deepseek-v4-flash" -a
+ainiux deepseek -m "deepseek-flash" -a
 ```
 
 ![Interactive agent](docs/ainiux_agent.png)
@@ -95,10 +95,13 @@ ainiux deepseek -m "deepseek-v4-flash" -a
 Chat, editor, and agent share terminal presentation and selectors, but not semantics. Switch explicitly with `/chat`, `/editor`, `/agent`, `/mode`, `/cycle`, or `Ctrl+G`. From an interactive agent turn you can hop to the editor or dired with `Ctrl+G` / `F4` without cancelling the turn; temporary editor hops keep the project session open. Leaving for chat or quitting finishes the agent session and disarms tools.
 
 Ainiux works especially well with **DeepSeek-V4-Flash**, **DeepSeek-V4-Pro**,
-**GPT-5.6**, and local **Qwen3.6** and **Gemma-4** model series. These are the
-families used most heavily while developing and testing the current agent,
-reasoning, tool-calling, and local OpenAI-compatible server paths. Exact model
-availability and identifiers still depend on the selected provider or local server.
+**GPT-5.6**, and local **Qwen3.6** and **Gemma-4** model series. On the official
+DeepSeek API the current Flash id is `deepseek-flash` (V4.1-Flash);
+`deepseek-v4-flash` remains valid on local servers and routers such as
+OpenRouter. These are the families used most heavily while developing and
+testing the current agent, reasoning, tool-calling, and local OpenAI-compatible
+server paths. Exact model availability and identifiers still depend on the
+selected provider or local server.
 
 ## Current v1.35 capabilities
 
@@ -113,12 +116,14 @@ Use `-p` for a prompt, `-i` for the line-oriented REPL, and `--no-stream` when a
 ```sh
 ainiux openai -m MODEL -p "Summarize the tradeoffs" --no-stream
 ainiux openrouter -m MODEL -i
-ainiux deepseek -m deepseek-v4-flash-vision-exp -p "Describe this chart" \
+ainiux deepseek -m deepseek-flash -p "Describe this chart" \
   --input tests/image_files/China_EV_sales_March_2024.png
 ainiux --input page.html --output-format md
 ainiux --input notes.md --output-format pdf --output notes.pdf
 ainiux --input report.docx --output-format md --output report.md
 ainiux --input notes.md --output-format docx --output notes.docx
+ainiux --input sheet.xlsx --output-format md --output sheet.md
+ainiux --input notes.md --output-format xlsx --output notes.xlsx
 ainiux --fetch-url https://example.com --output-format plaintext
 printf 'piped text' | ainiux --input stdin --output stdout
 ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
@@ -137,7 +142,7 @@ ainiux video --provider xai -m grok-imagine-video-1.5 -p "a red cube rotating" -
 ainiux video --provider gemini -m gemini-omni-1.1-flash -p "a red cube rotating" --resolution 360p
 ```
 
-Text, Markdown, HTML, PDF, and DOCX can be attached with `--attach`. Ainiux's PDF↔Markdown conversion is deliberately **super fast**: it is a local, single-process C++17 reader/writer with bounded streaming, no Python runtime or external PDF service, and fast enough to process thousands of pages per second on typical text PDFs. Ainiux also has very fast DOCX-to-Markdown and Markdown-to-DOCX conversion: the local C++17 converter is dependency-free beyond the already-linked zlib, and the reproducible [v1.35 benchmark](docs/docx_conversion_benchmark.md) records its end-to-end speed and canonical-semantic fidelity against Python libraries. PDF, DOCX, and HTML compound conversions pass through canonical Markdown: for example, `--input report.docx --output-format pdf` extracts Markdown and newly typesets it, while `--input notes.md --output-format docx` creates a compact normalized Word package. Headings, quotes, lists, tables, links, common emphasis, tabs, and hard breaks are retained; fonts, sizes, colors, alignment, and ordinary paragraph indentation normalize at the Markdown boundary. Embedded image preservation is not supported yet: DOCX input images become visible `[image omitted]` placeholders, and Markdown images are not embedded in generated DOCX files. Unsupported Word story parts are omitted with warnings. CJK, Hebrew, and Arabic use a subsetted system or `--font` TrueType for PDF output. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. URL fetching happens only when explicitly requested with `--fetch-url`, `/fetch`, `/attach URL`, `/insert URL`, or the agent fetch tool; remote PDF and DOCX are converted locally to Markdown. A URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
+Text, Markdown, HTML, PDF, DOCX, and XLSX can be attached with `--attach`. Ainiux's PDF↔Markdown conversion is deliberately **super fast**: it is a local, single-process C++17 reader/writer with bounded streaming, no Python runtime or external PDF service, and fast enough to process thousands of pages per second on typical text PDFs. Ainiux also has very fast DOCX-to-Markdown and Markdown-to-DOCX conversion: the local C++17 converter is dependency-free beyond the already-linked zlib, and the reproducible [v1.35 benchmark](docs/docx_conversion_benchmark.md) records its end-to-end speed and canonical-semantic fidelity against Python libraries. XLSX↔Markdown is the same kind of local streaming converter: worksheet cells become GitHub-flavored tables and a Markdown table becomes a new `.xlsx` workbook. Drawings, charts, comments, pivots, macros, and Excel layout are out of scope. PDF, DOCX, XLSX, and HTML compound conversions pass through canonical Markdown: for example, `--input report.docx --output-format pdf` extracts Markdown and newly typesets it, while `--input notes.md --output-format docx` creates a compact normalized Word package. Headings, quotes, lists, tables, links, common emphasis, tabs, and hard breaks are retained; fonts, sizes, colors, alignment, and ordinary paragraph indentation normalize at the Markdown boundary. Embedded image preservation is not supported yet: DOCX input images become visible `[image omitted]` placeholders, and Markdown images are not embedded in generated DOCX files. Unsupported Word story parts are omitted with warnings. CJK, Hebrew, and Arabic use a subsetted system or `--font` TrueType for PDF output. `--encoding` converts UTF-16, Windows-1250/1251/1252, ISO-8859-1/2, and KOI8-R/U locally; CJK names use `iconv` when installed. The editor asks when a file is not valid UTF-8. PNG, JPEG, and GIF input is available through compatible Chat Completions models. URL fetching happens only when explicitly requested with `--fetch-url`, `/fetch`, `/attach URL`, `/insert URL`, or the agent fetch tool; remote PDF, DOCX, and XLSX are converted locally to Markdown. A URL inside a prompt never triggers a fetch. Private, loopback, link-local, multicast, and metadata addresses are blocked unless explicitly allowed.
 
 Web search supports API providers and keyless fallbacks:
 

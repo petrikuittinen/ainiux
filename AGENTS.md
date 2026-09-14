@@ -73,6 +73,11 @@ editing. It does not preserve images, recurring headers/footers, notes, comments
 macros, themes, or arbitrary Word layout. WebUI DOCX downloads and transcript-to-
 DOCX commands remain unimplemented.
 
+XLSX input/output is local canonical-Markdown conversion of worksheet cell values
+to GitHub-flavored tables, not lossless workbook editing. It does not preserve
+drawings, charts, comments, pivots, macros, encryption, themes, or Excel layout.
+Legacy `.xls` is rejected. Transcript-to-XLSX commands are unimplemented.
+
 Do not pretend these exist: REPL/TUI image-generation jobs, batch or streaming
 image output, multi-turn image editing, `/loop`, sub-agents, a native Anthropic
 Messages adapter, multi-workspace server routing, or an ncurses UI. MCP tools do
@@ -127,6 +132,7 @@ Put code in the existing matching module; do not create a parallel architecture.
 │   ├── fetch/, search/      explicit network retrieval
 │   ├── highlight/           shared terminal syntax highlighter
 │   ├── html/, markdown/     conversion and display formatting
+│   ├── xlsx/                SpreadsheetML ↔ Markdown tables
 │   ├── http/                libcurl transport and SSE
 │   ├── input/               bounded text/image classification and reads
 │   ├── json/                in-tree JSON facade

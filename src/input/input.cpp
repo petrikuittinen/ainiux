@@ -17,6 +17,7 @@
 #include "docx/docx.hpp"
 #include "html/html.hpp"
 #include "pdf/pdf.hpp"
+#include "xlsx/xlsx.hpp"
 
 namespace ainiux::input {
 namespace {
@@ -365,6 +366,10 @@ Error classify_file_type(const std::string& path, FileType& type) {
         type = {Kind::Docx, "docx", docx::kMimeType};
         return ok_error();
     }
+    if (ends_with(lower, ".xlsx")) {
+        type = {Kind::Xlsx, "xlsx", xlsx::kMimeType};
+        return ok_error();
+    }
     if (ends_with(lower, ".png")) {
         type = {Kind::Image, "image", "image/png"};
         return ok_error();
@@ -381,7 +386,7 @@ Error classify_file_type(const std::string& path, FileType& type) {
     // if (ends_with(lower, ".webp")) type = {Kind::Image, "image", "image/webp"};
     return {ErrorCode::UnsupportedFeature,
             "unsupported input file type for " + resolved +
-                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .docx, .png, .jpg, .jpeg, "
+                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .docx, .xlsx, .png, .jpg, .jpeg, "
                 "and .gif "
                 "(case-insensitive)"};
 }
@@ -470,7 +475,7 @@ Error load_text_context_file(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text insertion supports .txt, .md, .html, .pdf, and .docx files; attach images to a prompt instead: " +
+                "text insertion supports .txt, .md, .html, .pdf, .docx, and .xlsx files; attach images to a prompt instead: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {
@@ -504,6 +509,23 @@ Error load_text_context_file(const std::string& path,
         Error docx_error = docx::to_markdown_file(resolved, docx_options, loaded.content,
                                                   &diagnostics);
         if (!docx_error.ok()) return docx_error;
+        loaded.warnings = std::move(diagnostics.messages);
+        context = std::move(loaded);
+        return ok_error();
+    }
+    if (type.kind == Kind::Xlsx) {
+        if (resolved == "stdin") {
+            return {ErrorCode::UnsupportedFeature, "XLSX input from stdin is not supported; pass a .xlsx path"};
+        }
+        xlsx::ReadOptions xlsx_options;
+        xlsx_options.max_bytes = max_bytes;
+        xlsx_options.cancellation = cancellation;
+        TextContext loaded;
+        loaded.source = "file " + resolved;
+        loaded.kind = Kind::Xlsx;
+        xlsx::Diagnostics diagnostics;
+        Error xlsx_error = xlsx::to_markdown_file(resolved, xlsx_options, loaded.content, &diagnostics);
+        if (!xlsx_error.ok()) return xlsx_error;
         loaded.warnings = std::move(diagnostics.messages);
         context = std::move(loaded);
         return ok_error();
@@ -587,7 +609,8 @@ Error load_insert_source(const std::string& source,
             return err;
         }
         if (fetched.kind == fetch::DocumentKind::Pdf ||
-            fetched.kind == fetch::DocumentKind::Docx) {
+            fetched.kind == fetch::DocumentKind::Docx ||
+            fetched.kind == fetch::DocumentKind::Xlsx) {
             loaded.content = std::move(fetched.markdown);
             loaded.converted_html = true;
             loaded.warnings = std::move(fetched.warnings);
@@ -648,6 +671,17 @@ Error load_insert_source(const std::string& source,
             loaded.content = std::move(converted);
             loaded.converted_html = true;
             loaded.warnings = std::move(diagnostics.messages);
+        } else if (type_error.ok() && type.kind == Kind::Xlsx) {
+            xlsx::ReadOptions xlsx_options;
+            xlsx_options.max_bytes = options.max_file_bytes;
+            xlsx_options.cancellation = cancellation;
+            std::string converted;
+            xlsx::Diagnostics diagnostics;
+            err = xlsx::to_markdown_bytes(loaded.content, xlsx_options, converted, &diagnostics);
+            if (!err.ok()) return err;
+            loaded.content = std::move(converted);
+            loaded.converted_html = true;
+            loaded.warnings = std::move(diagnostics.messages);
         } else {
         const bool html_hints = type_error.ok() && type.kind == Kind::Html;
         err = decode_local_text(loaded.content, "file " + loaded.source, options.encoding_name,
@@ -674,7 +708,7 @@ Error load_insert_source(const std::string& source,
 std::string text_context_message(const TextContext& context) {
     std::string message = "Input context from " + context.source + "\nFormat: ";
     if (context.kind == Kind::Markdown || context.kind == Kind::Html || context.kind == Kind::Pdf ||
-        context.kind == Kind::Docx) {
+        context.kind == Kind::Docx || context.kind == Kind::Xlsx) {
         message += "md";
     } else {
         message += "plaintext";
@@ -703,7 +737,7 @@ Error read_local_text_file_for_attach(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text attach supports .txt, .md, .html, .pdf, and .docx files; images use the pending image queue: " +
+                "text attach supports .txt, .md, .html, .pdf, .docx, and .xlsx files; images use the pending image queue: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {
@@ -720,6 +754,15 @@ Error read_local_text_file_for_attach(const std::string& path,
         Error docx_error = docx::to_markdown_file(resolved, docx_options, content, &diagnostics);
         if (docx_error.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
         return docx_error;
+    }
+    if (type.kind == Kind::Xlsx) {
+        xlsx::ReadOptions xlsx_options;
+        xlsx_options.max_bytes = max_bytes;
+        xlsx_options.cancellation = cancellation;
+        xlsx::Diagnostics diagnostics;
+        Error xlsx_error = xlsx::to_markdown_file(resolved, xlsx_options, content, &diagnostics);
+        if (xlsx_error.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
+        return xlsx_error;
     }
 
     std::ifstream file(std::filesystem::u8path(resolved), std::ios::binary);

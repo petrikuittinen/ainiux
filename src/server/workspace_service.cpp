@@ -16,6 +16,7 @@
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "pdf/pdf.hpp"
+#include "xlsx/xlsx.hpp"
 #include "platform/filesystem.hpp"
 #include "security/hash.hpp"
 #include "server/limits.hpp"
@@ -332,6 +333,21 @@ Error snapshot_file(const std::string& root,
         if (!error.ok()) return error;
         snapshot.content = std::move(markdown);
         snapshot.converted_from = docx::kMimeType;
+        snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
+        snapshot.warnings = std::move(diagnostics.messages);
+        return ok_error();
+    }
+    const bool xlsx_path = lower_path.size() >= 5 &&
+                           lower_path.compare(lower_path.size() - 5, 5, ".xlsx") == 0;
+    if (xlsx_path) {
+        xlsx::ReadOptions xlsx_options;
+        xlsx_options.max_bytes = content.size();
+        xlsx::Diagnostics diagnostics;
+        std::string markdown;
+        error = xlsx::to_markdown_bytes(content, xlsx_options, markdown, &diagnostics);
+        if (!error.ok()) return error;
+        snapshot.content = std::move(markdown);
+        snapshot.converted_from = xlsx::kMimeType;
         snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
         snapshot.warnings = std::move(diagnostics.messages);
         return ok_error();
@@ -803,6 +819,16 @@ Error WorkspaceService::save(const std::string& relative_path,
     if (content.find('\0') != std::string::npos || !html::is_valid_utf8(content)) {
         return {ErrorCode::BadArgs, "field 'content' must be valid UTF-8 text without NUL bytes"};
     }
+    {
+        const std::string lower = ascii_lower(relative_path);
+        if (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".xlsx") == 0) {
+            xlsx::WriteOptions write_options;
+            std::string xlsx_bytes;
+            error = xlsx::from_markdown(content, write_options, xlsx_bytes);
+            if (!error.ok()) return error;
+            content = std::move(xlsx_bytes);
+        }
+    }
     WorkspaceFileSnapshot before;
     error = snapshot_file(workspace_, relative_path, before);
     if (!error.ok()) return error;
@@ -852,6 +878,16 @@ Error WorkspaceService::create_file(const std::string& request_body,
     if (content.size() > kMaxFileBytes || content.find('\0') != std::string::npos ||
         !html::is_valid_utf8(content)) {
         return {ErrorCode::BadArgs, "field 'content' must be bounded valid UTF-8 text without NUL bytes"};
+    }
+    {
+        const std::string lower = ascii_lower(relative);
+        if (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".xlsx") == 0) {
+            xlsx::WriteOptions write_options;
+            std::string xlsx_bytes;
+            error = xlsx::from_markdown(content, write_options, xlsx_bytes);
+            if (!error.ok()) return error;
+            content = std::move(xlsx_bytes);
+        }
     }
     fs::path target;
     fs::path parent;

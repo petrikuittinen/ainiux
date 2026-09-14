@@ -11,6 +11,7 @@
 #include "html/html.hpp"
 #include "http/http.hpp"
 #include "pdf/pdf.hpp"
+#include "xlsx/xlsx.hpp"
 
 namespace ainiux::fetch {
 namespace {
@@ -189,6 +190,10 @@ bool classify_fetched_kind(const std::string& media_type,
         kind = DocumentKind::Docx;
         return allow_binary;
     }
+    if (media_type_is_xlsx(media_type)) {
+        kind = DocumentKind::Xlsx;
+        return allow_binary;
+    }
     const bool generic_type = media_type.empty() || media_type == "application/octet-stream";
     if (generic_type || media_type == "application/zip") {
         if (body_looks_like_pdf(body)) {
@@ -197,6 +202,10 @@ bool classify_fetched_kind(const std::string& media_type,
         }
         if (body_looks_like_docx(body)) {
             kind = DocumentKind::Docx;
+            return allow_binary;
+        }
+        if (body_looks_like_xlsx(body)) {
+            kind = DocumentKind::Xlsx;
             return allow_binary;
         }
         if (!generic_type) {
@@ -222,22 +231,26 @@ const char* accept_header_for(FetchAccept accept) {
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "text/plain;q=0.8,application/pdf;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.7,"
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.7,"
                    "image/avif,image/webp,*/*;q=0.8";
         case FetchAccept::HtmlOrBinaryDocument:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "application/pdf;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.8,"
                    "image/avif,image/webp,image/apng,*/*;q=0.8";
         case FetchAccept::Document:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "text/plain;q=0.8,application/pdf;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.8,"
                    "image/avif,image/webp,*/*;q=0.8";
         case FetchAccept::HtmlOnly:
         default:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "application/pdf;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.7,"
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.7,"
                    "image/avif,image/webp,image/apng,*/*;q=0.8";
     }
 }
@@ -247,9 +260,9 @@ const char* unsupported_type_message(FetchAccept accept) {
         case FetchAccept::HtmlOrPlain:
             return "a supported text content type: ";
         case FetchAccept::HtmlOrBinaryDocument:
-            return "an HTML, PDF, or DOCX content type: ";
+            return "an HTML, PDF, DOCX, or XLSX content type: ";
         case FetchAccept::Document:
-            return "a supported HTML, PDF, DOCX, or text content type: ";
+            return "a supported HTML, PDF, DOCX, XLSX, or text content type: ";
         case FetchAccept::HtmlOnly:
         default:
             return "an HTML content type: ";
@@ -382,6 +395,30 @@ Error convert_docx_body(const std::string& url,
     return ok_error();
 }
 
+Error convert_xlsx_body(const std::string& url,
+                        std::string body,
+                        const Options& options,
+                        std::string& markdown,
+                        std::vector<std::string>* warnings,
+                        runtime::CancellationToken cancellation) {
+    xlsx::ReadOptions xlsx_options;
+    xlsx_options.max_bytes = options.max_bytes > 0 ? static_cast<std::size_t>(options.max_bytes)
+                                                   : body.size();
+    xlsx_options.cancellation = cancellation;
+    xlsx::Diagnostics diagnostics;
+    Error err = xlsx::to_markdown_bytes(body, xlsx_options, markdown, &diagnostics);
+    if (!err.ok()) {
+        return err;
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    }
+    if (warnings != nullptr) {
+        *warnings = std::move(diagnostics.messages);
+    }
+    return ok_error();
+}
+
 }  // namespace
 
 std::string fetched_media_type(std::string content_type) {
@@ -394,6 +431,10 @@ bool media_type_is_pdf(const std::string& media_type) {
 
 bool media_type_is_docx(const std::string& media_type) {
     return media_type == docx::kMimeType;
+}
+
+bool media_type_is_xlsx(const std::string& media_type) {
+    return media_type == xlsx::kMimeType;
 }
 
 bool media_type_is_html(const std::string& media_type) {
@@ -430,6 +471,10 @@ bool body_looks_like_docx(std::string_view body) {
            body.find("word/") != std::string_view::npos;
 }
 
+bool body_looks_like_xlsx(std::string_view body) {
+    return xlsx::looks_like_xlsx(body);
+}
+
 Error markdown_from_fetched_bytes(std::string_view body,
                                   const std::string& content_type,
                                   std::string& markdown,
@@ -458,14 +503,24 @@ Error markdown_from_fetched_bytes(std::string_view body,
         if (err.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
         return err;
     }
+    if (media_type_is_xlsx(media) || (docx_sniffable && body_looks_like_xlsx(body))) {
+        kind = DocumentKind::Xlsx;
+        xlsx::ReadOptions xlsx_options;
+        xlsx_options.max_bytes = body.size();
+        xlsx_options.cancellation = cancellation;
+        xlsx::Diagnostics diagnostics;
+        Error err = xlsx::to_markdown_bytes(body, xlsx_options, markdown, &diagnostics);
+        if (err.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
+        return err;
+    }
     if (media_type_is_plain(media)) {
         kind = DocumentKind::Plaintext;
     } else if (media_type_is_html(media) || generic_type) {
         kind = DocumentKind::Html;
     } else {
         return {ErrorCode::UnsupportedFeature,
-                "fetched body is not HTML, PDF, DOCX, or plain text (Content-Type: " + content_type +
-                    ")"};
+                "fetched body is not HTML, PDF, DOCX, XLSX, or plain text (Content-Type: " +
+                    content_type + ")"};
     }
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "fetched conversion cancelled"};
@@ -515,6 +570,10 @@ Error fetch_document(const std::string& url,
         return convert_docx_body(url, std::move(body), options, document.markdown,
                                  &document.warnings, cancellation);
     }
+    if (kind == DocumentKind::Xlsx) {
+        return convert_xlsx_body(url, std::move(body), options, document.markdown,
+                                 &document.warnings, cancellation);
+    }
     document.body = normalize_body_to_utf8(std::move(body), content_type);
     return ok_error();
 }
@@ -533,7 +592,8 @@ Error fetch_markdown(const std::string& url,
         return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
     }
     if (warnings != nullptr) *warnings = document.warnings;
-    if (document.kind == DocumentKind::Pdf || document.kind == DocumentKind::Docx) {
+    if (document.kind == DocumentKind::Pdf || document.kind == DocumentKind::Docx ||
+        document.kind == DocumentKind::Xlsx) {
         markdown = std::move(document.markdown);
         return ok_error();
     }
@@ -563,6 +623,9 @@ Error fetch_text(const std::string& url,
     }
     if (kind == DocumentKind::Docx) {
         return convert_docx_body(url, std::move(body), options, text, warnings, cancellation);
+    }
+    if (kind == DocumentKind::Xlsx) {
+        return convert_xlsx_body(url, std::move(body), options, text, warnings, cancellation);
     }
     body = normalize_body_to_utf8(std::move(body), content_type);
     if (cancellation.cancelled()) {

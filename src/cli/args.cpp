@@ -625,7 +625,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     opts.output_format_explicit = true;
                     opts.rendered_output_format_explicit = true;
                 } else {
-                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, docx, json, jsond, or ndjson"}};
+                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, docx, xlsx, json, jsond, or ndjson"}};
                 }
             } else if (opt == "--font") {
                 opts.pdf_font = value;
@@ -1369,8 +1369,8 @@ Usage:
   ainiux -c, --chat [BASE_URL|PROFILE] [options]
   ainiux [BASE_URL|PROFILE] -e, --editor [PATH] [--output PATH]
   ainiux -d, --dired [PATH]
-  ainiux --input PATH [--output-format md|html|plaintext|pdf|json|jsond] [--output PATH]
-  ainiux --fetch-url URL [--output-format md|html|plaintext|pdf|json|jsond] [--output PATH]
+  ainiux --input PATH [--output-format md|html|plaintext|pdf|docx|xlsx|json|jsond] [--output PATH]
+  ainiux --fetch-url URL [--output-format md|html|plaintext|pdf|docx|xlsx|json|jsond] [--output PATH]
   ainiux --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
   ainiux --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
   ainiux benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
@@ -1415,8 +1415,11 @@ Examples:
   ainiux --input page.html --output-format md
   ainiux --input notes.md --output-format pdf --output notes.pdf
   ainiux --input report.pdf --output-format md --output report.md
+  ainiux --input sheet.xlsx --output-format md --output sheet.md
+  ainiux --input notes.md --output-format xlsx --output notes.xlsx
   ainiux --fetch-url https://example.com --output-format md
   ainiux --fetch-url https://example.com/report.pdf --output-format md
+  ainiux --fetch-url https://example.com/sheet.xlsx --output-format md
   ainiux --search "web scraping" --output-format plaintext
   ainiux lmstudio -p "Summarize" --attach notes.md --search "latest news"
   printf 'piped text' | ainiux --input stdin --output stdout
@@ -1555,23 +1558,23 @@ Options:
   Output:
       --format text|json|ndjson|jsonl|jsond
                                 In image mode: png|jpeg|webp|auto (default png).
-      --output-format html|md|plaintext|pdf|docx|json|jsond|ndjson
+      --output-format html|md|plaintext|pdf|docx|xlsx|json|jsond|ndjson
       --font PATH               TrueType (.ttf/.ttc with glyf) for CJK/Hebrew/Arabic PDF output.
                                 Also AINIUX_PDF_FONT, then a small system-font allowlist.
       --output PATH             Use 'stdout' to write to standard output.
                                 In image mode, omit to write the first unused imageN.png.
 
   Input and attachments:
-      --input PATH              Read text/Markdown/HTML/PDF/DOCX, or attach PNG/JPEG/GIF with -p;
-                                PDF/DOCX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
+      --input PATH              Read text/Markdown/HTML/PDF/DOCX/XLSX, or attach PNG/JPEG/GIF with -p;
+                                PDF/DOCX/XLSX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
       --encoding NAME           Decode --input/--attach text as NAME instead of UTF-8.
                                 Built-in: utf-8, utf-16, windows-1250/1251/1252,
                                 iso-8859-1/2, koi8-r/u. CJK names (gbk, big5, …)
                                 use iconv when installed.
-      --attach PATH             Add text/Markdown/HTML/PDF/DOCX or PNG/JPEG/GIF; repeatable;
-                                PDF/DOCX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
+      --attach PATH             Add text/Markdown/HTML/PDF/DOCX/XLSX or PNG/JPEG/GIF; repeatable;
+                                PDF/DOCX/XLSX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
                                 In image mode: PNG/JPEG references only (repeatable, max 16).
-      --fetch-url URL           Fetch HTML, PDF, or DOCX for extraction or prompt context with -p.
+      --fetch-url URL           Fetch HTML, PDF, DOCX, or XLSX for extraction or prompt context with -p.
                                 PDF and DOCX are converted to Markdown.
                                 Downloads are capped by --max-fetch-bytes (default 10 MiB).
       --search QUERY            Run a web search and use results as prompt context with -p.

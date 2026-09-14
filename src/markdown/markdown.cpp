@@ -10,6 +10,7 @@
 #include "ainiux/version.hpp"
 #include "docx/docx.hpp"
 #include "pdf/pdf.hpp"
+#include "xlsx/xlsx.hpp"
 
 namespace ainiux::markdown {
 namespace {
@@ -952,6 +953,10 @@ bool parse_output_format(const std::string& text, OutputFormat& out) {
         out = OutputFormat::Docx;
         return true;
     }
+    if (normalized == "xlsx") {
+        out = OutputFormat::Xlsx;
+        return true;
+    }
     return false;
 }
 
@@ -967,6 +972,8 @@ const char* output_format_name(OutputFormat format) {
             return "pdf";
         case OutputFormat::Docx:
             return "docx";
+        case OutputFormat::Xlsx:
+            return "xlsx";
     }
     return "md";
 }
@@ -1004,6 +1011,12 @@ std::string render(const std::string& markdown, OutputFormat format, bool comple
             std::string docx_bytes;
             if (!docx::from_markdown(markdown, options, docx_bytes).ok()) return {};
             return docx_bytes;
+        }
+        case OutputFormat::Xlsx: {
+            xlsx::WriteOptions options;
+            std::string xlsx_bytes;
+            if (!xlsx::from_markdown(markdown, options, xlsx_bytes).ok()) return {};
+            return xlsx_bytes;
         }
     }
     return markdown;

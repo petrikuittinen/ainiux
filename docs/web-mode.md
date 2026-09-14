@@ -69,7 +69,7 @@ provides:
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
 - a bounded UTF-8 editor with optimistic saves, conflict recovery, PDF/DOCX-to-
-  Markdown conversion when opening `.pdf` or `.docx` (Save writes the sibling
+  Markdown conversion when opening `.pdf`, `.docx`, or `.xlsx` (Save writes the sibling
   `.md`; WebUI DOCX export remains deferred), detected
   per-file indentation controls, Tab/Shift+Tab indent and outdent, adaptive
   selection/file reformatting, and bounded undo/redo. Use `Ctrl+U` or `Ctrl+Z` to

@@ -10,6 +10,7 @@
 #include "ainiux/model_setting.hpp"
 #include "context/context.hpp"
 #include "docx/docx.hpp"
+#include "xlsx/xlsx.hpp"
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "pdf/pdf.hpp"
@@ -76,6 +77,14 @@ Error write_rendered_assistant_output(const cli::Options& options,
         docx::WriteOptions docx_options;
         std::string rendered;
         Error err = docx::from_markdown(content, docx_options, rendered);
+        if (!err.ok()) return err;
+        out << rendered;
+        return ok_error();
+    }
+    if (options.output_format == markdown::OutputFormat::Xlsx) {
+        xlsx::WriteOptions xlsx_options;
+        std::string rendered;
+        Error err = xlsx::from_markdown(content, xlsx_options, rendered);
         if (!err.ok()) return err;
         out << rendered;
         return ok_error();

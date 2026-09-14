@@ -4,6 +4,7 @@
 #include "encoding/encoding.hpp"
 #include "docx/docx.hpp"
 #include "pdf/pdf.hpp"
+#include "xlsx/xlsx.hpp"
 #include "platform/filesystem.hpp"
 
 #include <algorithm>
@@ -43,6 +44,10 @@ bool path_has_docx_extension(const std::string& path) {
     return ends_with_ci(path, ".docx");
 }
 
+bool path_has_xlsx_extension(const std::string& path) {
+    return ends_with_ci(path, ".xlsx");
+}
+
 bool bytes_look_like_pdf(const std::string& bytes) {
     size_t i = 0;
     while (i < bytes.size() &&
@@ -53,7 +58,13 @@ bool bytes_look_like_pdf(const std::string& bytes) {
 }
 
 bool bytes_look_like_docx(const std::string& bytes) {
-    return bytes.size() >= 4 && bytes.compare(0, 4, "PK\x03\x04", 4) == 0;
+    return bytes.find("[Content_Types].xml") != std::string::npos &&
+           bytes.find("_rels/.rels") != std::string::npos &&
+           bytes.find("word/") != std::string::npos;
+}
+
+bool bytes_look_like_xlsx(const std::string& bytes) {
+    return xlsx::looks_like_xlsx(bytes);
 }
 
 }  // namespace
@@ -63,6 +74,9 @@ std::string sibling_markdown_path(const std::string& path) {
         return path.substr(0, path.size() - 4) + ".md";
     }
     if (path_has_docx_extension(path)) {
+        return path.substr(0, path.size() - 5) + ".md";
+    }
+    if (path_has_xlsx_extension(path)) {
         return path.substr(0, path.size() - 5) + ".md";
     }
     return path + ".md";
@@ -408,6 +422,19 @@ Error load_file(const std::string& path,
         out.suggested_path = sibling_markdown_path(resolved);
         return finalize_editor_content(std::move(markdown), settings, out);
     }
+    if (path_has_xlsx_extension(resolved) || bytes_look_like_xlsx(content)) {
+        xlsx::ReadOptions xlsx_options;
+        xlsx_options.max_bytes = content.size();
+        std::string markdown;
+        xlsx::Diagnostics diagnostics;
+        err = xlsx::to_markdown_bytes(content, xlsx_options, markdown, &diagnostics);
+        if (!err.ok()) return err;
+        out.converted_source = LoadedFile::ConvertedSource::Xlsx;
+        out.converted = true;
+        out.conversion_warnings = std::move(diagnostics.messages);
+        out.suggested_path = sibling_markdown_path(resolved);
+        return finalize_editor_content(std::move(markdown), settings, out);
+    }
     const encoding::DetectedEncoding detected = encoding::detect(content);
     if (detected.confident) {
         std::string utf8;
@@ -482,6 +509,12 @@ Error save_file(const std::string& path, const PieceTable& text, LineBreak lineb
         err = docx::from_markdown(payload, docx_options, docx_bytes);
         if (!err.ok()) return {err.code, err.message + ": " + resolved};
         payload = std::move(docx_bytes);
+    } else if (path_has_xlsx_extension(resolved)) {
+        xlsx::WriteOptions xlsx_options;
+        std::string xlsx_bytes;
+        err = xlsx::from_markdown(payload, xlsx_options, xlsx_bytes);
+        if (!err.ok()) return {err.code, err.message + ": " + resolved};
+        payload = std::move(xlsx_bytes);
     }
     // Editor buffers are ordinary project files: respect umask / existing mode.
     Error save_error = platform::atomic_write_shared(resolved, payload, true);

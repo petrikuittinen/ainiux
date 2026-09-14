@@ -15,6 +15,7 @@
 #include "markdown/markdown.hpp"
 #include "pdf/pdf.hpp"
 #include "search/search.hpp"
+#include "xlsx/xlsx.hpp"
 
 namespace ainiux::app {
 
@@ -84,6 +85,8 @@ const char* input_kind_name(InputKind kind) {
             return "pdf";
         case InputKind::Docx:
             return "docx";
+        case InputKind::Xlsx:
+            return "xlsx";
         case InputKind::Image:
             return "image";
     }
@@ -137,7 +140,8 @@ markdown::OutputFormat document_output_format(const cli::Options& options,
     if (kind == InputKind::Html) {
         return legacy_html_output_format(options);
     }
-    if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx) {
+    if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx ||
+        kind == InputKind::Xlsx) {
         return markdown::OutputFormat::Markdown;
     }
     return markdown::OutputFormat::Plaintext;
@@ -190,12 +194,23 @@ Error write_docx_from_markdown(const std::string& markdown, std::string& bytes) 
     return docx::from_markdown(markdown, options, bytes);
 }
 
+void warn_xlsx_diagnostics(bool quiet, const xlsx::Diagnostics& diagnostics) {
+    if (quiet) return;
+    for (const std::string& message : diagnostics.messages) std::cerr << "warning: " << message << "\n";
+}
+
+Error write_xlsx_from_markdown(const std::string& markdown, std::string& bytes) {
+    xlsx::WriteOptions options;
+    return xlsx::from_markdown(markdown, options, bytes);
+}
+
 std::string render_document_body(const std::string& body,
                                  InputKind kind,
                                  markdown::OutputFormat output_format,
                                  bool complete_html_document) {
     if (output_format == markdown::OutputFormat::Pdf ||
-        output_format == markdown::OutputFormat::Docx) {
+        output_format == markdown::OutputFormat::Docx ||
+        output_format == markdown::OutputFormat::Xlsx) {
         return "";
     }
     if (kind == InputKind::Html) {
@@ -208,7 +223,8 @@ std::string render_document_body(const std::string& body,
         }
         return markdown;
     }
-    if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx) {
+    if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx ||
+        kind == InputKind::Xlsx) {
         return markdown::render(body, output_format, complete_html_document);
     }
     if (kind == InputKind::Image) {
@@ -320,11 +336,14 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
             return err;
         }
         if (fetched.kind == fetch::DocumentKind::Pdf ||
-            fetched.kind == fetch::DocumentKind::Docx) {
+            fetched.kind == fetch::DocumentKind::Docx ||
+            fetched.kind == fetch::DocumentKind::Xlsx) {
             document.source = document_source_label(options);
             document.input_kind = fetched.kind == fetch::DocumentKind::Pdf
                                       ? InputKind::Pdf
-                                      : InputKind::Docx;
+                                      : fetched.kind == fetch::DocumentKind::Docx
+                                            ? InputKind::Docx
+                                            : InputKind::Xlsx;
             document.warnings = std::move(fetched.warnings);
             if (!options.quiet) {
                 for (const std::string& warning : document.warnings)
@@ -337,6 +356,8 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
             }
             if (document.output_format == markdown::OutputFormat::Docx)
                 return write_docx_from_markdown(fetched.markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Xlsx)
+                return write_xlsx_from_markdown(fetched.markdown, document.converted);
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -393,6 +414,8 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
             }
             if (document.output_format == markdown::OutputFormat::Docx)
                 return write_docx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Xlsx)
+                return write_xlsx_from_markdown(markdown, document.converted);
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -415,6 +438,32 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
                 return write_pdf_from_markdown(markdown, options.quiet, options.pdf_font, document.converted);
             if (document.output_format == markdown::OutputFormat::Docx)
                 return write_docx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Xlsx)
+                return write_xlsx_from_markdown(markdown, document.converted);
+            const bool complete_html_document = standalone &&
+                document.output_format == markdown::OutputFormat::Html &&
+                !options.output_path.empty() && options.output_path != "stdout";
+            document.converted = render_document_body(markdown, document.input_kind,
+                                                      document.output_format, complete_html_document);
+            return ok_error();
+        }
+        if (input_type.kind == InputKind::Xlsx) {
+            xlsx::ReadOptions xlsx_options;
+            xlsx_options.max_bytes = static_cast<size_t>(options.max_input_bytes);
+            std::string markdown;
+            xlsx::Diagnostics diagnostics;
+            err = xlsx::to_markdown_file(local_input_path(options), xlsx_options, markdown, &diagnostics);
+            if (!err.ok()) return err;
+            warn_xlsx_diagnostics(options.quiet, diagnostics);
+            document.source = document_source_label(options);
+            document.input_kind = InputKind::Xlsx;
+            document.output_format = document_output_format(options, document.input_kind, standalone);
+            if (document.output_format == markdown::OutputFormat::Pdf)
+                return write_pdf_from_markdown(markdown, options.quiet, options.pdf_font, document.converted);
+            if (document.output_format == markdown::OutputFormat::Docx)
+                return write_docx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Xlsx)
+                return write_xlsx_from_markdown(markdown, document.converted);
             const bool complete_html_document = standalone &&
                 document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -460,6 +509,8 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
     }
     if (document.output_format == markdown::OutputFormat::Docx)
         return write_docx_from_markdown(canonical_markdown_body(body, document.input_kind), document.converted);
+    if (document.output_format == markdown::OutputFormat::Xlsx)
+        return write_xlsx_from_markdown(canonical_markdown_body(body, document.input_kind), document.converted);
     const bool complete_html_document = standalone &&
                                         document.output_format == markdown::OutputFormat::Html &&
                                         !options.output_path.empty() && options.output_path != "stdout";
@@ -521,9 +572,10 @@ int run_document_extract(const cli::Options& options, std::ostream& out) {
     }
 
     if ((document.output_format == markdown::OutputFormat::Pdf ||
-         document.output_format == markdown::OutputFormat::Docx) &&
+         document.output_format == markdown::OutputFormat::Docx ||
+         document.output_format == markdown::OutputFormat::Xlsx) &&
         options.format != cli::OutputFormat::Text) {
-        print_error({ErrorCode::BadArgs, "binary --output-format pdf or docx cannot be combined with --format json or ndjson"});
+        print_error({ErrorCode::BadArgs, "binary --output-format pdf, docx, or xlsx cannot be combined with --format json or ndjson"});
         return exit_code_for(ErrorCode::BadArgs);
     }
 

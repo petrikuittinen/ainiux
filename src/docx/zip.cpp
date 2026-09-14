@@ -66,7 +66,13 @@ bool fits_size(std::uint64_t value) {
 }
 
 Error zip_error(std::string message) {
-    return {ErrorCode::FileRead, "invalid DOCX ZIP: " + std::move(message)};
+    return {ErrorCode::FileRead, "invalid OOXML ZIP: " + std::move(message)};
+}
+
+void replace_backslash(std::string& name) {
+    for (char& ch : name) {
+        if (ch == '\\') ch = '/';
+    }
 }
 
 struct InflateGuard {
@@ -129,7 +135,7 @@ bool unsupported_flags(std::uint16_t flags) {
 
 Error check_limit(std::size_t current, std::size_t extra, std::size_t maximum) {
     if (current > maximum || extra > maximum - current) {
-        return {ErrorCode::UnsupportedFeature, "DOCX output exceeds size limit"};
+        return {ErrorCode::UnsupportedFeature, "OOXML output exceeds size limit"};
     }
     return ok_error();
 }
@@ -204,17 +210,18 @@ Error ZipArchive::open(std::string_view bytes,
                        runtime::CancellationToken cancellation) {
     archive_.clear();
     entries_.clear();
+    lookup_.clear();
     cache_.clear();
     names_.clear();
     selected_bytes_ = 0;
     limits_ = limits;
     cancellation_ = cancellation;
-    if (cancellation.cancelled()) return {ErrorCode::Cancelled, "DOCX ZIP read cancelled"};
+    if (cancellation.cancelled()) return {ErrorCode::Cancelled, "OOXML ZIP read cancelled"};
     if (bytes.size() < 22) return zip_error("end-of-central-directory record is missing");
     try {
         archive_.assign(bytes.data(), bytes.size());
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to read DOCX ZIP"};
+        return {ErrorCode::Internal, "not enough memory to read OOXML ZIP"};
     }
 
     const std::size_t search_start = archive_.size() > 65557U ? archive_.size() - 65557U : 0U;
@@ -277,7 +284,7 @@ Error ZipArchive::open(std::string_view bytes,
         return zip_error("central-directory entry counts disagree");
     }
     if (total > limits_.max_members) {
-        return {ErrorCode::UnsupportedFeature, "DOCX ZIP contains more than " +
+        return {ErrorCode::UnsupportedFeature, "OOXML ZIP contains more than " +
                                                    std::to_string(limits_.max_members) + " members"};
     }
     if (!fits_size(central_offset) || !fits_size(central_size) || central_offset > eocd ||
@@ -293,11 +300,11 @@ Error ZipArchive::open(std::string_view bytes,
         entries_.reserve(static_cast<std::size_t>(total));
         names_.reserve(static_cast<std::size_t>(total));
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to index DOCX ZIP"};
+        return {ErrorCode::Internal, "not enough memory to index OOXML ZIP"};
     }
     for (std::uint64_t index = 0; index < total; ++index) {
         if ((index & 0xffU) == 0 && cancellation.cancelled())
-            return {ErrorCode::Cancelled, "DOCX ZIP indexing cancelled"};
+            return {ErrorCode::Cancelled, "OOXML ZIP indexing cancelled"};
         std::uint32_t signature = 0, crc = 0, comp32 = 0, uncomp32 = 0, offset32 = 0;
         std::uint16_t flags = 0, method = 0, name_length = 0, extra_length = 0, comment_length = 0;
         std::uint16_t entry_disk = 0;
@@ -317,11 +324,15 @@ Error ZipArchive::open(std::string_view bytes,
             return zip_error("encrypted members are unsupported");
         if (unsupported_flags(flags)) return zip_error("member uses unsupported general-purpose flags");
         if (method != 0 && method != 8) return zip_error("member uses unsupported compression method " + std::to_string(method));
-        const std::string name = archive_.substr(pos + 46, name_length);
+        const std::string raw_name = archive_.substr(pos + 46, name_length);
         std::size_t invalid = 0;
-        if (!html::is_valid_utf8(name, &invalid)) return zip_error("member name is not valid UTF-8");
+        if (!html::is_valid_utf8(raw_name, &invalid)) return zip_error("member name is not valid UTF-8");
+        std::string name = raw_name;
+        replace_backslash(name);
         if (!safe_part_name(name)) return zip_error("member has an absolute or traversing name: " + name);
         if (entries_.find(name) != entries_.end()) return zip_error("duplicate member name: " + name);
+        const std::string key = ascii_lower(name);
+        if (lookup_.find(key) != lookup_.end()) return zip_error("duplicate member name: " + name);
 
         Entry entry;
         entry.flags = flags;
@@ -339,14 +350,14 @@ Error ZipArchive::open(std::string_view bytes,
         if (!fits_size(entry.local_offset) || !fits_size(entry.compressed_size) ||
             !fits_size(entry.uncompressed_size)) return zip_error("member size or offset exceeds this platform");
         if (entry.uncompressed_size > limits_.max_member_bytes)
-            return {ErrorCode::UnsupportedFeature, "DOCX ZIP member exceeds the 64 MiB inflation limit: " + name};
+            return {ErrorCode::UnsupportedFeature, "OOXML ZIP member exceeds the 64 MiB inflation limit: " + name};
         if (entry.uncompressed_size > 0 && entry.compressed_size == 0)
             return zip_error("non-empty member has no compressed data: " + name);
         if (entry.compressed_size > 0 &&
             entry.compressed_size <= std::numeric_limits<std::uint64_t>::max() /
                                          limits_.max_expansion_ratio &&
             entry.uncompressed_size > entry.compressed_size * limits_.max_expansion_ratio)
-            return {ErrorCode::UnsupportedFeature, "DOCX ZIP member exceeds the 1000:1 expansion limit: " + name};
+            return {ErrorCode::UnsupportedFeature, "OOXML ZIP member exceeds the 1000:1 expansion limit: " + name};
 
         const std::size_t local = static_cast<std::size_t>(entry.local_offset);
         std::uint32_t local_signature = 0, local_crc = 0, local_comp = 0, local_uncomp = 0;
@@ -361,7 +372,7 @@ Error ZipArchive::open(std::string_view bytes,
         }
         if (local_flags != flags || local_method != method || local_name_length != name_length ||
             !range_ok(local + 30, static_cast<std::size_t>(local_name_length) + local_extra_length, cd_start) ||
-            archive_.compare(local + 30, local_name_length, name) != 0) {
+            archive_.compare(local + 30, local_name_length, raw_name) != 0) {
             return zip_error("local and central headers disagree for " + name);
         }
         if (method == 0 && (flags & 6U) != 0)
@@ -414,6 +425,7 @@ Error ZipArchive::open(std::string_view bytes,
             entry.record_end = descriptor;
         }
         entries_.emplace(name, entry);
+        lookup_.emplace(key, name);
         names_.push_back(name);
         pos += 46U + variable;
     }
@@ -429,25 +441,39 @@ Error ZipArchive::open(std::string_view bytes,
     return ok_error();
 }
 
+const std::string* ZipArchive::resolve_name(std::string_view name) const {
+    std::string stored(name);
+    replace_backslash(stored);
+    const auto exact = entries_.find(stored);
+    if (exact != entries_.end()) return &exact->first;
+    const auto folded = lookup_.find(ascii_lower(stored));
+    if (folded == lookup_.end()) return nullptr;
+    const auto found = entries_.find(folded->second);
+    if (found == entries_.end()) return nullptr;
+    return &found->first;
+}
+
 bool ZipArchive::contains(const std::string& name) const {
-    return entries_.find(name) != entries_.end();
+    return resolve_name(name) != nullptr;
 }
 
 Error ZipArchive::read(const std::string& name, std::string& bytes) {
     bytes.clear();
-    const auto cached = cache_.find(name);
+    const std::string* resolved = resolve_name(name);
+    if (resolved == nullptr) return zip_error("required member is missing: " + name);
+    const auto cached = cache_.find(*resolved);
     if (cached != cache_.end()) {
         bytes = cached->second;
         return ok_error();
     }
-    const auto found = entries_.find(name);
+    const auto found = entries_.find(*resolved);
     if (found == entries_.end()) return zip_error("required member is missing: " + name);
     const Entry& entry = found->second;
-    if (cancellation_.cancelled()) return {ErrorCode::Cancelled, "DOCX member inflation cancelled: " + name};
+    if (cancellation_.cancelled()) return {ErrorCode::Cancelled, "OOXML member inflation cancelled: " + *resolved};
     const std::size_t expected = static_cast<std::size_t>(entry.uncompressed_size);
     if (selected_bytes_ > limits_.max_total_selected_bytes ||
         expected > limits_.max_total_selected_bytes - selected_bytes_) {
-        return {ErrorCode::UnsupportedFeature, "DOCX selected XML parts exceed the 128 MiB inflation limit"};
+        return {ErrorCode::UnsupportedFeature, "OOXML selected XML parts exceed the 128 MiB inflation limit"};
     }
     std::string output;
     try {
@@ -458,14 +484,15 @@ Error ZipArchive::read(const std::string& name, std::string& bytes) {
         } else {
             InflateGuard guard;
             if (inflateInit2(&guard.stream, -MAX_WBITS) != Z_OK)
-                return {ErrorCode::Internal, "could not initialize zlib for DOCX inflation"};
+                return {ErrorCode::Internal, "could not initialize zlib for OOXML inflation"};
             guard.initialized = true;
             std::size_t input_pos = static_cast<std::size_t>(entry.data_offset);
             const std::size_t input_end = static_cast<std::size_t>(entry.data_end);
             std::array<char, 32768> chunk{};
             int status = Z_OK;
             while (status != Z_STREAM_END) {
-                if (cancellation_.cancelled()) return {ErrorCode::Cancelled, "DOCX member inflation cancelled: " + name};
+                if (cancellation_.cancelled())
+                    return {ErrorCode::Cancelled, "OOXML member inflation cancelled: " + *resolved};
                 if (guard.stream.avail_in == 0 && input_pos < input_end) {
                     const std::size_t available = std::min<std::size_t>(input_end - input_pos,
                                                                        std::numeric_limits<uInt>::max());
@@ -489,18 +516,18 @@ Error ZipArchive::read(const std::string& name, std::string& bytes) {
                 return zip_error("raw DEFLATE stream has trailing compressed bytes: " + name);
         }
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to inflate DOCX member: " + name};
+        return {ErrorCode::Internal, "not enough memory to inflate OOXML member: " + *resolved};
     }
-    if (output.size() != expected) return zip_error("member inflated size does not match metadata: " + name);
+    if (output.size() != expected) return zip_error("member inflated size does not match metadata: " + *resolved);
     const std::uint32_t actual_crc = static_cast<std::uint32_t>(
         crc32(0L, reinterpret_cast<const Bytef*>(output.data()), static_cast<uInt>(output.size())));
-    if (actual_crc != entry.crc) return zip_error("CRC-32 check failed for " + name);
+    if (actual_crc != entry.crc) return zip_error("CRC-32 check failed for " + *resolved);
     selected_bytes_ += output.size();
     try {
-        cache_.emplace(name, output);
+        cache_.emplace(*resolved, output);
         bytes = std::move(output);
     } catch (const std::bad_alloc&) {
-        return {ErrorCode::Internal, "not enough memory to retain DOCX member: " + name};
+        return {ErrorCode::Internal, "not enough memory to retain OOXML member: " + *resolved};
     }
     return ok_error();
 }
@@ -510,7 +537,7 @@ Error write_zip(const std::vector<ZipWriteEntry>& entries,
                 runtime::CancellationToken cancellation,
                 std::string& bytes) {
     bytes.clear();
-    if (entries.size() > 65535U) return {ErrorCode::UnsupportedFeature, "DOCX output has too many ZIP members"};
+    if (entries.size() > 65535U) return {ErrorCode::UnsupportedFeature, "OOXML output has too many ZIP members"};
     struct Written {
         std::string name;
         std::uint32_t crc = 0;
@@ -524,12 +551,12 @@ Error write_zip(const std::vector<ZipWriteEntry>& entries,
     try {
         written.reserve(entries.size());
         for (const ZipWriteEntry& item : entries) {
-            if (cancellation.cancelled()) return {ErrorCode::Cancelled, "DOCX serialization cancelled"};
+            if (cancellation.cancelled()) return {ErrorCode::Cancelled, "OOXML serialization cancelled"};
             if (!safe_part_name(item.name) || !names.insert(item.name).second)
-                return {ErrorCode::Internal, "DOCX writer produced an unsafe or duplicate ZIP member"};
+                return {ErrorCode::Internal, "OOXML writer produced an unsafe or duplicate ZIP member"};
             if (item.bytes.size() > std::numeric_limits<std::uint32_t>::max() ||
                 bytes.size() > std::numeric_limits<std::uint32_t>::max())
-                return {ErrorCode::UnsupportedFeature, "DOCX output requires unsupported Zip64 writing"};
+                return {ErrorCode::UnsupportedFeature, "OOXML output requires unsupported Zip64 writing"};
             Written meta;
             meta.name = item.name;
             meta.crc = static_cast<std::uint32_t>(crc32(
@@ -541,13 +568,13 @@ Error write_zip(const std::vector<ZipWriteEntry>& entries,
             if (item.compress) {
                 DeflateGuard guard;
                 if (deflateInit2(&guard.stream, 6, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) != Z_OK)
-                    return {ErrorCode::Internal, "could not initialize zlib for DOCX serialization"};
+                    return {ErrorCode::Internal, "could not initialize zlib for OOXML serialization"};
                 guard.initialized = true;
                 std::size_t pos = 0;
                 std::array<char, 32768> chunk{};
                 int status = Z_OK;
                 while (status != Z_STREAM_END) {
-                    if (cancellation.cancelled()) return {ErrorCode::Cancelled, "DOCX serialization cancelled"};
+                    if (cancellation.cancelled()) return {ErrorCode::Cancelled, "OOXML serialization cancelled"};
                     if (guard.stream.avail_in == 0 && pos < item.bytes.size()) {
                         const std::size_t count = std::min<std::size_t>(item.bytes.size() - pos,
                                                                       std::numeric_limits<uInt>::max());
@@ -561,14 +588,14 @@ Error write_zip(const std::vector<ZipWriteEntry>& entries,
                     status = deflate(&guard.stream,
                                      pos == item.bytes.size() && guard.stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
                     if (status != Z_OK && status != Z_STREAM_END)
-                        return {ErrorCode::Internal, "zlib failed while serializing DOCX"};
+                        return {ErrorCode::Internal, "zlib failed while serializing OOXML"};
                     compressed.append(chunk.data(), chunk.size() - guard.stream.avail_out);
                 }
             } else {
                 compressed = item.bytes;
             }
             if (compressed.size() > std::numeric_limits<std::uint32_t>::max())
-                return {ErrorCode::UnsupportedFeature, "DOCX compressed member is too large"};
+                return {ErrorCode::UnsupportedFeature, "OOXML compressed member is too large"};
             meta.compressed = static_cast<std::uint32_t>(compressed.size());
             const std::size_t record_size = 30U + item.name.size() + compressed.size();
             Error limit = check_limit(bytes.size(), record_size, max_bytes);
@@ -614,7 +641,7 @@ Error write_zip(const std::vector<ZipWriteEntry>& entries,
         const std::size_t central_size = bytes.size() - central_offset;
         if (central_offset > std::numeric_limits<std::uint32_t>::max() ||
             central_size > std::numeric_limits<std::uint32_t>::max())
-            return {ErrorCode::UnsupportedFeature, "DOCX output requires unsupported Zip64 writing"};
+            return {ErrorCode::UnsupportedFeature, "OOXML output requires unsupported Zip64 writing"};
         Error limit = check_limit(bytes.size(), 22, max_bytes);
         if (!limit.ok()) return limit;
         append_u32(bytes, kEndSignature);
@@ -627,10 +654,10 @@ Error write_zip(const std::vector<ZipWriteEntry>& entries,
         append_u16(bytes, 0);
     } catch (const std::bad_alloc&) {
         bytes.clear();
-        return {ErrorCode::Internal, "not enough memory to serialize DOCX ZIP"};
+        return {ErrorCode::Internal, "not enough memory to serialize OOXML ZIP"};
     } catch (const std::length_error&) {
         bytes.clear();
-        return {ErrorCode::UnsupportedFeature, "DOCX output is too large to serialize"};
+        return {ErrorCode::UnsupportedFeature, "OOXML output is too large to serialize"};
     }
     return ok_error();
 }

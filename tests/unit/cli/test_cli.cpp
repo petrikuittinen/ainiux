@@ -313,8 +313,8 @@ void test_cli_help_displays_version() {
           "CLI help documents PDF as a --input type");
     check(help.find("Add text/Markdown/HTML/PDF") != std::string::npos,
           "CLI help documents PDF as an --attach type");
-    check(help.find("Fetch HTML, PDF, or DOCX") != std::string::npos,
-          "CLI help documents PDF and DOCX as --fetch-url types");
+    check(help.find("Fetch HTML, PDF, DOCX, or XLSX") != std::string::npos,
+          "CLI help documents PDF, DOCX, and XLSX as --fetch-url types");
     check(help.find("--input report.pdf") != std::string::npos,
           "CLI help includes a PDF conversion example");
     check(help.find("Mode:") != std::string::npos &&
@@ -453,6 +453,12 @@ void test_cli_output_format_parse() {
     check(parsed.error.ok() && parsed.options.output_format == ainiux::markdown::OutputFormat::Docx &&
               parsed.options.rendered_output_format_explicit,
           "CLI docx output-format args parse as binary rendered output");
+
+    const char* xlsx_argv[] = {"ainiux", "-p", "hello", "--output-format", "xlsx", "--output", "out.xlsx"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(xlsx_argv));
+    check(parsed.error.ok() && parsed.options.output_format == ainiux::markdown::OutputFormat::Xlsx &&
+              parsed.options.rendered_output_format_explicit,
+          "CLI xlsx output-format args parse as binary rendered output");
 
     const char* bad_argv[] = {"ainiux", "-p", "hello", "--output-format", "epub"};
     parsed = ainiux::cli::parse_args(5, const_cast<char**>(bad_argv));

@@ -15,6 +15,7 @@ enum class Kind {
     Html,
     Pdf,
     Docx,
+    Xlsx,
     Image,
 };
 

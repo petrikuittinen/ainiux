@@ -1,6 +1,7 @@
 #include "fetch/test_fetch.hpp"
 #include "support/test_support.hpp"
 #include "docx/docx.hpp"
+#include "xlsx/xlsx.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
@@ -215,6 +216,24 @@ void test_binary_document_fetch_classification() {
     check(err.ok() && markdown.find("[image omitted") != std::string::npos,
           "fetched DOCX keeps image omission placeholders");
     check(!warnings.empty(), "fetched DOCX exposes bounded conversion warnings");
+
+    check(ainiux::fetch::media_type_is_xlsx(ainiux::xlsx::kMimeType),
+          "the official XLSX media type is recognized");
+    const std::string xlsx = read_fixture("tests/xlsx_files/blankcell.xlsx");
+    check(ainiux::fetch::body_looks_like_xlsx(xlsx),
+          "an OPC package with workbook parts is sniffed as XLSX");
+    check(!ainiux::fetch::body_looks_like_xlsx(docx),
+          "a DOCX package is not sniffed as XLSX");
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes(xlsx, ainiux::xlsx::kMimeType, markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Xlsx && markdown.find('|') != std::string::npos,
+          "the official XLSX content type converts to a Markdown table");
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes(xlsx, "application/zip", markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Xlsx,
+          "application/zip with XLSX package structure is sniffed as XLSX");
 }
 
 void test_json_escape_rejects_raw_latin1() {

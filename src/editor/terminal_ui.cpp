@@ -645,8 +645,7 @@ void load_editor_from_path(EditorState& state,
         const bool mixed = loaded.mixed_linebreaks;
         const bool from_document = loaded.converted_source != LoadedFile::ConvertedSource::None &&
                                    !loaded.suggested_path.empty();
-        const std::string source_name = loaded.converted_source == LoadedFile::ConvertedSource::Pdf
-                                            ? "PDF" : "DOCX";
+        const std::string source_name = converted_source_name(loaded.converted_source);
         const std::string conversion_warning = loaded.conversion_warnings.empty()
                                                    ? std::string()
                                                    : ". Warning: " + loaded.conversion_warnings.front();

@@ -25,6 +25,7 @@
 #include "editor/text_layout.hpp"
 #include "pdf/pdf.hpp"
 #include "docx/docx.hpp"
+#include "xlsx/xlsx.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "platform/environment.hpp"
@@ -2451,6 +2452,34 @@ void test_editor_docx_conversion() {
     check(ainiux::docx::to_markdown_bytes(bytes, {}, markdown).ok() &&
               markdown.find("Hello from a DOCX buffer") != std::string::npos,
           "explicit editor DOCX output is a readable package");
+}
+
+void test_editor_xlsx_conversion() {
+    check(ainiux::editor::sibling_markdown_path("Sheet.XLSX") == "Sheet.md",
+          "XLSX sibling path replaces a case-insensitive suffix");
+    const std::string xlsx_path = "build/unit-editor-xlsx-source.xlsx";
+    const std::string saved_xlsx = "build/unit-editor-xlsx-save.xlsx";
+    ainiux::editor::PieceTable source =
+        ainiux::editor::PieceTable::from_string("# Sheet1\n\n| Name | Value |\n| --- | --- |\n| Hello | 7 |\n");
+    check(ainiux::editor::save_file(xlsx_path, source).ok(),
+          "editor explicitly saves a Markdown table as XLSX");
+    ainiux::editor::LoadedFile loaded;
+    ainiux::editor::EditorSettings settings;
+    ainiux::Error err = ainiux::editor::load_file(xlsx_path, settings, loaded);
+    check(err.ok() && loaded.converted_source ==
+                          ainiux::editor::LoadedFile::ConvertedSource::Xlsx &&
+              loaded.suggested_path == "build/unit-editor-xlsx-source.md" &&
+              loaded.text.str().find("Hello") != std::string::npos,
+          "editor opens XLSX as a Markdown buffer aimed at the sibling path");
+    check(ainiux::editor::save_file(saved_xlsx, loaded.text).ok(),
+          "editor writes a normalized XLSX on an explicit .xlsx save");
+    std::ifstream input(saved_xlsx, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+    std::string markdown;
+    check(ainiux::xlsx::to_markdown_bytes(bytes, {}, markdown).ok() &&
+              markdown.find("Hello") != std::string::npos,
+          "explicit editor XLSX output is a readable package");
 }
 
 void test_editor_linebreak_modes() {
@@ -5999,6 +6028,7 @@ void run_all() {
     test_editor_file_round_trip();
     test_editor_pdf_conversion();
     test_editor_docx_conversion();
+    test_editor_xlsx_conversion();
     test_editor_linebreak_modes();
     test_editor_indentation_detection();
     test_editor_tab_indentation();

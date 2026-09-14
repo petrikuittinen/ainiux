@@ -38,6 +38,7 @@
 #include "server/chat_service.hpp"
 #include "pdf/pdf.hpp"
 #include "docx/docx.hpp"
+#include "xlsx/xlsx.hpp"
 #include "server/http_parser.hpp"
 #include "server/event_broker.hpp"
 #include "server/job_registry.hpp"
@@ -158,7 +159,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
               index.body.find("/ui/assets/app-v23.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v29.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v30.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -251,7 +252,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v29.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v30.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -721,6 +722,23 @@ void test_chat_input_uploads() {
               docx_created.body.find("\"warnings\":[]") != std::string::npos &&
               docx_created.body.find("text/markdown") != std::string::npos,
           "DOCX chat upload stores only converted Markdown and bounded warnings");
+
+    ainiux::xlsx::WriteOptions xlsx_write_options;
+    std::string xlsx_bytes;
+    check(ainiux::xlsx::from_markdown("# Sheet1\n\n| Name | Value |\n| --- | --- |\n| Hello | 7 |\n",
+                                     xlsx_write_options, xlsx_bytes).ok(),
+          "test XLSX for chat upload is generated");
+    http::Request xlsx = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\n"
+        "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n"
+        "X-Ainiux-Filename: sheet.xlsx\r\nContent-Length: 0\r\n\r\n");
+    xlsx.body = xlsx_bytes;
+    Response xlsx_created = route_request(xlsx, auth, status);
+    check(xlsx_created.status == 201 &&
+              xlsx_created.body.find("\"converted\":true") != std::string::npos &&
+              xlsx_created.body.find("text/markdown") != std::string::npos,
+          "XLSX chat upload stores only converted Markdown");
 
     Response denial;
     check(!preflight_request_body(text, Limits::upload_body_bytes + 1U, auth, status, denial) &&

@@ -27,6 +27,9 @@ class ZipArchive {
     Error read(const std::string& name, std::string& bytes);
     const std::vector<std::string>& names() const { return names_; }
 
+    // Exact match first, then case-insensitive and '\\' → '/' lookup.
+    const std::string* resolve_name(std::string_view name) const;
+
    private:
     struct Entry {
         std::uint16_t flags = 0;
@@ -45,6 +48,7 @@ class ZipArchive {
     ZipLimits limits_;
     runtime::CancellationToken cancellation_;
     std::unordered_map<std::string, Entry> entries_;
+    std::unordered_map<std::string, std::string> lookup_;
     std::unordered_map<std::string, std::string> cache_;
     std::vector<std::string> names_;
     std::size_t selected_bytes_ = 0;
