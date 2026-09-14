@@ -51,10 +51,12 @@ agent/run/plan attach the provider-hosted search tool and do
 not advertise the client Tavily/DuckDuckGo `web_search` function. Official
 Gemini OpenAI-compat Chat stays on client `web_search` because that adapter
 rejects hosted `google_search`. GPT-5, Grok 4, and DeepSeek V4 / Vision host
-search only on Responses; a Chat Completions session (including a live
-`/provider` or `/model` switch that stays on Chat) uses client `web_search`.
-Live provider/model changes re-resolve hosted vs client search for the next
-round; they do not auto-promote the session to Responses. `fetch` stays. `read` accepts either one `path` or an `items` batch
+search only on Responses; a Chat Completions session (the default for every
+non-OpenAI provider, including xAI and DeepSeek, and a live `/provider` or
+`/model` switch that stays on Chat) uses client `web_search`. Catalog
+`web_search = on` does not auto-select Responses. Live provider/model changes
+re-resolve hosted vs client search for the next round; they do not auto-promote
+the session to Responses. `fetch` stays. `read` accepts either one `path` or an `items` batch
 of 1–100 ranges. `grep` can combine a file/directory `path` with a name/type
 `glob` filter.
 

@@ -42,6 +42,9 @@ HostedWebSearchKind kind_for(const ModelCapability& capability,
     return HostedWebSearchKind::ChatType;
 }
 
+// These families host search only on Responses. On Chat Completions Ainiux
+// keeps the client web_search function instead of sending {type:web_search}.
+// This does not auto-select the Responses API.
 bool family_requires_responses(const std::string& catalog_id) {
     return catalog_id == "openai-gpt-5" || catalog_id == "xai-grok-4" ||
            catalog_id == "deepseek-v4" || catalog_id == "deepseek-v4-flash-vision" ||

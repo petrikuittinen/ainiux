@@ -668,7 +668,11 @@ void test_image_capability_detection() {
     deepseek.options.model = "deepseek-v4-flash";
     check(!ainiux::provider::detected_capabilities_for(deepseek).images &&
               !ainiux::provider::validate_image_input(deepseek).ok(),
-          "DeepSeek V4 Flash remains text-to-text in auto image mode");
+          "legacy DeepSeek V4 Flash remains text-to-text in auto image mode");
+    deepseek.options.model = "deepseek-flash";
+    check(ainiux::provider::detected_capabilities_for(deepseek).images &&
+              ainiux::provider::validate_image_input(deepseek).ok(),
+          "official DeepSeek API deepseek-flash is image-capable in auto mode");
     deepseek.options.model = "deepseek-v4-flash-vision-exp";
     check(ainiux::provider::detected_capabilities_for(deepseek).images &&
               ainiux::provider::validate_image_input(deepseek).ok(),
@@ -2222,12 +2226,60 @@ void test_openai_defaults_to_responses() {
 }
 
 void test_xai_and_deepseek_accept_responses() {
+    ainiux::config::ParseResult models = ainiux::config::read_file("config/models.conf");
+    check(models.error.ok(), "bundled models.conf loads for non-OpenAI API defaults");
+
     const char* xai[] = {"ainiux", "--provider", "xai", "--api", "responses", "-m", "grok-4.6",
                          "-p", "hello", "--header", "Authorization: Bearer test"};
     ainiux::cli::ParseResult xai_parsed = ainiux::cli::parse_args(11, const_cast<char**>(xai));
+    check(xai_parsed.error.ok() &&
+              ainiux::config::apply_models_document(models.document, xai_parsed.options).ok(),
+          "xAI Responses args parse with bundled catalog");
     ainiux::provider::ContextResult xai_ctx = ainiux::provider::build_context(xai_parsed.options);
     check(xai_ctx.error.ok() && xai_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
           "xAI accepts --api responses");
+
+    const char* xai_default[] = {"ainiux", "--provider", "xai", "-m", "grok-4.6", "-p", "hello",
+                                 "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult xai_default_parsed =
+        ainiux::cli::parse_args(9, const_cast<char**>(xai_default));
+    check(xai_default_parsed.error.ok() &&
+              ainiux::config::apply_models_document(models.document, xai_default_parsed.options)
+                  .ok(),
+          "xAI default args parse with bundled catalog");
+    ainiux::provider::ContextResult xai_default_ctx =
+        ainiux::provider::build_context(xai_default_parsed.options);
+    check(xai_default_ctx.error.ok() &&
+              xai_default_ctx.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions &&
+              ainiux::provider::active_request_url(xai_default_ctx.context)
+                      .find("/chat/completions") != std::string::npos,
+          "xAI grok-4 stays on Chat Completions despite catalog web_search=on");
+
+    ainiux::cli::Options leftover_xai = xai_default_parsed.options;
+    leftover_xai.api = "responses";
+    leftover_xai.api_explicit = false;
+    ainiux::provider::ContextResult leftover_xai_ctx =
+        ainiux::provider::build_context(leftover_xai);
+    check(leftover_xai_ctx.error.ok() &&
+              leftover_xai_ctx.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions,
+          "non-explicit leftover Responses on xAI falls back to Chat Completions");
+
+    const char* xai_gpt5[] = {"ainiux", "--provider", "xai", "-m", "gpt-5.4", "-p", "hello",
+                              "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult xai_gpt5_parsed =
+        ainiux::cli::parse_args(9, const_cast<char**>(xai_gpt5));
+    check(xai_gpt5_parsed.error.ok() &&
+              ainiux::config::apply_models_document(models.document, xai_gpt5_parsed.options)
+                  .ok(),
+          "xAI plus a GPT-5 catalog id parses");
+    ainiux::provider::ContextResult xai_gpt5_ctx =
+        ainiux::provider::build_context(xai_gpt5_parsed.options);
+    check(xai_gpt5_ctx.error.ok() &&
+              xai_gpt5_ctx.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions,
+          "catalog web_search for openai-gpt-5 does not auto-select Responses on xAI");
 
     const char* deepseek[] = {"ainiux", "--provider", "deepseek", "--api", "responses", "-m",
                               "deepseek-v4-flash", "-p", "hello", "--header",
@@ -2238,21 +2290,44 @@ void test_xai_and_deepseek_accept_responses() {
           "DeepSeek accepts --api responses");
 
     ainiux::cli::Options vision_options = ds_parsed.options;
-    ainiux::config::ParseResult models = ainiux::config::read_file("config/models.conf");
-    check(models.error.ok() &&
-              ainiux::config::apply_models_document(models.document, vision_options).ok(),
-          "bundled models.conf loads for DeepSeek vision auto-Responses");
-    vision_options.model = "deepseek-v4-flash-vision-exp";
+    check(ainiux::config::apply_models_document(models.document, vision_options).ok(),
+          "bundled models.conf applies for DeepSeek Chat Completions default");
     vision_options.api_explicit = false;
+    vision_options.model = "deepseek-v4-flash-vision-exp";
     ainiux::provider::ContextResult vision_ctx = ainiux::provider::build_context(vision_options);
     check(vision_ctx.error.ok() &&
-              vision_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
-          "DeepSeek V4 Flash Vision Exp auto-selects Responses like other V4 family ids");
+              vision_ctx.context.api_kind == ainiux::provider::ApiKind::ChatCompletions,
+          "DeepSeek V4 Flash Vision Exp stays on Chat Completions unless Responses is explicit");
     vision_options.model = "deepseek-v4.1-flash-expires-on-0910";
     ainiux::provider::ContextResult v41_ctx = ainiux::provider::build_context(vision_options);
     check(v41_ctx.error.ok() &&
-              v41_ctx.context.api_kind == ainiux::provider::ApiKind::Responses,
-          "DeepSeek V4.1 Flash auto-selects Responses like other V4 family ids");
+              v41_ctx.context.api_kind == ainiux::provider::ApiKind::ChatCompletions,
+          "DeepSeek V4.1 Flash stays on Chat Completions unless Responses is explicit");
+    vision_options.model = "deepseek-flash";
+    ainiux::provider::ContextResult official_flash_ctx =
+        ainiux::provider::build_context(vision_options);
+    check(official_flash_ctx.error.ok() &&
+              official_flash_ctx.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions,
+          "official DeepSeek API deepseek-flash stays on Chat Completions by default");
+
+    const char* default_flash[] = {
+        "ainiux", "--provider", "deepseek", "-m", "deepseek-flash", "-p", "hello",
+        "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult default_parsed =
+        ainiux::cli::parse_args(9, const_cast<char**>(default_flash));
+    check(default_parsed.error.ok() &&
+              ainiux::config::apply_models_document(models.document, default_parsed.options)
+                  .ok(),
+          "default DeepSeek flash args parse with bundled catalog");
+    ainiux::provider::ContextResult default_ctx =
+        ainiux::provider::build_context(default_parsed.options);
+    check(default_ctx.error.ok() &&
+              default_ctx.context.api_kind ==
+                  ainiux::provider::ApiKind::ChatCompletions &&
+              ainiux::provider::active_request_url(default_ctx.context)
+                      .find("/chat/completions") != std::string::npos,
+          "ainiux deepseek -m deepseek-flash uses Chat Completions");
 }
 
 void test_hosted_web_search_serialization() {

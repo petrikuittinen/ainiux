@@ -154,7 +154,7 @@ The command minibuffer opens with `Ctrl+E`, `Esc`, or `Alt+X`; `Tab` completes c
 
 ## Web search
 
-When `models.conf` marks the selected model `web_search = on`, Ainiux prefers the provider-hosted search tool over Tavily and the other client providers. Set `builtin = off` or pass `--no-builtin-web-search` to force the client path. `--web-search-provider` does not disable hosted search.
+When `models.conf` marks the selected model `web_search = on` **and** the current adapter can emit that family's hosted tool, Ainiux prefers the provider-hosted search tool over Tavily and the other client providers. The flag does not select Chat Completions vs Responses. Official OpenAI is the only profile that defaults to Responses. Set `builtin = off` or pass `--no-builtin-web-search` to force the client path. `--web-search-provider` does not disable hosted search.
 
 `provider = auto` tries configured API providers and keyless fallbacks according to the implementation. Supported names are `tavily`, `firecrawl`, `exa`, `searxng`, and `duckduckgo`.
 

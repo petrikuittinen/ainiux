@@ -2474,27 +2474,22 @@ ContextResult build_context(const cli::Options& input_options) {
         options.api = "responses";
         api_kind = ApiKind::Responses;
     }
-    if (!options.api_explicit && !options.model.empty() &&
-        profile.capabilities.responses_api) {
-        const ModelCapability* preview = config::resolve_model_capability(
-            options.model_catalog, profile.name,
-            api_kind == ApiKind::Responses ? "responses" : "chat", options.model);
-        if (preview != nullptr && preview->web_search &&
-            (preview->id == "xai-grok-4" || preview->id == "deepseek-v4" ||
-             preview->id == "deepseek-v4-flash-vision" ||
-             preview->id == "deepseek-v4.1-flash" || preview->id == "openai-gpt-5")) {
-            options.api = "responses";
-            api_kind = ApiKind::Responses;
+    // Official OpenAI is the only profile that defaults to Responses.
+    // Catalog web_search flags and other /responses-capable profiles (xAI,
+    // DeepSeek) stay on Chat Completions unless the user asked (--api
+    // responses, --responses, openai_responses, or a user config api). This
+    // also drops a project-restored api=responses left by the former
+    // hosted-search auto-promote, which stalled DeepSeek streams on SSE
+    // keep-alives.
+    if (api_kind == ApiKind::Responses && !options.api_explicit) {
+        const bool official_openai =
+            normalize_provider_key(profile.name) == names::kOpenAi;
+        const bool chat_only_without_url =
+            !profile.capabilities.responses_api && options.responses_url.empty();
+        if (!official_openai || chat_only_without_url) {
+            options.api = "chat";
+            api_kind = ApiKind::ChatCompletions;
         }
-    }
-    // Official OpenAI (and project restore after it) leave api=responses.
-    // Chat-only profiles such as Gemini have no Responses endpoint; inherit
-    // Chat Completions unless the user asked for Responses or supplied a URL.
-    if (api_kind == ApiKind::Responses &&
-        !profile.capabilities.responses_api && options.responses_url.empty() &&
-        !options.api_explicit) {
-        options.api = "chat";
-        api_kind = ApiKind::ChatCompletions;
     }
     Error reasoning_error = config::resolve_reasoning_off(
         options.model_catalog,

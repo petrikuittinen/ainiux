@@ -846,7 +846,21 @@ void test_config_reads_models_template() {
             options.model_catalog, "deepseek", "chat", "deepseek-v4-flash");
     check(deepseek_v4_flash != nullptr && deepseek_v4_flash->id == "deepseek-v4" &&
               deepseek_v4_flash->images.has_value() && !*deepseek_v4_flash->images,
-          "DeepSeek V4 Flash stays on the text-to-text family");
+          "legacy DeepSeek V4 Flash stays on the text-to-text family");
+    const ainiux::ModelCapability* deepseek_flash =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "deepseek", "chat", "deepseek-flash");
+    const ainiux::ModelCapability* deepseek_flash_routed =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "deepseek/deepseek-flash");
+    check(deepseek_flash != nullptr && deepseek_flash->id == "deepseek-v4.1-flash" &&
+              deepseek_flash->images.has_value() && *deepseek_flash->images &&
+              deepseek_flash->reasoning_protocol == ainiux::ReasoningProtocol::DeepSeek &&
+              deepseek_v4_flash != nullptr && deepseek_flash != deepseek_v4_flash,
+          "official DeepSeek API deepseek-flash is cataloged as V4.1 Flash text-image-to-text");
+    check(deepseek_flash_routed != nullptr &&
+              deepseek_flash_routed->id == "deepseek-v4.1-flash",
+          "official deepseek-flash family rule covers routed OpenRouter-style ids");
     const ainiux::ModelCapability* deepseek_v4_dated =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "openrouter", "chat",
@@ -959,10 +973,17 @@ void test_config_reads_models_template() {
     const ainiux::ModelCapability* grok46 = ainiux::config::resolve_model_capability(
         options.model_catalog, "xai", "responses", "grok-4.6");
     check(grok46 != nullptr && grok46->web_search, "Grok 4 family advertises hosted web_search");
-    const ainiux::ModelCapability* deepseek_flash = ainiux::config::resolve_model_capability(
-        options.model_catalog, "deepseek", "responses", "deepseek-v4-flash");
-    check(deepseek_flash != nullptr && deepseek_flash->web_search,
-          "DeepSeek V4 family advertises hosted web_search on Responses");
+    const ainiux::ModelCapability* deepseek_v4_responses =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "deepseek", "responses", "deepseek-v4-flash");
+    check(deepseek_v4_responses != nullptr && deepseek_v4_responses->web_search,
+          "legacy DeepSeek V4 Flash advertises hosted web_search on Responses");
+    const ainiux::ModelCapability* deepseek_flash_responses =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "deepseek", "responses", "deepseek-flash");
+    check(deepseek_flash_responses != nullptr && deepseek_flash_responses->web_search &&
+              deepseek_flash_responses->id == "deepseek-v4.1-flash",
+          "official DeepSeek API deepseek-flash advertises hosted web_search on Responses");
     const ainiux::ModelCapability* kimi_k26 = ainiux::config::resolve_model_capability(
         options.model_catalog, "moonshot", "chat", "kimi-k2.6");
     check(kimi_k26 != nullptr && kimi_k26->id == "moonshot-kimi-k2-hybrid" &&
