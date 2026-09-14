@@ -24,9 +24,10 @@ Useful targets:
 |--------|----------------|
 | `make test` | In-process units plus the small mock smoke |
 | `make test-full` | Units, fault tests, and comprehensive integration; Windows also runs native SQLite/ConPTY parity paths |
-| `make test-unit` | In-process `test_runner` plus the fast preserved-config migration check |
+| `make test-unit` | In-process `test_runner` plus fast preserved-config migration and installer PATH-shadow checks |
 | `make test-pdf` | PDF units only, including isolated malformed-input regressions with per-case timeouts; no provider, browser, or integration tests |
 | `make test-docx` | DOCX units only; `build/test_runner --docx-case NAME` isolates one parser/writer case |
+| `make test-install-path` | Installer PATH-shadow synchronization and refusal cases in isolated temporary homes |
 | `make test-web-js` | Optional dependency-free WebUI Markdown, syntax, editor indentation/history, image/video, and selector tests when Node.js is installed; real-browser test when `AINIUX_TEST_BROWSER` is set |
 | `make compare-pdf` | Optional PDF-to-Markdown quality table vs `pdftotext` (`scripts/ainiux/pdf_compare.py`); not part of `make test` |
 | `make test-unit-faults` | Fault tests only |

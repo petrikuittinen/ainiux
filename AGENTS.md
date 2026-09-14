@@ -332,6 +332,24 @@ updates relevant documentation, and has focused cleanup/error coverage when reso
 lifetimes change. Full sanitizer/Valgrind runs are required only by the test-selection
 policy or explicit request.
 
+## Installation and executable resolution
+
+- `scripts/install.sh` is the supported source-build installer. A non-staged
+  install is not successful until the executable selected from `PATH` is the
+  installed build or a byte-identical synchronized copy.
+- Do not rely on `ainiux --version` to detect stale executables: two different
+  builds may carry the same release version. Compare executable identity or
+  contents. When installing outside `~/.local`, the installer atomically refreshes
+  an existing regular writable `~/.local/bin/ainiux`; it must never follow or
+  replace a symlink or non-regular path. Any other mismatched `PATH` shadow is a
+  hard installation error with both paths reported.
+- Repository tests and manual checks must invoke `./ainiux` (or another explicit
+  build path) unless executable lookup itself is under test. `DESTDIR` packaging
+  must never inspect or modify host `PATH` executables.
+- Run `scripts/install.sh` as the normal user; it elevates only the system-copy
+  step. Do not wrap the whole installer in `sudo`, because that replaces the user
+  `HOME`/`PATH` context needed to detect and safely refresh a user-local shadow.
+
 ## Git and worktree safety
 
 - Inspect the worktree and preserve user changes and untracked scratch files.

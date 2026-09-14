@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "docx/docx.hpp"
 #include "encoding/encoding.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
@@ -160,8 +161,8 @@ bool is_private_or_loopback_host(std::string host) {
 enum class FetchAccept {
     HtmlOnly,
     HtmlOrPlain,
-    HtmlOrPdf,
-    Document,  // HTML, plaintext, or PDF
+    HtmlOrBinaryDocument,
+    Document,  // HTML, plaintext, PDF, or DOCX
 };
 
 std::string media_type_of(std::string content_type) {
@@ -178,15 +179,28 @@ bool classify_fetched_kind(const std::string& media_type,
                            FetchAccept accept,
                            DocumentKind& kind) {
     const bool allow_plain = accept == FetchAccept::HtmlOrPlain || accept == FetchAccept::Document;
-    const bool allow_pdf = accept == FetchAccept::HtmlOrPdf || accept == FetchAccept::Document;
+    const bool allow_binary = accept == FetchAccept::HtmlOrBinaryDocument ||
+                              accept == FetchAccept::Document;
     if (media_type_is_pdf(media_type)) {
         kind = DocumentKind::Pdf;
-        return allow_pdf;
+        return allow_binary;
     }
-    if (media_type.empty() || media_type == "application/octet-stream") {
+    if (media_type_is_docx(media_type)) {
+        kind = DocumentKind::Docx;
+        return allow_binary;
+    }
+    const bool generic_type = media_type.empty() || media_type == "application/octet-stream";
+    if (generic_type || media_type == "application/zip") {
         if (body_looks_like_pdf(body)) {
             kind = DocumentKind::Pdf;
-            return allow_pdf;
+            return allow_binary;
+        }
+        if (body_looks_like_docx(body)) {
+            kind = DocumentKind::Docx;
+            return allow_binary;
+        }
+        if (!generic_type) {
+            return false;
         }
         kind = DocumentKind::Html;
         return true;
@@ -206,17 +220,25 @@ const char* accept_header_for(FetchAccept accept) {
     switch (accept) {
         case FetchAccept::HtmlOrPlain:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-                   "text/plain;q=0.8,application/pdf;q=0.7,image/avif,image/webp,*/*;q=0.8";
-        case FetchAccept::HtmlOrPdf:
+                   "text/plain;q=0.8,application/pdf;q=0.7,"
+                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.7,"
+                   "image/avif,image/webp,*/*;q=0.8";
+        case FetchAccept::HtmlOrBinaryDocument:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-                   "application/pdf;q=0.8,image/avif,image/webp,image/apng,*/*;q=0.8";
+                   "application/pdf;q=0.8,"
+                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
+                   "image/avif,image/webp,image/apng,*/*;q=0.8";
         case FetchAccept::Document:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-                   "text/plain;q=0.8,application/pdf;q=0.8,image/avif,image/webp,*/*;q=0.8";
+                   "text/plain;q=0.8,application/pdf;q=0.8,"
+                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
+                   "image/avif,image/webp,*/*;q=0.8";
         case FetchAccept::HtmlOnly:
         default:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
-                   "application/pdf;q=0.7,image/avif,image/webp,image/apng,*/*;q=0.8";
+                   "application/pdf;q=0.7,"
+                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.7,"
+                   "image/avif,image/webp,image/apng,*/*;q=0.8";
     }
 }
 
@@ -224,10 +246,10 @@ const char* unsupported_type_message(FetchAccept accept) {
     switch (accept) {
         case FetchAccept::HtmlOrPlain:
             return "a supported text content type: ";
-        case FetchAccept::HtmlOrPdf:
-            return "an HTML or PDF content type: ";
+        case FetchAccept::HtmlOrBinaryDocument:
+            return "an HTML, PDF, or DOCX content type: ";
         case FetchAccept::Document:
-            return "a supported HTML, PDF, or text content type: ";
+            return "a supported HTML, PDF, DOCX, or text content type: ";
         case FetchAccept::HtmlOnly:
         default:
             return "an HTML content type: ";
@@ -336,6 +358,30 @@ Error convert_pdf_body(const std::string& url,
     return ok_error();
 }
 
+Error convert_docx_body(const std::string& url,
+                        std::string body,
+                        const Options& options,
+                        std::string& markdown,
+                        std::vector<std::string>* warnings,
+                        runtime::CancellationToken cancellation) {
+    docx::ReadOptions docx_options;
+    docx_options.max_bytes = options.max_bytes > 0 ? static_cast<std::size_t>(options.max_bytes)
+                                                   : body.size();
+    docx_options.cancellation = cancellation;
+    docx::Diagnostics diagnostics;
+    Error err = docx::to_markdown_bytes(body, docx_options, markdown, &diagnostics);
+    if (!err.ok()) {
+        return err;
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    }
+    if (warnings != nullptr) {
+        *warnings = std::move(diagnostics.messages);
+    }
+    return ok_error();
+}
+
 }  // namespace
 
 std::string fetched_media_type(std::string content_type) {
@@ -344,6 +390,10 @@ std::string fetched_media_type(std::string content_type) {
 
 bool media_type_is_pdf(const std::string& media_type) {
     return media_type == "application/pdf" || media_type == "application/x-pdf";
+}
+
+bool media_type_is_docx(const std::string& media_type) {
+    return media_type == docx::kMimeType;
 }
 
 bool media_type_is_html(const std::string& media_type) {
@@ -364,28 +414,57 @@ bool body_looks_like_pdf(std::string_view body) {
     return body.size() - i >= 5 && body.substr(i, 5) == "%PDF-";
 }
 
+bool body_looks_like_docx(std::string_view body) {
+    const bool zip_signature = body.size() >= 4 && body[0] == 'P' && body[1] == 'K' &&
+                               ((body[2] == '\x03' && body[3] == '\x04') ||
+                                (body[2] == '\x05' && body[3] == '\x06') ||
+                                (body[2] == '\x07' && body[3] == '\x08'));
+    if (!zip_signature) {
+        return false;
+    }
+    // ZIP entry names remain visible in the central directory even when their
+    // contents are deflated. Require the OPC roots plus a Word part so generic
+    // ZIP, XLSX, and PPTX responses are not handed to the DOCX parser.
+    return body.find("[Content_Types].xml") != std::string_view::npos &&
+           body.find("_rels/.rels") != std::string_view::npos &&
+           body.find("word/") != std::string_view::npos;
+}
+
 Error markdown_from_fetched_bytes(std::string_view body,
                                   const std::string& content_type,
                                   std::string& markdown,
                                   DocumentKind& kind,
-                                  runtime::CancellationToken cancellation) {
+                                  runtime::CancellationToken cancellation,
+                                  std::vector<std::string>* warnings) {
     markdown.clear();
+    if (warnings != nullptr) warnings->clear();
     const std::string media = media_type_of(content_type);
-    const bool sniffable = media.empty() || media == "application/octet-stream";
-    if (media_type_is_pdf(media) || (sniffable && body_looks_like_pdf(body))) {
+    const bool generic_type = media.empty() || media == "application/octet-stream";
+    const bool docx_sniffable = generic_type || media == "application/zip";
+    if (media_type_is_pdf(media) || (generic_type && body_looks_like_pdf(body))) {
         kind = DocumentKind::Pdf;
         pdf::Options pdf_options;
         pdf_options.max_bytes = body.size();
         pdf_options.cancellation = cancellation;
         return pdf::to_markdown_bytes(body, pdf_options, markdown);
     }
+    if (media_type_is_docx(media) || (docx_sniffable && body_looks_like_docx(body))) {
+        kind = DocumentKind::Docx;
+        docx::ReadOptions docx_options;
+        docx_options.max_bytes = body.size();
+        docx_options.cancellation = cancellation;
+        docx::Diagnostics diagnostics;
+        Error err = docx::to_markdown_bytes(body, docx_options, markdown, &diagnostics);
+        if (err.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
+        return err;
+    }
     if (media_type_is_plain(media)) {
         kind = DocumentKind::Plaintext;
-    } else if (media_type_is_html(media) || sniffable) {
+    } else if (media_type_is_html(media) || generic_type) {
         kind = DocumentKind::Html;
     } else {
         return {ErrorCode::UnsupportedFeature,
-                "fetched body is not HTML, PDF, or plain text (Content-Type: " + content_type +
+                "fetched body is not HTML, PDF, DOCX, or plain text (Content-Type: " + content_type +
                     ")"};
     }
     if (cancellation.cancelled()) {
@@ -424,13 +503,17 @@ Error fetch_document(const std::string& url,
     std::string body;
     std::string content_type;
     DocumentKind kind = DocumentKind::Html;
-    Error err = fetch_body(url, options, FetchAccept::HtmlOrPdf, body, content_type, kind,
+    Error err = fetch_body(url, options, FetchAccept::HtmlOrBinaryDocument, body, content_type, kind,
                            cancellation);
     if (!err.ok()) return err;
     document.kind = kind;
     document.content_type = content_type;
     if (kind == DocumentKind::Pdf) {
         return convert_pdf_body(url, std::move(body), options, document.markdown, cancellation);
+    }
+    if (kind == DocumentKind::Docx) {
+        return convert_docx_body(url, std::move(body), options, document.markdown,
+                                 &document.warnings, cancellation);
     }
     document.body = normalize_body_to_utf8(std::move(body), content_type);
     return ok_error();
@@ -439,7 +522,8 @@ Error fetch_document(const std::string& url,
 Error fetch_markdown(const std::string& url,
                      const Options& options,
                      std::string& markdown,
-                     runtime::CancellationToken cancellation) {
+                     runtime::CancellationToken cancellation,
+                     std::vector<std::string>* warnings) {
     FetchedDocument document;
     Error err = fetch_document(url, options, document, cancellation);
     if (!err.ok()) {
@@ -448,7 +532,8 @@ Error fetch_markdown(const std::string& url,
     if (cancellation.cancelled()) {
         return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
     }
-    if (document.kind == DocumentKind::Pdf) {
+    if (warnings != nullptr) *warnings = document.warnings;
+    if (document.kind == DocumentKind::Pdf || document.kind == DocumentKind::Docx) {
         markdown = std::move(document.markdown);
         return ok_error();
     }
@@ -462,7 +547,9 @@ Error fetch_markdown(const std::string& url,
 Error fetch_text(const std::string& url,
                  const Options& options,
                  std::string& text,
-                 runtime::CancellationToken cancellation) {
+                 runtime::CancellationToken cancellation,
+                 std::vector<std::string>* warnings) {
+    if (warnings != nullptr) warnings->clear();
     std::string body;
     std::string content_type;
     DocumentKind kind = DocumentKind::Html;
@@ -473,6 +560,9 @@ Error fetch_text(const std::string& url,
     }
     if (kind == DocumentKind::Pdf) {
         return convert_pdf_body(url, std::move(body), options, text, cancellation);
+    }
+    if (kind == DocumentKind::Docx) {
+        return convert_docx_body(url, std::move(body), options, text, warnings, cancellation);
     }
     body = normalize_body_to_utf8(std::move(body), content_type);
     if (cancellation.cancelled()) {

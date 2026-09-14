@@ -51,7 +51,7 @@ Examples:
   ./scripts/install.sh --with-deps -y
   ./scripts/install.sh --optimized
   ./scripts/install.sh --user
-  sudo ./scripts/install.sh --prefix /usr
+  ./scripts/install.sh --prefix /usr
 
 After install, verify:
   ainiux --version
@@ -109,6 +109,16 @@ done
 if [ ! -f "${REPO_ROOT}/Makefile" ] || [ ! -f "${REPO_ROOT}/config/ainiux.conf" ]; then
     echo "Could not find the Ainiux repository root (Makefile / config/ainiux.conf)." >&2
     echo "Run this script from a clone of the ainiux source tree." >&2
+    exit 1
+fi
+
+# Run the build and user-local shadow checks as the invoking user. The script
+# elevates only the final system copy; wrapping the whole script in sudo changes
+# HOME/PATH and could hide or create a root-owned ~/.local shadow.
+if [ -z "${DESTDIR}" ] && [ "$(id -u)" -eq 0 ] &&
+   [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    echo "Do not run the whole installer through sudo." >&2
+    echo "Re-run as your normal user; install.sh will request sudo only for the ${PREFIX} copy." >&2
     exit 1
 fi
 
@@ -224,6 +234,15 @@ if [ -x "${installed_bin}" ]; then
     "${installed_bin}" --version || true
 else
     echo "Warning: expected binary not found at ${installed_bin}" >&2
+fi
+
+# A successful copy is not a successful install if an older executable earlier
+# on PATH still wins. For a real (non-staged) install, refresh the known
+# ~/.local/bin legacy/user location when it exists and verify byte identity of
+# the command that this environment resolves. Unsafe or unmanaged shadows make
+# installation fail with exact corrective paths instead of failing later at use.
+if [ -z "${DESTDIR}" ]; then
+    "${SCRIPT_DIR}/verify-install-path.sh" "${installed_bin}" "${PREFIX}"
 fi
 
 case ":${PATH}:" in

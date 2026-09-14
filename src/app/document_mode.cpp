@@ -319,9 +319,17 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
         if (!err.ok()) {
             return err;
         }
-        if (fetched.kind == fetch::DocumentKind::Pdf) {
+        if (fetched.kind == fetch::DocumentKind::Pdf ||
+            fetched.kind == fetch::DocumentKind::Docx) {
             document.source = document_source_label(options);
-            document.input_kind = InputKind::Pdf;
+            document.input_kind = fetched.kind == fetch::DocumentKind::Pdf
+                                      ? InputKind::Pdf
+                                      : InputKind::Docx;
+            document.warnings = std::move(fetched.warnings);
+            if (!options.quiet) {
+                for (const std::string& warning : document.warnings)
+                    std::cerr << "warning: " << warning << "\n";
+            }
             document.output_format = document_output_format(options, document.input_kind, standalone);
             if (document.output_format == markdown::OutputFormat::Pdf) {
                 return write_pdf_from_markdown(fetched.markdown, options.quiet, options.pdf_font,

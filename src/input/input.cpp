@@ -586,9 +586,11 @@ Error load_insert_source(const std::string& source,
         if (!err.ok()) {
             return err;
         }
-        if (fetched.kind == fetch::DocumentKind::Pdf) {
+        if (fetched.kind == fetch::DocumentKind::Pdf ||
+            fetched.kind == fetch::DocumentKind::Docx) {
             loaded.content = std::move(fetched.markdown);
             loaded.converted_html = true;
+            loaded.warnings = std::move(fetched.warnings);
             err = validate_insert_text(loaded.content, "URL " + source);
             if (!err.ok()) {
                 return err;

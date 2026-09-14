@@ -261,7 +261,7 @@ void TuiFileJobs::start_attach(const std::string& path) {
             event.text = path;
             event.attached_source = path;
             std::string body;
-            event.error = fetch::fetch_markdown(path, options, body, token);
+            event.error = fetch::fetch_markdown(path, options, body, token, &event.warnings);
             if (event.error.ok()) {
                 if (text_limit > 0 && body.size() > static_cast<size_t>(text_limit)) {
                     event.error = {ErrorCode::UnsupportedFeature,
@@ -416,7 +416,7 @@ void TuiFileJobs::start_fetch(const std::string& url) {
         event.type = TuiEventType::FetchDone;
         event.text = url;
         std::string markdown;
-        event.error = fetch::fetch_markdown(url, options, markdown, token);
+        event.error = fetch::fetch_markdown(url, options, markdown, token, &event.warnings);
         if (event.error.ok()) {
             input::TextContext fetched;
             fetched.source = "URL " + url;

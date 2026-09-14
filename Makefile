@@ -137,7 +137,7 @@ APP_LINK_EXTRA :=
 APP_LINK_FLAGS :=
 endif
 
-.PHONY: all clean optimized test test-full test-unit test-pdf test-docx test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
+.PHONY: all clean optimized test test-full test-unit test-pdf test-docx test-install-path test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
 
 all: $(BIN)
 
@@ -340,7 +340,11 @@ test-docx: $(TEST_BIN)
 test-unit: $(TEST_BIN)
 	$(TEST_BIN)
 	tests/unit/config/test_config_migration.sh
+	tests/unit/install/test_install_path.sh
 	$(MAKE) test-web-js
+
+test-install-path:
+	tests/unit/install/test_install_path.sh
 
 compare-pdf: $(BIN)
 	python3 scripts/ainiux/pdf_compare.py tests/pdf_files/*.pdf

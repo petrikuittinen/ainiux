@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "common.hpp"
 #include "runtime/runtime.hpp"
@@ -25,15 +26,18 @@ enum class DocumentKind {
     Html,
     Plaintext,
     Pdf,
+    Docx,
 };
 
 struct FetchedDocument {
     DocumentKind kind = DocumentKind::Html;
     std::string content_type;
-    // UTF-8 HTML or plaintext. Empty when kind is Pdf (converted to markdown).
+    // UTF-8 HTML or plaintext. Empty for binary documents converted to Markdown.
     std::string body;
-    // Markdown for Pdf (always) and for Html/Plaintext after fetch_markdown/fetch_text.
+    // Markdown for Pdf/Docx (always) and for Html/Plaintext after conversion.
     std::string markdown;
+    // Bounded conversion diagnostics, currently produced by DOCX conversion.
+    std::vector<std::string> warnings;
 };
 
 Error fetch_html(const std::string& url,
@@ -43,12 +47,15 @@ Error fetch_html(const std::string& url,
 Error fetch_markdown(const std::string& url,
                      const Options& options,
                      std::string& markdown,
-                     runtime::CancellationToken cancellation = runtime::CancellationToken());
+                     runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                     std::vector<std::string>* warnings = nullptr);
 Error fetch_text(const std::string& url,
                  const Options& options,
                  std::string& text,
-                 runtime::CancellationToken cancellation = runtime::CancellationToken());
-// HTML or PDF. PDF bytes are converted to Markdown in `markdown`; HTML stays in `body`.
+                 runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                 std::vector<std::string>* warnings = nullptr);
+// HTML, PDF, or DOCX. Binary documents are converted to Markdown in `markdown`;
+// HTML stays in `body`.
 Error fetch_document(const std::string& url,
                      const Options& options,
                      FetchedDocument& document,
@@ -61,13 +68,16 @@ std::string convert_fetched_body_to_utf8(std::string body, const std::string& co
 // Classification helpers for tests and callers that already have a downloaded body.
 std::string fetched_media_type(std::string content_type);
 bool media_type_is_pdf(const std::string& media_type);
+bool media_type_is_docx(const std::string& media_type);
 bool media_type_is_html(const std::string& media_type);
 bool media_type_is_plain(const std::string& media_type);
 bool body_looks_like_pdf(std::string_view body);
+bool body_looks_like_docx(std::string_view body);
 Error markdown_from_fetched_bytes(std::string_view body,
                                   const std::string& content_type,
                                   std::string& markdown,
                                   DocumentKind& kind,
-                                  runtime::CancellationToken cancellation = runtime::CancellationToken());
+                                  runtime::CancellationToken cancellation = runtime::CancellationToken(),
+                                  std::vector<std::string>* warnings = nullptr);
 
 }  // namespace ainiux::fetch

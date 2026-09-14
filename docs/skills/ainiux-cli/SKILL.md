@@ -149,9 +149,11 @@ DOCX images become visible omission placeholders and conversion warnings go to
 stderr unless `--quiet`; raw package bytes are never sent to the model.
 
 `--fetch-url` and `--search` are explicit. A URL inside `-p` is not fetched.
-HTML and `application/pdf` responses are accepted; PDF is converted to
-Markdown. Private/loopback fetch needs `--allow-private-url-fetch`. Raise
-`--max-fetch-bytes` for PDFs larger than the 10 MiB default.
+HTML, PDF, and DOCX responses are accepted; PDF and DOCX are converted locally
+to canonical Markdown. REPL/TUI `/fetch`, `/attach URL`, `/insert URL`, and
+agent `fetch` use the same bounded conversion. Private/loopback fetch needs
+`--allow-private-url-fetch`. Raise `--max-fetch-bytes` for documents larger
+than the 10 MiB default.
 
 `run` / `plan` may mutate the current workspace. They do not get a y/n prompt
 in this headless path; destructive Guard Ask is denied. Prefer `plan` when the

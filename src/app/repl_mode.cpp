@@ -360,10 +360,16 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                     continue;
                 }
                 std::string markdown;
-                Error err = fetch::fetch_markdown(url, fetch_options_for(context.options), markdown);
+                std::vector<std::string> warnings;
+                Error err = fetch::fetch_markdown(url, fetch_options_for(context.options), markdown,
+                                                  runtime::CancellationToken(), &warnings);
                 if (!err.ok()) {
                     print_error(err);
                     continue;
+                }
+                if (!context.options.quiet) {
+                    for (const std::string& warning : warnings)
+                        std::cerr << "warning: " << warning << "\n";
                 }
                 input::TextContext fetched;
                 fetched.source = "URL " + url;

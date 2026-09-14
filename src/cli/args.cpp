@@ -1571,8 +1571,8 @@ Options:
       --attach PATH             Add text/Markdown/HTML/PDF/DOCX or PNG/JPEG/GIF; repeatable;
                                 PDF/DOCX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
                                 In image mode: PNG/JPEG references only (repeatable, max 16).
-      --fetch-url URL           Fetch HTML or PDF for extraction, or as prompt context with -p.
-                                PDF (application/pdf) is converted to Markdown.
+      --fetch-url URL           Fetch HTML, PDF, or DOCX for extraction or prompt context with -p.
+                                PDF and DOCX are converted to Markdown.
                                 Downloads are capped by --max-fetch-bytes (default 10 MiB).
       --search QUERY            Run a web search and use results as prompt context with -p.
                                 Hosted model search is used instead when the catalog

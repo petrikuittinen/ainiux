@@ -63,6 +63,20 @@ self-managed application should not leave stale administrator-owned copies of
 its evolving defaults in the active path. Install and uninstall scripts remove a
 legacy `/etc/xdg/ainiux` directory when present.
 
+The source installer treats executable resolution as a postcondition, not a
+user troubleshooting step. After a non-`DESTDIR` install it compares the
+installed executable with `type -P ainiux`; the version string is insufficient
+because two source builds can share it. An existing regular writable
+`~/.local/bin/ainiux` is a known prior installation location and is atomically
+refreshed when installing another prefix, which also keeps an already-cached
+user-local command path current. The installer never creates that duplicate,
+never follows a symlink there, and fails on non-regular, unwritable, or other
+unmanaged mismatched shadows. Staged packaging does not inspect or mutate host
+executables. The installer must run in the normal user's `HOME`/`PATH` context
+and elevates only its protected copy step; a non-staged invocation wrapped in
+`sudo` is rejected rather than missing the user's shadow or replacing it with a
+root-owned file.
+
 `src/config/` owns the dependency-free parser, schema mapper, and automatic layer loader. It reads regular files with a 1 MiB default cap and produces an owned map keyed by fully qualified setting name. Boolean, signed 64-bit integer, finite float, quoted string, and bare string values remain typed, and every entry retains its source path and byte-based line/column location. Parsing validates UTF-8 and rejects duplicate keys or malformed syntax without returning a partially populated document.
 
 Each document is schema-validated into a temporary `cli::Options` copy before it replaces the effective options, preventing partial application. The ordinary CLI parser then runs over that configured base so command-line values remain authoritative. TUI theme and thinking-trace visibility are ordinary effective options; provider credentials remain references resolved later by the provider layer.
@@ -320,7 +334,7 @@ DOCX is handled by the dependency-free `src/docx/` boundary using the already-li
 
 PDF input converts to Markdown in `src/pdf/` rather than inserting binary prompt text. Markdown-to-PDF writing uses the same module (`pdf::from_markdown`) with `--output-format pdf`.
 
-`--fetch-url`, `/fetch`, `/attach URL`, `/insert URL`, and agent `fetch` accept `application/pdf` (and `application/x-pdf`). A missing or `application/octet-stream` type is sniffed for a `%PDF-` header; a `.pdf` URL that returns HTML is still HTML. PDF bytes are not charset-decoded. The download cap remains `--max-fetch-bytes`; its default is 10 MiB, matching the local document-input default while retaining an explicit bound for untrusted responses.
+`--fetch-url`, `/fetch`, `/attach URL`, `/insert URL`, and agent `fetch` accept `application/pdf` (and `application/x-pdf`) plus `application/vnd.openxmlformats-officedocument.wordprocessingml.document`. A missing or `application/octet-stream` type is sniffed for a `%PDF-` header or DOCX OPC/Word ZIP structure; `application/zip` is accepted only when that DOCX structure is present. A document-looking URL that returns HTML is still HTML. PDF and DOCX bytes are never charset-decoded or placed directly into prompt context: each is converted locally to bounded canonical Markdown. DOCX conversion warnings propagate to CLI and interactive chat callers. The download cap remains `--max-fetch-bytes`; its default is 10 MiB, matching the local document-input default while retaining an explicit bound for untrusted responses.
 
 Opening a PDF or DOCX in the standalone or WebUI editor converts it to Markdown and retargets Save to the sibling `.md`. Saving a standalone buffer explicitly to `.pdf` or `.docx` runs the corresponding writer atomically. Original binary documents are never overwritten with Markdown bytes; WebUI DOCX export remains deferred.
 
@@ -338,7 +352,7 @@ Provider selection is client-side and independent from LLM provider profiles. Co
 
 The module reuses the existing libcurl HTTP wrapper. Google HTML scraping was removed: modern Google search pages return JavaScript-only shells to non-browser clients, so free Google SERP access is not reliable without a browser stack or a paid API. DuckDuckGo HTML is the supported keyless path (title, URL, snippet). Result URLs longer than 512 bytes are truncated (prefer dropping query/fragment). Agent-mode `web_search` hard-caps at 3 results so models do not fetch large SERPs. URL fetch sends a desktop Firefox User-Agent plus browser-like Accept/Sec-Fetch headers. A more reliable free search provider remains open work (see TODO.md).
 
-Agent `fetch` always converts HTML or PDF to Markdown (or keeps `text/plain`) via `fetch_text`. Raw HTML is never returned in tool results: full pages carry scripts/styles/hidden markup (prompt-injection risk) and waste tokens. CLI `--fetch-url` may still print HTML for local export. Legacy `extract_text=false` is ignored if a model still sends it. Tool `max_bytes` caps the **Markdown output** the model sees; the raw download uses a larger ceiling so HTML→MD is not aborted on bloated pages. HTTP redirects are followed (bounded) with the same private-address socket checks on each hop—trailing-slash 301s from WordPress-style hosts are common and previously failed as bare “HTTP 301”.
+Agent `fetch` always converts HTML, PDF, or DOCX to Markdown (or keeps `text/plain`) via `fetch_text`. Raw HTML is never returned in tool results: full pages carry scripts/styles/hidden markup (prompt-injection risk) and waste tokens. CLI `--fetch-url` may still print HTML for local export. Legacy `extract_text=false` is ignored if a model still sends it. Tool `max_bytes` caps the **Markdown output** the model sees; the raw download uses a larger ceiling so HTML→MD is not aborted on bloated pages. HTTP redirects are followed (bounded) with the same private-address socket checks on each hop—trailing-slash 301s from WordPress-style hosts are common and previously failed as bare “HTTP 301”.
 
 ## Request-Only Context Policies
 

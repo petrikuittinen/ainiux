@@ -1,5 +1,6 @@
 #include "fetch/test_fetch.hpp"
 #include "support/test_support.hpp"
+#include "docx/docx.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
@@ -132,7 +133,7 @@ std::string make_hello_pdf() {
     return out;
 }
 
-void test_pdf_fetch_classification() {
+void test_binary_document_fetch_classification() {
     check(ainiux::fetch::media_type_is_pdf("application/pdf"), "application/pdf is a PDF type");
     check(ainiux::fetch::media_type_is_pdf("application/x-pdf"), "application/x-pdf is a PDF type");
     check(ainiux::fetch::fetched_media_type("application/pdf; charset=binary") == "application/pdf",
@@ -167,6 +168,53 @@ void test_pdf_fetch_classification() {
     err = ainiux::fetch::markdown_from_fetched_bytes(pdf, "image/png", markdown, kind);
     check(!err.ok() && err.code == ainiux::ErrorCode::UnsupportedFeature,
           "non-document content types are rejected");
+
+    check(ainiux::fetch::media_type_is_docx(ainiux::docx::kMimeType),
+          "the official DOCX media type is recognized");
+    check(ainiux::fetch::fetched_media_type(std::string(ainiux::docx::kMimeType) +
+                                               "; charset=binary") == ainiux::docx::kMimeType,
+          "DOCX media type strips parameters");
+    const std::string docx = read_fixture("tests/docx_files/minimal.docx");
+    check(ainiux::fetch::body_looks_like_docx(docx),
+          "an OPC package with Word parts is sniffed as DOCX");
+    check(!ainiux::fetch::body_looks_like_docx("PK\x03\x04generic zip"),
+          "a generic ZIP signature is not enough to sniff DOCX");
+    err = ainiux::fetch::markdown_from_fetched_bytes(
+        "PK\x03\x04generic zip", "application/zip", markdown, kind);
+    check(!err.ok() && err.code == ainiux::ErrorCode::UnsupportedFeature,
+          "a generic application/zip response is rejected rather than decoded as text");
+
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes(docx, ainiux::docx::kMimeType,
+                                                     markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Docx,
+          "the official DOCX content type converts to Markdown");
+    check(markdown.find("# Heading") != std::string::npos,
+          "converted DOCX Markdown contains document text");
+
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes(docx, "application/octet-stream",
+                                                     markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Docx,
+          "octet-stream with DOCX package structure is sniffed as DOCX");
+
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes(docx, "application/zip", markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Docx,
+          "application/zip with DOCX package structure is sniffed as DOCX");
+
+    const std::string image_docx = read_fixture("tests/docx_files/image-placeholder.docx");
+    std::vector<std::string> warnings;
+    markdown.clear();
+    err = ainiux::fetch::markdown_from_fetched_bytes(
+        image_docx, ainiux::docx::kMimeType, markdown, kind,
+        ainiux::runtime::CancellationToken(), &warnings);
+    check(err.ok() && markdown.find("[image omitted") != std::string::npos,
+          "fetched DOCX keeps image omission placeholders");
+    check(!warnings.empty(), "fetched DOCX exposes bounded conversion warnings");
 }
 
 void test_json_escape_rejects_raw_latin1() {
@@ -187,7 +235,7 @@ void run_all() {
     test_fetch_validation_edge_cases();
     test_iso8859_1_html_to_utf8();
     test_windows1251_html_to_utf8();
-    test_pdf_fetch_classification();
+    test_binary_document_fetch_classification();
     test_json_escape_rejects_raw_latin1();
 }
 

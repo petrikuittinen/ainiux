@@ -26,6 +26,21 @@ Useful variants:
 `--user` installs below `~/.local`. Uninstall removes the selected-prefix
 installation; user configuration under `~/.config/ainiux/` is left untouched.
 
+For non-staged installs, the script verifies the actual `ainiux` executable
+selected by `PATH`, using byte identity rather than only the release version. If
+an existing regular writable `~/.local/bin/ainiux` would shadow a newer install
+under `/usr/local` or another prefix, that existing copy is atomically refreshed;
+the installer does not create a second user-local copy. A symlink, non-regular
+path, unwritable user-local copy, or different executable from another earlier
+`PATH` directory stops installation and reports both paths. After manually
+changing `PATH` or removing another shadow, run `hash -r` in shells that cache
+command locations and rerun the installer.
+
+Run `scripts/install.sh` as your normal user even for `/usr/local` or `/usr`;
+the script requests `sudo` only for the protected copy step. It rejects being
+wrapped wholesale in `sudo`, because root's `HOME` and `PATH` cannot safely
+identify the invoking user's shadowing executable.
+
 ## Build manually
 
 Install a C++17 compiler, Make, `pkg-config`, Git, SQLite, libcurl, and OpenSSL development files:

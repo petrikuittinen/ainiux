@@ -164,7 +164,7 @@ These items are intentional future work, not implied current behavior:
   control API;
 - a native Anthropic Messages adapter and broader live capability probing;
 - richer DOCX support beyond normalized canonical-Markdown conversion (media,
-  story parts, lossless edits, remote fetch, transcript/WebUI export), encrypted
+  story parts, lossless edits, transcript/WebUI export), encrypted
   PDF read/write, and broader PDF font/emoji support;
 - `/loop`, sub-agents, and a separately designed Agent skill/custom-command system;
 - optional core image downscaling/caching before vision requests, using shell-free

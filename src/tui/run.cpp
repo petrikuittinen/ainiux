@@ -3774,6 +3774,7 @@ app::TuiRunResult run(provider::RequestContext context,
                         session.messages.push_back(std::move(event.inserted_message));
                         history_scroll = 0;
                         status = "Fetched and inserted " + event.text;
+                        if (!event.warnings.empty()) status += ". Warning: " + event.warnings.front();
                     } else {
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }
