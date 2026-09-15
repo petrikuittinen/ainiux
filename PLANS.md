@@ -33,7 +33,7 @@ approved specification says otherwise.
 
 ## Current foundation
 
-Implementation status (2026-09-14): **v1.35**.
+Implementation status (2026-09-15): **v1.36**.
 
 The main product surfaces are shipped. The current foundation includes
 Chat Completions and Responses, provider/model catalogs, cancellable streaming,
