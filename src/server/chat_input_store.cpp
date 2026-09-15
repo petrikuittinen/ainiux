@@ -118,9 +118,15 @@ Error ChatInputStore::add(std::string mime_type,
                (named && (type.kind == input::Kind::Plaintext || type.kind == input::Kind::Markdown))) {
         stored_mime = named && type.kind == input::Kind::Markdown ? "text/markdown" : "text/plain";
         if (media == "text/markdown") stored_mime = "text/markdown";
+    } else if (media == "text/csv" || media == "application/csv" ||
+               (named && type.kind == input::Kind::Csv)) {
+        stored_mime = "text/csv";
+    } else if (media == "application/json" || media == "text/json" ||
+               (named && type.kind == input::Kind::Json)) {
+        stored_mime = "application/json";
     } else {
         return {ErrorCode::UnsupportedFeature,
-                "chat uploads accept PNG, JPEG, GIF, PDF, DOCX, XLSX, Markdown, plaintext, or HTML"};
+                "chat uploads accept PNG, JPEG, GIF, PDF, DOCX, XLSX, CSV, JSON, Markdown, plaintext, or HTML"};
     }
 
     {

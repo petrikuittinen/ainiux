@@ -78,6 +78,12 @@ to GitHub-flavored tables, not lossless workbook editing. It does not preserve
 drawings, charts, comments, pivots, macros, encryption, themes, or Excel layout.
 Legacy `.xls` is rejected. Transcript-to-XLSX commands are unimplemented.
 
+CSV and JSON are local UTF-8 text inputs (`.csv`, `.json`), not converted to
+Markdown on `--input`, `--attach`, TUI/REPL `/attach`, or WebUI chat upload.
+Fetched CSV becomes a GitHub-flavored Markdown table (RFC 4180 commas); fetched
+JSON is pretty-printed into a fenced `json` code block. `.jsonl`, `.tsv`, and
+CSV/JSON writers are unimplemented.
+
 Do not pretend these exist: REPL/TUI image-generation jobs, batch or streaming
 image output, multi-turn image editing, `/loop`, sub-agents, a native Anthropic
 Messages adapter, multi-workspace server routing, or an ncurses UI. MCP tools do
@@ -132,6 +138,7 @@ Put code in the existing matching module; do not create a parallel architecture.
 │   ├── fetch/, search/      explicit network retrieval
 │   ├── highlight/           shared terminal syntax highlighter
 │   ├── html/, markdown/     conversion and display formatting
+│   ├── csv/                 RFC 4180 CSV → Markdown tables (fetch)
 │   ├── xlsx/                SpreadsheetML ↔ Markdown tables
 │   ├── http/                libcurl transport and SSE
 │   ├── input/               bounded text/image classification and reads

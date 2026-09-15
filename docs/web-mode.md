@@ -45,8 +45,9 @@ The controller capability-detects the server before enabling features. It
 provides:
 
 - concurrency-safe ordinary chat threads with live streamed model responses,
-  local file attachments (PNG/JPEG/GIF, PDF, DOCX, Markdown, plaintext, HTML;
-  documents convert to Markdown), bounded upload warnings, and `/chat-to-pdf` /
+  local file attachments (PNG/JPEG/GIF, PDF, DOCX, XLSX, CSV, JSON, Markdown,
+  plaintext, HTML; PDF/DOCX/XLSX/HTML convert to Markdown, CSV/JSON stay native
+  text), bounded upload warnings, and `/chat-to-pdf` /
   `/last-to-pdf` downloads;
 - safe client-side Markdown rendering for Chat and Agent prose, including
   semantic headings, responsive GFM tables, clickable HTTP(S) links, and the

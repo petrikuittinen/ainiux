@@ -2,6 +2,7 @@
 
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "common.hpp"
@@ -43,5 +44,11 @@ ParsePrefixResult parse_prefix(const std::string& input, size_t offset = 0);
 std::string stringify(const Value& value);
 std::string escape_string(const std::string& input);
 std::string quote(const std::string& input);
+
+// Token-copying pretty printer: preserves object key order and number lexemes.
+// Does not round-trip through Value (which sorts keys and stores numbers as double).
+Error pretty_print(std::string_view input, std::string& output);
+// Pretty-print a single JSON value and wrap it in a ```json fence for Markdown.
+Error to_markdown_bytes(std::string_view utf8, std::string& markdown);
 
 }  // namespace ainiux::json

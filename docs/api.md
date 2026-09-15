@@ -275,9 +275,10 @@ Browser chat uploads use a raw body on `POST /ainiux/v1/chat/inputs` with
 `Content-Type` `image/png`, `image/jpeg`, `image/gif`, `application/pdf`,
 `application/vnd.openxmlformats-officedocument.wordprocessingml.document`,
 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
-`text/plain`, `text/markdown`, or `text/html`. An optional `X-Ainiux-Filename`
+`text/plain`, `text/markdown`, `text/html`, `text/csv`, or `application/json`.
+An optional `X-Ainiux-Filename`
 (or `Content-Disposition` filename) classifies generic types. PDF, DOCX, XLSX, and HTML
-are converted to Markdown immediately. The response is an opaque `id`, `kind`
+are converted to Markdown immediately. CSV and JSON are stored as native text. The response is an opaque `id`, `kind`
 (`image` or `text`), MIME type, display name, converted flag, byte size, expiry,
 and an additive bounded `warnings` array. DOCX/XLSX bytes and embedded media are
 discarded after conversion and never persisted as chat text. Inputs are

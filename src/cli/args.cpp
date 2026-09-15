@@ -1420,6 +1420,9 @@ Examples:
   ainiux --fetch-url https://example.com --output-format md
   ainiux --fetch-url https://example.com/report.pdf --output-format md
   ainiux --fetch-url https://example.com/sheet.xlsx --output-format md
+  ainiux --fetch-url https://example.com/data.csv --output-format md
+  ainiux --input data.csv --output-format plaintext
+  ainiux --input data.json --output-format plaintext
   ainiux --search "web scraping" --output-format plaintext
   ainiux lmstudio -p "Summarize" --attach notes.md --search "latest news"
   printf 'piped text' | ainiux --input stdin --output stdout
@@ -1565,17 +1568,19 @@ Options:
                                 In image mode, omit to write the first unused imageN.png.
 
   Input and attachments:
-      --input PATH              Read text/Markdown/HTML/PDF/DOCX/XLSX, or attach PNG/JPEG/GIF with -p;
-                                PDF/DOCX/XLSX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
+      --input PATH              Read text/Markdown/HTML/PDF/DOCX/XLSX/CSV/JSON, or attach PNG/JPEG/GIF with -p;
+                                PDF/DOCX/XLSX is converted to Markdown; CSV/JSON stay native text.
+                                'stdin' reads UTF-8 plaintext.
       --encoding NAME           Decode --input/--attach text as NAME instead of UTF-8.
                                 Built-in: utf-8, utf-16, windows-1250/1251/1252,
                                 iso-8859-1/2, koi8-r/u. CJK names (gbk, big5, …)
                                 use iconv when installed.
-      --attach PATH             Add text/Markdown/HTML/PDF/DOCX/XLSX or PNG/JPEG/GIF; repeatable;
-                                PDF/DOCX/XLSX is converted to Markdown. 'stdin' reads UTF-8 plaintext.
+      --attach PATH             Add text/Markdown/HTML/PDF/DOCX/XLSX/CSV/JSON or PNG/JPEG/GIF; repeatable;
+                                PDF/DOCX/XLSX is converted to Markdown; CSV/JSON stay native text.
+                                'stdin' reads UTF-8 plaintext.
                                 In image mode: PNG/JPEG references only (repeatable, max 16).
-      --fetch-url URL           Fetch HTML, PDF, DOCX, or XLSX for extraction or prompt context with -p.
-                                PDF and DOCX are converted to Markdown.
+      --fetch-url URL           Fetch HTML, PDF, DOCX, XLSX, CSV, or JSON for extraction or prompt context with -p.
+                                PDF, DOCX, XLSX, CSV, and JSON are converted to Markdown.
                                 Downloads are capped by --max-fetch-bytes (default 10 MiB).
       --search QUERY            Run a web search and use results as prompt context with -p.
                                 Hosted model search is used instead when the catalog

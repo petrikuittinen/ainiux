@@ -8,6 +8,7 @@
 #include <iostream>
 #include <utility>
 
+#include "csv/csv.hpp"
 #include "encoding/encoding.hpp"
 #include "docx/docx.hpp"
 #include "html/html.hpp"
@@ -87,6 +88,10 @@ const char* input_kind_name(InputKind kind) {
             return "docx";
         case InputKind::Xlsx:
             return "xlsx";
+        case InputKind::Csv:
+            return "csv";
+        case InputKind::Json:
+            return "json";
         case InputKind::Image:
             return "image";
     }
@@ -145,6 +150,26 @@ markdown::OutputFormat document_output_format(const cli::Options& options,
         return markdown::OutputFormat::Markdown;
     }
     return markdown::OutputFormat::Plaintext;
+}
+
+bool output_needs_markdown_interchange(markdown::OutputFormat format) {
+    return format == markdown::OutputFormat::Html || format == markdown::OutputFormat::Pdf ||
+           format == markdown::OutputFormat::Docx || format == markdown::OutputFormat::Xlsx;
+}
+
+Error convert_structured_text_to_markdown(const std::string& body, InputKind kind,
+                                          std::string& markdown) {
+    if (kind == InputKind::Csv) {
+        csv::ReadOptions options;
+        options.max_bytes = body.size();
+        csv::Diagnostics diagnostics;
+        return csv::to_markdown_bytes(body, options, markdown, &diagnostics);
+    }
+    if (kind == InputKind::Json) {
+        return json::to_markdown_bytes(body, markdown);
+    }
+    markdown = body;
+    return ok_error();
 }
 
 std::string canonical_markdown_body(const std::string& body, InputKind kind) {
@@ -229,6 +254,13 @@ std::string render_document_body(const std::string& body,
     }
     if (kind == InputKind::Image) {
         return "";
+    }
+    if (kind == InputKind::Csv || kind == InputKind::Json) {
+        if (output_format == markdown::OutputFormat::Plaintext ||
+            output_format == markdown::OutputFormat::Markdown) {
+            return body;
+        }
+        return markdown::render(body, output_format, complete_html_document);
     }
     if (output_format == markdown::OutputFormat::Plaintext ||
         output_format == markdown::OutputFormat::Markdown) {
@@ -337,19 +369,29 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
         }
         if (fetched.kind == fetch::DocumentKind::Pdf ||
             fetched.kind == fetch::DocumentKind::Docx ||
-            fetched.kind == fetch::DocumentKind::Xlsx) {
+            fetched.kind == fetch::DocumentKind::Xlsx ||
+            fetched.kind == fetch::DocumentKind::Csv ||
+            fetched.kind == fetch::DocumentKind::Json) {
             document.source = document_source_label(options);
             document.input_kind = fetched.kind == fetch::DocumentKind::Pdf
                                       ? InputKind::Pdf
                                       : fetched.kind == fetch::DocumentKind::Docx
                                             ? InputKind::Docx
-                                            : InputKind::Xlsx;
+                                            : fetched.kind == fetch::DocumentKind::Xlsx
+                                                  ? InputKind::Xlsx
+                                                  : fetched.kind == fetch::DocumentKind::Csv
+                                                        ? InputKind::Csv
+                                                        : InputKind::Json;
             document.warnings = std::move(fetched.warnings);
             if (!options.quiet) {
                 for (const std::string& warning : document.warnings)
                     std::cerr << "warning: " << warning << "\n";
             }
             document.output_format = document_output_format(options, document.input_kind, standalone);
+            if ((document.input_kind == InputKind::Csv || document.input_kind == InputKind::Json) &&
+                !(standalone && options.rendered_output_format_explicit)) {
+                document.output_format = markdown::OutputFormat::Markdown;
+            }
             if (document.output_format == markdown::OutputFormat::Pdf) {
                 return write_pdf_from_markdown(fetched.markdown, options.quiet, options.pdf_font,
                                                document.converted);
@@ -503,6 +545,15 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
     }
 
     document.output_format = document_output_format(options, document.input_kind, standalone);
+    if (output_needs_markdown_interchange(document.output_format) &&
+        (document.input_kind == InputKind::Csv || document.input_kind == InputKind::Json)) {
+        std::string converted;
+        err = convert_structured_text_to_markdown(body, document.input_kind, converted);
+        if (!err.ok()) {
+            return err;
+        }
+        body = std::move(converted);
+    }
     if (document.output_format == markdown::OutputFormat::Pdf) {
         return write_pdf_from_markdown(canonical_markdown_body(body, document.input_kind), options.quiet,
                                        options.pdf_font, document.converted);
@@ -522,7 +573,15 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
 std::string document_context_message(const LoadedDocument& document) {
     std::string message = "Input context from " + document.source + "\n";
     message += "Format: ";
-    message += markdown::output_format_name(document.output_format);
+    if (document.input_kind == InputKind::Csv &&
+        document.output_format != markdown::OutputFormat::Markdown) {
+        message += "csv";
+    } else if (document.input_kind == InputKind::Json &&
+               document.output_format != markdown::OutputFormat::Markdown) {
+        message += "json";
+    } else {
+        message += markdown::output_format_name(document.output_format);
+    }
     message += "\n\n";
     message += document.converted;
     return message;
@@ -546,8 +605,10 @@ Error load_text_context_file(const cli::Options& options,
     }
     document.source = std::move(loaded.source);
     document.input_kind = loaded.kind;
-    document.output_format = loaded.kind == InputKind::Plaintext ? markdown::OutputFormat::Plaintext
-                                                                 : markdown::OutputFormat::Markdown;
+    document.output_format = (loaded.kind == InputKind::Plaintext || loaded.kind == InputKind::Csv ||
+                              loaded.kind == InputKind::Json)
+                                 ? markdown::OutputFormat::Plaintext
+                                 : markdown::OutputFormat::Markdown;
     document.converted = std::move(loaded.content);
     document.warnings = std::move(loaded.warnings);
     if (!options.quiet) {

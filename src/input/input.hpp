@@ -16,6 +16,8 @@ enum class Kind {
     Pdf,
     Docx,
     Xlsx,
+    Csv,
+    Json,
     Image,
 };
 

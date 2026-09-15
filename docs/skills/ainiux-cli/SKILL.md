@@ -115,7 +115,10 @@ ainiux --input report.docx --output-format md --output report.md
 ainiux --input notes.md --output-format docx --output notes.docx
 ainiux --input sheet.xlsx --output-format md --output sheet.md
 ainiux --input notes.md --output-format xlsx --output notes.xlsx
+ainiux --input data.csv
+ainiux --input payload.json
 ainiux --fetch-url https://example.com --output-format md
+ainiux --fetch-url https://example.com/data.csv --output-format md
 ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
 ```
@@ -143,16 +146,18 @@ and a next step when one exists.
 
 ## Attachments and safety
 
-`--attach` is bounded text, Markdown, HTML, PDF/DOCX (converted to Markdown), or
-PNG/JPEG/GIF for capable Chat Completions models. `--input` on an image is the
+`--attach` is bounded text, Markdown, HTML, PDF/DOCX/XLSX (converted to Markdown),
+CSV/JSON (native text), or PNG/JPEG/GIF for capable Chat Completions models.
+`--input` on an image is the
 chat vision path, not `ainiux image`. `--input` on `.pdf`, `.docx`, or `.xlsx` converts to
-Markdown. `--output-format pdf`, `docx`, or `xlsx` writes a new normalized document.
+Markdown; `.csv` and `.json` stay native text. `--output-format pdf`, `docx`, or `xlsx` writes a new normalized document.
 DOCX images become visible omission placeholders and conversion warnings go to
 stderr unless `--quiet`; raw package bytes are never sent to the model.
 
 `--fetch-url` and `--search` are explicit. A URL inside `-p` is not fetched.
-HTML, PDF, and DOCX responses are accepted; PDF and DOCX are converted locally
-to canonical Markdown. REPL/TUI `/fetch`, `/attach URL`, `/insert URL`, and
+HTML, PDF, DOCX, XLSX, CSV, and JSON responses are accepted; PDF, DOCX, XLSX,
+CSV, and JSON are converted locally to canonical Markdown. REPL/TUI `/fetch`,
+`/attach URL`, `/insert URL`, and
 agent `fetch` use the same bounded conversion. Private/loopback fetch needs
 `--allow-private-url-fetch`. Raise `--max-fetch-bytes` for documents larger
 than the 10 MiB default.

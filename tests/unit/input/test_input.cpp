@@ -134,6 +134,10 @@ void test_input_file_type_classification() {
          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
         {"Sheet.XLSX", ainiux::input::Kind::Xlsx,
          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        {"data.csv", ainiux::input::Kind::Csv, "text/csv"},
+        {"DATA.CSV", ainiux::input::Kind::Csv, "text/csv"},
+        {"payload.json", ainiux::input::Kind::Json, "application/json"},
+        {"Payload.JSON", ainiux::input::Kind::Json, "application/json"},
         {"image.PnG", ainiux::input::Kind::Image, "image/png"},
         {"photo.JPG", ainiux::input::Kind::Image, "image/jpeg"},
         {"photo.JpEg", ainiux::input::Kind::Image, "image/jpeg"},
@@ -157,6 +161,10 @@ void test_input_file_type_classification() {
           "WebM is rejected instead of treated as an image");
     err = ainiux::input::classify_file_type("image-without-extension", type);
     check(!err.ok(), "input without a supported extension is rejected");
+    err = ainiux::input::classify_file_type("events.jsonl", type);
+    check(!err.ok(), "JSONL is not treated as JSON input");
+    err = ainiux::input::classify_file_type("sheet.tsv", type);
+    check(!err.ok(), "TSV is not treated as CSV input");
 }
 
 void test_input_file_io_and_unicode_edge_cases() {
@@ -314,6 +322,37 @@ void test_insert_source_accepts_any_utf8_file_ending() {
 
 }  // namespace
 
+void test_local_csv_and_json_pass_through() {
+    const std::string csv_path = "build/unit-native.csv";
+    const std::string csv_body = "name,value\nhello,7\n";
+    {
+        std::ofstream output(csv_path, std::ios::binary | std::ios::trunc);
+        output << csv_body;
+    }
+    ainiux::input::TextContext loaded;
+    ainiux::Error err = ainiux::input::load_text_context_file(csv_path, 1024, loaded);
+    check(err.ok() && loaded.kind == ainiux::input::Kind::Csv && loaded.content == csv_body,
+          "local CSV is attached as native text, not converted to a Markdown table");
+    check(ainiux::input::text_context_message(loaded).find("Format: csv") != std::string::npos,
+          "CSV context is labeled csv");
+
+    const std::string json_path = "build/unit-native.json";
+    const std::string json_body = "{\"z\":1,\"a\":9007199254740993}";
+    {
+        std::ofstream output(json_path, std::ios::binary | std::ios::trunc);
+        output << json_body;
+    }
+    err = ainiux::input::load_text_context_file(json_path, 1024, loaded);
+    check(err.ok() && loaded.kind == ainiux::input::Kind::Json && loaded.content == json_body,
+          "local JSON is attached as native text, not pretty-printed or fenced");
+    check(ainiux::input::text_context_message(loaded).find("Format: json") != std::string::npos,
+          "JSON context is labeled json");
+
+    std::string attached;
+    err = ainiux::input::read_local_text_file_for_attach(csv_path, 1024, attached);
+    check(err.ok() && attached == csv_body, "/attach reads local CSV without converting it");
+}
+
 void run_all() {
     test_image_loading_and_chat_request();
     test_extract_local_image_path_candidates();
@@ -321,6 +360,7 @@ void run_all() {
     test_input_file_io_and_unicode_edge_cases();
     test_text_context_loading_and_cancellation();
     test_insert_source_accepts_any_utf8_file_ending();
+    test_local_csv_and_json_pass_through();
 }
 
 }  // namespace ainiux::test::input

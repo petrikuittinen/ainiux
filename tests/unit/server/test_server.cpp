@@ -740,6 +740,28 @@ void test_chat_input_uploads() {
               xlsx_created.body.find("text/markdown") != std::string::npos,
           "XLSX chat upload stores only converted Markdown");
 
+    http::Request csv = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: text/csv\r\n"
+        "X-Ainiux-Filename: data.csv\r\nContent-Length: 0\r\n\r\n");
+    csv.body = "name,value\nhello,7\n";
+    Response csv_created = route_request(csv, auth, status);
+    check(csv_created.status == 201 &&
+              csv_created.body.find("\"converted\":false") != std::string::npos &&
+              csv_created.body.find("text/csv") != std::string::npos,
+          "CSV chat upload is stored as native text, not converted");
+
+    http::Request json_upload = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: application/json\r\n"
+        "X-Ainiux-Filename: payload.json\r\nContent-Length: 0\r\n\r\n");
+    json_upload.body = "{\"z\":1}";
+    Response json_created = route_request(json_upload, auth, status);
+    check(json_created.status == 201 &&
+              json_created.body.find("\"converted\":false") != std::string::npos &&
+              json_created.body.find("application/json") != std::string::npos,
+          "JSON chat upload is stored as native text, not converted");
+
     Response denial;
     check(!preflight_request_body(text, Limits::upload_body_bytes + 1U, auth, status, denial) &&
               denial.status == 413,

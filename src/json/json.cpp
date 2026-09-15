@@ -3,7 +3,9 @@
 #include <cerrno>
 #include <cstdlib>
 #include <iomanip>
+#include <new>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 namespace ainiux::json {
@@ -556,4 +558,293 @@ std::string escape_string(const std::string& input) {
 
 std::string quote(const std::string& input) { return "\"" + escape_string(input) + "\""; }
 
+namespace {
+
+class PrettyPrinter {
+   public:
+    explicit PrettyPrinter(std::string_view input) : input_(input) {}
+
+    Error run(std::string& output) {
+        output.clear();
+        skip_ws();
+        Error err = emit_value(0);
+        if (!err.ok()) {
+            return err;
+        }
+        skip_ws();
+        if (pos_ != input_.size()) {
+            return fail("unexpected trailing JSON data");
+        }
+        if (output_.empty() || output_.back() != '\n') {
+            output_.push_back('\n');
+        }
+        output = std::move(output_);
+        return ok_error();
+    }
+
+   private:
+    static constexpr int kMaxDepth = 256;
+
+    std::string_view input_;
+    size_t pos_ = 0;
+    std::string output_;
+
+    Error fail(const std::string& detail) const {
+        return {ErrorCode::JsonParse,
+                "JSON parse error at byte " + std::to_string(pos_) + ": " + detail};
+    }
+
+    void skip_ws() {
+        while (pos_ < input_.size()) {
+            const char ch = input_[pos_];
+            if (ch != ' ' && ch != '\n' && ch != '\r' && ch != '\t') {
+                break;
+            }
+            ++pos_;
+        }
+    }
+
+    void indent(int depth) {
+        output_.append(static_cast<size_t>(depth) * 2, ' ');
+    }
+
+    Error emit_value(int depth) {
+        if (depth > kMaxDepth) {
+            return fail("JSON nesting is too deep");
+        }
+        if (pos_ >= input_.size()) {
+            return fail("unexpected end of JSON");
+        }
+        const char ch = input_[pos_];
+        if (ch == '{') {
+            return emit_object(depth);
+        }
+        if (ch == '[') {
+            return emit_array(depth);
+        }
+        if (ch == '"') {
+            return emit_string();
+        }
+        if (ch == '-' || (ch >= '0' && ch <= '9')) {
+            return emit_number();
+        }
+        if (match_literal("true") || match_literal("false") || match_literal("null")) {
+            return ok_error();
+        }
+        return fail("expected a JSON value");
+    }
+
+    bool match_literal(const char* literal) {
+        size_t len = 0;
+        while (literal[len] != '\0') {
+            ++len;
+        }
+        if (pos_ + len > input_.size() || input_.compare(pos_, len, literal) != 0) {
+            return false;
+        }
+        if (pos_ + len < input_.size()) {
+            const unsigned char next = static_cast<unsigned char>(input_[pos_ + len]);
+            if ((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') ||
+                (next >= '0' && next <= '9') || next == '_') {
+                return false;
+            }
+        }
+        output_.append(input_.data() + pos_, len);
+        pos_ += len;
+        return true;
+    }
+
+    Error emit_string() {
+        if (pos_ >= input_.size() || input_[pos_] != '"') {
+            return fail("expected string");
+        }
+        output_.push_back('"');
+        ++pos_;
+        while (pos_ < input_.size()) {
+            const unsigned char ch = static_cast<unsigned char>(input_[pos_]);
+            if (ch == '"') {
+                output_.push_back('"');
+                ++pos_;
+                return ok_error();
+            }
+            if (ch == '\\') {
+                if (pos_ + 1 >= input_.size()) {
+                    return fail("unterminated string escape");
+                }
+                output_.push_back('\\');
+                output_.push_back(input_[pos_ + 1]);
+                pos_ += 2;
+                continue;
+            }
+            if (ch < 0x20) {
+                return fail("unescaped control character in string");
+            }
+            output_.push_back(static_cast<char>(ch));
+            ++pos_;
+        }
+        return fail("unterminated string");
+    }
+
+    Error emit_number() {
+        const size_t start = pos_;
+        if (pos_ < input_.size() && input_[pos_] == '-') {
+            ++pos_;
+        }
+        if (pos_ >= input_.size() || input_[pos_] < '0' || input_[pos_] > '9') {
+            return fail("invalid number");
+        }
+        if (input_[pos_] == '0') {
+            ++pos_;
+        } else {
+            while (pos_ < input_.size() && input_[pos_] >= '0' && input_[pos_] <= '9') {
+                ++pos_;
+            }
+        }
+        if (pos_ < input_.size() && input_[pos_] == '.') {
+            ++pos_;
+            if (pos_ >= input_.size() || input_[pos_] < '0' || input_[pos_] > '9') {
+                return fail("invalid number");
+            }
+            while (pos_ < input_.size() && input_[pos_] >= '0' && input_[pos_] <= '9') {
+                ++pos_;
+            }
+        }
+        if (pos_ < input_.size() && (input_[pos_] == 'e' || input_[pos_] == 'E')) {
+            ++pos_;
+            if (pos_ < input_.size() && (input_[pos_] == '+' || input_[pos_] == '-')) {
+                ++pos_;
+            }
+            if (pos_ >= input_.size() || input_[pos_] < '0' || input_[pos_] > '9') {
+                return fail("invalid number");
+            }
+            while (pos_ < input_.size() && input_[pos_] >= '0' && input_[pos_] <= '9') {
+                ++pos_;
+            }
+        }
+        output_.append(input_.data() + start, pos_ - start);
+        return ok_error();
+    }
+
+    Error emit_object(int depth) {
+        output_.push_back('{');
+        ++pos_;
+        skip_ws();
+        if (pos_ < input_.size() && input_[pos_] == '}') {
+            output_.push_back('}');
+            ++pos_;
+            return ok_error();
+        }
+        output_.push_back('\n');
+        bool first = true;
+        while (true) {
+            skip_ws();
+            if (!first) {
+                if (pos_ < input_.size() && input_[pos_] == ',') {
+                    output_.push_back(',');
+                    output_.push_back('\n');
+                    ++pos_;
+                    skip_ws();
+                } else if (pos_ < input_.size() && input_[pos_] == '}') {
+                    output_.push_back('\n');
+                    indent(depth);
+                    output_.push_back('}');
+                    ++pos_;
+                    return ok_error();
+                } else {
+                    return fail("expected comma or object end");
+                }
+            }
+            first = false;
+            indent(depth + 1);
+            Error err = emit_string();
+            if (!err.ok()) {
+                return err;
+            }
+            skip_ws();
+            if (pos_ >= input_.size() || input_[pos_] != ':') {
+                return fail("expected colon after object key");
+            }
+            output_ += ": ";
+            ++pos_;
+            skip_ws();
+            err = emit_value(depth + 1);
+            if (!err.ok()) {
+                return err;
+            }
+        }
+    }
+
+    Error emit_array(int depth) {
+        output_.push_back('[');
+        ++pos_;
+        skip_ws();
+        if (pos_ < input_.size() && input_[pos_] == ']') {
+            output_.push_back(']');
+            ++pos_;
+            return ok_error();
+        }
+        output_.push_back('\n');
+        bool first = true;
+        while (true) {
+            skip_ws();
+            if (!first) {
+                if (pos_ < input_.size() && input_[pos_] == ',') {
+                    output_.push_back(',');
+                    output_.push_back('\n');
+                    ++pos_;
+                    skip_ws();
+                } else if (pos_ < input_.size() && input_[pos_] == ']') {
+                    output_.push_back('\n');
+                    indent(depth);
+                    output_.push_back(']');
+                    ++pos_;
+                    return ok_error();
+                } else {
+                    return fail("expected comma or array end");
+                }
+            }
+            first = false;
+            indent(depth + 1);
+            Error err = emit_value(depth + 1);
+            if (!err.ok()) {
+                return err;
+            }
+        }
+    }
+};
+
+}  // namespace
+
+Error pretty_print(std::string_view input, std::string& output) {
+    try {
+        return PrettyPrinter(input).run(output);
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to pretty-print JSON"};
+    } catch (const std::length_error&) {
+        return {ErrorCode::UnsupportedFeature, "pretty-printed JSON is too large"};
+    }
+}
+
+Error to_markdown_bytes(std::string_view utf8, std::string& markdown) {
+    std::string pretty;
+    Error err = pretty_print(utf8, pretty);
+    if (!err.ok()) {
+        return err;
+    }
+    try {
+        markdown = "```json\n";
+        markdown += pretty;
+        if (pretty.empty() || pretty.back() != '\n') {
+            markdown.push_back('\n');
+        }
+        markdown += "```\n";
+    } catch (const std::bad_alloc&) {
+        return {ErrorCode::Internal, "not enough memory to format JSON as Markdown"};
+    } catch (const std::length_error&) {
+        return {ErrorCode::UnsupportedFeature, "converted JSON Markdown is too large"};
+    }
+    return ok_error();
+}
+
 }  // namespace ainiux::json
+

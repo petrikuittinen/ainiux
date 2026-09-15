@@ -6,10 +6,12 @@
 #include <utility>
 #include <vector>
 
+#include "csv/csv.hpp"
 #include "docx/docx.hpp"
 #include "encoding/encoding.hpp"
 #include "html/html.hpp"
 #include "http/http.hpp"
+#include "json/json.hpp"
 #include "pdf/pdf.hpp"
 #include "xlsx/xlsx.hpp"
 
@@ -175,8 +177,25 @@ std::string media_type_of(std::string content_type) {
     return ascii_trim(std::move(content_type));
 }
 
+std::string url_path_lower(const std::string& url) {
+    std::string path = ascii_lower(url);
+    const size_t cut = path.find_first_of("?#");
+    if (cut != std::string::npos) {
+        path.resize(cut);
+    }
+    return path;
+}
+
+bool url_has_extension(const std::string& url, const char* extension) {
+    const std::string path = url_path_lower(url);
+    const std::string suffix = extension;
+    return path.size() >= suffix.size() &&
+           path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 bool classify_fetched_kind(const std::string& media_type,
                            const std::string& body,
+                           const std::string& url,
                            FetchAccept accept,
                            DocumentKind& kind) {
     const bool allow_plain = accept == FetchAccept::HtmlOrPlain || accept == FetchAccept::Document;
@@ -194,6 +213,14 @@ bool classify_fetched_kind(const std::string& media_type,
         kind = DocumentKind::Xlsx;
         return allow_binary;
     }
+    if (media_type_is_csv(media_type)) {
+        kind = DocumentKind::Csv;
+        return allow_binary;
+    }
+    if (media_type_is_json(media_type)) {
+        kind = DocumentKind::Json;
+        return allow_binary;
+    }
     const bool generic_type = media_type.empty() || media_type == "application/octet-stream";
     if (generic_type || media_type == "application/zip") {
         if (body_looks_like_pdf(body)) {
@@ -206,6 +233,14 @@ bool classify_fetched_kind(const std::string& media_type,
         }
         if (body_looks_like_xlsx(body)) {
             kind = DocumentKind::Xlsx;
+            return allow_binary;
+        }
+        if (generic_type && url_has_extension(url, ".csv")) {
+            kind = DocumentKind::Csv;
+            return allow_binary;
+        }
+        if (generic_type && url_has_extension(url, ".json")) {
+            kind = DocumentKind::Json;
             return allow_binary;
         }
         if (!generic_type) {
@@ -232,18 +267,21 @@ const char* accept_header_for(FetchAccept accept) {
                    "text/plain;q=0.8,application/pdf;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.7,"
+                   "text/csv;q=0.7,application/json;q=0.7,"
                    "image/avif,image/webp,*/*;q=0.8";
         case FetchAccept::HtmlOrBinaryDocument:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "application/pdf;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.8,"
+                   "text/csv;q=0.7,application/json;q=0.7,"
                    "image/avif,image/webp,image/apng,*/*;q=0.8";
         case FetchAccept::Document:
             return "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,"
                    "text/plain;q=0.8,application/pdf;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.8,"
+                   "text/csv;q=0.7,application/json;q=0.7,"
                    "image/avif,image/webp,*/*;q=0.8";
         case FetchAccept::HtmlOnly:
         default:
@@ -260,9 +298,9 @@ const char* unsupported_type_message(FetchAccept accept) {
         case FetchAccept::HtmlOrPlain:
             return "a supported text content type: ";
         case FetchAccept::HtmlOrBinaryDocument:
-            return "an HTML, PDF, DOCX, or XLSX content type: ";
+            return "an HTML, PDF, DOCX, XLSX, CSV, or JSON content type: ";
         case FetchAccept::Document:
-            return "a supported HTML, PDF, DOCX, XLSX, or text content type: ";
+            return "a supported HTML, PDF, DOCX, XLSX, CSV, JSON, or text content type: ";
         case FetchAccept::HtmlOnly:
         default:
             return "an HTML content type: ";
@@ -342,7 +380,7 @@ Error fetch_body(const std::string& url,
                 "HTTP " + std::to_string(result.response.status) + " while fetching URL: " + url};
     }
     if (!classify_fetched_kind(media_type_of(result.response.content_type), result.response.body,
-                               accept, kind)) {
+                               url, accept, kind)) {
         return {ErrorCode::UnsupportedFeature,
                 std::string("fetched URL did not return ") + unsupported_type_message(accept) + url +
                     " (Content-Type: " + result.response.content_type + ")"};
@@ -419,6 +457,51 @@ Error convert_xlsx_body(const std::string& url,
     return ok_error();
 }
 
+Error convert_csv_body(const std::string& url,
+                       std::string body,
+                       const Options& options,
+                       std::string& markdown,
+                       std::vector<std::string>* warnings,
+                       runtime::CancellationToken cancellation) {
+    body = normalize_body_to_utf8(std::move(body), "text/csv");
+    csv::ReadOptions csv_options;
+    csv_options.max_bytes = options.max_bytes > 0 ? static_cast<std::size_t>(options.max_bytes)
+                                                  : body.size();
+    csv_options.cancellation = cancellation;
+    csv::Diagnostics diagnostics;
+    Error err = csv::to_markdown_bytes(body, csv_options, markdown, &diagnostics);
+    if (!err.ok()) {
+        return {err.code, err.message + " (URL " + url + ")"};
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    }
+    if (warnings != nullptr) {
+        *warnings = std::move(diagnostics.messages);
+    }
+    return ok_error();
+}
+
+Error convert_json_body(const std::string& url,
+                        std::string body,
+                        const Options& options,
+                        std::string& markdown,
+                        runtime::CancellationToken cancellation) {
+    (void)options;
+    body = normalize_body_to_utf8(std::move(body), "application/json");
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    }
+    Error err = json::to_markdown_bytes(body, markdown);
+    if (!err.ok()) {
+        return {err.code, err.message + " (URL " + url + ")"};
+    }
+    if (cancellation.cancelled()) {
+        return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    }
+    return ok_error();
+}
+
 }  // namespace
 
 std::string fetched_media_type(std::string content_type) {
@@ -435,6 +518,14 @@ bool media_type_is_docx(const std::string& media_type) {
 
 bool media_type_is_xlsx(const std::string& media_type) {
     return media_type == xlsx::kMimeType;
+}
+
+bool media_type_is_csv(const std::string& media_type) {
+    return media_type == "text/csv" || media_type == "application/csv";
+}
+
+bool media_type_is_json(const std::string& media_type) {
+    return media_type == "application/json" || media_type == "text/json";
 }
 
 bool media_type_is_html(const std::string& media_type) {
@@ -475,12 +566,28 @@ bool body_looks_like_xlsx(std::string_view body) {
     return xlsx::looks_like_xlsx(body);
 }
 
+namespace {
+
+bool fetched_url_has_extension(const std::string& url, const char* extension) {
+    std::string path = ascii_lower(url);
+    const size_t cut = path.find_first_of("?#");
+    if (cut != std::string::npos) {
+        path.resize(cut);
+    }
+    const std::string suffix = extension;
+    return path.size() >= suffix.size() &&
+           path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+}  // namespace
+
 Error markdown_from_fetched_bytes(std::string_view body,
                                   const std::string& content_type,
                                   std::string& markdown,
                                   DocumentKind& kind,
                                   runtime::CancellationToken cancellation,
-                                  std::vector<std::string>* warnings) {
+                                  std::vector<std::string>* warnings,
+                                  const std::string& source_url) {
     markdown.clear();
     if (warnings != nullptr) warnings->clear();
     const std::string media = media_type_of(content_type);
@@ -513,13 +620,29 @@ Error markdown_from_fetched_bytes(std::string_view body,
         if (err.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
         return err;
     }
+    if (media_type_is_csv(media) || (generic_type && fetched_url_has_extension(source_url, ".csv"))) {
+        kind = DocumentKind::Csv;
+        const std::string utf8 = normalize_body_to_utf8(std::string(body), content_type);
+        csv::ReadOptions csv_options;
+        csv_options.max_bytes = utf8.size();
+        csv_options.cancellation = cancellation;
+        csv::Diagnostics diagnostics;
+        Error err = csv::to_markdown_bytes(utf8, csv_options, markdown, &diagnostics);
+        if (err.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
+        return err;
+    }
+    if (media_type_is_json(media) || (generic_type && fetched_url_has_extension(source_url, ".json"))) {
+        kind = DocumentKind::Json;
+        const std::string utf8 = normalize_body_to_utf8(std::string(body), content_type);
+        return json::to_markdown_bytes(utf8, markdown);
+    }
     if (media_type_is_plain(media)) {
         kind = DocumentKind::Plaintext;
     } else if (media_type_is_html(media) || generic_type) {
         kind = DocumentKind::Html;
     } else {
         return {ErrorCode::UnsupportedFeature,
-                "fetched body is not HTML, PDF, DOCX, XLSX, or plain text (Content-Type: " +
+                "fetched body is not HTML, PDF, DOCX, XLSX, CSV, JSON, or plain text (Content-Type: " +
                     content_type + ")"};
     }
     if (cancellation.cancelled()) {
@@ -574,6 +697,13 @@ Error fetch_document(const std::string& url,
         return convert_xlsx_body(url, std::move(body), options, document.markdown,
                                  &document.warnings, cancellation);
     }
+    if (kind == DocumentKind::Csv) {
+        return convert_csv_body(url, std::move(body), options, document.markdown,
+                                &document.warnings, cancellation);
+    }
+    if (kind == DocumentKind::Json) {
+        return convert_json_body(url, std::move(body), options, document.markdown, cancellation);
+    }
     document.body = normalize_body_to_utf8(std::move(body), content_type);
     return ok_error();
 }
@@ -593,7 +723,8 @@ Error fetch_markdown(const std::string& url,
     }
     if (warnings != nullptr) *warnings = document.warnings;
     if (document.kind == DocumentKind::Pdf || document.kind == DocumentKind::Docx ||
-        document.kind == DocumentKind::Xlsx) {
+        document.kind == DocumentKind::Xlsx || document.kind == DocumentKind::Csv ||
+        document.kind == DocumentKind::Json) {
         markdown = std::move(document.markdown);
         return ok_error();
     }
@@ -626,6 +757,12 @@ Error fetch_text(const std::string& url,
     }
     if (kind == DocumentKind::Xlsx) {
         return convert_xlsx_body(url, std::move(body), options, text, warnings, cancellation);
+    }
+    if (kind == DocumentKind::Csv) {
+        return convert_csv_body(url, std::move(body), options, text, warnings, cancellation);
+    }
+    if (kind == DocumentKind::Json) {
+        return convert_json_body(url, std::move(body), options, text, cancellation);
     }
     body = normalize_body_to_utf8(std::move(body), content_type);
     if (cancellation.cancelled()) {

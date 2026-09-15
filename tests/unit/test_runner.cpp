@@ -20,6 +20,7 @@
 #include "cli/test_cli.hpp"
 #include "config/test_config.hpp"
 #include "context/test_context.hpp"
+#include "csv/test_csv.hpp"
 #include "docx/test_docx.hpp"
 #include "xlsx/test_xlsx.hpp"
 #include "editor/test_editor.hpp"
@@ -106,6 +107,7 @@ int main(int argc, char** argv) {
     ainiux::test::pdf::run_all();
     ainiux::test::docx::run_all();
     ainiux::test::xlsx::run_all();
+    ainiux::test::csv::run_all();
     ainiux::test::config::run_all();
     ainiux::test::cli::run_all();
     ainiux::test::benchmark::run_all();

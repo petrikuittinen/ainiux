@@ -313,8 +313,10 @@ void test_cli_help_displays_version() {
           "CLI help documents PDF as a --input type");
     check(help.find("Add text/Markdown/HTML/PDF") != std::string::npos,
           "CLI help documents PDF as an --attach type");
-    check(help.find("Fetch HTML, PDF, DOCX, or XLSX") != std::string::npos,
-          "CLI help documents PDF, DOCX, and XLSX as --fetch-url types");
+    check(help.find("Fetch HTML, PDF, DOCX, XLSX, CSV, or JSON") != std::string::npos,
+          "CLI help documents PDF, DOCX, XLSX, CSV, and JSON as --fetch-url types");
+    check(help.find("CSV/JSON stay native text") != std::string::npos,
+          "CLI help documents local CSV/JSON as native text");
     check(help.find("--input report.pdf") != std::string::npos,
           "CLI help includes a PDF conversion example");
     check(help.find("Mode:") != std::string::npos &&

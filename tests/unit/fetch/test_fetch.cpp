@@ -234,6 +234,51 @@ void test_binary_document_fetch_classification() {
     err = ainiux::fetch::markdown_from_fetched_bytes(xlsx, "application/zip", markdown, kind);
     check(err.ok() && kind == ainiux::fetch::DocumentKind::Xlsx,
           "application/zip with XLSX package structure is sniffed as XLSX");
+
+    check(ainiux::fetch::media_type_is_csv("text/csv") &&
+              ainiux::fetch::media_type_is_csv("application/csv"),
+          "CSV media types are recognized");
+    check(ainiux::fetch::media_type_is_json("application/json") &&
+              ainiux::fetch::media_type_is_json("text/json"),
+          "JSON media types are recognized");
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes("Name,Value\nHello,7\n", "text/csv", markdown,
+                                                     kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Csv &&
+              markdown.find("| Name") != std::string::npos &&
+              markdown.find("| Hello") != std::string::npos,
+          "text/csv converts to a Markdown table");
+    markdown.clear();
+    err = ainiux::fetch::markdown_from_fetched_bytes(
+        "Name,Value\nHello,7\n", "application/octet-stream", markdown, kind,
+        ainiux::runtime::CancellationToken(), nullptr, "https://example.com/data.csv");
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Csv,
+          "octet-stream CSV is classified from the URL path");
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes("Name,Value\nHello,7\n",
+                                                     "application/octet-stream", markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Html,
+          "octet-stream CSV without a .csv URL is not sniffed as CSV");
+
+    markdown.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes("{\"z\":1,\"a\":9007199254740993}",
+                                                     "application/json", markdown, kind);
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Json &&
+              markdown.rfind("```json\n", 0) == 0 &&
+              markdown.find("9007199254740993") != std::string::npos &&
+              markdown.find("\"z\"") != std::string::npos,
+          "application/json converts to fenced pretty-printed JSON");
+    markdown.clear();
+    err = ainiux::fetch::markdown_from_fetched_bytes(
+        "{\"ok\":true}", "application/octet-stream", markdown, kind,
+        ainiux::runtime::CancellationToken(), nullptr, "https://example.com/api.json?x=1");
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Json,
+          "octet-stream JSON is classified from the URL path");
+    err = ainiux::fetch::markdown_from_fetched_bytes("{", "application/json", markdown, kind);
+    check(!err.ok(), "malformed fetched JSON is rejected");
 }
 
 void test_json_escape_rejects_raw_latin1() {

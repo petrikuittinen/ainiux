@@ -370,6 +370,14 @@ Error classify_file_type(const std::string& path, FileType& type) {
         type = {Kind::Xlsx, "xlsx", xlsx::kMimeType};
         return ok_error();
     }
+    if (ends_with(lower, ".csv")) {
+        type = {Kind::Csv, "csv", "text/csv"};
+        return ok_error();
+    }
+    if (ends_with(lower, ".json")) {
+        type = {Kind::Json, "json", "application/json"};
+        return ok_error();
+    }
     if (ends_with(lower, ".png")) {
         type = {Kind::Image, "image", "image/png"};
         return ok_error();
@@ -386,8 +394,8 @@ Error classify_file_type(const std::string& path, FileType& type) {
     // if (ends_with(lower, ".webp")) type = {Kind::Image, "image", "image/webp"};
     return {ErrorCode::UnsupportedFeature,
             "unsupported input file type for " + resolved +
-                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .docx, .xlsx, .png, .jpg, .jpeg, "
-                "and .gif "
+                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .docx, .xlsx, .csv, .json, "
+                ".png, .jpg, .jpeg, and .gif "
                 "(case-insensitive)"};
 }
 
@@ -475,7 +483,7 @@ Error load_text_context_file(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text insertion supports .txt, .md, .html, .pdf, .docx, and .xlsx files; attach images to a prompt instead: " +
+                "text insertion supports .txt, .md, .html, .pdf, .docx, .xlsx, .csv, and .json files; attach images to a prompt instead: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {
@@ -610,7 +618,9 @@ Error load_insert_source(const std::string& source,
         }
         if (fetched.kind == fetch::DocumentKind::Pdf ||
             fetched.kind == fetch::DocumentKind::Docx ||
-            fetched.kind == fetch::DocumentKind::Xlsx) {
+            fetched.kind == fetch::DocumentKind::Xlsx ||
+            fetched.kind == fetch::DocumentKind::Csv ||
+            fetched.kind == fetch::DocumentKind::Json) {
             loaded.content = std::move(fetched.markdown);
             loaded.converted_html = true;
             loaded.warnings = std::move(fetched.warnings);
@@ -710,6 +720,10 @@ std::string text_context_message(const TextContext& context) {
     if (context.kind == Kind::Markdown || context.kind == Kind::Html || context.kind == Kind::Pdf ||
         context.kind == Kind::Docx || context.kind == Kind::Xlsx) {
         message += "md";
+    } else if (context.kind == Kind::Csv) {
+        message += "csv";
+    } else if (context.kind == Kind::Json) {
+        message += "json";
     } else {
         message += "plaintext";
     }
@@ -737,7 +751,7 @@ Error read_local_text_file_for_attach(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text attach supports .txt, .md, .html, .pdf, .docx, and .xlsx files; images use the pending image queue: " +
+                "text attach supports .txt, .md, .html, .pdf, .docx, .xlsx, .csv, and .json files; images use the pending image queue: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {

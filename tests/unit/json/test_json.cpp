@@ -92,11 +92,36 @@ void test_json_unicode_and_escaping() {
 
 }  // namespace
 
+void test_json_pretty_print_is_lossless() {
+    std::string pretty;
+    ainiux::Error err = ainiux::json::pretty_print(
+        "{\"z\":1,\"a\":9007199254740993,\"nested\":[true,null]}", pretty);
+    check(err.ok(), "pretty-print accepts compact JSON");
+    check(pretty.find("\"z\": 1") != std::string::npos &&
+              pretty.find("\"a\": 9007199254740993") != std::string::npos,
+          "pretty-print preserves key order and large integer lexemes");
+    check(pretty.find("```") == std::string::npos, "pretty-print does not wrap in a fence");
+
+    std::string markdown;
+    err = ainiux::json::to_markdown_bytes("[1,2]", markdown);
+    check(err.ok() && markdown.rfind("```json\n", 0) == 0 && markdown.find("```\n") != std::string::npos,
+          "JSON Markdown conversion wraps pretty-printed JSON in a json fence");
+    check(markdown.find("1") != std::string::npos && markdown.find("2") != std::string::npos,
+          "fenced JSON Markdown contains the original values");
+
+    err = ainiux::json::pretty_print("null trailing", pretty);
+    check(!err.ok() && err.message.find("trailing JSON data") != std::string::npos,
+          "pretty-print rejects trailing data");
+    err = ainiux::json::to_markdown_bytes("{", markdown);
+    check(!err.ok(), "invalid JSON is rejected instead of fenced");
+}
+
 void run_all() {
     test_json_parse();
     test_json_parse_empty_and_invalid();
     test_json_numeric_edge_cases();
     test_json_unicode_and_escaping();
+    test_json_pretty_print_is_lossless();
 }
 
 }  // namespace ainiux::test::json
