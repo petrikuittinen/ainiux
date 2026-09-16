@@ -570,17 +570,24 @@ if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" \
 fi
 grep 'could not open plaintext for reading' "$missing_attachment_err" >/dev/null
 
-for deferred in docx; do
-    deferred_path="$ROOT/build/deferred.$deferred"
-    printf 'not implemented' >"$deferred_path"
-    deferred_err="$ROOT/build/deferred-$deferred.err"
-    if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$deferred_path" \
-        >"$ROOT/build/deferred-$deferred.out" 2>"$deferred_err"; then
-        echo "$deferred attachment should remain unsupported" >&2
-        exit 1
-    fi
-    grep 'unsupported input file type' "$deferred_err" >/dev/null
-done
+malformed_docx="$ROOT/build/malformed.docx"
+printf 'not an OOXML package' >"$malformed_docx"
+malformed_docx_err="$ROOT/build/malformed-docx.err"
+if "$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" -p "hello" --attach "$malformed_docx" \
+    >"$ROOT/build/malformed-docx.out" 2>"$malformed_docx_err"; then
+    echo "malformed DOCX attachment should fail" >&2
+    exit 1
+fi
+grep 'invalid OOXML ZIP' "$malformed_docx_err" >/dev/null
+
+pptx_attachment_md="$ROOT/build/attachment-deck.md"
+pptx_attachment="$ROOT/build/attachment-deck.pptx"
+printf '# Attachment Alpha\n\nAttachment Beta\n' >"$pptx_attachment_md"
+"$ROOT/ainiux" --no-config --input "$pptx_attachment_md" --output-format pptx \
+    --output "$pptx_attachment" --quiet
+pptx_attachment_reply=$("$ROOT/ainiux" "$BASE" --quiet --no-stream -m "$MODEL" \
+    -p "summarize-attachments" --attach "$pptx_attachment")
+test "$pptx_attachment_reply" = "attachments-ok"
 
 local_png="$ROOT/build/local-image.PnG"
 printf '\211PNG\r\n\032\nmock-image' >"$local_png"

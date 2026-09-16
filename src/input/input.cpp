@@ -17,6 +17,7 @@
 #include "docx/docx.hpp"
 #include "html/html.hpp"
 #include "pdf/pdf.hpp"
+#include "pptx/pptx.hpp"
 #include "xlsx/xlsx.hpp"
 
 namespace ainiux::input {
@@ -370,6 +371,16 @@ Error classify_file_type(const std::string& path, FileType& type) {
         type = {Kind::Xlsx, "xlsx", xlsx::kMimeType};
         return ok_error();
     }
+    if (ends_with(lower, ".pptx")) {
+        type = {Kind::Pptx, "pptx", pptx::kMimeType};
+        return ok_error();
+    }
+    if (ends_with(lower, ".ppt") || ends_with(lower, ".pptm") ||
+        ends_with(lower, ".ppsx") || ends_with(lower, ".potx")) {
+        return {ErrorCode::UnsupportedFeature,
+                "unsupported PowerPoint format for " + resolved +
+                    "; use an unencrypted .pptx presentation"};
+    }
     if (ends_with(lower, ".csv")) {
         type = {Kind::Csv, "csv", "text/csv"};
         return ok_error();
@@ -394,7 +405,7 @@ Error classify_file_type(const std::string& path, FileType& type) {
     // if (ends_with(lower, ".webp")) type = {Kind::Image, "image", "image/webp"};
     return {ErrorCode::UnsupportedFeature,
             "unsupported input file type for " + resolved +
-                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .docx, .xlsx, .csv, .json, "
+                "; supported endings are .txt, .text, .md, .markdown, .html, .htm, .pdf, .docx, .xlsx, .pptx, .csv, .json, "
                 ".png, .jpg, .jpeg, and .gif "
                 "(case-insensitive)"};
 }
@@ -483,7 +494,7 @@ Error load_text_context_file(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text insertion supports .txt, .md, .html, .pdf, .docx, .xlsx, .csv, and .json files; attach images to a prompt instead: " +
+                "text insertion supports .txt, .md, .html, .pdf, .docx, .xlsx, .pptx, .csv, and .json files; attach images to a prompt instead: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {
@@ -534,6 +545,23 @@ Error load_text_context_file(const std::string& path,
         xlsx::Diagnostics diagnostics;
         Error xlsx_error = xlsx::to_markdown_file(resolved, xlsx_options, loaded.content, &diagnostics);
         if (!xlsx_error.ok()) return xlsx_error;
+        loaded.warnings = std::move(diagnostics.messages);
+        context = std::move(loaded);
+        return ok_error();
+    }
+    if (type.kind == Kind::Pptx) {
+        if (resolved == "stdin") {
+            return {ErrorCode::UnsupportedFeature, "PPTX input from stdin is not supported; pass a .pptx path"};
+        }
+        pptx::ReadOptions pptx_options;
+        pptx_options.max_bytes = max_bytes;
+        pptx_options.cancellation = cancellation;
+        TextContext loaded;
+        loaded.source = "file " + resolved;
+        loaded.kind = Kind::Pptx;
+        pptx::Diagnostics diagnostics;
+        Error pptx_error = pptx::to_markdown_file(resolved, pptx_options, loaded.content, &diagnostics);
+        if (!pptx_error.ok()) return pptx_error;
         loaded.warnings = std::move(diagnostics.messages);
         context = std::move(loaded);
         return ok_error();
@@ -619,6 +647,7 @@ Error load_insert_source(const std::string& source,
         if (fetched.kind == fetch::DocumentKind::Pdf ||
             fetched.kind == fetch::DocumentKind::Docx ||
             fetched.kind == fetch::DocumentKind::Xlsx ||
+            fetched.kind == fetch::DocumentKind::Pptx ||
             fetched.kind == fetch::DocumentKind::Csv ||
             fetched.kind == fetch::DocumentKind::Json) {
             loaded.content = std::move(fetched.markdown);
@@ -692,6 +721,17 @@ Error load_insert_source(const std::string& source,
             loaded.content = std::move(converted);
             loaded.converted_html = true;
             loaded.warnings = std::move(diagnostics.messages);
+        } else if (type_error.ok() && type.kind == Kind::Pptx) {
+            pptx::ReadOptions pptx_options;
+            pptx_options.max_bytes = options.max_file_bytes;
+            pptx_options.cancellation = cancellation;
+            std::string converted;
+            pptx::Diagnostics diagnostics;
+            err = pptx::to_markdown_bytes(loaded.content, pptx_options, converted, &diagnostics);
+            if (!err.ok()) return err;
+            loaded.content = std::move(converted);
+            loaded.converted_html = true;
+            loaded.warnings = std::move(diagnostics.messages);
         } else {
         const bool html_hints = type_error.ok() && type.kind == Kind::Html;
         err = decode_local_text(loaded.content, "file " + loaded.source, options.encoding_name,
@@ -718,7 +758,7 @@ Error load_insert_source(const std::string& source,
 std::string text_context_message(const TextContext& context) {
     std::string message = "Input context from " + context.source + "\nFormat: ";
     if (context.kind == Kind::Markdown || context.kind == Kind::Html || context.kind == Kind::Pdf ||
-        context.kind == Kind::Docx || context.kind == Kind::Xlsx) {
+        context.kind == Kind::Docx || context.kind == Kind::Xlsx || context.kind == Kind::Pptx) {
         message += "md";
     } else if (context.kind == Kind::Csv) {
         message += "csv";
@@ -751,7 +791,7 @@ Error read_local_text_file_for_attach(const std::string& path,
     }
     if (type.kind == Kind::Image) {
         return {ErrorCode::UnsupportedFeature,
-                "text attach supports .txt, .md, .html, .pdf, .docx, .xlsx, .csv, and .json files; images use the pending image queue: " +
+                "text attach supports .txt, .md, .html, .pdf, .docx, .xlsx, .pptx, .csv, and .json files; images use the pending image queue: " +
                     resolved};
     }
     if (type.kind == Kind::Pdf) {
@@ -777,6 +817,15 @@ Error read_local_text_file_for_attach(const std::string& path,
         Error xlsx_error = xlsx::to_markdown_file(resolved, xlsx_options, content, &diagnostics);
         if (xlsx_error.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
         return xlsx_error;
+    }
+    if (type.kind == Kind::Pptx) {
+        pptx::ReadOptions pptx_options;
+        pptx_options.max_bytes = max_bytes;
+        pptx_options.cancellation = cancellation;
+        pptx::Diagnostics diagnostics;
+        Error pptx_error = pptx::to_markdown_file(resolved, pptx_options, content, &diagnostics);
+        if (pptx_error.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
+        return pptx_error;
     }
 
     std::ifstream file(std::filesystem::u8path(resolved), std::ios::binary);

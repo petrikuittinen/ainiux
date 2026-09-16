@@ -2,6 +2,7 @@
 #include "support/test_support.hpp"
 #include "input/input.hpp"
 #include "json/json.hpp"
+#include "pptx/pptx.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 #include <fstream>
@@ -134,6 +135,8 @@ void test_input_file_type_classification() {
          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
         {"Sheet.XLSX", ainiux::input::Kind::Xlsx,
          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+        {"deck.pptx", ainiux::input::Kind::Pptx, ainiux::pptx::kMimeType},
+        {"Deck.PPTX", ainiux::input::Kind::Pptx, ainiux::pptx::kMimeType},
         {"data.csv", ainiux::input::Kind::Csv, "text/csv"},
         {"DATA.CSV", ainiux::input::Kind::Csv, "text/csv"},
         {"payload.json", ainiux::input::Kind::Json, "application/json"},
@@ -165,6 +168,12 @@ void test_input_file_type_classification() {
     check(!err.ok(), "JSONL is not treated as JSON input");
     err = ainiux::input::classify_file_type("sheet.tsv", type);
     check(!err.ok(), "TSV is not treated as CSV input");
+    for (const char* unsupported : {"legacy.ppt", "macro.pptm", "show.ppsx", "template.potx"}) {
+        err = ainiux::input::classify_file_type(unsupported, type);
+        check(!err.ok() && err.code == ainiux::ErrorCode::UnsupportedFeature &&
+                  err.message.find("unencrypted .pptx") != std::string::npos,
+              std::string("unsupported PowerPoint variant is rejected explicitly: ") + unsupported);
+    }
 }
 
 void test_input_file_io_and_unicode_edge_cases() {

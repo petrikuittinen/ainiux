@@ -1,4 +1,4 @@
-# ainiux Editor Help v1.36
+# ainiux Editor Help v1.37
 
 Standalone editor mode (`ainiux --editor [PATH]`) is a multiline text editor with Unicode-aware navigation, search/replace, and optional AI assist when a provider and model are configured. Start in the directory browser with `ainiux -d` / `ainiux --dired [PATH]` (PATH defaults to the current directory; `q` leaves dired for the editor, `Ctrl+Q` quits ainiux). The full dired guide is [dired-mode.md](dired-mode.md).
 
@@ -66,7 +66,7 @@ Arrow keys, `Page Up`/`Page Down`, `Home`, and `End` scroll the help document.
 |-----|--------|
 | `Ctrl+S` | Save (prompts for path on scratch buffers) |
 | `Ctrl+Shift+S` | Save as (prompts for path; asks before overwriting an existing file) |
-| `Ctrl+O` | Open another file buffer. Opening `.pdf`, `.docx`, or `.xlsx` converts it to Markdown and aims Save at the sibling `.md`. Saving explicitly to `.pdf` newly typesets a PDF; saving explicitly to `.docx` or `.xlsx` writes a new normalized Office package atomically. |
+| `Ctrl+O` | Open another file buffer. Opening `.pdf`, `.docx`, `.xlsx`, or `.pptx` converts it to a dirty Markdown buffer and aims Save at the sibling `.md`; PPTX images appear as placeholders. Saving explicitly to `.pdf` newly typesets a PDF; saving explicitly to `.docx`, `.xlsx`, or `.pptx` writes a new normalized document atomically. Local PPTX image paths resolve relative to the buffer/output directory. |
 | `Ctrl+N` | Open a new empty buffer |
 | `Ctrl+L` | List open buffers; Enter chooses, `/` search, `.` sort, Tab/Insert new, type to jump, Esc cancels |
 | `Ctrl+P` | Open provider picker (same as bare `/provider`) |

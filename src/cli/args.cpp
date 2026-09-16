@@ -625,7 +625,7 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                     opts.output_format_explicit = true;
                     opts.rendered_output_format_explicit = true;
                 } else {
-                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, docx, xlsx, json, jsond, or ndjson"}};
+                    return {opts, {ErrorCode::BadArgs, "--output-format must be html, md, plaintext, pdf, docx, xlsx, pptx, json, jsond, or ndjson"}};
                 }
             } else if (opt == "--font") {
                 opts.pdf_font = value;
@@ -1369,8 +1369,8 @@ Usage:
   ainiux -c, --chat [BASE_URL|PROFILE] [options]
   ainiux [BASE_URL|PROFILE] -e, --editor [PATH] [--output PATH]
   ainiux -d, --dired [PATH]
-  ainiux --input PATH [--output-format md|html|plaintext|pdf|docx|xlsx|json|jsond] [--output PATH]
-  ainiux --fetch-url URL [--output-format md|html|plaintext|pdf|docx|xlsx|json|jsond] [--output PATH]
+  ainiux --input PATH [--output-format md|html|plaintext|pdf|docx|xlsx|pptx|json|jsond] [--output PATH]
+  ainiux --fetch-url URL [--output-format md|html|plaintext|pdf|docx|xlsx|pptx|json|jsond] [--output PATH]
   ainiux --search QUERY [--output-format md|html|plaintext|json|jsond] [--output PATH]
   ainiux --benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
   ainiux benchmark [--dataset FILE] [--mode MODE] [--provider NAME] [-m MODEL]
@@ -1417,6 +1417,8 @@ Examples:
   ainiux --input report.pdf --output-format md --output report.md
   ainiux --input sheet.xlsx --output-format md --output sheet.md
   ainiux --input notes.md --output-format xlsx --output notes.xlsx
+  ainiux --input deck.pptx --output-format md --output deck.md
+  ainiux --input slides.md --output-format pptx --output slides.pptx
   ainiux --fetch-url https://example.com --output-format md
   ainiux --fetch-url https://example.com/report.pdf --output-format md
   ainiux --fetch-url https://example.com/sheet.xlsx --output-format md
@@ -1561,26 +1563,26 @@ Options:
   Output:
       --format text|json|ndjson|jsonl|jsond
                                 In image mode: png|jpeg|webp|auto (default png).
-      --output-format html|md|plaintext|pdf|docx|xlsx|json|jsond|ndjson
+      --output-format html|md|plaintext|pdf|docx|xlsx|pptx|json|jsond|ndjson
       --font PATH               TrueType (.ttf/.ttc with glyf) for CJK/Hebrew/Arabic PDF output.
                                 Also AINIUX_PDF_FONT, then a small system-font allowlist.
       --output PATH             Use 'stdout' to write to standard output.
                                 In image mode, omit to write the first unused imageN.png.
 
   Input and attachments:
-      --input PATH              Read text/Markdown/HTML/PDF/DOCX/XLSX/CSV/JSON, or attach PNG/JPEG/GIF with -p;
-                                PDF/DOCX/XLSX is converted to Markdown; CSV/JSON stay native text.
+      --input PATH              Read text/Markdown/HTML/PDF/DOCX/XLSX/PPTX/CSV/JSON, or attach PNG/JPEG/GIF with -p;
+                                PDF/DOCX/XLSX/PPTX is converted to Markdown; CSV/JSON stay native text.
                                 'stdin' reads UTF-8 plaintext.
       --encoding NAME           Decode --input/--attach text as NAME instead of UTF-8.
                                 Built-in: utf-8, utf-16, windows-1250/1251/1252,
                                 iso-8859-1/2, koi8-r/u. CJK names (gbk, big5, …)
                                 use iconv when installed.
-      --attach PATH             Add text/Markdown/HTML/PDF/DOCX/XLSX/CSV/JSON or PNG/JPEG/GIF; repeatable;
-                                PDF/DOCX/XLSX is converted to Markdown; CSV/JSON stay native text.
+      --attach PATH             Add text/Markdown/HTML/PDF/DOCX/XLSX/PPTX/CSV/JSON or PNG/JPEG/GIF; repeatable;
+                                PDF/DOCX/XLSX/PPTX is converted to Markdown; CSV/JSON stay native text.
                                 'stdin' reads UTF-8 plaintext.
                                 In image mode: PNG/JPEG references only (repeatable, max 16).
-      --fetch-url URL           Fetch HTML, PDF, DOCX, XLSX, CSV, or JSON for extraction or prompt context with -p.
-                                PDF, DOCX, XLSX, CSV, and JSON are converted to Markdown.
+      --fetch-url URL           Fetch HTML, PDF, DOCX, XLSX, PPTX, CSV, or JSON for extraction or prompt context with -p.
+                                PDF, DOCX, XLSX, PPTX, CSV, and JSON are converted to Markdown.
                                 Downloads are capped by --max-fetch-bytes (default 10 MiB).
       --search QUERY            Run a web search and use results as prompt context with -p.
                                 Hosted model search is used instead when the catalog

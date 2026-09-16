@@ -376,6 +376,7 @@ bool preflight_request_body(const http::Request& request,
                             mime == "application/pdf" || mime == "application/x-pdf" ||
                             mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
                             mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+                            mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
                             mime == "text/plain" || mime == "text/markdown" || mime == "text/html" ||
                             mime == "text/csv" || mime == "application/csv" ||
                             mime == "application/json" || mime == "text/json" ||
@@ -385,7 +386,7 @@ bool preflight_request_body(const http::Request& request,
         (chat_upload && !chat_media)) {
         denial = error_response(415, "unsupported_media_type",
                                 video_upload ? "video references require a supported image, MP4/MOV, MP3, or WAV Content-Type" :
-                                chat_upload ? "chat uploads require PNG, JPEG, GIF, PDF, DOCX, XLSX, CSV, JSON, Markdown, plaintext, or HTML"
+                                chat_upload ? "chat uploads require PNG, JPEG, GIF, PDF, DOCX, XLSX, PPTX, CSV, JSON, Markdown, plaintext, or HTML"
                                                : "image input uploads require Content-Type: image/png or image/jpeg");
         return false;
     }

@@ -5,6 +5,7 @@
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "json/json.hpp"
+#include "pptx/pptx.hpp"
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -234,6 +235,25 @@ void test_binary_document_fetch_classification() {
     err = ainiux::fetch::markdown_from_fetched_bytes(xlsx, "application/zip", markdown, kind);
     check(err.ok() && kind == ainiux::fetch::DocumentKind::Xlsx,
           "application/zip with XLSX package structure is sniffed as XLSX");
+
+    const std::string pptx = read_fixture("tests/pptx_files/LinuxAdministrationAndUsage.pptx");
+    check(ainiux::fetch::media_type_is_pptx(ainiux::pptx::kMimeType),
+          "the official PPTX media type is recognized");
+    check(ainiux::fetch::body_looks_like_pptx(pptx) &&
+              !ainiux::fetch::body_looks_like_pptx(docx) &&
+              !ainiux::fetch::body_looks_like_pptx(xlsx),
+          "PPTX sniffing distinguishes presentations from other OPC packages");
+    markdown.clear();
+    warnings.clear();
+    kind = ainiux::fetch::DocumentKind::Html;
+    err = ainiux::fetch::markdown_from_fetched_bytes(
+        pptx, "application/octet-stream", markdown, kind,
+        ainiux::runtime::CancellationToken(), &warnings, "https://example.com/deck.pptx");
+    check(err.ok() && kind == ainiux::fetch::DocumentKind::Pptx &&
+              markdown.find("Linux") != std::string::npos,
+          "octet-stream PPTX converts to Markdown by package sniffing");
+    check(markdown.find("[image omitted:") != std::string::npos,
+          "fetched PPTX uses image omission placeholders");
 
     check(ainiux::fetch::media_type_is_csv("text/csv") &&
               ainiux::fetch::media_type_is_csv("application/csv"),

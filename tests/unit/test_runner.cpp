@@ -22,6 +22,7 @@
 #include "context/test_context.hpp"
 #include "csv/test_csv.hpp"
 #include "docx/test_docx.hpp"
+#include "pptx/test_pptx.hpp"
 #include "xlsx/test_xlsx.hpp"
 #include "editor/test_editor.hpp"
 #include "encoding/test_encoding.hpp"
@@ -72,6 +73,18 @@ int main(int argc, char** argv) {
         std::cout << "XLSX tests passed\n";
         return 0;
     }
+    if (argc == 3 && std::string(argv[1]) == "--pptx-case") {
+        return ainiux::test::pptx::run_case(argv[2]);
+    }
+    if (argc == 2 && std::string(argv[1]) == "--pptx-only") {
+        ainiux::test::pptx::run_all();
+        if (ainiux::test::failures != 0) {
+            std::cerr << ainiux::test::failures << " PPTX test(s) failed\n";
+            return 1;
+        }
+        std::cout << "PPTX tests passed\n";
+        return 0;
+    }
     if (argc == 3 && std::string(argv[1]) == "--pdf-case") {
         return ainiux::test::pdf::run_adversarial_case(argv[2]);
     }
@@ -86,7 +99,7 @@ int main(int argc, char** argv) {
     }
     if (argc != 1) {
         std::cerr << "Usage: test_runner [--pdf-only | --pdf-case NAME | --docx-only | --docx-case NAME | "
-                     "--xlsx-only | --xlsx-case NAME]\n";
+                     "--xlsx-only | --xlsx-case NAME | --pptx-only | --pptx-case NAME]\n";
         return 2;
     }
     ainiux::test::app_operations::run_all();
@@ -107,6 +120,7 @@ int main(int argc, char** argv) {
     ainiux::test::pdf::run_all();
     ainiux::test::docx::run_all();
     ainiux::test::xlsx::run_all();
+    ainiux::test::pptx::run_all();
     ainiux::test::csv::run_all();
     ainiux::test::config::run_all();
     ainiux::test::cli::run_all();

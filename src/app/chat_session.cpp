@@ -14,6 +14,7 @@
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "pdf/pdf.hpp"
+#include "pptx/pptx.hpp"
 #include "output/thinking.hpp"
 #include "ainiux/version.hpp"
 
@@ -86,6 +87,20 @@ Error write_rendered_assistant_output(const cli::Options& options,
         std::string rendered;
         Error err = xlsx::from_markdown(content, xlsx_options, rendered);
         if (!err.ok()) return err;
+        out << rendered;
+        return ok_error();
+    }
+    if (options.output_format == markdown::OutputFormat::Pptx) {
+        pptx::WriteOptions pptx_options;
+        std::string rendered;
+        pptx::Diagnostics diagnostics;
+        Error err = pptx::from_markdown(content, pptx_options, rendered, &diagnostics);
+        if (!err.ok()) return err;
+        if (!options.quiet) {
+            for (const std::string& warning : diagnostics.messages) {
+                std::cerr << "warning: " << warning << '\n';
+            }
+        }
         out << rendered;
         return ok_error();
     }

@@ -26,6 +26,7 @@
 #include "pdf/pdf.hpp"
 #include "docx/docx.hpp"
 #include "xlsx/xlsx.hpp"
+#include "pptx/pptx.hpp"
 #include "editor/terminal_input.hpp"
 #include "editor/terminal_ui.hpp"
 #include "platform/environment.hpp"
@@ -2480,6 +2481,35 @@ void test_editor_xlsx_conversion() {
     check(ainiux::xlsx::to_markdown_bytes(bytes, {}, markdown).ok() &&
               markdown.find("Hello") != std::string::npos,
           "explicit editor XLSX output is a readable package");
+}
+
+void test_editor_pptx_conversion() {
+    check(ainiux::editor::sibling_markdown_path("Deck.PPTX") == "Deck.md",
+          "PPTX sibling path replaces a case-insensitive suffix");
+    const std::string pptx_path = "build/unit-editor-pptx-source.pptx";
+    const std::string saved_pptx = "build/unit-editor-pptx-save.pptx";
+    ainiux::editor::PieceTable source = ainiux::editor::PieceTable::from_string(
+        "# Opening\n\nHello from a PPTX buffer.\n\n---\n\n# Closing\n");
+    check(ainiux::editor::save_file(pptx_path, source).ok(),
+          "editor explicitly saves Markdown as PPTX");
+    ainiux::editor::LoadedFile loaded;
+    ainiux::editor::EditorSettings settings;
+    ainiux::Error err = ainiux::editor::load_file(pptx_path, settings, loaded);
+    check(err.ok() && loaded.converted_source ==
+                          ainiux::editor::LoadedFile::ConvertedSource::Pptx &&
+              loaded.suggested_path == "build/unit-editor-pptx-source.md" &&
+              loaded.text.str().find("Hello from a PPTX buffer") != std::string::npos,
+          "editor opens PPTX as a dirty Markdown buffer aimed at the sibling path");
+    check(ainiux::editor::save_file(saved_pptx, loaded.text).ok(),
+          "editor writes a normalized PPTX on an explicit .pptx save");
+    std::ifstream input(saved_pptx, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+    std::string markdown;
+    check(ainiux::pptx::to_markdown_bytes(bytes, {}, markdown).ok() &&
+              markdown.find("Hello from a PPTX buffer") != std::string::npos &&
+              markdown.find("# Closing") != std::string::npos,
+          "explicit editor PPTX output is a readable two-slide package");
 }
 
 void test_editor_linebreak_modes() {
@@ -6029,6 +6059,7 @@ void run_all() {
     test_editor_pdf_conversion();
     test_editor_docx_conversion();
     test_editor_xlsx_conversion();
+    test_editor_pptx_conversion();
     test_editor_linebreak_modes();
     test_editor_indentation_detection();
     test_editor_tab_indentation();

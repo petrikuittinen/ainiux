@@ -129,8 +129,10 @@ contains `path`, an opaque directory `revision`, bounded `entries` (`name`,
 `executable`), and
 `truncated`. Review recursively returns the same entry shape plus a
 file/directory/byte summary. File reads return `path`, opaque `revision`,
-JSON-safe `content`, byte `size`, and `truncated:false`; individual remote
-editing reads are capped at 1 MiB. Missing, non-regular, oversized, traversing,
+JSON-safe `content`, byte `size`, and `truncated:false`; ordinary remote editing
+reads are capped at 1 MiB. Raw `.docx`, `.xlsx`, and `.pptx` workspace files may
+be up to 20 MiB, but their converted Markdown must still fit the 1 MiB editor
+payload limit. Missing, non-regular, oversized, traversing,
 or symlink/reparse paths
 are rejected. `.ainiux-pr`, `.ainiux`, `.git`, environment/credential names,
 and bundled sensitive configuration files are excluded.
@@ -164,6 +166,11 @@ capped at 1 MiB. A failed item does not suppress results for other items.
 `parent_revision`. `PUT /files?path=...` replaces an existing file from
 `content` and its reviewed `revision`. Saves use the shared atomic
 temp-write/flush/replace primitive and preserve the old file on write failure.
+A `.pptx` create/save treats `content` as canonical Markdown and writes a new
+normalized package with a 20 MiB output limit. Local image links must resolve
+inside the fixed workspace; remote/data links are not fetched. Opening PPTX
+returns the existing `converted_from`, `suggested_path`, and bounded `warnings`
+fields and never extracts images into browser-visible storage.
 A stale save returns HTTP 409 `revision_conflict` with `current_revision` for
 conflict UI. Reads and mutations serialize inside the service; identity-bearing
 revisions also detect same-content file replacement between review and action.
@@ -275,12 +282,13 @@ Browser chat uploads use a raw body on `POST /ainiux/v1/chat/inputs` with
 `Content-Type` `image/png`, `image/jpeg`, `image/gif`, `application/pdf`,
 `application/vnd.openxmlformats-officedocument.wordprocessingml.document`,
 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`,
+`application/vnd.openxmlformats-officedocument.presentationml.presentation`,
 `text/plain`, `text/markdown`, `text/html`, `text/csv`, or `application/json`.
 An optional `X-Ainiux-Filename`
-(or `Content-Disposition` filename) classifies generic types. PDF, DOCX, XLSX, and HTML
+(or `Content-Disposition` filename) classifies generic types. PDF, DOCX, XLSX, PPTX, and HTML
 are converted to Markdown immediately. CSV and JSON are stored as native text. The response is an opaque `id`, `kind`
 (`image` or `text`), MIME type, display name, converted flag, byte size, expiry,
-and an additive bounded `warnings` array. DOCX/XLSX bytes and embedded media are
+and an additive bounded `warnings` array. Office bytes and embedded media are
 discarded after conversion and never persisted as chat text. Inputs are
 memory-only, expire after one hour, and can be deleted
 early. Append a user message with `input_ids` so the thread imports images into
@@ -488,6 +496,7 @@ The strict parser and PR 4 job broker enforce these constants:
 | Header count | 100 |
 | JSON request body | 1 MiB |
 | Upload body | 20 MiB |
+| Raw workspace DOCX/XLSX/PPTX | 20 MiB (converted editor content remains 1 MiB) |
 | Requests per keep-alive connection | 100 |
 | Default simultaneous connections | 64 |
 | Default retained/in-flight jobs | 128 |

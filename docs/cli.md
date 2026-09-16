@@ -21,9 +21,9 @@ Use `-s` for a system prompt, `-t` for temperature, `--reasoning` for provider-m
 - `--format text` emits response text.
 - `--format json` emits one response object.
 - `--format ndjson` or `jsonl` emits event records.
-- `--output-format md|html|plaintext|pdf` renders assistant Markdown for text or PDF output.
+- `--output-format md|html|plaintext|pdf|docx|xlsx|pptx` renders assistant Markdown or writes a binary document.
 - `--output-format json|jsond|ndjson` selects machine-readable response output.
-- `--output-format pdf` cannot be combined with `--format json|ndjson`. PDF on stdout is binary.
+- Binary `pdf`, `docx`, `xlsx`, and `pptx` output cannot be combined with `--format json|ndjson`.
 - `--output PATH` writes intentional output to a file; `stdout` is accepted explicitly.
 
 HTML written to a file is a complete document. HTML on `stdout` is a fragment. Model-generated HTML is not sanitized for hostile browser contexts.
@@ -42,10 +42,13 @@ ainiux --input report.docx --output-format md --output report.md
 ainiux --input notes.md --output-format docx --output notes.docx
 ainiux --input sheet.xlsx --output-format md --output sheet.md
 ainiux --input notes.md --output-format xlsx --output notes.xlsx
+ainiux --input deck.pptx --output-format md --output deck.md
+ainiux --input slides.md --output-format pptx --output slides.pptx
 ainiux --fetch-url https://example.com --output-format md
 ainiux --fetch-url https://example.com/report.pdf --output-format md
 ainiux --fetch-url https://example.com/report.docx --output-format md
 ainiux --fetch-url https://example.com/sheet.xlsx --output-format md
+ainiux --fetch-url https://example.com/deck.pptx --output-format md
 ainiux --input data.csv
 ainiux --input payload.json
 ainiux --fetch-url https://example.com/data.csv --output-format md
@@ -54,9 +57,15 @@ ainiux --search "portable C++ terminal UI" --output-format json
 printf 'plain text' | ainiux --input stdin --output stdout
 ```
 
-Text, Markdown, HTML, PDF, DOCX, XLSX, CSV, and JSON are supported. Local `.csv` and `.json` files are passed through as UTF-8 text (LLMs already understand them). Fetched CSV is converted to a GitHub-flavored Markdown table; fetched JSON is pretty-printed into a fenced `json` code block. `--output-format json` remains the machine-readable response envelope, not a JSON document writer. `.jsonl` and `.tsv` are not CSV/JSON input. HTML conversion is intentionally lightweight: it does not execute JavaScript or implement a browser DOM. PDF, DOCX, and XLSX use Markdown as the canonical interchange, so PDF→DOCX, DOCX→PDF, HTML↔DOCX, and XLSX↔Markdown are staged through Markdown. The converters are local C++17; DOCX and XLSX use only the already-linked zlib. A local or fetched `.docx` or `.xlsx` input defaults to Markdown. `--output-format docx` or `xlsx` writes binary OPC/ZIP output and, like PDF, cannot be combined with `--format json` or `ndjson`. Generated XLSX is a newly typeset workbook from GitHub-flavored tables (one table per worksheet; a heading immediately above a table becomes the sheet name). Cell drawings, charts, comments, pivots, macros, encryption, and Excel layout are omitted. Legacy `.xls` is rejected. Generated DOCX is deterministic and normalized: headings 1–6, quotes, nested ordered/unordered lists, tables, links, bold, italic, strike, `++underline++`, tabs, and hard breaks are preserved; fonts, point sizes, RGB colors, alignment, and ordinary indentation are accepted without text loss but omitted at the Markdown boundary. Images become visible `[image omitted: ALT]` or `[image omitted]` text, and headers, footers, footnotes, endnotes, and comments are omitted with bounded warnings on stderr unless `--quiet`. This is conversion, not lossless Word editing.
+Text, Markdown, HTML, PDF, DOCX, XLSX, PPTX, CSV, and JSON are supported. Local `.csv` and `.json` files are passed through as UTF-8 text. Fetched CSV becomes a GitHub-flavored table and fetched JSON a fenced, pretty-printed block. `--output-format json` is the machine-readable response envelope, not a JSON writer. PDF and OOXML formats use Markdown as the canonical interchange, so compound conversion is normalized rather than lossless. The local C++17 DOCX, XLSX, and PPTX converters use only the already-linked zlib. Binary `docx`, `xlsx`, and `pptx` output, like PDF, cannot be combined with `--format json` or `ndjson`.
 
-The PDF writer uses PDF 1.4, Core-14 Helvetica/Courier (including BoldOblique), 1 inch print margins, and WinAnsi for Latin. CJK (Han/Kana/Hangul), Hebrew, and Arabic are embedded from a TrueType glyf font: `--font PATH`, then `AINIUX_PDF_FONT`, then a small system allowlist (DroidSansFallback, Noto Naskh Arabic, Noto Sans Hebrew, WenQuanYi, Microsoft YaHei, …). Arabic is shaped to Presentation Forms-B and RTL paragraphs are right-aligned; Hebrew does not join. CFF OpenType CJK collections such as NotoSansCJK `.ttc` are skipped; pass a `.ttf`. Other characters outside those encodings are replaced with `?` and counted on stderr. A `---` thematic break is a hairline rule, not a page break; PDF-to-Markdown joins source pages with a blank line so a round-trip reflows instead of copying original page boundaries. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. `.pdf`/`.PDF`, `.docx`/`.DOCX`, `.xlsx`/`.XLSX`, `.csv`/`.CSV`, and `.json`/`.JSON` are accepted case-insensitively.
+For PPTX, a top-level line containing exactly `---` outside fenced code is the only slide delimiter. Every segment is one slide, including blank segments; empty Markdown makes one blank slide. The first heading in a segment becomes the title, later headings remain content, and a final quote block beginning `> **Speaker notes:**` becomes speaker notes. The reader retains presentation dimensions in an ignored `ainiux-pptx` comment; new Markdown defaults to widescreen 16:9. Slide order, titles, paragraphs, common run formatting, hard breaks, nested lists, hyperlinks, GFM tables, supported images, and notes are preserved. Merged table continuations become empty cells. Charts, SmartArt, OLE, audio/video, unsupported shapes, effects, and missing relationships produce bounded warnings and visible placeholders. Content is never moved automatically to another slide.
+
+`--input deck.pptx --output-format md --output deck.md` extracts exact deduplicated image bytes into `deck.media/` and writes content-addressed links. Existing byte-identical hashes are reused; conflicting paths fail. Stdout and prompt-context conversions use `[image omitted: ALT]` placeholders and write no sidecars. Direct PPTX→PPTX keeps collected images in memory; PPTX→PDF/DOCX/XLSX follows the placeholder path, so images are intentionally lost. Markdown→PPTX embeds local PNG, JPEG, GIF, BMP, TIFF, WMF, or EMF paths relative to the source Markdown, or absolute paths for local CLI/editor use. HTTP/data URLs are not fetched. SVG can be extracted byte-for-byte, but writing requires a raster fallback and otherwise uses alt text. Generated PPTX is deterministic and normalized; themes, animation, exact layout, font embedding, chart/SmartArt semantics, macros, encryption, `.ppt`, `.pptm`, `.ppsx`, and `.potx` are unsupported.
+
+Generated XLSX is a new workbook from GitHub-flavored tables; drawings, charts, comments, pivots, macros, encryption, and Excel layout are omitted, and legacy `.xls` is rejected. Generated DOCX is deterministic and normalized but does not retain images, recurring stories, comments, macros, themes, or arbitrary Word layout. This is conversion, not lossless Office editing.
+
+The PDF writer uses PDF 1.4, Core-14 Helvetica/Courier (including BoldOblique), 1 inch print margins, and WinAnsi for Latin. CJK (Han/Kana/Hangul), Hebrew, and Arabic are embedded from a TrueType glyf font: `--font PATH`, then `AINIUX_PDF_FONT`, then a small system allowlist (DroidSansFallback, Noto Naskh Arabic, Noto Sans Hebrew, WenQuanYi, Microsoft YaHei, …). Arabic is shaped to Presentation Forms-B and RTL paragraphs are right-aligned; Hebrew does not join. CFF OpenType CJK collections such as NotoSansCJK `.ttc` are skipped; pass a `.ttf`. Other characters outside those encodings are replaced with `?` and counted on stderr. A `---` thematic break is a hairline rule, not a page break; PDF-to-Markdown joins source pages with a blank line so a round-trip reflows instead of copying original page boundaries. UTF-8 is accepted as-is. UTF-16 (BOM or a strong no-BOM heuristic) is converted automatically. Declared HTML/HTTP charsets and `--encoding NAME` convert Windows-1250/1251/1252, ISO-8859-1/2, KOI8-R/U, and (via `iconv` when installed) CJK names such as `gbk` or `big5`. Unlabeled 8-bit files fail with a hint to pass `--encoding`. `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.csv`, and `.json` endings are accepted case-insensitively.
 
 ```sh
 ainiux --input report.pdf --output-format md --output report.md
@@ -70,9 +79,11 @@ ainiux --input report.docx --output-format pdf --output report.pdf
 ainiux --input report.pdf --output-format docx --output report.docx
 ainiux --input sheet.xlsx --output-format md --output sheet.md
 ainiux --input notes.md --output-format xlsx --output notes.xlsx
+ainiux --input deck.pptx --output-format md --output deck.md
+ainiux --input deck.pptx --output-format pptx --output normalized.pptx
 ```
 
-The default `--max-input-bytes` limit is 10 MiB (10485760). Larger PDFs need an explicit higher cap.
+The default `--max-input-bytes` limit is 10 MiB (10485760). Larger documents need an explicit higher cap.
 
 ```sh
 ainiux --input letter.txt --encoding cp1251 --output-format plaintext
@@ -92,9 +103,9 @@ ainiux deepseek -m deepseek-flash -p "Describe this" \
 ainiux lmstudio -p "Compare the sources" --fetch-url https://example.com --search "related topic"
 ```
 
-Text, Markdown, HTML, PDF, DOCX, XLSX, CSV, and JSON attachments are bounded and validated. PDF, DOCX, and XLSX are converted to Markdown before they are sent. Local CSV and JSON stay native text. PNG, JPEG, and GIF are supported only when the selected Chat Completions model accepts image content. Raw base64 is not persisted in chat JSON. Use `--image-capability allow` only after verifying an unknown custom model.
+Text, Markdown, HTML, PDF, DOCX, XLSX, PPTX, CSV, and JSON attachments are bounded and validated. PDF and OOXML documents are converted to Markdown before they are sent; PPTX images become placeholders and are never extracted into chat state. Local CSV and JSON stay native text. PNG, JPEG, and GIF are supported only when the selected Chat Completions model accepts image content. Raw base64 is not persisted in chat JSON. Use `--image-capability allow` only after verifying an unknown custom model.
 
-Fetching and searching are explicit. Prompt URLs are never fetched automatically. URL fetch applies byte and timeout limits and blocks private, loopback, link-local, multicast, and metadata addresses unless `--allow-private-url-fetch` is set. HTML, `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `text/csv`, and `application/json` are converted to Markdown. PDF, DOCX, and XLSX served as `application/octet-stream` are recognized from bounded content signatures; `application/zip` is inspected for Word (`word/`) or workbook (`xl/`) parts before conversion. Octet-stream CSV/JSON uses the URL path ending (`.csv` / `.json`). The default `--max-fetch-bytes` limit is 10 MiB (10485760); larger documents need an explicit higher cap. Search provider details are in [Configuration](configuration.md#web-search).
+Fetching and searching are explicit. Prompt URLs are never fetched automatically. URL fetch applies byte and timeout limits and blocks private, loopback, link-local, multicast, and metadata addresses unless `--allow-private-url-fetch` is set. HTML, PDF, DOCX, XLSX, PPTX, CSV, and JSON MIME types are converted to Markdown. PDF and OOXML served as `application/octet-stream` are recognized from bounded signatures; generic ZIP bodies are accepted only after OPC relationships identify a Word document, workbook, or presentation. Octet-stream CSV/JSON uses the URL path ending (`.csv` / `.json`). The default `--max-fetch-bytes` limit is 10 MiB (10485760); larger documents need an explicit higher cap. Search provider details are in [Configuration](configuration.md#web-search).
 
 ## Context management
 

@@ -9,6 +9,7 @@
 #include "docx/docx.hpp"
 #include "input/input.hpp"
 #include "pdf/pdf.hpp"
+#include "pptx/pptx.hpp"
 #include "xlsx/xlsx.hpp"
 #include "platform/filesystem.hpp"
 #include "server/limits.hpp"
@@ -104,6 +105,18 @@ Error ChatInputStore::add(std::string mime_type,
         stored_mime = "text/markdown";
         converted = true;
         warnings = std::move(diagnostics.messages);
+    } else if (media == pptx::kMimeType || (named && type.kind == input::Kind::Pptx) ||
+               pptx::looks_like_pptx(payload)) {
+        pptx::ReadOptions pptx_options;
+        pptx_options.max_bytes = Limits::upload_body_bytes;
+        pptx::Diagnostics diagnostics;
+        std::string markdown;
+        Error error = pptx::to_markdown_bytes(payload, pptx_options, markdown, &diagnostics);
+        if (!error.ok()) return error;
+        payload = std::move(markdown);
+        stored_mime = "text/markdown";
+        converted = true;
+        warnings = std::move(diagnostics.messages);
     } else if (media == "text/html" || (named && type.kind == input::Kind::Html)) {
         try {
             payload = html::convert(payload, html::OutputFormat::Markdown);
@@ -126,7 +139,7 @@ Error ChatInputStore::add(std::string mime_type,
         stored_mime = "application/json";
     } else {
         return {ErrorCode::UnsupportedFeature,
-                "chat uploads accept PNG, JPEG, GIF, PDF, DOCX, XLSX, CSV, JSON, Markdown, plaintext, or HTML"};
+                "chat uploads accept PNG, JPEG, GIF, PDF, DOCX, XLSX, PPTX, CSV, JSON, Markdown, plaintext, or HTML"};
     }
 
     {

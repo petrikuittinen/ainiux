@@ -313,8 +313,8 @@ void test_cli_help_displays_version() {
           "CLI help documents PDF as a --input type");
     check(help.find("Add text/Markdown/HTML/PDF") != std::string::npos,
           "CLI help documents PDF as an --attach type");
-    check(help.find("Fetch HTML, PDF, DOCX, XLSX, CSV, or JSON") != std::string::npos,
-          "CLI help documents PDF, DOCX, XLSX, CSV, and JSON as --fetch-url types");
+    check(help.find("Fetch HTML, PDF, DOCX, XLSX, PPTX, CSV, or JSON") != std::string::npos,
+          "CLI help documents PDF, DOCX, XLSX, PPTX, CSV, and JSON as --fetch-url types");
     check(help.find("CSV/JSON stay native text") != std::string::npos,
           "CLI help documents local CSV/JSON as native text");
     check(help.find("--input report.pdf") != std::string::npos,
@@ -461,6 +461,12 @@ void test_cli_output_format_parse() {
     check(parsed.error.ok() && parsed.options.output_format == ainiux::markdown::OutputFormat::Xlsx &&
               parsed.options.rendered_output_format_explicit,
           "CLI xlsx output-format args parse as binary rendered output");
+
+    const char* pptx_argv[] = {"ainiux", "-p", "hello", "--output-format", "pptx", "--output", "out.pptx"};
+    parsed = ainiux::cli::parse_args(7, const_cast<char**>(pptx_argv));
+    check(parsed.error.ok() && parsed.options.output_format == ainiux::markdown::OutputFormat::Pptx &&
+              parsed.options.rendered_output_format_explicit,
+          "CLI pptx output-format args parse as binary rendered output");
 
     const char* bad_argv[] = {"ainiux", "-p", "hello", "--output-format", "epub"};
     parsed = ainiux::cli::parse_args(5, const_cast<char**>(bad_argv));

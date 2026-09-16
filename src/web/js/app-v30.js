@@ -3573,7 +3573,8 @@ async function loadFile(path) {
     renderDirectory();
     if (converted) {
       const from = String(response.converted_from || "");
-      const label = from.includes("spreadsheetml") ? "XLSX"
+      const label = from.includes("presentationml") ? "PPTX"
+        : from.includes("spreadsheetml") ? "XLSX"
         : from.includes("wordprocessingml") ? "DOCX"
         : from.includes("pdf") ? "PDF"
         : "document";

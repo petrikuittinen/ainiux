@@ -4,6 +4,7 @@
 #include "encoding/encoding.hpp"
 #include "docx/docx.hpp"
 #include "pdf/pdf.hpp"
+#include "pptx/pptx.hpp"
 #include "xlsx/xlsx.hpp"
 #include "platform/filesystem.hpp"
 
@@ -48,6 +49,10 @@ bool path_has_xlsx_extension(const std::string& path) {
     return ends_with_ci(path, ".xlsx");
 }
 
+bool path_has_pptx_extension(const std::string& path) {
+    return ends_with_ci(path, ".pptx");
+}
+
 bool bytes_look_like_pdf(const std::string& bytes) {
     size_t i = 0;
     while (i < bytes.size() &&
@@ -67,6 +72,10 @@ bool bytes_look_like_xlsx(const std::string& bytes) {
     return xlsx::looks_like_xlsx(bytes);
 }
 
+bool bytes_look_like_pptx(const std::string& bytes) {
+    return pptx::looks_like_pptx(bytes);
+}
+
 }  // namespace
 
 std::string sibling_markdown_path(const std::string& path) {
@@ -77,6 +86,9 @@ std::string sibling_markdown_path(const std::string& path) {
         return path.substr(0, path.size() - 5) + ".md";
     }
     if (path_has_xlsx_extension(path)) {
+        return path.substr(0, path.size() - 5) + ".md";
+    }
+    if (path_has_pptx_extension(path)) {
         return path.substr(0, path.size() - 5) + ".md";
     }
     return path + ".md";
@@ -435,6 +447,19 @@ Error load_file(const std::string& path,
         out.suggested_path = sibling_markdown_path(resolved);
         return finalize_editor_content(std::move(markdown), settings, out);
     }
+    if (path_has_pptx_extension(resolved) || bytes_look_like_pptx(content)) {
+        pptx::ReadOptions pptx_options;
+        pptx_options.max_bytes = content.size();
+        std::string markdown;
+        pptx::Diagnostics diagnostics;
+        err = pptx::to_markdown_bytes(content, pptx_options, markdown, &diagnostics);
+        if (!err.ok()) return err;
+        out.converted_source = LoadedFile::ConvertedSource::Pptx;
+        out.converted = true;
+        out.conversion_warnings = std::move(diagnostics.messages);
+        out.suggested_path = sibling_markdown_path(resolved);
+        return finalize_editor_content(std::move(markdown), settings, out);
+    }
     const encoding::DetectedEncoding detected = encoding::detect(content);
     if (detected.confident) {
         std::string utf8;
@@ -515,6 +540,13 @@ Error save_file(const std::string& path, const PieceTable& text, LineBreak lineb
         err = xlsx::from_markdown(payload, xlsx_options, xlsx_bytes);
         if (!err.ok()) return {err.code, err.message + ": " + resolved};
         payload = std::move(xlsx_bytes);
+    } else if (path_has_pptx_extension(resolved)) {
+        pptx::WriteOptions pptx_options;
+        pptx_options.source_directory = std::filesystem::u8path(resolved).parent_path().u8string();
+        std::string pptx_bytes;
+        err = pptx::from_markdown(payload, pptx_options, pptx_bytes);
+        if (!err.ok()) return {err.code, err.message + ": " + resolved};
+        payload = std::move(pptx_bytes);
     }
     // Editor buffers are ordinary project files: respect umask / existing mode.
     Error save_error = platform::atomic_write_shared(resolved, payload, true);

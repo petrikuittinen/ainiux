@@ -371,7 +371,7 @@ struct LoadedFile {
     bool tab_style_detected = false;
     std::string source_encoding;
     bool converted = false;
-    enum class ConvertedSource { None, Pdf, Docx, Xlsx } converted_source = ConvertedSource::None;
+    enum class ConvertedSource { None, Pdf, Docx, Xlsx, Pptx } converted_source = ConvertedSource::None;
     // Retained for source compatibility with older editor integrations.
     bool converted_from_pdf = false;
     std::vector<std::string> conversion_warnings;
@@ -389,6 +389,8 @@ inline const char* converted_source_name(LoadedFile::ConvertedSource source) {
             return "DOCX";
         case LoadedFile::ConvertedSource::Xlsx:
             return "XLSX";
+        case LoadedFile::ConvertedSource::Pptx:
+            return "PPTX";
         case LoadedFile::ConvertedSource::None:
             break;
     }
@@ -419,7 +421,7 @@ Error finish_loaded_file(LoadedFile& file,
 Error check_load_file_size(const std::string& path, const EditorSettings& settings, FileLoadCheck& check);
 Error save_file(const std::string& path, const PieceTable& text);
 Error save_file(const std::string& path, const PieceTable& text, LineBreak linebreak);
-// Same directory, .pdf/.docx/.xlsx (case-insensitive) → .md. Other paths append .md.
+// Same directory, .pdf/.docx/.xlsx/.pptx (case-insensitive) → .md. Other paths append .md.
 std::string sibling_markdown_path(const std::string& path);
 Error ensure_empty_file(const std::string& path);
 

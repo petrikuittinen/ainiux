@@ -13,6 +13,7 @@
 #include "http/http.hpp"
 #include "json/json.hpp"
 #include "pdf/pdf.hpp"
+#include "pptx/pptx.hpp"
 #include "xlsx/xlsx.hpp"
 
 namespace ainiux::fetch {
@@ -213,6 +214,10 @@ bool classify_fetched_kind(const std::string& media_type,
         kind = DocumentKind::Xlsx;
         return allow_binary;
     }
+    if (media_type_is_pptx(media_type)) {
+        kind = DocumentKind::Pptx;
+        return allow_binary;
+    }
     if (media_type_is_csv(media_type)) {
         kind = DocumentKind::Csv;
         return allow_binary;
@@ -233,6 +238,10 @@ bool classify_fetched_kind(const std::string& media_type,
         }
         if (body_looks_like_xlsx(body)) {
             kind = DocumentKind::Xlsx;
+            return allow_binary;
+        }
+        if (body_looks_like_pptx(body)) {
+            kind = DocumentKind::Pptx;
             return allow_binary;
         }
         if (generic_type && url_has_extension(url, ".csv")) {
@@ -267,6 +276,7 @@ const char* accept_header_for(FetchAccept accept) {
                    "text/plain;q=0.8,application/pdf;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.7,"
+                   "application/vnd.openxmlformats-officedocument.presentationml.presentation;q=0.7,"
                    "text/csv;q=0.7,application/json;q=0.7,"
                    "image/avif,image/webp,*/*;q=0.8";
         case FetchAccept::HtmlOrBinaryDocument:
@@ -274,6 +284,7 @@ const char* accept_header_for(FetchAccept accept) {
                    "application/pdf;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.8,"
+                   "application/vnd.openxmlformats-officedocument.presentationml.presentation;q=0.8,"
                    "text/csv;q=0.7,application/json;q=0.7,"
                    "image/avif,image/webp,image/apng,*/*;q=0.8";
         case FetchAccept::Document:
@@ -281,6 +292,7 @@ const char* accept_header_for(FetchAccept accept) {
                    "text/plain;q=0.8,application/pdf;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.8,"
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.8,"
+                   "application/vnd.openxmlformats-officedocument.presentationml.presentation;q=0.8,"
                    "text/csv;q=0.7,application/json;q=0.7,"
                    "image/avif,image/webp,*/*;q=0.8";
         case FetchAccept::HtmlOnly:
@@ -289,6 +301,7 @@ const char* accept_header_for(FetchAccept accept) {
                    "application/pdf;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document;q=0.7,"
                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;q=0.7,"
+                   "application/vnd.openxmlformats-officedocument.presentationml.presentation;q=0.7,"
                    "image/avif,image/webp,image/apng,*/*;q=0.8";
     }
 }
@@ -298,9 +311,9 @@ const char* unsupported_type_message(FetchAccept accept) {
         case FetchAccept::HtmlOrPlain:
             return "a supported text content type: ";
         case FetchAccept::HtmlOrBinaryDocument:
-            return "an HTML, PDF, DOCX, XLSX, CSV, or JSON content type: ";
+            return "an HTML, PDF, DOCX, XLSX, PPTX, CSV, or JSON content type: ";
         case FetchAccept::Document:
-            return "a supported HTML, PDF, DOCX, XLSX, CSV, JSON, or text content type: ";
+            return "a supported HTML, PDF, DOCX, XLSX, PPTX, CSV, JSON, or text content type: ";
         case FetchAccept::HtmlOnly:
         default:
             return "an HTML content type: ";
@@ -457,6 +470,24 @@ Error convert_xlsx_body(const std::string& url,
     return ok_error();
 }
 
+Error convert_pptx_body(const std::string& url,
+                        std::string body,
+                        const Options& options,
+                        std::string& markdown,
+                        std::vector<std::string>* warnings,
+                        runtime::CancellationToken cancellation) {
+    pptx::ReadOptions pptx_options;
+    pptx_options.max_bytes = options.max_bytes > 0 ? static_cast<std::size_t>(options.max_bytes)
+                                                   : body.size();
+    pptx_options.cancellation = cancellation;
+    pptx::Diagnostics diagnostics;
+    Error err = pptx::to_markdown_bytes(body, pptx_options, markdown, &diagnostics);
+    if (!err.ok()) return err;
+    if (cancellation.cancelled()) return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
+    if (warnings != nullptr) *warnings = std::move(diagnostics.messages);
+    return ok_error();
+}
+
 Error convert_csv_body(const std::string& url,
                        std::string body,
                        const Options& options,
@@ -520,6 +551,10 @@ bool media_type_is_xlsx(const std::string& media_type) {
     return media_type == xlsx::kMimeType;
 }
 
+bool media_type_is_pptx(const std::string& media_type) {
+    return media_type == pptx::kMimeType;
+}
+
 bool media_type_is_csv(const std::string& media_type) {
     return media_type == "text/csv" || media_type == "application/csv";
 }
@@ -564,6 +599,10 @@ bool body_looks_like_docx(std::string_view body) {
 
 bool body_looks_like_xlsx(std::string_view body) {
     return xlsx::looks_like_xlsx(body);
+}
+
+bool body_looks_like_pptx(std::string_view body) {
+    return pptx::looks_like_pptx(body);
 }
 
 namespace {
@@ -620,6 +659,16 @@ Error markdown_from_fetched_bytes(std::string_view body,
         if (err.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
         return err;
     }
+    if (media_type_is_pptx(media) || (docx_sniffable && body_looks_like_pptx(body))) {
+        kind = DocumentKind::Pptx;
+        pptx::ReadOptions pptx_options;
+        pptx_options.max_bytes = body.size();
+        pptx_options.cancellation = cancellation;
+        pptx::Diagnostics diagnostics;
+        Error err = pptx::to_markdown_bytes(body, pptx_options, markdown, &diagnostics);
+        if (err.ok() && warnings != nullptr) *warnings = std::move(diagnostics.messages);
+        return err;
+    }
     if (media_type_is_csv(media) || (generic_type && fetched_url_has_extension(source_url, ".csv"))) {
         kind = DocumentKind::Csv;
         const std::string utf8 = normalize_body_to_utf8(std::string(body), content_type);
@@ -642,7 +691,7 @@ Error markdown_from_fetched_bytes(std::string_view body,
         kind = DocumentKind::Html;
     } else {
         return {ErrorCode::UnsupportedFeature,
-                "fetched body is not HTML, PDF, DOCX, XLSX, CSV, JSON, or plain text (Content-Type: " +
+                "fetched body is not HTML, PDF, DOCX, XLSX, PPTX, CSV, JSON, or plain text (Content-Type: " +
                     content_type + ")"};
     }
     if (cancellation.cancelled()) {
@@ -697,6 +746,10 @@ Error fetch_document(const std::string& url,
         return convert_xlsx_body(url, std::move(body), options, document.markdown,
                                  &document.warnings, cancellation);
     }
+    if (kind == DocumentKind::Pptx) {
+        return convert_pptx_body(url, std::move(body), options, document.markdown,
+                                 &document.warnings, cancellation);
+    }
     if (kind == DocumentKind::Csv) {
         return convert_csv_body(url, std::move(body), options, document.markdown,
                                 &document.warnings, cancellation);
@@ -723,7 +776,8 @@ Error fetch_markdown(const std::string& url,
     }
     if (warnings != nullptr) *warnings = document.warnings;
     if (document.kind == DocumentKind::Pdf || document.kind == DocumentKind::Docx ||
-        document.kind == DocumentKind::Xlsx || document.kind == DocumentKind::Csv ||
+        document.kind == DocumentKind::Xlsx || document.kind == DocumentKind::Pptx ||
+        document.kind == DocumentKind::Csv ||
         document.kind == DocumentKind::Json) {
         markdown = std::move(document.markdown);
         return ok_error();
@@ -757,6 +811,9 @@ Error fetch_text(const std::string& url,
     }
     if (kind == DocumentKind::Xlsx) {
         return convert_xlsx_body(url, std::move(body), options, text, warnings, cancellation);
+    }
+    if (kind == DocumentKind::Pptx) {
+        return convert_pptx_body(url, std::move(body), options, text, warnings, cancellation);
     }
     if (kind == DocumentKind::Csv) {
         return convert_csv_body(url, std::move(body), options, text, warnings, cancellation);

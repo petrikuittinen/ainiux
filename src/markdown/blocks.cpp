@@ -85,12 +85,14 @@ void append_run(std::vector<Run>& runs, std::string text, unsigned style, const 
     runs.push_back(std::move(run));
 }
 
-void append_image_placeholder(std::vector<Run>& runs, std::string alt, unsigned style) {
+void append_image_placeholder(std::vector<Run>& runs, std::string alt,
+                              std::string destination, unsigned style) {
     Run run;
     run.text = alt.empty() ? "[image omitted]" : "[image omitted: " + alt + "]";
     run.style = style;
     run.image_placeholder = true;
     run.image_alt = std::move(alt);
+    run.image_destination = std::move(destination);
     runs.push_back(std::move(run));
 }
 
@@ -157,7 +159,9 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
             if (label_end != std::string::npos && input.compare(label_end, 2, "](") == 0) {
                 const size_t url_end = input.find(')', label_end + 2);
                 if (url_end != std::string::npos) {
-                    append_image_placeholder(out, input.substr(i + 2, label_end - i - 2), style);
+                    append_image_placeholder(out, input.substr(i + 2, label_end - i - 2),
+                                             input.substr(label_end + 2, url_end - label_end - 2),
+                                             style);
                     i = url_end + 1;
                     continue;
                 }
@@ -201,7 +205,7 @@ void parse_inlines(const std::string& input, unsigned style, const std::string& 
                 if (input.compare(i, 16, "[image omitted: ") == 0 && close > i + 16) {
                     alt = input.substr(i + 16, close - i - 16);
                 }
-                append_image_placeholder(out, std::move(alt), style);
+                append_image_placeholder(out, std::move(alt), {}, style);
                 i = close + 1;
                 continue;
             }

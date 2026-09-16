@@ -1,6 +1,6 @@
 # Embedded browser controller
 
-Ainiux v1.36 serves a responsive browser controller from `/ui/` while
+Ainiux v1.37 serves a responsive browser controller from `/ui/` while
 `ainiux server` is running. It is embedded in the executable and uses only
 vanilla HTML, CSS, and JavaScript ES modules: there is no Node.js runtime,
 framework, npm bundle, CDN, hosted font, or external script.
@@ -45,8 +45,8 @@ The controller capability-detects the server before enabling features. It
 provides:
 
 - concurrency-safe ordinary chat threads with live streamed model responses,
-  local file attachments (PNG/JPEG/GIF, PDF, DOCX, XLSX, CSV, JSON, Markdown,
-  plaintext, HTML; PDF/DOCX/XLSX/HTML convert to Markdown, CSV/JSON stay native
+  local file attachments (PNG/JPEG/GIF, PDF, DOCX, XLSX, PPTX, CSV, JSON, Markdown,
+  plaintext, HTML; PDF/DOCX/XLSX/PPTX/HTML convert to Markdown, CSV/JSON stay native
   text), bounded upload warnings, and `/chat-to-pdf` /
   `/last-to-pdf` downloads;
 - safe client-side Markdown rendering for Chat and Agent prose, including
@@ -69,14 +69,21 @@ provides:
   HTML5 MP4 playback, and authenticated download;
 - workspace review and dired navigation, revision-checked create, copy, move,
   and confirmed delete operations;
-- a bounded UTF-8 editor with optimistic saves, conflict recovery, PDF/DOCX-to-
-  Markdown conversion when opening `.pdf`, `.docx`, or `.xlsx` (Save writes the sibling
-  `.md`; WebUI DOCX export remains deferred), detected
+- a bounded UTF-8 editor with optimistic saves, conflict recovery, PDF/Office-to-
+  Markdown conversion when opening `.pdf`, `.docx`, `.xlsx`, or `.pptx` (Save writes
+  the sibling `.md`; explicit workspace create/save to `.pptx` writes a normalized
+  package, while dedicated browser Office downloads remain deferred), detected
   per-file indentation controls, Tab/Shift+Tab indent and outdent, adaptive
   selection/file reformatting, and bounded undo/redo. Use `Ctrl+U` or `Ctrl+Z` to
   undo and `Ctrl+Y` to redo; `Alt+U`/`Alt+Z` and `Alt+Y` are browser-safe
   fallbacks. AI proposals modify only the browser draft until Save is selected;
 - safe status and capability data already exposed by the control API.
+
+Workspace Office files may be up to 20 MiB while the converted Markdown editor
+payload remains capped at 1 MiB. PPTX open/upload uses placeholders and never
+extracts embedded images. Creating or explicitly saving a `.pptx` resolves only
+local Markdown image paths contained by the fixed workspace; HTTP/data URLs and
+paths outside the workspace degrade to alt text with a warning.
 
 Provider selection uses the server/provider API default. The WUI does not carry
 a Chat Completions/Responses override between providers: OpenAI may use its
@@ -110,7 +117,7 @@ Chat submission first persists the user message (and any converted attachments),
 runs the shared asynchronous chat job with that thread id, and appends the
 assistant result only if the thread revision still matches. The browser does
 not resend the transcript as job `content`; the server hydrates stored Markdown
-attachments, including converted PDF and DOCX input, so later turns still see the file. On a
+attachments, including converted PDF and Office input, so later turns still see the file. On a
 conflict, the completed result remains visible in Chat and the UI asks the user
 to reload. File drafts likewise remain visible until the user chooses whether to
 keep the draft or reload the current server copy.

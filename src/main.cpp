@@ -428,9 +428,15 @@ int ainiux_main(int argc, char** argv) {
         !ainiux::app::wants_document_prompt_context(options)) {
         if (!options.output_path.empty() && options.output_path != "stdout") {
             std::ostringstream converted(std::ios::out | std::ios::binary);
-            const int result = ainiux::app::run_document_extract(options, converted);
-            if (result != 0) return result;
+            ainiux::app::PptxMediaPublication media_publication;
+            const int result =
+                ainiux::app::run_document_extract(options, converted, &media_publication);
+            if (result != 0) {
+                ainiux::app::rollback_pptx_media(media_publication);
+                return result;
+            }
             if (!converted) {
+                ainiux::app::rollback_pptx_media(media_publication);
                 ainiux::app::print_error({ainiux::ErrorCode::FileWrite,
                                           "failed while buffering converted document output"});
                 return ainiux::app::exit_code_for(ainiux::ErrorCode::FileWrite);
@@ -439,6 +445,7 @@ int ainiux_main(int argc, char** argv) {
             const ainiux::Error error =
                 ainiux::platform::atomic_write_shared(path, converted.str(), true);
             if (!error.ok()) {
+                ainiux::app::rollback_pptx_media(media_publication);
                 ainiux::app::print_error({ainiux::ErrorCode::FileWrite,
                                           "could not atomically write converted output: " + path +
                                               ": " + error.message});

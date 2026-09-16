@@ -28,6 +28,7 @@ enum class DocumentKind {
     Pdf,
     Docx,
     Xlsx,
+    Pptx,
     Csv,
     Json,
 };
@@ -37,9 +38,9 @@ struct FetchedDocument {
     std::string content_type;
     // UTF-8 HTML or plaintext. Empty for binary documents converted to Markdown.
     std::string body;
-    // Markdown for Pdf/Docx/Xlsx/Csv/Json (always) and for Html/Plaintext after conversion.
+    // Markdown for Pdf/Docx/Xlsx/Pptx/Csv/Json (always) and for Html/Plaintext after conversion.
     std::string markdown;
-    // Bounded conversion diagnostics, currently produced by DOCX/XLSX conversion.
+    // Bounded conversion diagnostics produced by OOXML conversion.
     std::vector<std::string> warnings;
 };
 
@@ -57,7 +58,7 @@ Error fetch_text(const std::string& url,
                  std::string& text,
                  runtime::CancellationToken cancellation = runtime::CancellationToken(),
                  std::vector<std::string>* warnings = nullptr);
-// HTML, PDF, DOCX, XLSX, CSV, or JSON. Binary/structured documents are converted
+// HTML, PDF, DOCX, XLSX, PPTX, CSV, or JSON. Binary/structured documents are converted
 // to Markdown in `markdown`; HTML stays in `body`.
 Error fetch_document(const std::string& url,
                      const Options& options,
@@ -73,6 +74,7 @@ std::string fetched_media_type(std::string content_type);
 bool media_type_is_pdf(const std::string& media_type);
 bool media_type_is_docx(const std::string& media_type);
 bool media_type_is_xlsx(const std::string& media_type);
+bool media_type_is_pptx(const std::string& media_type);
 bool media_type_is_csv(const std::string& media_type);
 bool media_type_is_json(const std::string& media_type);
 bool media_type_is_html(const std::string& media_type);
@@ -80,6 +82,7 @@ bool media_type_is_plain(const std::string& media_type);
 bool body_looks_like_pdf(std::string_view body);
 bool body_looks_like_docx(std::string_view body);
 bool body_looks_like_xlsx(std::string_view body);
+bool body_looks_like_pptx(std::string_view body);
 Error markdown_from_fetched_bytes(std::string_view body,
                                   const std::string& content_type,
                                   std::string& markdown,

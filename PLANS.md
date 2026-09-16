@@ -33,7 +33,7 @@ approved specification says otherwise.
 
 ## Current foundation
 
-Implementation status (2026-09-15): **v1.36**.
+Implementation status (2026-09-16): **v1.37**.
 
 The main product surfaces are shipped. The current foundation includes
 Chat Completions and Responses, provider/model catalogs, cancellable streaming,
@@ -52,7 +52,10 @@ headless CLI and browser controller (`fal_queue`, `replicate_predictions`,
 v1.31–v1.35 added safe Markdown and full-language
 syntax highlighting, model/settings parity, persisted idle agent history,
 catalog-driven browser image generation, editor undo/redo, and native-parity
-browser indentation/reformatting.
+browser indentation/reformatting. v1.36–v1.37 added bounded native XLSX and
+PPTX↔Markdown conversion across CLI, fetch/chat, editor, control API, and WebUI
+workspace surfaces, with deterministic packages and exact CLI PPTX image
+sidecars.
 
 Native Windows x64 implementation is present but unreleased pending the UCRT64
 parity gate. The code index intentionally stores definitions and static importance,
@@ -166,6 +169,8 @@ These items are intentional future work, not implied current behavior:
 - richer DOCX support beyond normalized canonical-Markdown conversion (media,
   story parts, lossless edits, transcript/WebUI export), encrypted
   PDF read/write, and broader PDF font/emoji support;
+- richer PPTX semantics beyond normalized conversion (charts, SmartArt,
+  animation, themes, lossless editing, and transcript/dedicated WebUI export);
 - `/loop`, sub-agents, and a separately designed Agent skill/custom-command system;
 - optional core image downscaling/caching before vision requests, using shell-free
   bounded subprocesses and no mandatory image-codec dependency;

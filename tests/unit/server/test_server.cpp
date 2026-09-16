@@ -39,6 +39,7 @@
 #include "pdf/pdf.hpp"
 #include "docx/docx.hpp"
 #include "xlsx/xlsx.hpp"
+#include "pptx/pptx.hpp"
 #include "server/http_parser.hpp"
 #include "server/event_broker.hpp"
 #include "server/job_registry.hpp"
@@ -178,6 +179,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("application/vnd.openxmlformats-officedocument.wordprocessingml.document") !=
                   std::string::npos &&
               index.body.find(".docx") != std::string::npos &&
+              index.body.find("application/vnd.openxmlformats-officedocument.presentationml.presentation") !=
+                  std::string::npos &&
+              index.body.find(".pptx") != std::string::npos &&
               index.body.find("id=\"agent-list\"") == std::string::npos &&
               index.body.find("id=\"new-agent-dialog\"") == std::string::npos &&
               index.body.find("id=\"image-output\"") != std::string::npos &&
@@ -297,6 +301,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("stored.warnings || []") != std::string::npos &&
               javascript.body.find("Boolean(response.converted_from)") != std::string::npos &&
               javascript.body.find("response.warnings || []") != std::string::npos &&
+              javascript.body.find("from.includes(\"presentationml\") ? \"PPTX\"") !=
+                  std::string::npos &&
               javascript.body.find("function scheduleAgentRender") != std::string::npos &&
               javascript.body.find("async function ensureWorkspaceAgent") != std::string::npos &&
               javascript.body.find("const followTail =") != std::string::npos &&
@@ -739,6 +745,24 @@ void test_chat_input_uploads() {
               xlsx_created.body.find("\"converted\":true") != std::string::npos &&
               xlsx_created.body.find("text/markdown") != std::string::npos,
           "XLSX chat upload stores only converted Markdown");
+
+    ainiux::pptx::WriteOptions pptx_write_options;
+    std::string pptx_bytes;
+    check(ainiux::pptx::from_markdown("# Opening\n\nHello PPTX attach.\n", pptx_write_options,
+                                     pptx_bytes).ok(),
+          "test PPTX for chat upload is generated");
+    http::Request pptx = parsed_request(
+        "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\n"
+        "Content-Type: application/vnd.openxmlformats-officedocument.presentationml.presentation\r\n"
+        "X-Ainiux-Filename: deck.pptx\r\nContent-Length: 0\r\n\r\n");
+    pptx.body = pptx_bytes;
+    Response pptx_created = route_request(pptx, auth, status);
+    check(pptx_created.status == 201 &&
+              pptx_created.body.find("\"converted\":true") != std::string::npos &&
+              pptx_created.body.find("\"warnings\":[]") != std::string::npos &&
+              pptx_created.body.find("text/markdown") != std::string::npos,
+          "PPTX chat upload stores only converted Markdown");
 
     http::Request csv = parsed_request(
         "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
@@ -1476,6 +1500,34 @@ void test_revision_safe_workspace_mutations_and_editor_assist() {
     check(!root_revision.empty() && !first_revision.empty() &&
               listing.find("\"revision\"") != std::string::npos,
           "workspace listings and file reads expose opaque revisions");
+
+    std::string pptx_response;
+    std::string pptx_revision;
+    const Error pptx_created = service.create_file(
+        "{\"path\":\"deck.pptx\",\"parent_revision\":" + json::quote(root_revision) +
+            ",\"content\":" + json::quote("# Opening\n\nWorkspace presentation.\n") + "}",
+        pptx_response, pptx_revision);
+    check(pptx_created.ok() && fs::exists(workspace / "deck.pptx"),
+          "workspace create converts canonical Markdown to a bounded PPTX package");
+    std::string pptx_open;
+    check(service.read("deck.pptx", pptx_open).ok() &&
+              pptx_open.find("Workspace presentation") != std::string::npos &&
+              pptx_open.find("presentationml.presentation") != std::string::npos &&
+              pptx_open.find("\"suggested_path\":\"deck.md\"") != std::string::npos,
+          "workspace open converts PPTX to Markdown with existing conversion metadata");
+    const std::string opened_pptx_revision = string_member(pptx_open, "revision");
+    check(service.save("deck.pptx",
+                       "{\"revision\":" + json::quote(opened_pptx_revision) +
+                           ",\"content\":" + json::quote("# Updated\n\nSecond edition.\n") + "}",
+                       pptx_response, pptx_revision).ok(),
+          "workspace save converts edited Markdown back to PPTX");
+    std::string saved_pptx_bytes;
+    std::string saved_pptx_markdown;
+    check(platform::read_file_bounded((workspace / "deck.pptx").u8string(),
+                                      20U * 1024U * 1024U, saved_pptx_bytes).ok() &&
+              ainiux::pptx::to_markdown_bytes(saved_pptx_bytes, {}, saved_pptx_markdown).ok() &&
+              saved_pptx_markdown.find("Second edition") != std::string::npos,
+          "workspace PPTX save publishes a readable presentation");
 
     std::string response;
     std::string current;

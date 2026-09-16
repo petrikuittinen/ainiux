@@ -15,6 +15,8 @@
 #include "json/json.hpp"
 #include "markdown/markdown.hpp"
 #include "pdf/pdf.hpp"
+#include "platform/filesystem.hpp"
+#include "pptx/pptx.hpp"
 #include "search/search.hpp"
 #include "xlsx/xlsx.hpp"
 
@@ -88,6 +90,8 @@ const char* input_kind_name(InputKind kind) {
             return "docx";
         case InputKind::Xlsx:
             return "xlsx";
+        case InputKind::Pptx:
+            return "pptx";
         case InputKind::Csv:
             return "csv";
         case InputKind::Json:
@@ -146,7 +150,7 @@ markdown::OutputFormat document_output_format(const cli::Options& options,
         return legacy_html_output_format(options);
     }
     if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx ||
-        kind == InputKind::Xlsx) {
+        kind == InputKind::Xlsx || kind == InputKind::Pptx) {
         return markdown::OutputFormat::Markdown;
     }
     return markdown::OutputFormat::Plaintext;
@@ -154,7 +158,8 @@ markdown::OutputFormat document_output_format(const cli::Options& options,
 
 bool output_needs_markdown_interchange(markdown::OutputFormat format) {
     return format == markdown::OutputFormat::Html || format == markdown::OutputFormat::Pdf ||
-           format == markdown::OutputFormat::Docx || format == markdown::OutputFormat::Xlsx;
+           format == markdown::OutputFormat::Docx || format == markdown::OutputFormat::Xlsx ||
+           format == markdown::OutputFormat::Pptx;
 }
 
 Error convert_structured_text_to_markdown(const std::string& body, InputKind kind,
@@ -229,13 +234,34 @@ Error write_xlsx_from_markdown(const std::string& markdown, std::string& bytes) 
     return xlsx::from_markdown(markdown, options, bytes);
 }
 
+void warn_pptx_diagnostics(bool quiet, const pptx::Diagnostics& diagnostics) {
+    if (quiet) return;
+    for (const std::string& message : diagnostics.messages)
+        std::cerr << "warning: " << message << "\n";
+}
+
+Error write_pptx_from_markdown(const std::string& markdown,
+                               const std::string& source_directory,
+                               const std::vector<pptx::MediaAsset>& media,
+                               bool quiet,
+                               std::string& bytes) {
+    pptx::WriteOptions options;
+    options.source_directory = source_directory;
+    options.collected_media = media;
+    pptx::Diagnostics diagnostics;
+    Error error = pptx::from_markdown(markdown, options, bytes, &diagnostics);
+    if (error.ok()) warn_pptx_diagnostics(quiet, diagnostics);
+    return error;
+}
+
 std::string render_document_body(const std::string& body,
                                  InputKind kind,
                                  markdown::OutputFormat output_format,
                                  bool complete_html_document) {
     if (output_format == markdown::OutputFormat::Pdf ||
         output_format == markdown::OutputFormat::Docx ||
-        output_format == markdown::OutputFormat::Xlsx) {
+        output_format == markdown::OutputFormat::Xlsx ||
+        output_format == markdown::OutputFormat::Pptx) {
         return "";
     }
     if (kind == InputKind::Html) {
@@ -249,7 +275,7 @@ std::string render_document_body(const std::string& body,
         return markdown;
     }
     if (kind == InputKind::Markdown || kind == InputKind::Pdf || kind == InputKind::Docx ||
-        kind == InputKind::Xlsx) {
+        kind == InputKind::Xlsx || kind == InputKind::Pptx) {
         return markdown::render(body, output_format, complete_html_document);
     }
     if (kind == InputKind::Image) {
@@ -295,6 +321,76 @@ void write_document_json(std::ostream& out, const LoadedDocument& document) {
         << "\"output_format\":" << json::quote(markdown::output_format_name(document.output_format)) << ","
         << "\"content\":" << json::quote(document.converted)
         << "}\n";
+}
+
+Error publish_pptx_media(const cli::Options& options,
+                         const LoadedDocument& document,
+                         PptxMediaPublication* publication) {
+    if (document.media.empty() || document.output_format != markdown::OutputFormat::Markdown)
+        return ok_error();
+    if (options.output_path.empty() || options.output_path == "stdout" ||
+        document.media_directory.empty()) {
+        return {ErrorCode::Internal, "PPTX media was collected without a file output target"};
+    }
+    const std::filesystem::path output =
+        std::filesystem::u8path(expand_user_path(options.output_path));
+    const std::filesystem::path directory = output.parent_path() /
+                                            std::filesystem::u8path(document.media_directory);
+    std::error_code ec;
+    bool made_directory = false;
+    if (!std::filesystem::exists(directory, ec)) {
+        if (ec || !std::filesystem::create_directory(directory, ec) || ec)
+            return {ErrorCode::FileWrite, "could not create PPTX media directory: " +
+                                             directory.u8string()};
+        made_directory = true;
+    } else if (!std::filesystem::is_directory(directory, ec) || ec) {
+        return {ErrorCode::FileWrite, "PPTX media path is not a directory: " + directory.u8string()};
+    }
+    bool linked = false;
+    Error link_error = platform::path_is_link_or_reparse(directory.u8string(), linked);
+    if (!link_error.ok() || linked) {
+        if (made_directory) std::filesystem::remove(directory, ec);
+        return {ErrorCode::FileWrite, "refusing unsafe PPTX media directory: " + directory.u8string()};
+    }
+    std::vector<std::filesystem::path> created;
+    auto rollback = [&]() {
+        std::error_code ignored;
+        for (auto item = created.rbegin(); item != created.rend(); ++item)
+            std::filesystem::remove(*item, ignored);
+        if (made_directory) std::filesystem::remove(directory, ignored);
+    };
+    for (const pptx::MediaAsset& asset : document.media) {
+        const std::filesystem::path target = directory /
+            std::filesystem::u8path("image-" + asset.sha256 + "." + asset.extension);
+        if (std::filesystem::exists(target, ec)) {
+            if (ec || !std::filesystem::is_regular_file(target, ec)) {
+                rollback();
+                return {ErrorCode::FileWrite, "conflicting PPTX media path: " + target.u8string()};
+            }
+            std::string prior;
+            Error read_error = platform::read_file_bounded(target.u8string(), asset.bytes.size() + 1, prior);
+            if (!read_error.ok() || prior != asset.bytes) {
+                rollback();
+                return {ErrorCode::FileWrite,
+                        "existing PPTX media file does not match its content hash: " + target.u8string()};
+            }
+            continue;
+        }
+        Error write_error = platform::atomic_write_shared_create(target.u8string(), asset.bytes, true);
+        if (!write_error.ok()) {
+            rollback();
+            return {ErrorCode::FileWrite, "could not publish PPTX media: " + target.u8string() +
+                                             ": " + write_error.message};
+        }
+        created.push_back(target);
+    }
+    if (publication != nullptr) {
+        publication->created_files.reserve(created.size());
+        for (const std::filesystem::path& path : created)
+            publication->created_files.push_back(path.u8string());
+        if (made_directory) publication->created_directory = directory.u8string();
+    }
+    return ok_error();
 }
 
 }  // namespace
@@ -370,6 +466,7 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
         if (fetched.kind == fetch::DocumentKind::Pdf ||
             fetched.kind == fetch::DocumentKind::Docx ||
             fetched.kind == fetch::DocumentKind::Xlsx ||
+            fetched.kind == fetch::DocumentKind::Pptx ||
             fetched.kind == fetch::DocumentKind::Csv ||
             fetched.kind == fetch::DocumentKind::Json) {
             document.source = document_source_label(options);
@@ -379,9 +476,11 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
                                             ? InputKind::Docx
                                             : fetched.kind == fetch::DocumentKind::Xlsx
                                                   ? InputKind::Xlsx
-                                                  : fetched.kind == fetch::DocumentKind::Csv
-                                                        ? InputKind::Csv
-                                                        : InputKind::Json;
+                                                  : fetched.kind == fetch::DocumentKind::Pptx
+                                                        ? InputKind::Pptx
+                                                        : fetched.kind == fetch::DocumentKind::Csv
+                                                              ? InputKind::Csv
+                                                              : InputKind::Json;
             document.warnings = std::move(fetched.warnings);
             if (!options.quiet) {
                 for (const std::string& warning : document.warnings)
@@ -400,6 +499,9 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
                 return write_docx_from_markdown(fetched.markdown, document.converted);
             if (document.output_format == markdown::OutputFormat::Xlsx)
                 return write_xlsx_from_markdown(fetched.markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Pptx)
+                return write_pptx_from_markdown(fetched.markdown, {}, {}, options.quiet,
+                                                document.converted);
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -458,6 +560,8 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
                 return write_docx_from_markdown(markdown, document.converted);
             if (document.output_format == markdown::OutputFormat::Xlsx)
                 return write_xlsx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Pptx)
+                return write_pptx_from_markdown(markdown, {}, {}, options.quiet, document.converted);
             const bool complete_html_document =
                 standalone && document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -482,6 +586,8 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
                 return write_docx_from_markdown(markdown, document.converted);
             if (document.output_format == markdown::OutputFormat::Xlsx)
                 return write_xlsx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Pptx)
+                return write_pptx_from_markdown(markdown, {}, {}, options.quiet, document.converted);
             const bool complete_html_document = standalone &&
                 document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
@@ -506,9 +612,53 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
                 return write_docx_from_markdown(markdown, document.converted);
             if (document.output_format == markdown::OutputFormat::Xlsx)
                 return write_xlsx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Pptx)
+                return write_pptx_from_markdown(markdown, {}, {}, options.quiet, document.converted);
             const bool complete_html_document = standalone &&
                 document.output_format == markdown::OutputFormat::Html &&
                 !options.output_path.empty() && options.output_path != "stdout";
+            document.converted = render_document_body(markdown, document.input_kind,
+                                                      document.output_format, complete_html_document);
+            return ok_error();
+        }
+        if (input_type.kind == InputKind::Pptx) {
+            pptx::ReadOptions pptx_options;
+            pptx_options.max_bytes = static_cast<size_t>(options.max_input_bytes);
+            const bool output_to_file = standalone && !options.output_path.empty() &&
+                                        options.output_path != "stdout";
+            const bool preserve_media = document_output_format(options, InputKind::Pptx, standalone) ==
+                                             markdown::OutputFormat::Pptx ||
+                                         (output_to_file &&
+                                          document_output_format(options, InputKind::Pptx, standalone) ==
+                                              markdown::OutputFormat::Markdown);
+            pptx_options.collect_media = preserve_media;
+            if (preserve_media && output_to_file &&
+                document_output_format(options, InputKind::Pptx, standalone) ==
+                    markdown::OutputFormat::Markdown) {
+                const std::filesystem::path output = std::filesystem::u8path(options.output_path);
+                document.media_directory = output.stem().u8string() + ".media";
+                pptx_options.media_link_prefix = document.media_directory;
+            }
+            std::string markdown;
+            pptx::Diagnostics diagnostics;
+            err = pptx::to_markdown_file(local_input_path(options), pptx_options, markdown,
+                                         &diagnostics, &document.media);
+            if (!err.ok()) return err;
+            warn_pptx_diagnostics(options.quiet, diagnostics);
+            document.source = document_source_label(options);
+            document.input_kind = InputKind::Pptx;
+            document.output_format = document_output_format(options, document.input_kind, standalone);
+            if (document.output_format == markdown::OutputFormat::Pdf)
+                return write_pdf_from_markdown(markdown, options.quiet, options.pdf_font, document.converted);
+            if (document.output_format == markdown::OutputFormat::Docx)
+                return write_docx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Xlsx)
+                return write_xlsx_from_markdown(markdown, document.converted);
+            if (document.output_format == markdown::OutputFormat::Pptx)
+                return write_pptx_from_markdown(markdown, {}, document.media, options.quiet,
+                                                document.converted);
+            const bool complete_html_document = standalone &&
+                document.output_format == markdown::OutputFormat::Html && output_to_file;
             document.converted = render_document_body(markdown, document.input_kind,
                                                       document.output_format, complete_html_document);
             return ok_error();
@@ -562,6 +712,15 @@ Error load_document(const cli::Options& options, bool standalone, LoadedDocument
         return write_docx_from_markdown(canonical_markdown_body(body, document.input_kind), document.converted);
     if (document.output_format == markdown::OutputFormat::Xlsx)
         return write_xlsx_from_markdown(canonical_markdown_body(body, document.input_kind), document.converted);
+    if (document.output_format == markdown::OutputFormat::Pptx) {
+        std::string source_directory;
+        if (has_local_input_source(options)) {
+            source_directory = std::filesystem::u8path(expand_user_path(local_input_path(options)))
+                                   .parent_path().u8string();
+        }
+        return write_pptx_from_markdown(canonical_markdown_body(body, document.input_kind),
+                                        source_directory, {}, options.quiet, document.converted);
+    }
     const bool complete_html_document = standalone &&
                                         document.output_format == markdown::OutputFormat::Html &&
                                         !options.output_path.empty() && options.output_path != "stdout";
@@ -618,7 +777,21 @@ Error load_text_context_file(const cli::Options& options,
     return ok_error();
 }
 
-int run_document_extract(const cli::Options& options, std::ostream& out) {
+void rollback_pptx_media(const PptxMediaPublication& publication) {
+    std::error_code ignored;
+    for (auto item = publication.created_files.rbegin();
+         item != publication.created_files.rend(); ++item) {
+        std::filesystem::remove(std::filesystem::u8path(*item), ignored);
+    }
+    if (!publication.created_directory.empty())
+        std::filesystem::remove(std::filesystem::u8path(publication.created_directory), ignored);
+}
+
+int run_document_extract(const cli::Options& options,
+                         std::ostream& out,
+                         PptxMediaPublication* media_publication) {
+    if (media_publication)
+        *media_publication = PptxMediaPublication{};
     Error err = validate_document_extract_options(options);
     if (!err.ok()) {
         print_error(err);
@@ -632,11 +805,18 @@ int run_document_extract(const cli::Options& options, std::ostream& out) {
         return exit_code_for(err.code);
     }
 
+    err = publish_pptx_media(options, document, media_publication);
+    if (!err.ok()) {
+        print_error(err);
+        return exit_code_for(err.code);
+    }
+
     if ((document.output_format == markdown::OutputFormat::Pdf ||
          document.output_format == markdown::OutputFormat::Docx ||
-         document.output_format == markdown::OutputFormat::Xlsx) &&
+         document.output_format == markdown::OutputFormat::Xlsx ||
+         document.output_format == markdown::OutputFormat::Pptx) &&
         options.format != cli::OutputFormat::Text) {
-        print_error({ErrorCode::BadArgs, "binary --output-format pdf, docx, or xlsx cannot be combined with --format json or ndjson"});
+        print_error({ErrorCode::BadArgs, "binary --output-format pdf, docx, xlsx, or pptx cannot be combined with --format json or ndjson"});
         return exit_code_for(ErrorCode::BadArgs);
     }
 

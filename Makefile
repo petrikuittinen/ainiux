@@ -137,7 +137,7 @@ APP_LINK_EXTRA :=
 APP_LINK_FLAGS :=
 endif
 
-.PHONY: all clean optimized test test-full test-unit test-pdf test-docx test-xlsx test-install-path test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
+.PHONY: all clean optimized test test-full test-unit test-pdf test-docx test-xlsx test-pptx test-install-path test-web-js test-unit-faults test-integration-smoke test-integration test-integration-sqlite test-windows-conpty sanitize test-sanitize leak-check test-leak install package-windows
 
 all: $(BIN)
 
@@ -339,6 +339,11 @@ test-docx: $(TEST_BIN)
 
 test-xlsx: $(TEST_BIN)
 	$(TEST_BIN) --xlsx-only
+
+test-pptx: $(TEST_BIN)
+	$(TEST_BIN) --pptx-only
+	python3 tests/pptx_files/generate_fixtures.py --check
+	python3 scripts/ainiux/pptxlint.py --selftest
 
 test-unit: $(TEST_BIN)
 	$(TEST_BIN)

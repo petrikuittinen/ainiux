@@ -25,6 +25,9 @@ struct Run {
     bool hard_break_after = false;
     bool image_placeholder = false;
     std::string image_alt;
+    // Retained for renderers that can embed images. Existing text/PDF/DOCX
+    // renderers intentionally continue to use their visible placeholder path.
+    std::string image_destination;
 };
 
 enum class BlockKind {

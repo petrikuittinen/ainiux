@@ -16,6 +16,7 @@
 #include "html/html.hpp"
 #include "json/json.hpp"
 #include "pdf/pdf.hpp"
+#include "pptx/pptx.hpp"
 #include "xlsx/xlsx.hpp"
 #include "platform/filesystem.hpp"
 #include "security/hash.hpp"
@@ -28,6 +29,7 @@ namespace fs = std::filesystem;
 
 constexpr std::size_t kMaxEntries = 2048U;
 constexpr std::size_t kMaxFileBytes = 1024U * 1024U;
+constexpr std::size_t kMaxOfficeFileBytes = 20U * 1024U * 1024U;
 constexpr std::size_t kMaxReviewDirectories = 2048U;
 constexpr std::size_t kMaxMutationOperations = 32U;
 constexpr std::size_t kMaxMutationTreeEntries = 512U;
@@ -278,14 +280,21 @@ Error snapshot_file(const std::string& root,
     if (!entry_is_supported(path, directory, size) || directory) {
         return {ErrorCode::FileRead, safe_path_error("workspace path is not a regular file", relative)};
     }
-    if (size > kMaxFileBytes) {
+    const std::string lower_relative = ascii_lower(relative);
+    const bool office_document =
+        (lower_relative.size() >= 5 &&
+         (lower_relative.compare(lower_relative.size() - 5, 5, ".docx") == 0 ||
+          lower_relative.compare(lower_relative.size() - 5, 5, ".xlsx") == 0 ||
+          lower_relative.compare(lower_relative.size() - 5, 5, ".pptx") == 0));
+    const std::size_t read_limit = office_document ? kMaxOfficeFileBytes : kMaxFileBytes;
+    if (size > read_limit) {
         return {ErrorCode::FileRead, safe_path_error("workspace file exceeds the remote editing limit", relative)};
     }
     platform::FileIdentity before;
     error = platform::file_identity(path.u8string(), before, false);
     if (!error.ok()) return {ErrorCode::FileRead, "could not inspect workspace file"};
     std::string content;
-    error = platform::read_file_bounded(path.u8string(), kMaxFileBytes, content);
+    error = platform::read_file_bounded(path.u8string(), read_limit, content);
     if (!error.ok()) {
         return {ErrorCode::FileRead, safe_path_error("workspace file cannot be read", relative)};
     }
@@ -331,6 +340,8 @@ Error snapshot_file(const std::string& root,
         std::string markdown;
         error = docx::to_markdown_bytes(content, docx_options, markdown, &diagnostics);
         if (!error.ok()) return error;
+        if (markdown.size() > kMaxFileBytes)
+            return {ErrorCode::FileRead, "converted DOCX exceeds the 1 MiB remote editing limit"};
         snapshot.content = std::move(markdown);
         snapshot.converted_from = docx::kMimeType;
         snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
@@ -346,8 +357,27 @@ Error snapshot_file(const std::string& root,
         std::string markdown;
         error = xlsx::to_markdown_bytes(content, xlsx_options, markdown, &diagnostics);
         if (!error.ok()) return error;
+        if (markdown.size() > kMaxFileBytes)
+            return {ErrorCode::FileRead, "converted XLSX exceeds the 1 MiB remote editing limit"};
         snapshot.content = std::move(markdown);
         snapshot.converted_from = xlsx::kMimeType;
+        snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
+        snapshot.warnings = std::move(diagnostics.messages);
+        return ok_error();
+    }
+    const bool pptx_path = lower_path.size() >= 5 &&
+                           lower_path.compare(lower_path.size() - 5, 5, ".pptx") == 0;
+    if (pptx_path) {
+        pptx::ReadOptions pptx_options;
+        pptx_options.max_bytes = content.size();
+        pptx::Diagnostics diagnostics;
+        std::string markdown;
+        error = pptx::to_markdown_bytes(content, pptx_options, markdown, &diagnostics);
+        if (!error.ok()) return error;
+        if (markdown.size() > kMaxFileBytes)
+            return {ErrorCode::FileRead, "converted PPTX exceeds the 1 MiB remote editing limit"};
+        snapshot.content = std::move(markdown);
+        snapshot.converted_from = pptx::kMimeType;
         snapshot.suggested_path = editor::sibling_markdown_path(snapshot.path);
         snapshot.warnings = std::move(diagnostics.messages);
         return ok_error();
@@ -827,6 +857,16 @@ Error WorkspaceService::save(const std::string& relative_path,
             error = xlsx::from_markdown(content, write_options, xlsx_bytes);
             if (!error.ok()) return error;
             content = std::move(xlsx_bytes);
+        } else if (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".pptx") == 0) {
+            pptx::WriteOptions write_options;
+            write_options.max_bytes = kMaxOfficeFileBytes;
+            write_options.workspace_root = workspace_;
+            write_options.source_directory =
+                (fs::u8path(workspace_) / fs::u8path(relative_path)).parent_path().u8string();
+            std::string pptx_bytes;
+            error = pptx::from_markdown(content, write_options, pptx_bytes);
+            if (!error.ok()) return error;
+            content = std::move(pptx_bytes);
         }
     }
     WorkspaceFileSnapshot before;
@@ -887,6 +927,16 @@ Error WorkspaceService::create_file(const std::string& request_body,
             error = xlsx::from_markdown(content, write_options, xlsx_bytes);
             if (!error.ok()) return error;
             content = std::move(xlsx_bytes);
+        } else if (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".pptx") == 0) {
+            pptx::WriteOptions write_options;
+            write_options.max_bytes = kMaxOfficeFileBytes;
+            write_options.workspace_root = workspace_;
+            write_options.source_directory =
+                (fs::u8path(workspace_) / fs::u8path(relative)).parent_path().u8string();
+            std::string pptx_bytes;
+            error = pptx::from_markdown(content, write_options, pptx_bytes);
+            if (!error.ok()) return error;
+            content = std::move(pptx_bytes);
         }
     }
     fs::path target;

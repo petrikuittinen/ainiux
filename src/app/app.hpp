@@ -16,6 +16,7 @@
 #include "input/input.hpp"
 #include "markdown/markdown.hpp"
 #include "provider/provider.hpp"
+#include "pptx/pptx.hpp"
 #include "runtime/runtime.hpp"
 
 namespace ainiux::app {
@@ -31,7 +32,14 @@ struct LoadedDocument {
     markdown::OutputFormat output_format = markdown::OutputFormat::Markdown;
     std::string converted;
     std::vector<std::string> warnings;
+    std::vector<pptx::MediaAsset> media;
+    std::string media_directory;
     provider::ImageInput image;
+};
+
+struct PptxMediaPublication {
+    std::vector<std::string> created_files;
+    std::string created_directory;
 };
 
 bool has_document_source(const cli::Options& options);
@@ -49,7 +57,10 @@ Error load_text_context_file(const cli::Options& options,
 std::string document_context_message(const LoadedDocument& document);
 fetch::Options fetch_options_for(const cli::Options& options);
 
-int run_document_extract(const cli::Options& options, std::ostream& out);
+int run_document_extract(const cli::Options& options,
+                         std::ostream& out,
+                         PptxMediaPublication* media_publication = nullptr);
+void rollback_pptx_media(const PptxMediaPublication& publication);
 int run_search_extract(const cli::Options& options, std::ostream& out);
 std::string search_context_message(const cli::Options& options, const search::SearchResponse& response);
 int run_benchmark_mode(const cli::Options& options);
