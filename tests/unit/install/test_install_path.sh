@@ -20,18 +20,66 @@ test_home="${install_test_root}/home"
 user_local="${test_home}/.local/bin/ainiux"
 write_test_binary "${installed}" new-build
 write_test_binary "${user_local}" stale-build
+mkdir -p -- "${install_test_root}/system/share/ainiux/prompts" \
+    "${test_home}/.local/share/ainiux/prompts"
+printf '%s\n' 'new-model-catalog' >"${install_test_root}/system/share/ainiux/models.conf"
+printf '%s\n' 'new-prompt' >"${install_test_root}/system/share/ainiux/prompts/master.md"
+printf '%s\n' 'stale-model-catalog' >"${test_home}/.local/share/ainiux/models.conf"
+printf '%s\n' 'stale-prompt' >"${test_home}/.local/share/ainiux/prompts/master.md"
+printf '%s\n' 'keep-me' >"${test_home}/.local/share/ainiux/local-note.txt"
 
 verified_output=$(env AINIUX_INSTALL_USER_HOME="${test_home}" \
     PATH="${test_home}/.local/bin:${install_test_root}/system/bin:/usr/bin:/bin" \
     "${verifier}" "${installed}" "${install_test_root}/system")
 cmp -s "${installed}" "${user_local}"
+cmp -s "${install_test_root}/system/share/ainiux/models.conf" \
+    "${test_home}/.local/share/ainiux/models.conf"
+cmp -s "${install_test_root}/system/share/ainiux/prompts/master.md" \
+    "${test_home}/.local/share/ainiux/prompts/master.md"
+grep -q "keep-me" "${test_home}/.local/share/ainiux/local-note.txt"
 case "${verified_output}" in
-    *"Refreshed shadowing user-local executable"*"Verified synchronized PATH duplicate"*) ;;
+    *"Refreshed shadowing user-local executable"*"Synchronized user-local share assets"*"Verified synchronized PATH duplicate"*) ;;
     *)
         echo "install verifier did not report the refreshed PATH shadow" >&2
         exit 1
         ;;
 esac
+
+# A previous install may already have synchronized the executable while leaving
+# its adjacent share tree stale. Re-run verification with identical binaries to
+# cover that exact upgrade state.
+printf '%s\n' 'stale-again' >"${test_home}/.local/share/ainiux/models.conf"
+verified_again_output=$(env AINIUX_INSTALL_USER_HOME="${test_home}" \
+    PATH="${test_home}/.local/bin:${install_test_root}/system/bin:/usr/bin:/bin" \
+    "${verifier}" "${installed}" "${install_test_root}/system")
+cmp -s "${install_test_root}/system/share/ainiux/models.conf" \
+    "${test_home}/.local/share/ainiux/models.conf"
+case "${verified_again_output}" in
+    *"Synchronized user-local share assets (1 updated)"*"Verified synchronized PATH duplicate"*) ;;
+    *)
+        echo "install verifier did not refresh stale assets beside an identical shadow binary" >&2
+        exit 1
+        ;;
+esac
+
+asset_symlink_home="${install_test_root}/asset-symlink-home"
+asset_symlink_binary="${asset_symlink_home}/.local/bin/ainiux"
+write_test_binary "${asset_symlink_binary}" stale-build
+mkdir -p -- "${asset_symlink_home}/.local/share/ainiux"
+printf '%s\n' 'protected' >"${install_test_root}/protected-models.conf"
+ln -s "${install_test_root}/protected-models.conf" \
+    "${asset_symlink_home}/.local/share/ainiux/models.conf"
+if env AINIUX_INSTALL_USER_HOME="${asset_symlink_home}" \
+    PATH="${asset_symlink_home}/.local/bin:${install_test_root}/system/bin:/usr/bin:/bin" \
+    "${verifier}" "${installed}" "${install_test_root}/system" \
+    >"${install_test_root}/asset-symlink.stdout" \
+    2>"${install_test_root}/asset-symlink.stderr"; then
+    echo "install verifier replaced an unsafe user-local share symlink" >&2
+    exit 1
+fi
+grep -q "refused to replace a user-local share symlink" \
+    "${install_test_root}/asset-symlink.stderr"
+grep -q '^protected$' "${install_test_root}/protected-models.conf"
 
 custom_shadow="${install_test_root}/custom/bin/ainiux"
 write_test_binary "${custom_shadow}" unmanaged-stale-build

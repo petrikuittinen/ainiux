@@ -18,7 +18,7 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
 - **Browser and terminal share model workflows.** The [Web UI](docs/web-mode.md) has searchable, keyboard-navigable provider/model pickers, per-thread chat settings, and a remembered workspace agent/editor configuration.
 - **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
-- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, optional OpenSSL for control-server TLS, native POSIX/Win32 platform backends, and ANSI/VT rendering. Its core CLI and terminal modes do not require Electron, a browser, or ncurses, and the optional browser controller is dependency-free vanilla JavaScript. And it won't eat all of your RAM.
+- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, zlib, optional OpenSSL for control-server TLS, native POSIX/Win32 platform backends, and ANSI/VT rendering. Its core CLI and terminal modes do not require Electron, a browser, or ncurses, and the optional browser controller is dependency-free vanilla JavaScript. And it won't eat all of your RAM.
 
 ## Platform support
 
@@ -41,12 +41,12 @@ To build without installing:
 
 ```sh
 sudo apt update
-sudo apt install -y build-essential pkg-config git libsqlite3-dev libcurl4-openssl-dev libssl-dev
+sudo apt install -y build-essential pkg-config git libsqlite3-dev libcurl4-openssl-dev zlib1g-dev libssl-dev
 make
 ./ainiux --version
 ```
 
-Some Ubuntu releases name the curl runtime package `libcurl4t64`; the dependency script selects the available package. `./scripts/install.sh --user` installs below `~/.local`, and `make optimized` creates a stripped release-style build. A normal install verifies the executable selected by `PATH`; when an older regular writable `~/.local/bin/ainiux` would shadow a new system install, it is atomically refreshed to the same build. Unsafe symlinks and other mismatched shadows stop installation with both paths reported. Detailed package, installation, upgrade, and platform notes are in [Getting started](docs/getting-started.md).
+Some Ubuntu releases name the curl runtime package `libcurl4t64`; the dependency script selects the available package. `./scripts/install.sh --user` installs below `~/.local`, and `make optimized` creates a stripped release-style build. A normal install verifies the executable selected by `PATH`; when an older regular writable `~/.local/bin/ainiux` would shadow a new system install, it and its adjacent immutable share assets are atomically synchronized to the new installation. Unsafe symlinks and other mismatched shadows stop installation with both paths reported. Detailed package, installation, upgrade, and platform notes are in [Getting started](docs/getting-started.md).
 
 ## Four ways to start
 

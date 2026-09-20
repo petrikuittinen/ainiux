@@ -14,7 +14,7 @@
 # User-local install (no root):
 #   ./scripts/install.sh --user
 #
-# Runtime libraries: libsqlite3 and libcurl (see install-deps.sh / README).
+# Runtime libraries: libsqlite3, libcurl, and zlib (see install-deps.sh / README).
 
 set -euo pipefail
 
@@ -146,6 +146,13 @@ if ! pkg-config --exists sqlite3 2>/dev/null; then
         missing+=("libsqlite3 development files (libsqlite3-dev)")
     fi
 fi
+if ! pkg-config --exists zlib 2>/dev/null; then
+    # Apple SDK and some POSIX installations provide zlib without pkg-config.
+    if [ "$(uname -s)" != "Darwin" ] &&
+       [ ! -f /usr/include/zlib.h ] && [ ! -f /usr/local/include/zlib.h ]; then
+        missing+=("zlib development files (zlib1g-dev)")
+    fi
+fi
 
 if [ "${#missing[@]}" -gt 0 ]; then
     echo "Missing build requirements:" >&2
@@ -238,9 +245,10 @@ fi
 
 # A successful copy is not a successful install if an older executable earlier
 # on PATH still wins. For a real (non-staged) install, refresh the known
-# ~/.local/bin legacy/user location when it exists and verify byte identity of
-# the command that this environment resolves. Unsafe or unmanaged shadows make
-# installation fail with exact corrective paths instead of failing later at use.
+# ~/.local/bin legacy/user location when it exists, synchronize the immutable
+# share tree used beside that copy, and verify byte identity of the command that
+# this environment resolves. Unsafe or unmanaged shadows make installation fail
+# with exact corrective paths instead of failing later at use.
 if [ -z "${DESTDIR}" ]; then
     "${SCRIPT_DIR}/verify-install-path.sh" "${installed_bin}" "${PREFIX}"
 fi

@@ -80,7 +80,7 @@ Notes:
 
 CI (`.github/workflows/ci.yml`): `workflow_dispatch` only (explicitly disabled on push to avoid
 failure emails), `ubuntu-latest`, installs `build-essential pkg-config libcurl4-openssl-dev
-libsqlite3-dev python3 valgrind`, then `make`, `make test-full`, `make test-leak`. No macOS/BSD
+libsqlite3-dev zlib1g-dev python3 valgrind`, then `make`, `make test-full`, `make test-leak`. No macOS/BSD
 jobs despite the portability goal; no sanitizer job.
 
 ---

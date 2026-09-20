@@ -1,6 +1,10 @@
 # Getting started
 
-Ainiux builds as a C++17 terminal application with libcurl and SQLite, plus optional OpenSSL for control-server TLS. Ubuntu x86-64 and ARM64 are the primary tested baseline. Native Windows 10 1903+/Windows 11 x64 builds use GNU Make in MSYS2 UCRT64. Apple Silicon source builds support macOS 15 or newer; other POSIX-like systems are targeted where practical but are not guaranteed.
+Ainiux builds as a C++17 terminal application with libcurl, SQLite, and zlib,
+plus optional OpenSSL for control-server TLS. Ubuntu x86-64 and ARM64 are the
+primary tested baseline. Native Windows 10 1903+/Windows 11 x64 builds use GNU
+Make in MSYS2 UCRT64. Apple Silicon source builds support macOS 15 or newer;
+other POSIX-like systems are targeted where practical but are not guaranteed.
 
 ## Install on Ubuntu or Debian
 
@@ -29,10 +33,13 @@ installation; user configuration under `~/.config/ainiux/` is left untouched.
 For non-staged installs, the script verifies the actual `ainiux` executable
 selected by `PATH`, using byte identity rather than only the release version. If
 an existing regular writable `~/.local/bin/ainiux` would shadow a newer install
-under `/usr/local` or another prefix, that existing copy is atomically refreshed;
-the installer does not create a second user-local copy. A symlink, non-regular
-path, unwritable user-local copy, or different executable from another earlier
-`PATH` directory stops installation and reports both paths. After manually
+under `/usr/local` or another prefix, that existing copy is atomically refreshed.
+Its adjacent immutable defaults under `~/.local/share/ainiux/` are synchronized
+from the new prefix at the same time so the copied executable cannot load stale
+model metadata or prompts; unrelated files in that directory are retained. The
+installer does not create a second user-local executable. A symlink, non-regular
+path, unwritable user-local copy/share file, or different executable from another
+earlier `PATH` directory stops installation and reports both paths. After manually
 changing `PATH` or removing another shadow, run `hash -r` in shells that cache
 command locations and rerun the installer.
 
@@ -43,23 +50,28 @@ identify the invoking user's shadowing executable.
 
 ## Build manually
 
-Install a C++17 compiler, Make, `pkg-config`, Git, SQLite, libcurl, and OpenSSL development files:
+Install a C++17 compiler, Make, `pkg-config`, Git, SQLite, libcurl, zlib, and
+OpenSSL development files:
 
 ```sh
 sudo apt update
-sudo apt install -y build-essential pkg-config git libsqlite3-dev libcurl4-openssl-dev libssl-dev
+sudo apt install -y build-essential pkg-config git libsqlite3-dev libcurl4-openssl-dev zlib1g-dev libssl-dev
 make
 ./ainiux --version
 ```
 
 Some Ubuntu releases call the curl runtime package `libcurl4t64`; `scripts/install-deps.sh` detects the available name. `make optimized` uses release-oriented compiler settings. `sudo make install PREFIX=/usr/local` installs the binary and refreshable bundled configuration documents below `/usr/local/share/ainiux/`.
 
-On another POSIX-like system, provide a C++17 compiler plus development headers and link libraries for libcurl and SQLite. OpenSSL is optional: without it the default loopback control server works over plain HTTP, while `--tls-cert` startup is unavailable. Terminal behavior can differ across emulators.
+On another POSIX-like system, provide a C++17 compiler plus development headers
+and link libraries for libcurl, SQLite, and zlib. OpenSSL is optional: without it
+the default loopback control server works over plain HTTP, while `--tls-cert`
+startup is unavailable. Terminal behavior can differ across emulators.
 
 ## Build on Apple Silicon macOS 15+
 
 Install Apple Clang from the Xcode Command Line Tools, then use GNU Make and
-Homebrew's `pkg-config` metadata for curl and SQLite:
+Homebrew's `pkg-config` metadata for curl and SQLite. The macOS SDK supplies
+zlib:
 
 ```sh
 xcode-select --install
@@ -86,6 +98,7 @@ pacman -S --needed base-devel git zip \
   mingw-w64-ucrt-x86_64-toolchain \
   mingw-w64-ucrt-x86_64-curl \
   mingw-w64-ucrt-x86_64-sqlite3 \
+  mingw-w64-ucrt-x86_64-zlib \
   mingw-w64-ucrt-x86_64-openssl \
   mingw-w64-ucrt-x86_64-python
 make

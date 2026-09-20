@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Install Ainiux build and runtime dependencies (Debian/Ubuntu apt).
 #
-# Requires libsqlite3 and libcurl at runtime; OpenSSL enables control-server TLS.
-# Their -dev packages are needed to build. Elevates with sudo when not already root.
+# Requires libsqlite3, libcurl, and zlib at runtime; OpenSSL enables
+# control-server TLS. Their -dev packages are needed to build. Elevates with
+# sudo when not already root.
 #
 # Usage:
 #   ./scripts/install-deps.sh
@@ -28,6 +29,7 @@ Packages:
   build-essential, pkg-config, git
   libsqlite3-0, libsqlite3-dev
   libcurl4t64 or libcurl4 (runtime), libcurl4-openssl-dev
+  zlib1g, zlib1g-dev
   libssl runtime (selected by apt), libssl-dev
 EOF
 }
@@ -53,7 +55,7 @@ done
 
 if ! command -v apt-get >/dev/null 2>&1; then
     echo "install-deps.sh supports Debian/Ubuntu systems with apt-get." >&2
-    echo "Install a C++17 toolchain, pkg-config, libsqlite3, and libcurl yourself," >&2
+    echo "Install a C++17 toolchain, pkg-config, libsqlite3, libcurl, and zlib yourself," >&2
     echo "then build with: make && sudo make install" >&2
     exit 1
 fi
@@ -87,6 +89,8 @@ PACKAGES=(
     libsqlite3-dev
     "${CURL_RT}"
     libcurl4-openssl-dev
+    zlib1g
+    zlib1g-dev
     libssl-dev
 )
 

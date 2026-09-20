@@ -20,6 +20,7 @@ jobs:
             pkg-config \
             libcurl4-openssl-dev \
             libsqlite3-dev \
+            zlib1g-dev \
             python3 \
             valgrind
 
@@ -53,6 +54,7 @@ jobs:
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-python
 
       - name: Build native Windows executable

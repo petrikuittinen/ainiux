@@ -126,7 +126,6 @@ void parse_cmap(const std::string& data, const TableDir& table, std::unordered_m
         const std::uint8_t* startc = endc + segsx2 + 2;
         const std::uint8_t* delta = startc + segsx2;
         const std::uint8_t* range = delta + segsx2;
-        const std::uint8_t* gids = range + segsx2;
         for (std::uint16_t i = 0; i < segs; ++i) {
             const unsigned end = ru16(endc + i * 2);
             const unsigned start = ru16(startc + i * 2);
