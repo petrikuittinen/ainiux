@@ -513,8 +513,14 @@ Error InteractiveSession::model_settings(const std::string& body, std::string& o
         cli::Options options = context_.options;
         error = apply_public_model_target(parsed.value, options);
         if (!error.ok()) return error;
+        const bool target_changed = options.provider != context_.options.provider ||
+                                    options.model != context_.options.model;
         auto built = provider::build_context(options);
         if (!built.error.ok()) return public_context_error(built.error);
+        if (target_changed || (!built.context.options.has_context_tokens &&
+                               built.context.options.context_tokens <= 0)) {
+            provider::apply_context_window_from_catalog(built.context);
+        }
         built.context.routing_session_id = context_.routing_session_id;
         error = controller_->runtime()->update_project_settings(built.context);
         if (!error.ok()) return {error.code, "could not save workspace settings"};
@@ -605,6 +611,7 @@ Error InteractiveSession::set_settings(const std::string& body) {
             options.provider_explicit = true;
             provider::ContextResult built = provider::build_context(options);
             if (!built.error.ok()) return public_context_error(std::move(built.error));
+            provider::apply_context_window_from_catalog(built.context);
             built.context.routing_session_id = context_.routing_session_id;
             error = controller_->runtime()->update_project_settings(built.context);
             if (!error.ok()) return {error.code, safe_error(error)};
@@ -615,6 +622,7 @@ Error InteractiveSession::set_settings(const std::string& body) {
             next.options.model_explicit = true;
             next.options.reasoning = ReasoningSelection::automatic();
             next.options.reasoning_explicit = true;
+            provider::apply_context_window_from_catalog(next);
             error = controller_->runtime()->update_project_settings(next);
             if (!error.ok()) return {error.code, safe_error(error)};
             context_ = std::move(next);
@@ -847,6 +855,10 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     options.image = false;
     provider::ContextResult built = provider::build_context(options);
     if (!built.error.ok()) return {{}, public_context_error(std::move(built.error))};
+    // The constructor publishes the initial session snapshot before asynchronous
+    // model discovery starts. Apply the bundled fallback now so exact catalog
+    // matches such as deepseek-flash expose their context percentage immediately.
+    provider::apply_context_window_from_catalog(built.context);
     built.context.routing_session_id = provider::new_routing_session_id();
 
     std::shared_ptr<InteractiveSession> session;

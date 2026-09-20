@@ -53,6 +53,7 @@ const state = {
   chatStreams: new Map(),
   chatRegenerateQueued: false,
   showThinkingTraces: false,
+  chatWebSearch: false,
   chatMetrics: new Map(),
   sessions: [],
   session: null,
@@ -556,6 +557,15 @@ function formatTokenCount(value, estimated = false) {
   return `${estimated ? "~" : ""}${new Intl.NumberFormat().format(Math.round(count))}`;
 }
 
+function formatCompactTokenCount(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "";
+  const count = value;
+  const compact = (scaled) => scaled.toFixed(1).replace(/\.0$/, "");
+  if (count >= 1000000) return `${compact(count / 1000000)}M`;
+  if (count >= 1000) return `${compact(count / 1000)}k`;
+  return String(Math.round(count));
+}
+
 function formatDuration(value) {
   if (value === null || value === undefined || value === "") return "";
   const milliseconds = Number(value);
@@ -563,7 +573,7 @@ function formatDuration(value) {
   return `${new Intl.NumberFormat().format(Math.round(milliseconds))} ms`;
 }
 
-function metricText(metrics, context = null, activeElapsed = null) {
+function metricText(metrics, context = null, activeElapsed = null, includeContext = true) {
   const source = metrics && typeof metrics === "object" ? metrics : {};
   const pieces = [];
   const used = context && context.used_tokens !== undefined
@@ -572,7 +582,9 @@ function metricText(metrics, context = null, activeElapsed = null) {
     ? context.window_tokens : source.context_window_tokens;
   const usedText = formatTokenCount(used, true);
   const windowText = formatTokenCount(windowTokens);
-  if (usedText) pieces.push(`Context ${usedText}${windowText ? ` / ${windowText}` : ""} tok`);
+  if (includeContext && usedText) {
+    pieces.push(`Context ${usedText}${windowText ? ` / ${windowText}` : ""} tok`);
+  }
   const input = formatTokenCount(source.input_tokens, source.input_tokens_estimated === true);
   const output = formatTokenCount(source.output_tokens, source.output_tokens_estimated === true);
   if (input) pieces.push(`In ${input}`);
@@ -2768,6 +2780,7 @@ async function sendChatMessage(text) {
       settings: sendingThread.settings || {},
       input_ids: inputIds,
       thread_id: threadId,
+      search_query: state.chatWebSearch ? text : "",
     });
     const context = {
       type: "chat",
@@ -2951,7 +2964,39 @@ function renderAgentMetrics() {
     activeElapsed = state.agentClock.baseMs + performance.now() - state.agentClock.startedAt;
     metrics = null;
   }
-  target.textContent = metricText(metrics, state.session.context, activeElapsed);
+  target.textContent = metricText(metrics, null, activeElapsed, false);
+}
+
+function renderAgentContext() {
+  const target = byId("agent-context");
+  const context = state.session && state.session.context;
+  const used = context && typeof context === "object"
+    ? context.used_tokens : Number.NaN;
+  const usedText = formatCompactTokenCount(
+    context && typeof context === "object" ? context.used_tokens : null);
+  if (!Number.isFinite(used) || used < 0 || !usedText) {
+    target.hidden = true;
+    if (target.textContent) target.textContent = "";
+    target.removeAttribute("aria-label");
+    target.removeAttribute("title");
+    return;
+  }
+  const windowTokens = context.window_tokens;
+  let visible = usedText;
+  let accessible = `Estimated context usage: ${usedText} tokens`;
+  const percentValue = (used / windowTokens) * 100;
+  if (typeof windowTokens === "number" && Number.isFinite(windowTokens) &&
+      windowTokens > 0 && Number.isFinite(percentValue)) {
+    const percent = percentValue.toFixed(1).replace(/\.0$/, "");
+    visible += ` (${percent}%)`;
+    accessible += `, ${percent}% of the context window`;
+  }
+  if (target.textContent !== visible) target.textContent = visible;
+  if (target.getAttribute("aria-label") !== accessible) {
+    target.setAttribute("aria-label", accessible);
+  }
+  if (target.title !== accessible) target.title = accessible;
+  target.hidden = false;
 }
 
 function agentEventDisplay(entry, live) {
@@ -3059,6 +3104,7 @@ function applyAgentActivity(sessionId, event, logs) {
 
 function renderAgent() {
   updateSettingsAvailability();
+  renderAgentContext();
   const events = byId("agent-events");
   const followTail = events.classList.contains("empty-state") ||
     events.scrollHeight - events.scrollTop - events.clientHeight <= 40;
@@ -3363,6 +3409,11 @@ function toggleChatThinking() {
   renderChat();
 }
 
+function toggleChatWebSearch() {
+  state.chatWebSearch = !state.chatWebSearch;
+  renderChatToolbar();
+}
+
 function renderChatToolbar() {
   const regenerate = byId("chat-regenerate-button");
   regenerate.disabled = !state.thread || state.thread.read_only === true;
@@ -3372,6 +3423,10 @@ function renderChatToolbar() {
   const thinking = byId("chat-thinking-button");
   thinking.textContent = `Thinking ${state.showThinkingTraces ? "shown" : "hidden"}`;
   thinking.setAttribute("aria-pressed", state.showThinkingTraces ? "true" : "false");
+  const search = byId("chat-web-search-button");
+  search.disabled = !state.thread || state.thread.read_only === true;
+  search.textContent = `Web search ${state.chatWebSearch ? "on" : "off"}`;
+  search.setAttribute("aria-pressed", state.chatWebSearch ? "true" : "false");
 }
 
 async function cycleAgentReasoning() {
@@ -4100,6 +4155,12 @@ function bindEvents() {
       toggleChatThinking();
       return;
     }
+    if (event.altKey && !event.ctrlKey && !event.metaKey && key === "s" &&
+        activePanelId() === "chat-panel") {
+      event.preventDefault();
+      toggleChatWebSearch();
+      return;
+    }
     if (event.key === "Escape") {
       if (modal && modal.id !== "guard-dialog") return;
       if ((chatTurnBusy() || state.chatPendingJobId || (state.session && state.session.turn_id) ||
@@ -4326,6 +4387,7 @@ function bindEvents() {
   byId("chat-regenerate-button").addEventListener("click", () => void regenerateChat());
   byId("chat-cycle-reasoning-button").addEventListener("click", cycleChatReasoning);
   byId("chat-thinking-button").addEventListener("click", toggleChatThinking);
+  byId("chat-web-search-button").addEventListener("click", toggleChatWebSearch);
   byId("refresh-threads-button").addEventListener("click", () => void loadThreads());
   byId("new-thread-form").addEventListener("submit", async (event) => {
     event.preventDefault();

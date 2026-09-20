@@ -161,20 +161,21 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v24.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v31.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v26.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v33.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
               index.body.find("list=\"chat-model-list\"") != std::string::npos &&
               index.body.find("id=\"chat-reasoning\"") != std::string::npos &&
               index.body.find("id=\"agent-reasoning\"") != std::string::npos &&
-              index.body.find("aria-keyshortcuts=\"Alt+P Alt+M Control+R Alt+T Alt+W Escape\"") != std::string::npos &&
+              index.body.find("aria-keyshortcuts=\"Alt+P Alt+M Control+R Alt+T Alt+W Alt+S Escape\"") != std::string::npos &&
               index.body.find("id=\"chat-provider-link\" href=\"#settings-panel\"") != std::string::npos &&
               index.body.find("id=\"agent-model-link\" href=\"#settings-panel\"") != std::string::npos &&
               index.body.find("id=\"chat-regenerate-button\"") != std::string::npos &&
               index.body.find("id=\"chat-cycle-reasoning-button\"") != std::string::npos &&
               index.body.find("id=\"chat-thinking-button\"") != std::string::npos &&
+              index.body.find("id=\"chat-web-search-button\"") != std::string::npos &&
               index.body.find("<kbd>Ctrl+R</kbd>") == std::string::npos &&
               index.body.find("<kbd>Alt+T</kbd>") == std::string::npos &&
               index.body.find("id=\"chat-form\" class=\"composer chat-composer\"") != std::string::npos &&
@@ -211,6 +212,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("id=\"chat-heading\"") == std::string::npos &&
               index.body.find("id=\"chat-metrics\"") != std::string::npos &&
               index.body.find("id=\"agent-metrics\"") != std::string::npos &&
+              index.body.find("id=\"agent-context\"") != std::string::npos &&
               index.body.find("id=\"file-edit-layer\"") != std::string::npos &&
               index.body.find("id=\"file-edit-highlight\"") != std::string::npos &&
               index.body.find("id=\"undo-file-button\"") != std::string::npos &&
@@ -228,7 +230,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v24.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v26.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -243,6 +245,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find("height: 100dvh") != std::string::npos &&
               stylesheet.body.find(".metrics-strip") != std::string::npos &&
               stylesheet.body.find(".agent-toolbar") != std::string::npos &&
+              stylesheet.body.find(".agent-context") != std::string::npos &&
               stylesheet.body.find(".agent-console { height: 100%; max-height: 100%; overflow: hidden; }") != std::string::npos &&
               stylesheet.body.find(".markdown-body") != std::string::npos &&
               stylesheet.body.find(".markdown-table-scroll") != std::string::npos &&
@@ -274,7 +277,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v31.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v33.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -310,6 +313,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("function pruneChatNoticesFrom") != std::string::npos &&
               javascript.body.find("function formatConversionNotice") != std::string::npos &&
               javascript.body.find("function formatTaskComplete") != std::string::npos &&
+              javascript.body.find("function renderAgentContext") != std::string::npos &&
               javascript.body.find("💬 message") != std::string::npos &&
               javascript.body.find("⚠️ warning") != std::string::npos &&
               javascript.body.find("⚠️ error") != std::string::npos &&
@@ -331,6 +335,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("key === \"w\"") != std::string::npos &&
               javascript.body.find("control || event.altKey") != std::string::npos &&
               javascript.body.find("function toggleChatThinking") != std::string::npos &&
+              javascript.body.find("function toggleChatWebSearch") != std::string::npos &&
               javascript.body.find("function handleThemeCommand") != std::string::npos &&
               javascript.body.find("import { renderMarkdown } from \"./highlight-v5.js\"") != std::string::npos &&
               javascript.body.find("languageForPath") != std::string::npos &&
@@ -486,9 +491,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     check(route_request(public_get("/ui/assets/"), config, status).status == 404,
           "WUI route serves only exact embedded assets and never a directory");
-    check(route_request(public_get("/ui/assets/app-v30.js"), config, status).status == 404 &&
-              route_request(public_get("/ui/assets/app-v23.css"), config, status).status == 404,
-          "the previous notice assets are rejected after the inline-notice update");
+    check(route_request(public_get("/ui/assets/app-v32.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v25.css"), config, status).status == 404,
+          "the previous assets are rejected after adding explicit Chat web search");
     check(route_request(public_get("/ui/assets/app-v1.js"), config, status).status == 404,
           "superseded immutable WUI asset URLs are not silently aliased");
     check(route_request(public_get("/ui/assets/app-v2.js"), config, status).status == 404,
@@ -1121,6 +1126,11 @@ void test_terminal_retention_eviction_releases_workers_safely() {
 void test_job_routes_and_sse() {
     cli::Options options;
     options.provider = "none";
+    ModelCapability hosted_search;
+    hosted_search.id = "anthropic-claude";
+    hosted_search.model_regex = "^claude-search-test$";
+    hosted_search.web_search = true;
+    options.model_catalog.models.push_back(std::move(hosted_search));
     JobService jobs(options, ".", 8);
     AuthConfig auth{"controller", {}};
     std::atomic<std::size_t> active{1};
@@ -1137,6 +1147,14 @@ void test_job_routes_and_sse() {
     check(created.status == 202 && existing.status == 200 &&
               existing.body.find("\"existing\":true") != std::string::npos,
           "chat submission accepts reasoning and idempotently reuses a job resource");
+
+    ServiceSubmitResult searched = jobs.submit(
+        "chat",
+        "{\"provider\":\"none\",\"model\":\"claude-search-test\","
+        "\"search_query\":\"current release\","
+        "\"messages\":[{\"role\":\"user\",\"content\":\"What changed?\"}]}", "");
+    check(searched.validation_error.ok() && searched.submission.job != nullptr,
+          "chat jobs accept an explicit bounded web-search query");
 
     ServiceSubmitResult invalid_reasoning = jobs.submit(
         "chat",
@@ -1308,6 +1326,11 @@ void test_interactive_sessions_are_bounded_and_replayable() {
 
     cli::Options options;
     options.provider = "none";
+    ModelCapability deepseek_flash;
+    deepseek_flash.id = "deepseek-v4.1-flash";
+    deepseek_flash.model_regex = "^deepseek-flash$";
+    deepseek_flash.context_window_tokens = 1000000;
+    options.model_catalog.models.push_back(std::move(deepseek_flash));
     SessionHub hub(options, workspace.u8string(), 1);
     AuthConfig auth{"controller", {}};
     std::atomic<std::size_t> active{0};
@@ -1316,7 +1339,8 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     status.max_sessions = 1;
 
     const std::string create_body =
-        "{\"kind\":\"agent\",\"provider\":\"none\",\"reasoning\":\"high\","
+        "{\"kind\":\"agent\",\"provider\":\"none\",\"model\":\"deepseek-flash\","
+        "\"reasoning\":\"high\","
         "\"permission_mode\":\"confirm\",\"task_mode\":\"act\"}";
     Response created = route_request(session_request("POST", "/ainiux/v1/sessions/agent", create_body),
                                      auth, status);
@@ -1325,6 +1349,9 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     const json::Value* id_value = session_value == nullptr ? nullptr : session_value->get("id");
     check(created.status == 202 && id_value != nullptr && id_value->is_string(),
           "interactive agent session creation returns an opaque session ID");
+    check(created.body.find("\"model\":\"deepseek-flash\"") != std::string::npos &&
+              created.body.find("\"window_tokens\":1000000") != std::string::npos,
+          "initial DeepSeek Flash session snapshots apply the 1M catalog context window");
     if (id_value == nullptr || !id_value->is_string()) {
         hub.shutdown();
         fs::remove_all(workspace, cleanup_error);
@@ -1376,6 +1403,24 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     check(model_setting.status == 200 &&
               model_setting.body.find("\"model\":\"local-model\"") != std::string::npos,
           "agent model changes update the active workspace snapshot");
+    Response workspace_configuration = route_request(session_request(
+        "GET", "/ainiux/v1/workspace/settings", ""), auth, status);
+    const json::ParseResult workspace_json = json::parse(workspace_configuration.body);
+    const json::Value* workspace_revision = workspace_json.value.get("revision");
+    if (workspace_revision != nullptr && workspace_revision->is_string()) {
+        const std::string deepseek_patch = "{\"revision\":" +
+            json::quote(workspace_revision->string) + ",\"model\":\"deepseek-flash\"}";
+        Response deepseek_setting = route_request(session_request(
+            "POST", "/ainiux/v1/workspace/settings", deepseek_patch), auth, status);
+        check(deepseek_setting.status == 200 &&
+                  session->snapshot_json().find("\"model\":\"deepseek-flash\"") !=
+                      std::string::npos &&
+                  session->snapshot_json().find("\"window_tokens\":1000000") !=
+                      std::string::npos,
+              "workspace model changes apply catalog context windows to the active session");
+    } else {
+        check(false, "active workspace settings expose a revision for model changes");
+    }
     Response mixed_settings = route_request(session_request(
         "POST", "/ainiux/v1/sessions/" + id + "/settings",
         "{\"model\":\"one\",\"task_mode\":\"act\"}"), auth, status);

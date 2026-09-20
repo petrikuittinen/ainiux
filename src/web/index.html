@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v24.css">
-  <script type="module" src="/ui/assets/app-v31.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v26.css">
+  <script type="module" src="/ui/assets/app-v33.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -53,13 +53,14 @@
                 <button id="chat-regenerate-button" class="tool-button" type="button" disabled aria-keyshortcuts="Control+R" title="Regenerate · Ctrl+R">Regenerate</button>
                 <button id="chat-cycle-reasoning-button" class="tool-button" type="button" aria-keyshortcuts="Alt+T" title="Change reasoning · Alt+T">Reasoning: auto</button>
                 <button id="chat-thinking-button" class="tool-button" type="button" aria-pressed="false" aria-keyshortcuts="Alt+W" title="Show or hide thinking · Alt+W">Thinking hidden</button>
+                <button id="chat-web-search-button" class="tool-button" type="button" aria-pressed="false" aria-keyshortcuts="Alt+S" title="Search the web for chat messages · Alt+S">Web search off</button>
               </div>
             </div>
             <div id="chat-messages" class="message-list empty-state" aria-live="polite">Choose or create a thread.</div>
             <form id="chat-form" class="composer chat-composer">
               <div id="chat-attach-list" class="chat-attach-list" aria-live="polite"></div>
               <label class="sr-only" for="chat-input">Message</label>
-              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" disabled aria-keyshortcuts="Alt+P Alt+M Control+R Alt+T Alt+W Escape"></textarea>
+              <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" disabled aria-keyshortcuts="Alt+P Alt+M Control+R Alt+T Alt+W Alt+S Escape"></textarea>
               <input id="chat-attach-files" type="file" accept="image/png,image/jpeg,image/gif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/markdown,text/plain,text/html,text/csv,application/json,.md,.markdown,.txt,.html,.htm,.pdf,.docx,.xlsx,.pptx,.csv,.json,.png,.jpg,.jpeg,.gif" multiple hidden>
               <button id="chat-attach-button" class="ghost" type="button" disabled title="Attach files">Attach</button>
               <div id="chat-model-controls" hidden>
@@ -98,12 +99,14 @@
             <label>Model <input id="agent-model" list="agent-model-list" maxlength="512" autocomplete="off"><datalist id="agent-model-list"></datalist><small id="agent-model-status" class="field-hint" aria-live="polite"></small></label>
           </div>
           <div class="agent-toolbar">
-            <div class="model-identity" aria-label="Agent model settings"><a id="agent-provider-link" href="#settings-panel">Provider: —</a><a id="agent-model-link" href="#settings-panel">Model: —</a></div>
+            <div class="model-identity" aria-label="Agent model settings"><a id="agent-provider-link" href="#settings-panel">Provider: —</a><a id="agent-model-link" href="#settings-panel">Model: —</a><span id="agent-context" class="agent-context" role="status" aria-live="polite" hidden></span></div>
             <select id="agent-reasoning" hidden aria-hidden="true"><option value="">Auto</option></select>
-            <button id="agent-cycle-reasoning-button" class="tool-button" type="button" aria-keyshortcuts="Alt+T" title="Change reasoning · Alt+T">Reasoning: auto</button>
-            <label>Mode <select id="agent-task-mode"><option value="act">Act</option><option value="plan">Plan</option></select></label>
-            <label>Permissions <select id="agent-permission"><option value="smart">Smart</option><option value="confirm">Confirm</option><option value="yolo">Yolo</option></select></label>
-            <button id="cancel-turn-button" class="danger" type="button" hidden>Cancel <kbd>Esc</kbd></button>
+            <div class="agent-controls" aria-label="Agent controls">
+              <button id="agent-cycle-reasoning-button" class="tool-button" type="button" aria-keyshortcuts="Alt+T" title="Change reasoning · Alt+T">Reasoning: auto</button>
+              <label>Mode <select id="agent-task-mode"><option value="act">Act</option><option value="plan">Plan</option></select></label>
+              <label>Permissions <select id="agent-permission"><option value="smart">Smart</option><option value="confirm">Confirm</option><option value="yolo">Yolo</option></select></label>
+              <button id="cancel-turn-button" class="danger" type="button" hidden>Cancel <kbd>Esc</kbd></button>
+            </div>
             <div class="agent-state"><span id="agent-meta" class="muted">Open Agent to initialize this workspace.</span><span id="agent-metrics" class="metrics-strip" aria-live="polite"></span></div>
           </div>
           <div id="agent-events" class="event-list empty-state" aria-live="polite">Open Agent to initialize this workspace.</div>

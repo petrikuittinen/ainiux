@@ -191,8 +191,7 @@ Error choose_default_model(provider::RequestContext& context) {
             context.options.model = models.model_ids.front();
         }
     }
-    if (!context.options.has_context_tokens && context.options.context_tokens <= 0 &&
-        !context.options.model.empty()) {
+    if (!context.options.has_context_tokens && !context.options.model.empty()) {
         if (!listed_models) {
             const Error err = provider::list_models(context, models);
             if (err.ok()) {
@@ -201,6 +200,8 @@ Error choose_default_model(provider::RequestContext& context) {
         }
         if (listed_models) {
             provider::apply_context_window_from_models(context, models);
+        } else {
+            provider::apply_context_window_from_catalog(context);
         }
     }
     if (!context.options.chat_purpose.empty() && !context.options.model.empty()) {

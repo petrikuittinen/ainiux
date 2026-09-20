@@ -3071,6 +3071,23 @@ void apply_context_window_from_models(RequestContext& context,
             return;
         }
     }
+    apply_context_window_from_catalog(context, model_selector);
+}
+
+void apply_context_window_from_catalog(RequestContext& context,
+                                       const std::string& model_selector) {
+    if (context.options.has_context_tokens && context.options.context_tokens > 0) {
+        return;
+    }
+    context.options.context_tokens = 0;
+    std::vector<std::string> selectors;
+    if (!model_selector.empty()) {
+        selectors.push_back(model_selector);
+    }
+    if (!context.options.model.empty() &&
+        (selectors.empty() || selectors.front() != context.options.model)) {
+        selectors.push_back(context.options.model);
+    }
     const std::string api =
         context.api_kind == ApiKind::Responses ? "responses" : "chat";
     for (const std::string& selector : selectors) {
@@ -3102,6 +3119,7 @@ Error resolve_context_window(RequestContext& context, const std::string& model_s
     ModelsResult models;
     const Error err = list_models(context, models);
     if (!err.ok()) {
+        apply_context_window_from_catalog(context, model_selector);
         return ok_error();
     }
     apply_context_window_from_models(context, models, model_selector);

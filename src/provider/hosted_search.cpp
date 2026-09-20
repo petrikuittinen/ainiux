@@ -46,17 +46,26 @@ HostedWebSearchKind kind_for(const ModelCapability& capability,
 // keeps the client web_search function instead of sending {type:web_search}.
 // This does not auto-select the Responses API.
 bool family_requires_responses(const std::string& catalog_id) {
-    return catalog_id == "openai-gpt-5" || catalog_id == "xai-grok-4" ||
-           catalog_id == "deepseek-v4" || catalog_id == "deepseek-v4-flash-vision" ||
-           catalog_id == "deepseek-v4.1-flash";
+    return catalog_id == "openai-gpt-5" || catalog_id == "xai-grok-4";
 }
 
 bool family_requires_responses(const ModelCapability& capability) {
     return family_requires_responses(capability.id);
 }
 
+bool deepseek_native_search_requires_anthropic(const std::string& catalog_id) {
+    return catalog_id == "deepseek-v4" ||
+           catalog_id == "deepseek-v4-flash-vision" ||
+           catalog_id == "deepseek-v4.1-flash";
+}
+
 bool hosted_search_unsupported_on_adapter(const ModelCapability& capability,
                                           ApiKind api_kind) {
+    // DeepSeek exposes native web search through its Anthropic-compatible API.
+    // Its OpenAI Chat schema has no hosted search type and its Responses API
+    // currently ignores built-in tools. Ainiux has no native Anthropic adapter,
+    // so retain the client-side web_search path on both implemented adapters.
+    if (deepseek_native_search_requires_anthropic(capability.id)) return true;
     if (family_requires_responses(capability) && api_kind != ApiKind::Responses)
         return true;
     // Official Gemini OpenAI-compat Chat rejects type=google_search (HTTP 400).

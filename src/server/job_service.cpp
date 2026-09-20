@@ -16,6 +16,7 @@
 #include "platform/filesystem.hpp"
 #include "provider/image.hpp"
 #include "provider/provider.hpp"
+#include "search/search.hpp"
 #include "security/redact.hpp"
 #include "server/metrics.hpp"
 #include "server/image_catalog_api.hpp"
@@ -296,6 +297,20 @@ JobOutcome JobService::run_chat_job(cli::Options options,
     if (!built.error.ok()) return {public_operation_error(built.error, {options.key}), {}};
     Error model_error = app::choose_default_model(built.context);
     if (!model_error.ok()) return {public_operation_error(model_error, {built.context.api_key}), {}};
+    if (!options.search_query.empty() &&
+        !provider::hosted_web_search_enabled(built.context)) {
+        search::SearchResponse search_response;
+        Error search_error = search::search(options.search_query,
+                                            search::options_for(options),
+                                            search_response,
+                                            cancellation);
+        if (!search_error.ok()) {
+            return {public_operation_error(search_error, {built.context.api_key}), {}};
+        }
+        provider::Message search_context{
+            "user", search::format_context_message(options.search_query, search_response)};
+        messages.insert(messages.end() - 1, std::move(search_context));
+    }
     app::operation::ChatResult result = app::operation::run_chat(
         built.context, {messages}, cancellation, std::move(events));
     if (!result.error.ok()) return {public_operation_error(result.error, {built.context.api_key}), {}};
@@ -534,8 +549,14 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
     if (operation == "chat") {
         error = reject_unknown(parsed.value,
                                {"provider", "model", "api", "reasoning", "messages", "settings",
-                                "input_ids", "thread_id"});
+                                "input_ids", "thread_id", "search_query"});
         if (!error.ok()) return {{}, error};
+        error = optional_string(parsed.value, "search_query", options.search_query, 4096U);
+        if (!error.ok()) return {{}, error};
+        options.search_query = ascii_trim(options.search_query);
+        // Browser/API chat search is request-explicit. Do not silently attach a
+        // catalog hosted-search tool when the caller left search_query absent.
+        if (options.search_query.empty()) options.builtin_web_search = false;
         long long thread_id = 0;
         if (const json::Value* thread = parsed.value.get("thread_id")) {
             if (thread->type != json::Value::Type::Number || thread->number <= 0.0 ||

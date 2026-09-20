@@ -270,6 +270,8 @@ double tokens_per_second(const ChatResult& result, bool stream);
 long long reported_total_tokens(const ChatResult& result);
 long long model_context_window_tokens(const ModelInfo& model);
 long long context_window_for_model(const ModelsResult& models, const std::string& model_selector);
+void apply_context_window_from_catalog(RequestContext& context,
+                                       const std::string& model_selector = "");
 void apply_context_window_from_models(RequestContext& context,
                                       const ModelsResult& models,
                                       const std::string& model_selector = "");

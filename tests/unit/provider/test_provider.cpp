@@ -925,6 +925,11 @@ void test_model_context_window_tokens() {
     check(context.options.context_tokens == 1000000,
           "catalog context window fills missing DeepSeek /models metadata");
 
+    context.options.context_tokens = 0;
+    ainiux::provider::apply_context_window_from_catalog(context);
+    check(context.options.context_tokens == 1000000,
+          "catalog context window does not require a successful /models response");
+
     sparse_models.models.front().attributes["context_length"] = "750000";
     ainiux::provider::apply_context_window_from_models(context, sparse_models);
     check(context.options.context_tokens == 750000,
@@ -2401,8 +2406,8 @@ void test_hosted_web_search_serialization() {
     context.api_kind = ainiux::provider::ApiKind::Responses;
     request = serialized_request_json(context);
     tools = field(request, "tools");
-    check(has_hosted_web_search_type(tools),
-          "DeepSeek V4 Flash Vision Responses still attaches hosted web_search");
+    check(!has_hosted_web_search_type(tools),
+          "DeepSeek Responses keeps client search because built-in tools are ignored");
 
     context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
 

@@ -55,9 +55,10 @@ provides:
 - provider model suggestions for chat, run/plan, thread creation, and the
   workspace agent, with manual model entry retained as a fallback;
 - focused run/plan job progress, replay/reconnect, and cancellation;
-- one human-facing workspace Agent with inline provider, model, reasoning,
-  Act/Plan, and Confirm/Smart/Yolo controls, live response/reasoning/tool
-  activity, correlated turn cancellation, and Guard review/allow/deny;
+- one human-facing workspace Agent with inline provider and model, compact
+  estimated context usage beside the model name, reasoning, Act/Plan, and
+  Confirm/Smart/Yolo controls, live response/reasoning/tool activity,
+  correlated turn cancellation, and Guard review/allow/deny;
 - a dedicated Image tab whose provider/model/size/aspect/quality/format controls
   come from the effective system and user `images.conf`, with dependent choices,
   validated custom dimensions, in-page preview, collision-safe server filename,
@@ -146,6 +147,12 @@ finishes.
 Completed chat and agent turns show compact context, input/output token, elapsed,
 TTFT, cache, and decode-rate measurements when the provider/runtime supplies
 them. A `~` marker identifies estimated token values.
+Beside the Agent model name, the controller shows current estimated context usage
+from the latest session snapshot, such as `500k (50%)`. The window comes from
+provider model metadata when available, with the model catalog as its fallback;
+when neither supplies a window, only the compact estimated token count is shown.
+The lower Agent status strip keeps turn timing and token-throughput details
+without repeating context usage.
 
 ## Model selection and remembered settings
 
@@ -256,11 +263,18 @@ Every completed Agent assistant response has a separate muted `Task complete in
 use minutes and seconds. The same line is reconstructed from project history
 after refresh, session switching, or page reload.
 
-Chat provides Regenerate, Reasoning, and Thinking controls beside the transcript.
+Chat provides Regenerate, Reasoning, Thinking, and a default-off **Web search**
+option beside the transcript. When enabled, each non-empty prompt is also the
+explicit search query. A provider-hosted tool is used where the active adapter
+supports it; otherwise Ainiux inserts results from the configured client search.
+DeepSeek's native search is available only through its Anthropic-compatible API,
+which Ainiux does not currently implement, so `deepseek-flash` uses that client
+fallback on the current OpenAI-compatible Chat and Responses adapters.
 Ctrl+R, Ctrl+T, and Ctrl+W are handled when the browser forwards those events,
 but ordinary browser tabs reserve Ctrl+T and Ctrl+W and may never deliver them
 to a page. Alt+T and Alt+W are therefore provided as keyboard fallbacks, while
-the visible buttons work in every supported browser. Esc interrupts the active
+Alt+S toggles web search and the visible buttons work in every supported browser.
+Esc interrupts the active
 response. Agent provides the same visible reasoning control, Alt+T fallback,
 and Esc interruption.
 

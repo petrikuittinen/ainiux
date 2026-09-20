@@ -24,7 +24,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [];
   let workspace = { provider: "openrouter", model: "workspace-model", revision: "1",
     settings_fields: fields, settings: { temperature: "0.5", reasoning: "low", stream: "on" } };
-  let session = null, assistRequest = null;
+  let session = null, assistRequest = null, delayNextSessionRefresh = false;
   const sessionEventStreams = new Set();
   const agentHistoryMessages = [
     { seq: 1, role: "user", content: "Earlier request", created_at_ms: 1000 },
@@ -35,7 +35,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v31.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v24.css"]) {
+  for (const name of ["app-v33.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v26.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -173,7 +173,13 @@ test("web controller selectors, per-thread saves, workspace settings and history
       }
       if (path.includes("/jobs/")) return send(jobs.get(path.split("/").at(-1)) || {});
       if (path.endsWith("/sessions/agent")) {
-        session = { id: "session-1", status: "ready", task_mode: "plan", permission_mode: "smart", turn_id: null, event_cursor: 0 };
+        session = { id: "session-1", status: "ready", task_mode: "plan",
+          permission_mode: "smart", turn_id: null, event_cursor: 0,
+          context: { used_tokens: 500000, window_tokens: 1000000 },
+          last_turn_metrics: { context_used_tokens: 500000,
+            context_window_tokens: 1000000, input_tokens: 1200, output_tokens: 300,
+            cache_read_tokens: 200, elapsed_ms: 2450, ttft_ms: 310,
+            output_tokens_per_second: 42.5 } };
         return send({ session: { ...session, ...workspace } });
       }
       if (path.endsWith("/sessions")) return send(session ? [{ ...session, ...workspace }] : []);
@@ -190,15 +196,28 @@ test("web controller selectors, per-thread saves, workspace settings and history
           const events = [
             { id: 10, type: "turn_started", turn_id: turnId, data: { text: body.text } },
             { id: 11, type: "turn_completed", turn_id: turnId,
-              data: { content: "Live agent answer", metrics: { elapsed_ms: 4960 } } },
+              data: { content: "Live agent answer", metrics: {
+                context_used_tokens: 600000, context_window_tokens: 1000000,
+                input_tokens: 1400, output_tokens: 350, cache_read_tokens: 250,
+                elapsed_ms: 4960, ttft_ms: 320, output_tokens_per_second: 43.8,
+              } } },
           ];
+          // Keep the event-backed completion card visible long enough to inspect
+          // before the controller reconciles it with canonical session history.
+          delayNextSessionRefresh = true;
           for (const stream of sessionEventStreams) {
             for (const event of events) stream.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
           }
         }, 20);
         return send({ turn_id: turnId });
       }
-      if (path.includes("/sessions/")) return send({ ...session, ...workspace, reasoning: workspace.settings.reasoning });
+      if (path.includes("/sessions/")) {
+        if (delayNextSessionRefresh) {
+          delayNextSessionRefresh = false;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        return send({ ...session, ...workspace, reasoning: workspace.settings.reasoning });
+      }
       if (path.endsWith("/dired")) return send({ path: ".", revision: "r1", entries: [
         { type: "file", name: "notes.txt", path: "notes.txt", size: 5, revision: "r1" },
         { type: "file", name: "sample.js", path: "sample.js", size: 27, revision: "r1" },
@@ -262,6 +281,10 @@ test("web controller selectors, per-thread saves, workspace settings and history
         notices: [...document.querySelectorAll(".browser-notice, .inline-notice-area:not([hidden])")]
           .map((node) => node.textContent),
         authOpen: document.querySelector("#auth-dialog")?.open || false,
+        agentText: document.querySelector("#agent-events")?.textContent,
+        agentMetrics: [...document.querySelectorAll("#agent-events .metrics-strip")]
+          .map((node) => node.textContent),
+        agentTurns: ${JSON.stringify(agentTurns)},
         token: localStorage.getItem("ainiux.controller.token.v1"),
         scripts: [...document.scripts].map((node) => node.src),
       })`);
@@ -282,18 +305,35 @@ test("web controller selectors, per-thread saves, workspace settings and history
       const result = await evaluate(`(() => {
         const panel = document.querySelector("#${panel}-panel");
         const toolbar = panel.querySelector("${panel === "chat" ? ".conversation-bar" : ".agent-toolbar"}");
-        const controls = [...toolbar.querySelectorAll("a, select, button")].filter(node => node.getClientRects().length);
+        const controls = [...toolbar.querySelectorAll("a, select, button, #agent-context:not([hidden])")]
+          .filter(node => node.getClientRects().length);
         const rectangles = controls.map(node => node.getBoundingClientRect());
         const within = rectangles.every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight);
         const overlaps = rectangles.some((a, i) => rectangles.slice(i + 1).some(b => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom));
+        const context = toolbar.querySelector("#agent-context:not([hidden])");
+        const modelLink = toolbar.querySelector("#agent-model-link");
+        const contextRect = context?.getBoundingClientRect();
+        const modelRect = modelLink?.getBoundingClientRect();
         return { within, overlaps, height: toolbar.getBoundingClientRect().height,
+          noHorizontalOverflow: toolbar.scrollWidth <= toolbar.clientWidth &&
+            document.documentElement.scrollWidth <= innerWidth,
+          contextBesideModel: !context || (context.parentElement.classList.contains("model-identity") &&
+            context.previousElementSibling === modelLink),
+          contextAlignedWithModel: !context || !modelLink ||
+            Math.abs((contextRect.top + contextRect.bottom) / 2 -
+              (modelRect.top + modelRect.bottom) / 2) <= 4,
           inputCount: toolbar.querySelectorAll("input").length,
-          selectBottoms: controls.filter(node => node.tagName === "SELECT" || node.tagName === "BUTTON").map(node => node.getBoundingClientRect().bottom),
+          selectBottoms: controls.filter(node => node.tagName === "SELECT" ||
+            node.tagName === "BUTTON")
+            .map(node => node.getBoundingClientRect().bottom),
           hasCatalogNoise: /models|list unavailable|Choose…|Model settings/.test(toolbar.innerText),
           visibleKbd: [...toolbar.querySelectorAll("kbd")].filter((node) => node.getClientRects().length).length,
           selects: controls.filter(node => node.tagName === "SELECT").map(node => node.id) };
       })()`);
       assert.equal(result.within, true); assert.equal(result.overlaps, false);
+      assert.equal(result.noHorizontalOverflow, true);
+      assert.equal(result.contextBesideModel, true);
+      assert.equal(result.contextAlignedWithModel, true);
       assert.equal(result.inputCount, 0); assert.equal(result.hasCatalogNoise, false);
       assert.equal(result.visibleKbd, 0);
       if (compact && !mobile && result.selectBottoms.length > 1) {
@@ -308,6 +348,8 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
     await command("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/ui/` }, sid);
     await wait('document.querySelectorAll("#thread-list .list-button").length === 3 && document.querySelector("#chat-provider").value === "openrouter"');
+    assert.equal(await evaluate('document.querySelector("#agent-context").hidden && document.querySelector("#agent-context").textContent === ""'), true,
+      "context indicator stays hidden before an Agent session exists");
     assert.deepEqual(createdProviders, ["openrouter"]);
     assert.equal(await evaluate('document.querySelector(".model-picker")?.open || false'), false);
     assert.equal(await evaluate('document.querySelector("#chat-provider").disabled'), false);
@@ -395,6 +437,21 @@ test("web controller selectors, per-thread saves, workspace settings and history
       "thread reload preserves notice chronology before the associated prompt");
     assert.equal(await evaluate('document.querySelector("#chat-messages").textContent.includes("Chat response saved to the thread")'), false,
       "successful chat persistence is silent");
+    await click("#chat-web-search-button");
+    assert.deepEqual(await evaluate(`(() => { const button = document.querySelector("#chat-web-search-button");
+      return { text: button.textContent, pressed: button.getAttribute("aria-pressed") }; })()`),
+      { text: "Web search on", pressed: "true" });
+    const jobsBeforeSearch = chatJobs.length;
+    await evaluate(`{ const input = document.querySelector("#chat-input");
+      input.value = "Latest DeepSeek release"; document.querySelector("#chat-form").requestSubmit(); }`);
+    for (let i = 0; i < 100 && chatJobs.length === jobsBeforeSearch; ++i) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(chatJobs.at(-1).search_query, "Latest DeepSeek release",
+      "enabled web search sends the current prompt as an explicit search query");
+    await wait('!document.querySelector("#chat-stream-message")');
+    await click("#chat-web-search-button");
+    assert.equal(await evaluate('document.querySelector("#chat-web-search-button").getAttribute("aria-pressed")'), "false");
     await click("#chat-thinking-button");
     await click("#chat-thinking-button");
     await click("#chat-cycle-reasoning-button");
@@ -541,6 +598,38 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.equal(await evaluate('document.querySelector("#agent-events").textContent.includes("Task complete in 21.34 seconds.")'), true,
       "reloaded agent history shows TUI-style task timing below the assistant response");
     assert.equal(await evaluate('document.querySelector("#agent-model").value'), "workspace-model");
+    assert.deepEqual(await evaluate(`(() => { const node = document.querySelector("#agent-context");
+      return { text: node.textContent, hidden: node.hidden, label: node.getAttribute("aria-label") }; })()`),
+      { text: "500k (50%)", hidden: false,
+        label: "Estimated context usage: 500k tokens, 50% of the context window" });
+    assert.equal(await evaluate('document.querySelector("#agent-meta").textContent'), "ready");
+    const agentMetrics = await evaluate('document.querySelector("#agent-metrics").textContent');
+    assert.equal(agentMetrics.includes("Context"), false,
+      "the lower Agent metrics strip does not duplicate context usage");
+    for (const value of ["In 1,200", "Out 300", "Cache 200", "Elapsed 2,450 ms",
+      "TTFT 310 ms", "42.5 tok/s"]) assert.ok(agentMetrics.includes(value), agentMetrics);
+
+    const refreshAgentContext = async (context, condition) => {
+      if (context === undefined) delete session.context;
+      else session.context = context;
+      await evaluate(`{ const select = document.querySelector("#agent-permission");
+        select.dispatchEvent(new Event("change", { bubbles: true })); }`);
+      await wait(`!document.querySelector("#agent-permission").disabled && (${condition})`);
+    };
+    await refreshAgentContext({ used_tokens: 333333, window_tokens: 1000000 },
+      'document.querySelector("#agent-context").textContent === "333.3k (33.3%)"');
+    await refreshAgentContext({ used_tokens: 1250000, window_tokens: 2000000 },
+      'document.querySelector("#agent-context").textContent === "1.3M (62.5%)"');
+    await refreshAgentContext({ used_tokens: 125000, window_tokens: null },
+      'document.querySelector("#agent-context").textContent === "125k"');
+    await refreshAgentContext({ used_tokens: -1, window_tokens: 1000000 },
+      'document.querySelector("#agent-context").hidden');
+    await refreshAgentContext({},
+      'document.querySelector("#agent-context").hidden');
+    await refreshAgentContext(undefined,
+      'document.querySelector("#agent-context").hidden');
+    await refreshAgentContext({ used_tokens: 500000, window_tokens: 1000000 },
+      'document.querySelector("#agent-context").textContent === "500k (50%)"');
     await checkToolbar("agent"); await screenshot("agent-desktop");
     await evaluate('{ const input = document.querySelector("#agent-turn-input"); input.value = "line"; input.focus(); input.setSelectionRange(4, 4); }');
     await key("Enter", 8, "Enter");
@@ -716,6 +805,12 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await wait('document.querySelector("#agent-events").textContent.includes("Live agent answer") && document.querySelector("#agent-events").textContent.includes("Task complete in 4.96 seconds.")');
     assert.deepEqual(agentTurns, [{ text: "Submit with Enter" }],
       "unmodified Enter submits one Agent instruction and live completion shows its timing");
+    const completedMetrics = await evaluate(`[...document.querySelectorAll("#agent-events .event-card")]
+      .find(node => node.textContent.includes("Live agent answer"))
+      ?.querySelector(".metrics-strip:not(.task-complete)")?.textContent || ""`);
+    for (const value of ["Context ~600,000 / 1,000,000 tok", "In 1,400", "Out 350",
+      "Cache 250", "Elapsed 4,960 ms", "TTFT 320 ms", "43.8 tok/s"])
+      assert.ok(completedMetrics.includes(value), completedMetrics);
 
     await click('[data-panel="chat-panel"]');
     await command("Network.enable", {}, sid);

@@ -854,6 +854,7 @@ void test_config_reads_models_template() {
         ainiux::config::resolve_model_capability(
             options.model_catalog, "openrouter", "chat", "deepseek/deepseek-flash");
     check(deepseek_flash != nullptr && deepseek_flash->id == "deepseek-v4.1-flash" &&
+              deepseek_flash->context_window_tokens == 1000000 &&
               deepseek_flash->images.has_value() && *deepseek_flash->images &&
               deepseek_flash->reasoning_protocol == ainiux::ReasoningProtocol::DeepSeek &&
               deepseek_v4_flash != nullptr && deepseek_flash != deepseek_v4_flash,

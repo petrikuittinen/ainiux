@@ -384,7 +384,7 @@ Events use monotonically increasing integer IDs and this stable envelope:
 Submit a JSON object to one of these routes:
 
 ```text
-POST /ainiux/v1/jobs/chat   {provider?, model?, api?, reasoning?, thread_id?, messages:[{role,content,input_ids?}], input_ids?:[]}
+POST /ainiux/v1/jobs/chat   {provider?, model?, api?, reasoning?, search_query?, thread_id?, messages:[{role,content,input_ids?}], input_ids?:[]}
 POST /ainiux/v1/jobs/models {provider?, api?}
 POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
 POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}
@@ -408,7 +408,10 @@ and returns `{"provider":"...","models":["..."],"reasoning_options":[...]}`.
 Catalog-matched models include their model-aware reasoning values and labels in
 `reasoning_options`; unmatched models are omitted from that metadata. The chat
 job's optional `reasoning` field accepts the same `auto|off|VALUE|TOKENS` syntax
-as the CLI. Model requests use the same
+as the CLI. A non-empty `search_query` explicitly enables web search for that
+request. The matched provider-hosted tool is used when the active API adapter
+supports it; otherwise the server runs the configured bounded client search and
+inserts its results immediately before the final prompt. Model requests use the same
 provider concurrency limit, cancellation, authentication, error redaction,
 retention, and SSE lifecycle as other jobs. Clients should keep manual model
 entry available when a provider does not advertise model listing or its
