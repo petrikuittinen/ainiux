@@ -226,9 +226,35 @@ Agent view, the activity transcript owns the vertical scrollbar while the
 instruction composer remains anchored at the bottom of the viewport. New
 activity follows the bottom only while the reader is already near it, so
 scrolling back through a running transcript does not immediately jump down. In the
-chat composer, Enter sends the message. Shift+Enter and Alt+Enter insert a
-newline; Ctrl+Enter and Command+Enter remain multiline editing input and do not
-submit.
+Chat and Agent composers use the same browser keys: unmodified Enter submits
+unless an IME composition is active. Shift+Enter and Alt+Enter insert a newline;
+Ctrl+Enter and Command+Enter remain multiline editing input and do not submit.
+
+Transient browser notices stay in flow instead of floating over controls. Chat
+notices are interleaved at their actual boundary between durable messages and
+kept with their originating thread; Agent notices stay with their originating
+session while the page remains open. Converted PDF, DOCX, XLSX, PPTX, and HTML
+attachments add one conversion notice per file immediately before their user
+prompt, in selection order, followed by any conversion warnings. Plain text,
+Markdown, CSV, JSON, and image attachments use attachment chips without a
+success notice. Deleting or regenerating a transcript tail also removes its
+transient notices.
+
+The only routine success notices in Chat or Agent are document conversion and
+a restored connection. Download, save, cancellation, regeneration, reasoning,
+thinking, settings, Guard-decision, theme, and initial-connection state changes
+are silent; warnings and failures remain visible. Browser notices are
+display-only, capped at the newest 150 notices per thread or session, and never
+enter server history, model context, exports, message counts, or browser
+storage. Jobs, Image, Video, Workspace, and Settings retain their in-flow notice
+areas. A successful reconnect clears stale notices before reporting the restored
+connection; reload and sign-out clear them as well. Authentication, Guard,
+confirmation, conflict, and model-selection choices remain in dialogs.
+
+Every completed Agent assistant response has a separate muted `Task complete in
+…` line. Durations under one minute use two decimal seconds; longer durations
+use minutes and seconds. The same line is reconstructed from project history
+after refresh, session switching, or page reload.
 
 Chat provides Regenerate, Reasoning, and Thinking controls beside the transcript.
 Ctrl+R, Ctrl+T, and Ctrl+W are handled when the browser forwards those events,

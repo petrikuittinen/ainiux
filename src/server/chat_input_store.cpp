@@ -55,10 +55,12 @@ Error ChatInputStore::add(std::string mime_type,
     if (bytes.size() > Limits::upload_body_bytes) {
         return {ErrorCode::BadArgs, "chat upload exceeds the 20 MiB per-file limit"};
     }
+    const std::size_t source_byte_size = bytes.size();
     filename = basename_of(std::move(filename));
     const std::string media = media_type_of(mime_type);
     ChatInputKind kind = ChatInputKind::Text;
     bool converted = false;
+    long long conversion_elapsed_us = 0;
     std::string stored_mime = media;
     std::string payload = std::move(bytes);
     std::vector<std::string> warnings;
@@ -77,8 +79,11 @@ Error ChatInputStore::add(std::string mime_type,
         pdf::Options pdf_options;
         pdf_options.max_bytes = payload.size();
         std::string markdown;
+        const auto conversion_started = std::chrono::steady_clock::now();
         Error error = pdf::to_markdown_bytes(payload, pdf_options, markdown);
         if (!error.ok()) return error;
+        conversion_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - conversion_started).count();
         payload = std::move(markdown);
         stored_mime = "text/markdown";
         converted = true;
@@ -87,8 +92,11 @@ Error ChatInputStore::add(std::string mime_type,
         docx_options.max_bytes = Limits::upload_body_bytes;
         docx::Diagnostics diagnostics;
         std::string markdown;
+        const auto conversion_started = std::chrono::steady_clock::now();
         Error error = docx::to_markdown_bytes(payload, docx_options, markdown, &diagnostics);
         if (!error.ok()) return error;
+        conversion_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - conversion_started).count();
         payload = std::move(markdown);
         stored_mime = "text/markdown";
         converted = true;
@@ -99,8 +107,11 @@ Error ChatInputStore::add(std::string mime_type,
         xlsx_options.max_bytes = Limits::upload_body_bytes;
         xlsx::Diagnostics diagnostics;
         std::string markdown;
+        const auto conversion_started = std::chrono::steady_clock::now();
         Error error = xlsx::to_markdown_bytes(payload, xlsx_options, markdown, &diagnostics);
         if (!error.ok()) return error;
+        conversion_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - conversion_started).count();
         payload = std::move(markdown);
         stored_mime = "text/markdown";
         converted = true;
@@ -111,13 +122,17 @@ Error ChatInputStore::add(std::string mime_type,
         pptx_options.max_bytes = Limits::upload_body_bytes;
         pptx::Diagnostics diagnostics;
         std::string markdown;
+        const auto conversion_started = std::chrono::steady_clock::now();
         Error error = pptx::to_markdown_bytes(payload, pptx_options, markdown, &diagnostics);
         if (!error.ok()) return error;
+        conversion_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - conversion_started).count();
         payload = std::move(markdown);
         stored_mime = "text/markdown";
         converted = true;
         warnings = std::move(diagnostics.messages);
     } else if (media == "text/html" || (named && type.kind == input::Kind::Html)) {
+        const auto conversion_started = std::chrono::steady_clock::now();
         try {
             payload = html::convert(payload, html::OutputFormat::Markdown);
         } catch (const std::bad_alloc&) {
@@ -125,6 +140,8 @@ Error ChatInputStore::add(std::string mime_type,
         } catch (const std::length_error&) {
             return {ErrorCode::UnsupportedFeature, "converted HTML is too large to attach"};
         }
+        conversion_elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - conversion_started).count();
         stored_mime = "text/markdown";
         converted = true;
     } else if (media == "text/plain" || media == "text/markdown" ||
@@ -182,7 +199,8 @@ Error ChatInputStore::add(std::string mime_type,
         }
         entries_.emplace(id, Entry{kind, stored_mime, filename, converted, warnings, body, expires});
     }
-    output = {id, kind, stored_mime, filename, converted, std::move(warnings), std::move(body), expires};
+    output = {id, kind, stored_mime, filename, converted, source_byte_size,
+              conversion_elapsed_us, std::move(warnings), std::move(body), expires};
     return ok_error();
 }
 
@@ -201,7 +219,7 @@ Error ChatInputStore::resolve(const std::vector<std::string>& ids,
             return {ErrorCode::FileRead, "uploaded chat input is missing or expired: " + id};
         }
         output.push_back({id, found->second.kind, found->second.mime_type, found->second.display_name,
-                          found->second.converted, found->second.warnings, found->second.bytes,
+                          found->second.converted, 0, 0, found->second.warnings, found->second.bytes,
                           found->second.expires_at});
     }
     return ok_error();

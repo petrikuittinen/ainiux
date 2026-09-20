@@ -240,7 +240,8 @@ Roles are `system`, `user`, or `assistant`. Optional bounded `provider` and
 transaction, so a resumed browser or TUI chat keeps its effective routing.
 This persistence operation does not
 start a model request; use the asynchronous chat job route for provider work.
-Successful appends return the new revision and message count. Existing TUI
+Successful appends return the new revision, message count, and `first_ordinal`
+for the first row in that append. Existing TUI
 saves advance the same SQLite revision, so a stale API append returns
 `revision_conflict` (409) with `details.current_revision`; no stale messages are
 written. Read-only threads return `thread_read_only` (409).
@@ -287,8 +288,11 @@ Browser chat uploads use a raw body on `POST /ainiux/v1/chat/inputs` with
 An optional `X-Ainiux-Filename`
 (or `Content-Disposition` filename) classifies generic types. PDF, DOCX, XLSX, PPTX, and HTML
 are converted to Markdown immediately. CSV and JSON are stored as native text. The response is an opaque `id`, `kind`
-(`image` or `text`), MIME type, display name, converted flag, byte size, expiry,
-and an additive bounded `warnings` array. Office bytes and embedded media are
+(`image` or `text`), MIME type, display name, converted flag, resulting byte size,
+original `source_byte_size`, monotonic `conversion_elapsed_us`, expiry, and an
+additive bounded `warnings` array. Unconverted inputs report zero conversion
+time. These measurements describe only that upload conversion and are not
+persisted. Office bytes and embedded media are
 discarded after conversion and never persisted as chat text. Inputs are
 memory-only, expire after one hour, and can be deleted
 early. Append a user message with `input_ids` so the thread imports images into
@@ -592,8 +596,11 @@ the updated snapshot and emits `settings_changed`. Provider changes use that
 profile's configured API default; the browser does not choose Chat Completions
 or Responses itself.
 
-History returns chronological `messages` (`seq`, `role`, `content`), a `before`
-cursor for older pages, and the active `turn_id` (empty when idle). Omit `before`
+History returns chronological `messages` (`seq`, `role`, `content`, and
+`created_at_ms`). Assistant rows also include `task_elapsed_ms`, derived from
+the latest preceding user row even when that prompt falls before the current
+page. It also returns a `before` cursor for older pages and the active `turn_id`
+(empty when idle). Omit `before`
 for the newest page; an empty page ends pagination. Pages contain at most 100
 rows and 4 MiB of content. Oversized individual rows fail without modifying the
 transcript. Request-only summaries and rows before an explicit context reset

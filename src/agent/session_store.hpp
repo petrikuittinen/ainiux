@@ -111,6 +111,11 @@ class AgentSessionStore {
     Error load_messages(std::vector<AgentMessageRecord>& messages, int limit = 0) const;
     Error load_message_page(std::vector<AgentMessageRecord>& messages, long long before,
                             int limit = 100, long long after = 0) const;
+
+    Error load_latest_user_created_at_before(long long before,
+                                             long long after,
+                                             long long& created_at,
+                                             bool& found) const;
     // Newest transcript row by seq, if any. found is false when the table is empty.
     Error peek_last_message(AgentMessageRecord& message, bool& found) const;
 

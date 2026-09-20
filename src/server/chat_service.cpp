@@ -536,9 +536,12 @@ Error ChatService::append(long long thread_id,
                                    provider_name, model,
                                    current_revision, message_count);
     if (!error.ok()) return safe_store_error(error, "append chat messages");
+    const long long first_ordinal =
+        message_count - static_cast<long long>(messages.size());
     body = "{\"thread\":{\"id\":" + std::to_string(thread_id) +
            ",\"revision\":" + std::to_string(current_revision) +
-           ",\"message_count\":" + std::to_string(message_count);
+           ",\"message_count\":" + std::to_string(message_count) +
+           ",\"first_ordinal\":" + std::to_string(first_ordinal);
     if (provider_name.has_value()) body += ",\"provider\":" + json::quote(*provider_name);
     if (model.has_value()) body += ",\"model\":" + json::quote(*model);
     body += "}}";

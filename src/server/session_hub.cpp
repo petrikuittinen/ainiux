@@ -12,6 +12,7 @@
 #include "agent/approval.hpp"
 #include "agent/project_settings.hpp"
 #include "agent/session_runtime.hpp"
+#include "agent/tool_display.hpp"
 #include "config/model_catalog.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
@@ -463,14 +464,33 @@ Error InteractiveSession::history(long long before, std::string& output) const {
     if (!error.ok()) return {error.code, "invalid project history boundary"};
     error = store.load_message_page(rows, boundary, 100, after);
     if (!error.ok()) return {error.code, "could not read project history (pages are limited to 4 MiB)"};
+    long long preceding_user_ms = 0;
+    if (!rows.empty()) {
+        long long preceding_user_created_at = 0;
+        bool found = false;
+        error = store.load_latest_user_created_at_before(
+            rows.front().seq, after, preceding_user_created_at, found);
+        if (!error.ok()) return {error.code, "could not read the preceding project prompt"};
+        if (found) preceding_user_ms = agent::normalize_timestamp_ms(preceding_user_created_at);
+    }
     output = "{\"turn_id\":" + json::quote(active_turn_id_) + ",\"messages\":[";
     bool first = true;
     for (const auto& row : rows) {
         if (!first) output += ',';
         first = false;
+        const long long created_at_ms = agent::normalize_timestamp_ms(row.created_at);
+        if (row.role == "user") preceding_user_ms = created_at_ms;
         output += "{\"seq\":" + std::to_string(row.seq) +
             ",\"role\":" + json::quote(row.role) +
-            ",\"content\":" + json::quote(redact_secrets(row.content, {context_.api_key})) + "}";
+            ",\"content\":" + json::quote(redact_secrets(row.content, {context_.api_key})) +
+            ",\"created_at_ms\":" + std::to_string(created_at_ms);
+        if (row.role == "assistant") {
+            output += ",\"task_elapsed_ms\":" +
+                (preceding_user_ms > 0
+                     ? std::to_string(std::max(0LL, created_at_ms - preceding_user_ms))
+                     : std::string("null"));
+        }
+        output += "}";
     }
     output += "],\"before\":" + std::to_string(rows.empty() ? 0 : rows.front().seq) + "}";
     return ok_error();

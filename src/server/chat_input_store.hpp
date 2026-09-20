@@ -23,6 +23,8 @@ struct StoredChatInput {
     std::string mime_type;
     std::string display_name;
     bool converted = false;
+    std::size_t source_byte_size = 0;
+    long long conversion_elapsed_us = 0;
     std::vector<std::string> warnings;
     std::shared_ptr<const std::string> bytes;
     std::chrono::system_clock::time_point expires_at;

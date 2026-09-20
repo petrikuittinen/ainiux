@@ -13,6 +13,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -28,6 +29,7 @@
 
 #include "cli/args.hpp"
 #include "agent/project_settings.hpp"
+#include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
 #include "config/config.hpp"
 #include "server/model_settings.hpp"
@@ -159,8 +161,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v23.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v30.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v24.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v31.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -195,6 +197,16 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("id=\"new-thread-button\"") <
                   index.body.find("id=\"thread-list\"") &&
               index.body.find("id=\"confirm-dialog\"") != std::string::npos &&
+              index.body.find("id=\"jobs-notice\"") != std::string::npos &&
+              index.body.find("id=\"image-notice\"") != std::string::npos &&
+              index.body.find("id=\"video-notice\"") != std::string::npos &&
+              index.body.find("id=\"workspace-notice\"") != std::string::npos &&
+              index.body.find("id=\"settings-notice\"") != std::string::npos &&
+              index.body.find("id=\"new-thread-error\"") != std::string::npos &&
+              index.body.find("id=\"mutation-error\"") != std::string::npos &&
+              index.body.find("id=\"assist-error\"") != std::string::npos &&
+              index.body.find("aria-keyshortcuts=\"Enter Shift+Enter Alt+Enter Control+Enter Meta+Enter Alt+P Alt+M Alt+T Escape\"") != std::string::npos &&
+              index.body.find("toast-region") == std::string::npos &&
               index.body.find("<p class=\"eyebrow\">Conversation</p>") == std::string::npos &&
               index.body.find("id=\"chat-heading\"") == std::string::npos &&
               index.body.find("id=\"chat-metrics\"") != std::string::npos &&
@@ -216,7 +228,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v23.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v24.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -241,6 +253,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet.body.find(".event-card.thinking") != std::string::npos &&
               stylesheet.body.find(".event-card.tool") != std::string::npos &&
               stylesheet.body.find(".event-card.notice") != std::string::npos &&
+              stylesheet.body.find(".browser-notice[data-severity=\"message\"]") != std::string::npos &&
+              stylesheet.body.find(".browser-notice[data-severity=\"warning\"]") != std::string::npos &&
+              stylesheet.body.find(".browser-notice[data-severity=\"error\"]") != std::string::npos &&
+              stylesheet.body.find(".inline-notice-area") != std::string::npos &&
+              stylesheet.body.find(".task-complete") != std::string::npos &&
+              stylesheet.body.find(".toast") == std::string::npos &&
               stylesheet.body.find(".file-highlight") != std::string::npos &&
               stylesheet.body.find(".file-edit-layer") != std::string::npos &&
               stylesheet.body.find(".editor-indent-controls") != std::string::npos &&
@@ -256,7 +274,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v30.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v31.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -283,6 +301,29 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("cleanup-empty") != std::string::npos &&
               javascript.body.find("edit-message") != std::string::npos &&
               javascript.body.find("function chatTurnBusy") != std::string::npos &&
+              javascript.body.find("MAX_CONVERSATION_NOTICES = 150") != std::string::npos &&
+              javascript.body.find("function chatNotice") != std::string::npos &&
+              javascript.body.find("function agentNotice") != std::string::npos &&
+              javascript.body.find("function surfaceNotice") != std::string::npos &&
+              javascript.body.find("function clearTransientNotices") != std::string::npos &&
+              javascript.body.find("function appendChatTimeline") != std::string::npos &&
+              javascript.body.find("function pruneChatNoticesFrom") != std::string::npos &&
+              javascript.body.find("function formatConversionNotice") != std::string::npos &&
+              javascript.body.find("function formatTaskComplete") != std::string::npos &&
+              javascript.body.find("💬 message") != std::string::npos &&
+              javascript.body.find("⚠️ warning") != std::string::npos &&
+              javascript.body.find("⚠️ error") != std::string::npos &&
+              javascript.body.find("Chat response saved to the thread") == std::string::npos &&
+              javascript.body.find("Thinking traces shown") == std::string::npos &&
+              javascript.body.find("Thinking traces hidden") == std::string::npos &&
+              javascript.body.find("Chat reasoning:") == std::string::npos &&
+              javascript.body.find("Connected to the Ainiux control server") == std::string::npos &&
+              javascript.body.find("Agent turn cancellation requested") == std::string::npos &&
+              javascript.body.find("Guard decision sent:") == std::string::npos &&
+              javascript.body.find("Regenerating the previous answer") == std::string::npos &&
+              javascript.body.find("Cancellation requested for") == std::string::npos &&
+              javascript.body.find("toast(") == std::string::npos &&
+              javascript.body.find("toast-region") == std::string::npos &&
               javascript.body.find("async function createNewChat") != std::string::npos &&
               javascript.body.find("async function cancelActiveAgentTurn") != std::string::npos &&
               javascript.body.find("key === \"r\"") != std::string::npos &&
@@ -445,6 +486,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     check(route_request(public_get("/ui/assets/"), config, status).status == 404,
           "WUI route serves only exact embedded assets and never a directory");
+    check(route_request(public_get("/ui/assets/app-v30.js"), config, status).status == 404 &&
+              route_request(public_get("/ui/assets/app-v23.css"), config, status).status == 404,
+          "the previous notice assets are rejected after the inline-notice update");
     check(route_request(public_get("/ui/assets/app-v1.js"), config, status).status == 404,
           "superseded immutable WUI asset URLs are not silently aliased");
     check(route_request(public_get("/ui/assets/app-v2.js"), config, status).status == 404,
@@ -683,8 +727,12 @@ void test_chat_input_uploads() {
     Response created = route_request(text, auth, status);
     check(created.status == 201 && created.body.find("\"kind\":\"text\"") != std::string::npos &&
               created.body.find("\"converted\":false") != std::string::npos &&
+              created.body.find("\"source_byte_size\":5") != std::string::npos &&
+              created.body.find("\"conversion_elapsed_us\":0") != std::string::npos &&
+              created.body.find("\"byte_size\":5") != std::string::npos &&
+              created.body.find("\"warnings\":[]") != std::string::npos &&
               created.body.find("notes.txt") != std::string::npos,
-          "plaintext chat upload is stored as text");
+          "plaintext chat upload reports unchanged source/result sizes without conversion diagnostics");
 
     http::Request html = parsed_request(
         "POST /ainiux/v1/chat/inputs HTTP/1.1\r\nHost: 127.0.0.1\r\n"
@@ -694,8 +742,11 @@ void test_chat_input_uploads() {
     Response html_created = route_request(html, auth, status);
     check(html_created.status == 201 &&
               html_created.body.find("\"converted\":true") != std::string::npos &&
+              html_created.body.find("\"source_byte_size\":14") != std::string::npos &&
+              html_created.body.find("\"conversion_elapsed_us\":") != std::string::npos &&
+              html_created.body.find("\"byte_size\":") != std::string::npos &&
               html_created.body.find("text/markdown") != std::string::npos,
-          "HTML chat upload is converted to Markdown");
+          "HTML chat upload reports source size, result size, and conversion timing");
 
     ainiux::pdf::WriteOptions write_options;
     std::string pdf_bytes;
@@ -1799,6 +1850,60 @@ void test_model_settings_persistence_and_resume() {
         }
         hub.shutdown();
     }
+    long long boundary_user_ms = 0;
+    long long boundary_assistant_ms = 0;
+    {
+        agent::AgentSessionStore store;
+        agent::AgentMessageRecord row;
+        bool found = false;
+        check(store.open(directory.u8string()).ok() &&
+                  store.append_message("user", "history boundary prompt").ok() &&
+                  store.peek_last_message(row, found).ok() && found,
+              "seed the user row before an agent history page boundary");
+        boundary_user_ms = agent::normalize_timestamp_ms(row.created_at);
+        for (int index = 0; index < 100; ++index) {
+            check(store.append_message("notice", "boundary notice " + std::to_string(index)).ok(),
+                  "seed display rows across an agent history page boundary");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        check(store.append_message("assistant", "history boundary assistant").ok() &&
+                  store.peek_last_message(row, found).ok() && found,
+              "seed the assistant row after an agent history page boundary");
+        boundary_assistant_ms = agent::normalize_timestamp_ms(row.created_at);
+        std::vector<agent::AgentMessageRecord> page;
+        check(store.load_message_page(page, 0).ok() && page.size() == 100 &&
+                  std::none_of(page.begin(), page.end(), [](const auto& message) {
+                      return message.content == "history boundary prompt";
+                  }),
+              "newest agent history page excludes its preceding user fixture");
+        long long preceding_created_at = 0;
+        check(!page.empty() && store.load_latest_user_created_at_before(
+                  page.front().seq, 0, preceding_created_at, found).ok() && found &&
+                  agent::normalize_timestamp_ms(preceding_created_at) == boundary_user_ms,
+              "agent history finds the latest user before the current page");
+    }
+    {
+        SessionHub hub(options, directory.u8string(), 1);
+        auto created = hub.create("{\"kind\":\"agent\"}");
+        check(created.error.ok(), "server opens the history timing boundary fixture");
+        if (created.session) {
+            for (int i = 0; i < 200 &&
+                 created.session->snapshot_json().find("\"status\":\"ready\"") == std::string::npos;
+                 ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            std::string history;
+            const long long elapsed = std::max(0LL, boundary_assistant_ms - boundary_user_ms);
+            check(created.session->history(0, history).ok() &&
+                      history.find("\"content\":\"history boundary assistant\"") != std::string::npos &&
+                      history.find("\"created_at_ms\":" +
+                                   std::to_string(boundary_assistant_ms)) != std::string::npos &&
+                      history.find("\"task_elapsed_ms\":" + std::to_string(elapsed)) !=
+                          std::string::npos,
+                  "agent history exposes timestamps and derives assistant task time across a page boundary");
+        }
+        hub.shutdown();
+    }
     {
         auto built = provider::build_context(options);
         agent::AgentSessionRuntime runtime;
@@ -1877,6 +1982,7 @@ void test_revision_safe_chat_thread_routes() {
         "{\"role\":\"assistant\",\"content\":\"hi\"}]}"), auth, status);
     check(appended.status == 200 && appended.body.find("\"revision\":2") != std::string::npos &&
               appended.body.find("\"message_count\":2") != std::string::npos &&
+              appended.body.find("\"first_ordinal\":0") != std::string::npos &&
               appended.body.find("\"provider\":\"deepseek\"") != std::string::npos &&
               appended.body.find("\"model\":\"model-b\"") != std::string::npos,
           "message append advances the thread and its selected provider/model atomically");

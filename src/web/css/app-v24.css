@@ -216,6 +216,7 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .muted { color: var(--muted); font-size: 0.78rem; }
 .field-hint { min-height: 0; color: var(--muted); font-size: 0.68rem; font-weight: 500; }
 .metrics-strip { color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.task-complete { display: block; margin-top: 0.3rem; }
 .empty-state { display: grid; place-items: center; min-height: 6rem; padding: 1rem; color: var(--muted); text-align: center; }
 
 .chat-layout { height: 100%; display: grid; grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr); }
@@ -264,6 +265,11 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .event-card.tool.failed .event-type { color: var(--danger); }
 .event-card.notice { border-left-color: var(--notice); color: var(--notice); }
 .event-card.notice .event-type { color: var(--notice); }
+.browser-notice[data-severity="message"] { border-left-color: var(--accent); color: var(--accent); }
+.browser-notice[data-severity="warning"] { border-left-color: var(--notice); color: var(--notice); }
+.browser-notice[data-severity="error"] { border-left-color: var(--danger); color: var(--danger); }
+.browser-notice .role, .browser-notice .event-type { color: inherit; }
+.browser-notice-text { margin: 0; color: inherit; white-space: pre-wrap; }
 .message pre, .event-card pre, .job-card pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .message-content { min-width: 0; }
 .markdown-body { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
@@ -505,6 +511,15 @@ kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0
 .details-list dt { color: var(--muted); font-weight: 700; }
 .details-list dd { margin: 0; overflow-wrap: anywhere; }
 .callout { padding: 0.55rem 0.7rem; border-left: 3px solid var(--accent); background: var(--panel); }
+.inline-notice-area { display: flex; align-items: center; justify-content: space-between; gap: 0.55rem; padding: 0.45rem 0.55rem; border: 1px solid currentColor; border-left-width: 3px; background: var(--raised); overflow-wrap: anywhere; }
+.inline-notice-area.message { color: var(--accent); }
+.inline-notice-area.warning { color: var(--notice); }
+.inline-notice-area.error { color: var(--danger); }
+.inline-notice-text { min-width: 0; }
+.inline-notice-prefix { text-transform: lowercase; }
+.inline-notice-dismiss { flex: 0 0 auto; min-height: 1.65rem; padding: 0.1rem 0.35rem; border-color: currentColor; color: inherit; font-size: 0.7rem; }
+#workspace-notice { flex: 0 0 auto; margin: 0.4rem 0.55rem 0; }
+#settings-notice { margin-bottom: 0.65rem; }
 
 dialog { width: min(calc(100% - 1.5rem), 38rem); max-height: 90dvh; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); color: var(--text); box-shadow: var(--shadow); }
 dialog::backdrop { background: rgb(0 0 0 / 62%); }
@@ -516,10 +531,6 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
 .checkbox-row input { width: 1.1rem; min-height: 1.1rem; }
 .review-box { max-height: 45dvh; overflow: auto; padding: 0.6rem; border: 1px solid var(--border); background: var(--code); white-space: pre-wrap; }
 .error-text { color: var(--danger); }
-.toast-region { position: fixed; z-index: 210; right: max(0.6rem, env(safe-area-inset-right)); top: calc(var(--topbar-height) + max(0.6rem, env(safe-area-inset-top))); display: grid; gap: 0.35rem; width: min(24rem, calc(100% - 1.2rem)); pointer-events: none; }
-.toast { padding: 0.55rem 0.7rem; border: 1px solid var(--border); background: var(--raised); box-shadow: var(--shadow); pointer-events: none; }
-.toast.error { border-color: var(--danger); }
-
 @media (max-width: 68rem) {
   .agent-toolbar { grid-template-columns: minmax(0, 1fr) auto auto auto; }
   .agent-toolbar .model-identity { grid-column: 1 / -1; }

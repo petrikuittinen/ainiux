@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v23.css">
-  <script type="module" src="/ui/assets/app-v30.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v24.css">
+  <script type="module" src="/ui/assets/app-v31.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -77,6 +77,7 @@
         <div class="utility-layout">
           <form id="goal-job-form" class="control-pane stack">
             <div class="pane-bar"><h2>Run or plan</h2></div>
+            <div id="jobs-notice" class="inline-notice-area" role="status" aria-live="polite" hidden></div>
             <label>Operation <select id="goal-operation"><option value="run">Run</option><option value="plan">Plan</option></select></label>
             <label>Goal <textarea id="goal-input" rows="8" maxlength="262144" required placeholder="Describe the outcome…"></textarea></label>
             <label>Provider <select id="goal-provider" class="provider-select"></select></label>
@@ -108,7 +109,7 @@
           <div id="agent-events" class="event-list empty-state" aria-live="polite">Open Agent to initialize this workspace.</div>
           <form id="agent-turn-form" class="composer agent-composer">
             <label class="sr-only" for="agent-turn-input">Agent instruction</label>
-            <textarea id="agent-turn-input" rows="4" maxlength="262144" required disabled placeholder="Describe the task…" aria-keyshortcuts="Alt+P Alt+M Alt+T Escape"></textarea>
+            <textarea id="agent-turn-input" rows="4" maxlength="262144" required disabled placeholder="Describe the task…" aria-keyshortcuts="Enter Shift+Enter Alt+Enter Control+Enter Meta+Enter Alt+P Alt+M Alt+T Escape"></textarea>
             <button id="agent-turn-submit" type="submit" disabled>Send</button>
           </form>
         </section>
@@ -118,6 +119,7 @@
         <div class="image-layout">
           <form id="image-job-form" class="control-pane stack">
             <div class="pane-bar"><h2>Generate image</h2></div>
+            <div id="image-notice" class="inline-notice-area" role="status" aria-live="polite" hidden></div>
             <label>Prompt <textarea id="image-prompt" rows="8" maxlength="262144" required placeholder="Describe one image…"></textarea></label>
             <label>Provider <select id="image-provider"><option value="">Loading catalog…</option></select></label>
             <label>Model <select id="image-model"><option value="">Loading catalog…</option></select></label>
@@ -147,6 +149,7 @@
         <div class="image-layout">
           <form id="video-job-form" class="control-pane stack">
             <div class="pane-bar"><h2>Generate video</h2></div>
+            <div id="video-notice" class="inline-notice-area" role="status" aria-live="polite" hidden></div>
             <label>Prompt <textarea id="video-prompt" rows="7" maxlength="262144" required placeholder="Describe the video…"></textarea></label>
             <label>Provider <select id="video-provider"><option value="">Loading catalog…</option></select></label>
             <label>Model <select id="video-model"><option value="">Loading catalog…</option></select></label>
@@ -165,6 +168,7 @@
 
       <section id="workspace-panel" class="panel" aria-label="Workspace" hidden>
         <div class="workspace-toolbar"><div id="workspace-summary" class="summary-strip" aria-live="polite"></div><div class="button-row"><button id="workspace-review-button" class="ghost" type="button">Review</button><button id="refresh-directory-button" type="button">Refresh</button></div></div>
+        <div id="workspace-notice" class="inline-notice-area" role="status" aria-live="polite" hidden></div>
         <div class="workspace-layout">
           <section class="dired-panel" aria-labelledby="dired-heading">
             <div class="pane-bar vertical-mobile"><div><h2 id="dired-heading">Files</h2><nav id="breadcrumbs" class="breadcrumbs" aria-label="Current workspace path"></nav></div><div class="button-row"><button id="create-file-button" class="ghost" type="button">New file</button><button id="create-directory-button" class="ghost" type="button">New folder</button></div></div>
@@ -182,6 +186,7 @@
       </section>
 
       <section id="settings-panel" class="panel settings-panel" aria-label="Settings" hidden>
+        <div id="settings-notice" class="inline-notice-area" role="status" aria-live="polite" hidden></div>
         <div class="settings-grid">
           <section id="appearance-settings-card" class="control-pane stack settings-card"><h2>Appearance</h2><label>Theme <select id="theme-select"><option value="auto">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label><p class="muted">In Chat or Agent, use <code>/theme light</code> or <code>/theme dark</code>.</p></section>
           <section class="control-pane settings-card"><div class="pane-bar"><h2>Status</h2><button id="refresh-settings-button" class="ghost" type="button">Refresh</button></div><dl id="status-details" class="details-list"></dl></section>
@@ -205,6 +210,7 @@
   <dialog id="new-thread-dialog" aria-labelledby="new-thread-title">
     <form id="new-thread-form" class="dialog-card">
       <h2 id="new-thread-title">New chat thread</h2>
+      <p id="new-thread-error" class="error-text" role="alert"></p>
       <label>Name <input id="thread-name-input" maxlength="512" placeholder="Optional; first message is used"></label>
       <div class="form-grid"><label>Provider <select id="thread-provider" class="provider-select"></select></label><label>Model <input id="thread-model" list="thread-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="thread-model-list"></datalist><small id="thread-model-status" class="field-hint" aria-live="polite"></small></label></div>
       <div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Create</button></div>
@@ -216,11 +222,11 @@
   </dialog>
 
   <dialog id="mutation-dialog" aria-labelledby="mutation-title">
-    <form id="mutation-form" class="dialog-card"><h2 id="mutation-title">Workspace action</h2><p id="mutation-description"></p><label id="mutation-path-label">Path <input id="mutation-path" maxlength="8192" required autocomplete="off"></label><label id="mutation-recursive-row" class="checkbox-row" hidden><input id="mutation-recursive" type="checkbox"> Delete non-empty directory recursively</label><label id="mutation-confirm-row" hidden>Type the confirmation exactly <input id="mutation-confirm" autocomplete="off"></label><div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button id="mutation-submit" type="submit">Apply</button></div></form>
+    <form id="mutation-form" class="dialog-card"><h2 id="mutation-title">Workspace action</h2><p id="mutation-description"></p><p id="mutation-error" class="error-text" role="alert"></p><label id="mutation-path-label">Path <input id="mutation-path" maxlength="8192" required autocomplete="off"></label><label id="mutation-recursive-row" class="checkbox-row" hidden><input id="mutation-recursive" type="checkbox"> Delete non-empty directory recursively</label><label id="mutation-confirm-row" hidden>Type the confirmation exactly <input id="mutation-confirm" autocomplete="off"></label><div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button id="mutation-submit" type="submit">Apply</button></div></form>
   </dialog>
 
   <dialog id="assist-dialog" aria-labelledby="assist-title">
-    <form id="assist-form" class="dialog-card"><h2 id="assist-title">Editor AI assist</h2><label>Instruction <textarea id="assist-instruction" rows="5" maxlength="262144" required placeholder="Describe the edit…"></textarea></label><label class="checkbox-row"><input id="assist-selection" type="checkbox"> Limit to the current selection</label><div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Request proposal</button></div></form>
+    <form id="assist-form" class="dialog-card"><h2 id="assist-title">Editor AI assist</h2><p id="assist-error" class="error-text" role="alert"></p><label>Instruction <textarea id="assist-instruction" rows="5" maxlength="262144" required placeholder="Describe the edit…"></textarea></label><label class="checkbox-row"><input id="assist-selection" type="checkbox"> Limit to the current selection</label><div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Request proposal</button></div></form>
   </dialog>
 
   <dialog id="conflict-dialog" aria-labelledby="conflict-title">
@@ -230,7 +236,5 @@
   <dialog id="confirm-dialog" aria-labelledby="confirm-title">
     <div class="dialog-card"><h2 id="confirm-title">Confirm</h2><p id="confirm-message"></p><div class="dialog-actions"><button id="confirm-cancel" class="ghost dialog-cancel" type="button">Cancel</button><button id="confirm-submit" class="danger" type="button">Delete</button></div></div>
   </dialog>
-
-  <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>

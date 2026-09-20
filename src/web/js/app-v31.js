@@ -23,6 +23,14 @@ const THEME_STORAGE_KEY = "ainiux.ui.theme.v1";
 const THINKING_STORAGE_KEY = "ainiux.chat.thinking.v1";
 const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
 const MAX_EDITOR_REFORMAT_BYTES = 1024 * 1024;
+const MAX_CONVERSATION_NOTICES = 150;
+const SURFACE_NOTICE_IDS = new Map([
+  ["jobs-panel", "jobs-notice"],
+  ["image-panel", "image-notice"],
+  ["video-panel", "video-notice"],
+  ["workspace-panel", "workspace-notice"],
+  ["settings-panel", "settings-notice"],
+]);
 
 const state = {
   token: "",
@@ -78,6 +86,12 @@ const state = {
   file: null,
   mutation: null,
   conflictAction: null,
+  chatNotices: new Map(),
+  chatUnscopedNotices: [],
+  agentNotices: new Map(),
+  agentUnscopedNotices: [],
+  surfaceNotices: new Map(),
+  nextNoticeId: 1,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -168,12 +182,11 @@ function storageSet(key, value) {
   }
 }
 
-function applyTheme(theme, announce = false) {
+function applyTheme(theme) {
   if (!["auto", "dark", "light"].includes(theme)) return false;
   document.documentElement.dataset.theme = theme;
   byId("theme-select").value = theme;
   storageSet(THEME_STORAGE_KEY, theme);
-  if (announce) toast(`Theme: ${theme === "auto" ? "system" : theme}`);
   return true;
 }
 
@@ -181,15 +194,13 @@ function handleThemeCommand(text) {
   if (!/^\/theme(?:\s|$)/i.test(text)) return false;
   const match = text.match(/^\/theme(?:\s+(auto|light|dark))?\s*$/i);
   if (!match) {
-    toast("Usage: /theme light or /theme dark", "error");
+    targetNotice(activeNoticeTarget(), "Usage: /theme light or /theme dark", "error");
     return true;
   }
   if (!match[1]) {
-    const current = document.documentElement.dataset.theme || "auto";
-    toast(`Theme: ${current === "auto" ? "system" : current}`);
     return true;
   }
-  applyTheme(match[1].toLowerCase(), true);
+  applyTheme(match[1].toLowerCase());
   return true;
 }
 
@@ -198,11 +209,11 @@ function handleChatSlashCommand(text) {
   const pdf = text.match(/^\/(chat-to-pdf|last-to-pdf)\s*$/i);
   if (!pdf) return false;
   if (!state.thread) {
-    toast("Select a chat thread first", "error");
+    chatNotice("Select a chat thread first", "error", null);
     return true;
   }
   if (!supports("chat_pdf")) {
-    toast("This server does not export chat PDFs", "error");
+    chatNotice("This server does not export chat PDFs", "error", state.thread.id);
     return true;
   }
   void downloadChatPdf(pdf[1].toLowerCase() === "last-to-pdf" ? "last" : "thread");
@@ -210,16 +221,22 @@ function handleChatSlashCommand(text) {
 }
 
 async function downloadChatPdf(scope) {
+  const thread = state.thread;
+  const threadId = thread?.id ?? null;
+  if (!thread) {
+    chatNotice("Select a chat thread first", "error", null);
+    return;
+  }
   try {
     const response = await fetch(
-      `${API_ROOT}/chat/threads/${encodeURIComponent(state.thread.id)}/pdf`, {
+      `${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/pdf`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${state.token}`,
           Accept: "application/pdf",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ revision: state.thread.revision, scope }),
+        body: JSON.stringify({ revision: thread.revision, scope }),
         credentials: "omit",
         cache: "no-store",
         referrerPolicy: "no-referrer",
@@ -242,17 +259,9 @@ async function downloadChatPdf(scope) {
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast(scope === "last" ? "Downloaded last.pdf" : "Downloaded chat.pdf");
   } catch (error) {
-    toast(errorMessage(error), "error");
+    chatNotice(errorMessage(error), "error", threadId);
   }
-}
-
-function toast(message, kind = "info") {
-  const region = byId("toast-region");
-  const item = element("div", `toast ${kind === "error" ? "error" : ""}`, message);
-  region.append(item);
-  window.setTimeout(() => item.remove(), 5500);
 }
 
 function errorMessage(error) {
@@ -263,6 +272,175 @@ function errorMessage(error) {
 function activePanelId() {
   const panel = document.querySelector(".panel.active");
   return panel ? panel.id : "";
+}
+
+function noticeSeverity(value) {
+  return value === "warning" || value === "error" ? value : "message";
+}
+
+function noticeRecord(message, severity, fields = {}) {
+  return {
+    id: state.nextNoticeId++,
+    message: String(message || ""),
+    severity: noticeSeverity(severity),
+    ...fields,
+  };
+}
+
+function appendBoundedNotice(records, record) {
+  records.push(record);
+  if (records.length > MAX_CONVERSATION_NOTICES) {
+    records.splice(0, records.length - MAX_CONVERSATION_NOTICES);
+  }
+}
+
+function scopedNotice(recordsByScope, unscoped, scopeId, message, severity, fields = {}) {
+  const record = noticeRecord(message, severity, fields);
+  if (scopeId == null || scopeId === "") {
+    appendBoundedNotice(unscoped, record);
+  } else {
+    const records = recordsByScope.get(scopeId) || [];
+    appendBoundedNotice(records, record);
+    recordsByScope.set(scopeId, records);
+  }
+  return record;
+}
+
+function nextChatOrdinal(threadId) {
+  const thread = state.thread?.id === threadId
+    ? state.thread : state.threads.find((item) => item.id === threadId);
+  if (!thread) return null;
+  const count = Number(thread.message_count);
+  if (Number.isSafeInteger(count) && count >= 0) return count;
+  const messages = Array.isArray(thread.messages) ? thread.messages : [];
+  const last = messages.length ? messages[messages.length - 1] : null;
+  const ordinal = Number(last?.ordinal);
+  return Number.isSafeInteger(ordinal) && ordinal >= 0 ? ordinal + 1 : messages.length;
+}
+
+function chatNotice(message, severity = "message", threadId = state.thread?.id ?? null,
+                    beforeOrdinal = null) {
+  const nextOrdinal = beforeOrdinal === null ? nextChatOrdinal(threadId) : beforeOrdinal;
+  scopedNotice(state.chatNotices, state.chatUnscopedNotices, threadId, message, severity,
+    { nextOrdinal: Number.isSafeInteger(Number(nextOrdinal)) ? Number(nextOrdinal) : null });
+  if ((threadId == null && !state.thread) || state.thread?.id === threadId) renderChat();
+}
+
+function agentNotice(message, severity = "message", sessionId = state.session?.id ?? null) {
+  scopedNotice(state.agentNotices, state.agentUnscopedNotices, sessionId, message, severity);
+  if ((sessionId == null && !state.session) || state.session?.id === sessionId) renderAgent();
+}
+
+function pruneChatNoticesFrom(threadId, firstRemovedOrdinal) {
+  const records = state.chatNotices.get(threadId);
+  if (!records) return;
+  const boundary = Number(firstRemovedOrdinal);
+  if (!Number.isSafeInteger(boundary) || boundary < 0) return;
+  const retained = records.filter((record) =>
+    record.nextOrdinal === null || record.nextOrdinal < boundary);
+  if (retained.length) state.chatNotices.set(threadId, retained);
+  else state.chatNotices.delete(threadId);
+}
+
+function appendConversationNotice(container, record, cardClass) {
+  const prefix = record.severity === "message" ? "💬 message" :
+    record.severity === "warning" ? "⚠️ warning" : "⚠️ error";
+  const card = element("article", `${cardClass} browser-notice`);
+  card.dataset.severity = record.severity;
+  card.append(element("div", cardClass === "message" ? "role" : "event-type", prefix),
+    element("p", "browser-notice-text", record.message));
+  container.append(card);
+}
+
+function appendChatTimeline(container, transcript, notices) {
+  const ordered = [...notices].sort((left, right) => {
+    const leftBoundary = Number.isSafeInteger(left.nextOrdinal)
+      ? left.nextOrdinal : Number.MAX_SAFE_INTEGER;
+    const rightBoundary = Number.isSafeInteger(right.nextOrdinal)
+      ? right.nextOrdinal : Number.MAX_SAFE_INTEGER;
+    return leftBoundary - rightBoundary || left.id - right.id;
+  });
+  let noticeIndex = 0;
+  for (const message of transcript) {
+    const ordinal = Number(message.ordinal);
+    while (noticeIndex < ordered.length && Number.isSafeInteger(ordinal) &&
+           Number.isSafeInteger(ordered[noticeIndex].nextOrdinal) &&
+           ordered[noticeIndex].nextOrdinal <= ordinal) {
+      appendConversationNotice(container, ordered[noticeIndex++], "message");
+    }
+    appendChatMessage(container, message.role, message.content, false, message.ordinal,
+      message.attachments);
+  }
+  while (noticeIndex < ordered.length) {
+    appendConversationNotice(container, ordered[noticeIndex++], "message");
+  }
+}
+
+function renderSurfaceNotice(panelId) {
+  const areaId = SURFACE_NOTICE_IDS.get(panelId);
+  if (!areaId) return;
+  const area = byId(areaId);
+  const record = state.surfaceNotices.get(panelId);
+  area.replaceChildren();
+  area.hidden = !record;
+  if (!record) return;
+  const prefix = record.severity === "message" ? "💬 message" :
+    record.severity === "warning" ? "⚠️ warning" : "⚠️ error";
+  const text = element("span", "inline-notice-text");
+  text.append(element("strong", "inline-notice-prefix", prefix),
+    document.createTextNode(` ${record.message}`));
+  const dismiss = element("button", "ghost inline-notice-dismiss", "Dismiss");
+  dismiss.type = "button";
+  dismiss.addEventListener("click", () => {
+    if (state.surfaceNotices.get(panelId)?.id === record.id) {
+      state.surfaceNotices.delete(panelId);
+      renderSurfaceNotice(panelId);
+    }
+  });
+  area.className = `inline-notice-area ${record.severity}`;
+  area.append(text, dismiss);
+}
+
+function surfaceNotice(panelId, message, severity = "message") {
+  if (!SURFACE_NOTICE_IDS.has(panelId)) panelId = "settings-panel";
+  state.surfaceNotices.set(panelId, noticeRecord(message, severity));
+  renderSurfaceNotice(panelId);
+}
+
+function activeNoticeTarget() {
+  const panelId = activePanelId();
+  if (panelId === "chat-panel") return { panelId, scopeId: state.thread?.id ?? null };
+  if (panelId === "agent-panel") return { panelId, scopeId: state.session?.id ?? null };
+  return { panelId: SURFACE_NOTICE_IDS.has(panelId) ? panelId : "settings-panel", scopeId: null };
+}
+
+function targetNotice(target, message, severity = "message") {
+  if (target.panelId === "chat-panel") chatNotice(message, severity, target.scopeId);
+  else if (target.panelId === "agent-panel") agentNotice(message, severity, target.scopeId);
+  else surfaceNotice(target.panelId, message, severity);
+}
+
+function jobNotice(job, message, severity = "message") {
+  if (job?._context?.type === "chat") {
+    chatNotice(message, severity, job._context.threadId);
+    return;
+  }
+  if (job?.operation === "image") surfaceNotice("image-panel", message, severity);
+  else if (job?.operation === "video") surfaceNotice("video-panel", message, severity);
+  else if (job?.operation === "editor-assist" || job?._context?.type === "assist") {
+    surfaceNotice("workspace-panel", message, severity);
+  } else {
+    surfaceNotice("jobs-panel", message, severity);
+  }
+}
+
+function clearTransientNotices() {
+  state.chatNotices.clear();
+  state.chatUnscopedNotices.length = 0;
+  state.agentNotices.clear();
+  state.agentUnscopedNotices.length = 0;
+  state.surfaceNotices.clear();
+  for (const panelId of SURFACE_NOTICE_IDS.keys()) renderSurfaceNotice(panelId);
 }
 
 function appendDisplaySegment(segments, kind, text) {
@@ -964,7 +1142,7 @@ async function saveChatSettings(patch) {
       byId("chat-settings-save-status").textContent = errorMessage(error);
       if (patch.provider !== undefined || patch.model !== undefined) applyThreadModelSettings(state.thread);
     }
-    toast(errorMessage(error), "error");
+    chatNotice(errorMessage(error), "error", id);
   } finally {
     if (threadSettingsSaves.get(id) === save) threadSettingsSaves.delete(id);
   }
@@ -984,7 +1162,7 @@ function applyWorkspaceSettings() {
   renderModelSettings("workspace");
 }
 
-async function saveWorkspaceSettings(patch) {
+async function saveWorkspaceSettings(patch, noticeTarget = activeNoticeTarget()) {
   if (workspaceSavePending || !state.workspaceSettings) return;
   workspaceSavePending = true; updateSettingsAvailability();
   byId("workspace-settings-save-status").textContent = "Saving…";
@@ -998,7 +1176,8 @@ async function saveWorkspaceSettings(patch) {
     if (state.session) await refreshSelectedSession();
     byId("workspace-settings-save-status").textContent = "Saved";
   } catch (error) {
-    byId("workspace-settings-save-status").textContent = errorMessage(error); toast(errorMessage(error), "error");
+    byId("workspace-settings-save-status").textContent = errorMessage(error);
+    targetNotice(noticeTarget, errorMessage(error), "error");
     if (patch.provider !== undefined || patch.model !== undefined) applyWorkspaceSettings();
   } finally {
     workspaceSavePending = false; updateSettingsAvailability();
@@ -1503,6 +1682,7 @@ function scheduleReconnect(immediate = false) {
 
 function markConnectionLost() {
   if (!state.authenticated) return;
+  const noticeTarget = activeNoticeTarget();
   const wasConnected = state.connected;
   state.connected = false;
   if (wasConnected) {
@@ -1513,7 +1693,8 @@ function markConnectionLost() {
   setConnectionStatus("Reconnecting…", "reconnecting");
   byId("disconnect-button").hidden = false;
   applyCapabilities();
-  if (wasConnected) toast("Connection lost. Ainiux will reconnect automatically.", "error");
+  if (wasConnected) targetNotice(noticeTarget,
+    "Connection lost. Ainiux will reconnect automatically.", "error");
   if (state.reconnectTimer === null) scheduleReconnect();
 }
 
@@ -1565,10 +1746,12 @@ async function markConnected(reconnected) {
   byId("disconnect-button").hidden = false;
   closeDialog(byId("auth-dialog"));
   applyCapabilities();
+  if (reconnected) clearTransientNotices();
   await restoreBrowserState();
   state.chatInitialized = true;
-  toast(reconnected ? "Reconnected to the Ainiux control server" :
-    "Connected to the Ainiux control server");
+  if (reconnected) {
+    targetNotice(activeNoticeTarget(), "Reconnected to the Ainiux control server");
+  }
 }
 
 async function attemptReconnect() {
@@ -1638,6 +1821,7 @@ function forgetAuthentication(message = "") {
   state.modelCatalogs.clear();
   state.file = null;
   state.guard = null;
+  clearTransientNotices();
   storageSet(TOKEN_STORAGE_KEY, "");
   byId("token-input").value = "";
   setConnectionStatus("Offline", "offline");
@@ -1787,7 +1971,7 @@ function downloadGeneratedImage() {
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   } catch (error) {
-    toast(`Could not prepare the local image copy: ${errorMessage(error)}`, "error");
+    surfaceNotice("image-panel", `Could not prepare the local image copy: ${errorMessage(error)}`, "error");
   }
 }
 
@@ -1917,7 +2101,8 @@ function watchJob(jobId) {
     },
     async () => {
       await refreshJob(jobId);
-      toast(`Event replay expired for ${jobId}; loaded its current snapshot.`);
+      jobNotice(state.jobs.get(jobId),
+        `Event replay expired for ${jobId}; loaded its current snapshot.`, "warning");
     },
     () => {
       const job = state.jobs.get(jobId);
@@ -1934,7 +2119,7 @@ async function refreshJob(jobId) {
       await handleJobCompletion(job);
     }
   } catch (error) {
-    toast(errorMessage(error), "error");
+    jobNotice(state.jobs.get(jobId), errorMessage(error), "error");
   }
 }
 
@@ -1965,12 +2150,12 @@ async function handleJobCompletion(job) {
 }
 
 async function cancelJob(jobId) {
+  const existing = state.jobs.get(jobId);
   try {
-    const job = await api(`${API_ROOT}/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
-    updateJob(job);
-    toast(`Cancellation requested for ${jobId}`);
+    const snapshot = await api(`${API_ROOT}/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+    updateJob(snapshot);
   } catch (error) {
-    toast(errorMessage(error), "error");
+    jobNotice(existing, errorMessage(error), "error");
   }
 }
 
@@ -2105,7 +2290,15 @@ function renderChat() {
       ? "Starting new chat…" : "Select a thread";
     byId("thread-meta").textContent = "";
     byId("chat-metrics").textContent = "";
-    setEmpty(messages, state.startingNewChat ? "Starting new chat…" : "Choose or create a thread.");
+    if (state.chatUnscopedNotices.length) {
+      clear(messages);
+      for (const notice of state.chatUnscopedNotices) {
+        appendConversationNotice(messages, notice, "message");
+      }
+      messages.scrollTop = messages.scrollHeight;
+    } else {
+      setEmpty(messages, state.startingNewChat ? "Starting new chat…" : "Choose or create a thread.");
+    }
     byId("chat-input").disabled = true;
     syncChatSendButton();
     renderChatAttachList();
@@ -2117,13 +2310,11 @@ function renderChat() {
   byId("chat-metrics").textContent = metricText(state.chatMetrics.get(state.thread.id));
   const transcript = Array.isArray(state.thread.messages) ? state.thread.messages : [];
   const stream = state.chatStreams.get(state.thread.id);
-  if (!transcript.length && !stream) setEmpty(messages, "This thread is empty.");
+  const notices = state.chatNotices.get(state.thread.id) || [];
+  if (!transcript.length && !stream && !notices.length) setEmpty(messages, "This thread is empty.");
   else {
     clear(messages);
-    for (const message of transcript) {
-      appendChatMessage(messages, message.role, message.content, false, message.ordinal,
-        message.attachments);
-    }
+    appendChatTimeline(messages, transcript, notices);
     if (stream) appendChatMessage(messages, "assistant", stream.streamText, true);
     messages.scrollTop = messages.scrollHeight;
   }
@@ -2164,11 +2355,11 @@ async function loadThread(threadId) {
     renderChat();
     if (previous && previous.id !== threadId) void abandonUnusedThread(previous);
   } catch (error) {
-    toast(errorMessage(error), "error");
+    chatNotice(errorMessage(error), "error", threadId);
   }
 }
 
-async function cleanupEmptyThreads(keepId = 0) {
+async function cleanupEmptyThreads(keepId = 0, noticeThreadId = state.thread?.id ?? null) {
   try {
     await api(`${API_ROOT}/chat/threads/cleanup-empty`, {
       method: "POST",
@@ -2177,7 +2368,7 @@ async function cleanupEmptyThreads(keepId = 0) {
     await loadThreads();
   } catch (error) {
     if (!(error instanceof ApiError) || ![404, 409].includes(error.status)) {
-      toast(`Could not clean up unused chats: ${errorMessage(error)}`, "error");
+      chatNotice(`Could not clean up unused chats: ${errorMessage(error)}`, "error", noticeThreadId);
     }
   }
 }
@@ -2193,7 +2384,7 @@ function threadHasConversation(thread) {
 async function deleteThread(thread) {
   if (!thread || thread.read_only === true) return;
   if (chatTurnBusy(thread.id)) {
-    toast("Wait for the current response to finish before deleting this chat", "error");
+    chatNotice("Wait for the current response to finish before deleting this chat", "error", thread.id);
     return;
   }
   if (threadHasConversation(thread) &&
@@ -2217,16 +2408,17 @@ async function deleteThread(thread) {
       renderChat();
     }
     threadSettingsSnapshots.delete(thread.id);
+    state.chatNotices.delete(thread.id);
     await loadThreads();
     if (!wasCurrent) return;
     if (state.threads.length) await loadThread(state.threads[0].id);
     else await startNewChat();
   } catch (error) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
-      toast("The chat thread changed in another client. Reload it before deleting.", "error");
+      chatNotice("The chat thread changed in another client. Reload it before deleting.", "error", thread.id);
       await loadThreads();
       if (state.thread && state.thread.id === thread.id) await loadThread(thread.id);
-    } else toast(errorMessage(error), "error");
+    } else chatNotice(errorMessage(error), "error", thread.id);
   }
 }
 
@@ -2263,7 +2455,7 @@ async function saveChatMessageEdit(ordinal, content) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict("The chat thread changed in another client. Reload it before editing again.",
         () => loadThread(threadId));
-    } else toast(errorMessage(error), "error");
+    } else chatNotice(errorMessage(error), "error", threadId);
   }
 }
 
@@ -2290,6 +2482,7 @@ async function deleteChatMessage(ordinal) {
         body: { revision: state.thread.revision, ordinal },
       });
     state.chatEdit = null;
+    pruneChatNoticesFrom(threadId, ordinal);
     if (response.thread && state.thread?.id === threadId) {
       state.thread = response.thread;
       threadSettingsSnapshots.set(threadId, state.thread);
@@ -2301,7 +2494,7 @@ async function deleteChatMessage(ordinal) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict("The chat thread changed in another client. Reload it before deleting again.",
         () => loadThread(threadId));
-    } else toast(errorMessage(error), "error");
+    } else chatNotice(errorMessage(error), "error", threadId);
   }
 }
 
@@ -2316,11 +2509,12 @@ async function abandonUnusedThread(thread) {
     });
     if (result.deleted) {
       threadSettingsSnapshots.delete(thread.id);
+      state.chatNotices.delete(thread.id);
       await loadThreads();
     }
   } catch (error) {
     if (!(error instanceof ApiError) || ![404, 409].includes(error.status)) {
-      toast(`Could not clean up the unused chat: ${errorMessage(error)}`, "error");
+      chatNotice(`Could not clean up the unused chat: ${errorMessage(error)}`, "error", thread.id);
     }
   }
 }
@@ -2454,7 +2648,7 @@ function queueChatFiles(fileList) {
   const files = [...fileList];
   for (const file of files) {
     if (state.chatInputs.length >= 16) {
-      toast("Chat accepts at most 16 attachments", "error");
+      chatNotice("Chat accepts at most 16 attachments", "error");
       break;
     }
     state.chatInputs.push({ file, uploadId: "" });
@@ -2464,20 +2658,36 @@ function queueChatFiles(fileList) {
 
 async function uploadChatInputs(signal, inputs = state.chatInputs) {
   for (const input of inputs) {
-    if (input.uploadId) continue;
-    const stored = await api(`${API_ROOT}/chat/inputs`, {
-      method: "POST",
-      rawBody: input.file,
-      contentType: input.file.type || "application/octet-stream",
-      headers: { "X-Ainiux-Filename": headerFileName(input.file.name) },
-      signal,
-    });
-    input.uploadId = stored.id;
-    input.kind = stored.kind;
-    input.converted = stored.converted;
-    for (const warning of stored.warnings || []) toast(warning, "warning");
+    if (!input.uploadId) {
+      const stored = await api(`${API_ROOT}/chat/inputs`, {
+        method: "POST",
+        rawBody: input.file,
+        contentType: input.file.type || "application/octet-stream",
+        headers: { "X-Ainiux-Filename": headerFileName(input.file.name) },
+        signal,
+      });
+      input.uploadId = stored.id;
+      input.kind = stored.kind;
+      input.converted = stored.converted;
+      input.stored = stored;
+    }
   }
-  return inputs.map((input) => input.uploadId);
+  return {
+    ids: inputs.map((input) => input.uploadId),
+    stored: inputs.map((input) => input.stored).filter(Boolean),
+  };
+}
+
+function formatConversionNotice(stored) {
+  const elapsedUs = Number(stored.conversion_elapsed_us);
+  const elapsed = Number.isFinite(elapsedUs) && elapsedUs >= 0
+    ? (elapsedUs / 1000).toFixed(3) : "0.000";
+  const resultBytes = Number(stored.byte_size);
+  const result = Number.isFinite(resultBytes) && resultBytes >= 0
+    ? new Intl.NumberFormat().format(Math.round(resultBytes)) : "0";
+  return `Attached and converted ${stored.display_name || "document"} ` +
+    `(${formatBytes(stored.source_byte_size)}) in ${elapsed} ms, resulting in ` +
+    `${result} bytes of Markdown.`;
 }
 
 function showConflict(message, action) {
@@ -2491,13 +2701,13 @@ async function sendChatMessage(text) {
   const requestedId = state.thread.id;
   try { await threadSettingsSaves.get(requestedId); }
   catch (error) {
-    toast(errorMessage(error), "error");
+    chatNotice(errorMessage(error), "error", requestedId);
     return;
   }
   if (state.thread?.id !== requestedId) return;
   const provider = state.thread.provider || "";
   if (!provider || provider === "none") {
-    toast("Choose a provider before sending", "error");
+    chatNotice("Choose a provider before sending", "error", requestedId);
     const control = modelControls().find((item) => item.providerId === "chat-provider");
     openModelPicker(control, "provider");
     return;
@@ -2515,13 +2725,27 @@ async function sendChatMessage(text) {
     };
     const pendingInputs = [...state.chatInputs];
     const attachedName = pendingInputs[0]?.file?.name || "";
-    const inputIds = pendingInputs.length ? await uploadChatInputs(controller.signal, pendingInputs) : [];
+    const uploaded = pendingInputs.length
+      ? await uploadChatInputs(controller.signal, pendingInputs)
+      : { ids: [], stored: [] };
+    const inputIds = uploaded.ids;
     const userMessage = { role: "user", content: text };
     if (inputIds.length) userMessage.input_ids = inputIds;
     const appended = await appendThreadMessages(threadId, sendingThread.revision,
       [userMessage], selected, controller.signal);
+    const ordinalValue = Number(appended.thread?.first_ordinal);
+    const ordinal = Number.isSafeInteger(ordinalValue) && ordinalValue >= 0
+      ? ordinalValue : Math.max(0, Number(appended.thread?.message_count || 1) - 1);
+    const attachments = uploaded.stored.map((stored) => ({
+      kind: stored.kind,
+      mime_type: stored.mime_type,
+      display_name: stored.display_name,
+      byte_size: stored.byte_size,
+    }));
     sendingThread = { ...sendingThread, ...appended.thread,
-      messages: [...sendingThread.messages, { role: "user", content: text }] };
+      messages: [...sendingThread.messages, {
+        ordinal, role: "user", content: text, attachments,
+      }] };
     if (!sendingThread.name || sendingThread.name === "New chat") {
       const firstLine = text.split(/\r?\n/, 1)[0].trim();
       sendingThread.name = [...firstLine].slice(0, 40).join("") ||
@@ -2529,6 +2753,16 @@ async function sendChatMessage(text) {
     }
     if (state.thread?.id === threadId) state.thread = sendingThread;
     threadSettingsSnapshots.set(threadId, sendingThread);
+    for (const stored of uploaded.stored) {
+      if (stored.converted) {
+        chatNotice(formatConversionNotice(stored), "message", threadId, ordinal);
+      }
+    }
+    for (const stored of uploaded.stored) {
+      for (const warning of stored.warnings || []) {
+        chatNotice(warning, "warning", threadId, ordinal);
+      }
+    }
     const payload = optionalPayload({
       ...selected,
       settings: sendingThread.settings || {},
@@ -2560,7 +2794,7 @@ async function sendChatMessage(text) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict("The chat thread changed in another client. Reload it before sending again.",
         () => loadThread(threadId));
-    } else toast(errorMessage(error), "error");
+    } else chatNotice(errorMessage(error), "error", threadId);
   } finally {
     if (chatSendAborts.get(threadId) === controller) chatSendAborts.delete(threadId);
   }
@@ -2568,7 +2802,7 @@ async function sendChatMessage(text) {
 
 async function regenerateChat() {
   if (!state.thread || state.thread.read_only === true) {
-    toast("Select a writable chat thread before regenerating", "error");
+    chatNotice("Select a writable chat thread before regenerating", "error");
     return;
   }
   const threadId = state.thread.id;
@@ -2577,7 +2811,6 @@ async function regenerateChat() {
     if (!jobId) return;
     state.chatRegenerateQueued = true;
     await cancelJob(jobId);
-    toast("Cancelling the current response before regenerating");
     return;
   }
   try {
@@ -2594,6 +2827,10 @@ async function regenerateChat() {
     let userIndex = messages.length - 1;
     while (userIndex >= 0 && messages[userIndex].role !== "user") userIndex -= 1;
     if (userIndex < 0) throw new Error("This thread has no user prompt to regenerate");
+    const promptOrdinal = Number(messages[userIndex].ordinal);
+    const firstRemovedOrdinal = Number.isSafeInteger(promptOrdinal) && promptOrdinal >= 0
+      ? promptOrdinal + 1 : Number(response.thread?.message_count);
+    pruneChatNoticesFrom(threadId, firstRemovedOrdinal);
     state.thread = {
       ...state.thread,
       ...response.thread,
@@ -2602,12 +2839,11 @@ async function regenerateChat() {
     threadSettingsSnapshots.set(threadId, state.thread);
     renderChat();
     await sendChatMessageFromTranscript(response.prompt);
-    toast("Regenerating the previous answer");
   } catch (error) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict("The chat thread changed in another client. Reload it before regenerating.",
         () => loadThread(threadId));
-    } else toast(errorMessage(error), "error");
+    } else chatNotice(errorMessage(error), "error", threadId);
   }
 }
 
@@ -2666,12 +2902,11 @@ async function finishChatJob(job, context) {
     state.chatStreams.delete(context.threadId);
     if (state.thread && state.thread.id === context.threadId) await loadThread(context.threadId);
     await loadThreads();
-    toast("Chat response saved to the thread");
   } catch (error) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict("The model response completed, but the thread changed before it could be appended. The response remains visible in Jobs; reload the thread to continue.",
         () => loadThread(context.threadId));
-    } else toast(errorMessage(error), "error");
+    } else chatNotice(errorMessage(error), "error", context.threadId);
   } finally {
     renderChat();
     if (regenerate) void regenerateChat();
@@ -2736,7 +2971,25 @@ function agentEventDisplay(entry, live) {
     typeof data.content === "string" ? data.content :
     typeof data.message === "string" ? data.message :
       typeof data.text === "string" ? data.text : JSON.stringify(data, null, 2);
-  return { label: live ? `${label} · streaming` : label, kind, text, metrics: data.metrics };
+  const taskElapsedMs = type === "turn_completed" ? data.metrics?.elapsed_ms
+    : type === "assistant" ? data.task_elapsed_ms : null;
+  return { label: live ? `${label} · streaming` : label, kind, text,
+    metrics: data.metrics, taskElapsedMs };
+}
+
+function formatTaskComplete(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const elapsedMs = Number(value);
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return "";
+  if (elapsedMs < 60000) {
+    return `Task complete in ${(elapsedMs / 1000).toFixed(2)} seconds.`;
+  }
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  let text = `Task complete in ${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  if (seconds) text += ` and ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+  return `${text}.`;
 }
 
 function appendAgentEvent(container, entry, live = false) {
@@ -2761,6 +3014,8 @@ function appendAgentEvent(container, entry, live = false) {
     }
   }
   appendMetrics(card, display.metrics);
+  const taskComplete = formatTaskComplete(display.taskElapsedMs);
+  if (taskComplete) card.append(element("small", "metrics-strip task-complete", taskComplete));
   container.append(card);
 }
 
@@ -2812,8 +3067,16 @@ function renderAgent() {
     byId("agent-meta").textContent = state.agentInitializing
       ? "Preparing the workspace agent…" : "Open Agent to initialize this workspace.";
     byId("agent-metrics").textContent = "";
-    setEmpty(events, state.agentInitializing
-      ? "Loading the project context and tools…" : "Open Agent to initialize this workspace.");
+    if (state.agentUnscopedNotices.length) {
+      clear(events);
+      for (const notice of state.agentUnscopedNotices) {
+        appendConversationNotice(events, notice, "event-card");
+      }
+      events.scrollTop = events.scrollHeight;
+    } else {
+      setEmpty(events, state.agentInitializing
+        ? "Loading the project context and tools…" : "Open Agent to initialize this workspace.");
+    }
     byId("agent-turn-input").disabled = true;
     byId("agent-turn-submit").disabled = true;
     byId("cancel-turn-button").hidden = true;
@@ -2855,7 +3118,9 @@ function renderAgent() {
   const logs = state.agentLogs.get(session.id) || [];
   const history = state.agentHistory.get(session.id);
   const activities = state.agentActivities.get(session.id);
-  if (!history?.messages?.length && !logs.length && (!activities || activities.size === 0)) {
+  const notices = state.agentNotices.get(session.id) || [];
+  if (!history?.messages?.length && !logs.length && (!activities || activities.size === 0) &&
+      !notices.length) {
     setEmpty(events, "Waiting for session events…");
   }
   else {
@@ -2864,11 +3129,15 @@ function renderAgent() {
       const older = element("button", "ghost", "Load older messages"); older.type = "button";
       older.addEventListener("click", () => void loadAgentHistory(session.id, history.before)); events.append(older);
     }
-    for (const message of history?.messages || []) appendAgentEvent(events, { type: message.role, data: { content: message.content } });
+    for (const message of history?.messages || []) appendAgentEvent(events, {
+      type: message.role,
+      data: { content: message.content, task_elapsed_ms: message.task_elapsed_ms },
+    });
     for (const entry of logs) {
       appendAgentEvent(events, entry);
     }
     if (activities) for (const entry of activities.values()) appendAgentEvent(events, entry, true);
+    for (const notice of notices) appendConversationNotice(events, notice, "event-card");
     events.scrollTop = followTail ? events.scrollHeight : previousScrollTop;
   }
   const ready = session.status === "ready" && !session.turn_id;
@@ -2901,7 +3170,9 @@ async function loadAgentHistory(sessionId, before = 0) {
       if (!response.turn_id) state.agentActivities.set(sessionId, new Map());
     }
     renderAgent();
-  } catch (error) { if (error.status !== 409) toast(errorMessage(error), "error"); }
+  } catch (error) {
+    if (error.status !== 409) agentNotice(errorMessage(error), "error", sessionId);
+  }
 }
 
 function scheduleAgentRender() {
@@ -2913,6 +3184,7 @@ function scheduleAgentRender() {
 }
 
 async function loadSessions() {
+  const noticeSessionId = state.session?.id ?? null;
   try {
     const sessions = await api(`${API_ROOT}/sessions`);
     state.sessions = Array.isArray(sessions) ? sessions : [];
@@ -2921,7 +3193,7 @@ async function loadSessions() {
       if (updated) state.session = { ...state.session, ...updated };
     }
     renderAgent();
-  } catch (error) { toast(errorMessage(error), "error"); }
+  } catch (error) { agentNotice(errorMessage(error), "error", noticeSessionId); }
 }
 
 async function ensureWorkspaceAgent() {
@@ -2943,7 +3215,7 @@ async function ensureWorkspaceAgent() {
       await selectSession(response.session.id);
     }
   } catch (error) {
-    toast(errorMessage(error), "error");
+    agentNotice(errorMessage(error), "error", null);
   } finally {
     state.agentInitializing = false;
     renderAgent();
@@ -2983,7 +3255,7 @@ async function selectSession(sessionId) {
     }, state.session.turn_id);
     watchSession(sessionId);
   } catch (error) {
-    toast(errorMessage(error), "error");
+    agentNotice(errorMessage(error), "error", sessionId);
   }
 }
 
@@ -3027,7 +3299,8 @@ function watchSession(sessionId) {
           state.session = event.data;
           if (["ready", "settings_changed", "reasoning_changed"].includes(event.type)) {
             void loadAgentHistory(sessionId);
-            void refreshWorkspaceSettings().catch((error) => toast(errorMessage(error), "error"));
+            void refreshWorkspaceSettings().catch((error) =>
+              agentNotice(errorMessage(error), "error", sessionId));
           }
         }
         if (["turn_completed", "turn_failed", "approval_resolved"].includes(event.type)) {
@@ -3047,7 +3320,8 @@ function watchSession(sessionId) {
     },
     async () => {
       if (state.session && state.session.id === sessionId) await refreshSelectedSession();
-      toast("Agent event replay expired; loaded the current session state.");
+      agentNotice("Agent event replay expired; loaded the current session state.",
+        "warning", sessionId);
       return state.session?.id === sessionId ? state.session.event_cursor || 0 : 0;
     },
     () => !state.connected || !state.sessions.some((session) => session.id === sessionId),
@@ -3056,13 +3330,15 @@ function watchSession(sessionId) {
 
 async function refreshSelectedSession() {
   if (!state.session) return;
+  const sessionId = state.session.id;
   try {
-    state.session = await api(`${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}`);
+    const refreshed = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}`);
+    if (state.session?.id === sessionId) state.session = refreshed;
     await loadSessions();
-    await loadAgentHistory(state.session.id);
+    await loadAgentHistory(sessionId);
     renderAgent();
   } catch (error) {
-    toast(errorMessage(error), "error");
+    agentNotice(errorMessage(error), "error", sessionId);
   }
 }
 
@@ -3077,16 +3353,14 @@ function cycleSelect(select) {
 }
 
 function cycleChatReasoning() {
-  const label = cycleSelect(byId("chat-reasoning"));
+  cycleSelect(byId("chat-reasoning"));
   renderChatToolbar();
-  if (label) toast(`Chat reasoning: ${label}`);
 }
 
 function toggleChatThinking() {
   state.showThinkingTraces = !state.showThinkingTraces;
   storageSet(THINKING_STORAGE_KEY, state.showThinkingTraces ? "show" : "hide");
   renderChat();
-  toast(`Thinking traces ${state.showThinkingTraces ? "shown" : "hidden"}`);
 }
 
 function renderChatToolbar() {
@@ -3102,7 +3376,7 @@ function renderChatToolbar() {
 
 async function cycleAgentReasoning() {
   if (!state.session || state.session.turn_id) {
-    toast("Select an idle agent session before changing reasoning", "error");
+    agentNotice("Select an idle agent session before changing reasoning", "error");
     return;
   }
   const configured = Array.isArray(state.session.reasoning_options)
@@ -3118,18 +3392,23 @@ async function cycleAgentReasoning() {
 
 async function setAgentReasoning(value, label = value) {
   if (!state.session || state.session.turn_id || state.agentSettingsPending || !value) return;
+  const sessionId = state.session.id;
   state.agentSettingsPending = true;
   renderAgent();
   try {
-    state.session = await api(
-      `${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/reasoning`, {
+    const response = await api(
+      `${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/reasoning`, {
         method: "POST",
         body: { reasoning: value },
       });
-    renderAgent();
-    toast(`Agent reasoning: ${label}`);
+    const index = state.sessions.findIndex((item) => item.id === sessionId);
+    if (index >= 0) state.sessions[index] = response;
+    if (state.session?.id === sessionId) {
+      state.session = response;
+      renderAgent();
+    }
   } catch (error) {
-    toast(errorMessage(error), "error");
+    agentNotice(errorMessage(error), "error", sessionId);
   } finally {
     state.agentSettingsPending = false;
     renderAgent();
@@ -3138,24 +3417,25 @@ async function setAgentReasoning(value, label = value) {
 
 async function setAgentSetting(field, value) {
   if (!state.session || state.session.turn_id || state.agentSettingsPending || !value) return;
+  const sessionId = state.session.id;
   state.agentSettingsPending = true;
   renderAgent();
   try {
-    state.session = await api(
-      `${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/settings`, {
+    const response = await api(
+      `${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/settings`, {
         method: "POST",
         body: { [field]: value },
       });
-    const index = state.sessions.findIndex((item) => item.id === state.session.id);
-    if (index >= 0) state.sessions[index] = state.session;
-    if (field === "provider") {
+    const index = state.sessions.findIndex((item) => item.id === sessionId);
+    if (index >= 0) state.sessions[index] = response;
+    if (state.session?.id === sessionId) state.session = response;
+    if (field === "provider" && state.session?.id === sessionId) {
       const control = modelControls().find((item) => item.providerId === "agent-provider");
       if (control) refreshModelControl(control);
     }
-    toast(`Agent ${field.replace("_", " ")} updated`);
   } catch (error) {
-    toast(errorMessage(error), "error");
-    await refreshSelectedSession();
+    agentNotice(errorMessage(error), "error", sessionId);
+    if (state.session?.id === sessionId) await refreshSelectedSession();
   } finally {
     state.agentSettingsPending = false;
     renderAgent();
@@ -3164,16 +3444,17 @@ async function setAgentSetting(field, value) {
 
 async function cancelActiveAgentTurn() {
   if (!state.session || !state.session.turn_id) return false;
+  const sessionId = state.session.id;
+  const turnId = state.session.turn_id;
   try {
-    await api(`${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/turns/${encodeURIComponent(state.session.turn_id)}/cancel`, { method: "POST" });
-    if (state.guard) {
+    await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/cancel`, { method: "POST" });
+    if (state.guard?.sessionId === sessionId) {
       state.guard = null;
       closeDialog(byId("guard-dialog"));
     }
-    toast("Agent turn cancellation requested");
     return true;
   } catch (error) {
-    toast(errorMessage(error), "error");
+    agentNotice(errorMessage(error), "error", sessionId);
     return false;
   }
 }
@@ -3187,7 +3468,6 @@ async function interruptCurrentTask() {
     else {
       endChatTurn(threadId, true);
       renderChat();
-      toast("Send cancelled");
     }
     return;
   }
@@ -3208,25 +3488,28 @@ async function resolveGuard(decision) {
     state.guard = null;
     closeDialog(byId("guard-dialog"));
     await refreshSelectedSession();
-    toast(`Guard decision sent: ${decision}`);
   } catch (error) {
     closeDialog(byId("guard-dialog"));
     state.guard = null;
     if (error instanceof ApiError && [404, 409].includes(error.status)) {
-      toast("That approval is no longer pending; session state was refreshed.", "error");
+      agentNotice("That approval is no longer pending; session state was refreshed.",
+        "error", guard.sessionId);
       await refreshSelectedSession();
-    } else toast(errorMessage(error), "error");
+    } else agentNotice(errorMessage(error), "error", guard.sessionId);
   }
 }
 
 async function reviewGuardFile() {
   if (!state.guard) return;
+  const guard = state.guard;
+  const sessionId = guard.sessionId;
   try {
-    const response = await api(`${API_ROOT}/sessions/${encodeURIComponent(state.guard.sessionId)}/approvals/${encodeURIComponent(state.guard.approval.id)}/review-file`);
+    const response = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(guard.approval.id)}/review-file`);
+    if (state.guard !== guard) return;
     byId("guard-review").textContent = response.content || "";
     byId("guard-review").hidden = false;
   } catch (error) {
-    toast(errorMessage(error), "error");
+    agentNotice(errorMessage(error), "error", sessionId);
   }
 }
 
@@ -3356,13 +3639,13 @@ function reformatEditorDraft() {
   const language = languageForPath(state.file.path);
   if (language === "text") return;
   if (new TextEncoder().encode(byId("file-editor").value).length > MAX_EDITOR_REFORMAT_BYTES) {
-    toast("This draft is too large to reformat safely (1 MiB limit).", "error");
+    surfaceNotice("workspace-panel", "This draft is too large to reformat safely (1 MiB limit).", "error");
     return;
   }
   const next = reformatEditorSnapshot(editorSnapshot(), language,
     state.file.tabWidth, state.file.tabStyle);
   applyEditorTransformation(next);
-  if (next.warning) toast(next.warning);
+  if (next.warning) surfaceNotice("workspace-panel", next.warning, "warning");
 }
 
 function clearEditor() {
@@ -3541,7 +3824,9 @@ async function loadFile(path) {
   try {
     const response = await api(`${API_ROOT}/files?path=${wirePath(path)}`);
     const converted = Boolean(response.converted_from);
-    for (const warning of response.warnings || []) toast(warning, "warning");
+    for (const warning of response.warnings || []) {
+      surfaceNotice("workspace-panel", warning, "warning");
+    }
     const openPath = converted && response.suggested_path ? response.suggested_path : response.path;
     let revision = response.revision;
     if (converted && response.suggested_path) {
@@ -3578,10 +3863,11 @@ async function loadFile(path) {
         : from.includes("wordprocessingml") ? "DOCX"
         : from.includes("pdf") ? "PDF"
         : "document";
-      toast(`Converted ${label} to Markdown; Save writes the sibling .md file`);
+      surfaceNotice("workspace-panel",
+        `Converted ${label} to Markdown; Save writes the sibling .md file`);
     }
   } catch (error) {
-    toast(errorMessage(error), "error");
+    surfaceNotice("workspace-panel", errorMessage(error), "error");
   }
 }
 
@@ -3605,11 +3891,10 @@ async function saveFile() {
     updateEditorMeta();
     showFileViewer();
     await loadDirectory(state.directory.path);
-    toast(`Saved ${path}`);
   } catch (error) {
     if (error instanceof ApiError && error.code === "revision_conflict") {
       showConflict(`The server copy of ${path} changed. Your draft is still in the editor.`, () => loadFile(path));
-    } else toast(errorMessage(error), "error");
+    } else surfaceNotice("workspace-panel", errorMessage(error), "error");
   }
 }
 
@@ -3624,6 +3909,7 @@ async function openMutation(type, entry = null) {
     return;
   }
   state.mutation = { type, entry };
+  byId("mutation-error").textContent = "";
   const title = byId("mutation-title");
   const description = byId("mutation-description");
   const path = byId("mutation-path");
@@ -3709,7 +3995,6 @@ async function applyMutation() {
     state.file.dirty = false;
     await loadFile(`${path}${suffix}`);
   }
-  toast("Workspace action completed");
 }
 
 function byteOffset(text, codeUnitOffset) {
@@ -3759,7 +4044,9 @@ function finishAssistJob(job, context) {
   if (job.state !== "succeeded" || !job.result || !job.result.edit) return;
   if (!state.file || state.file.path !== context.path || state.file.revision !== context.revision ||
       byId("file-editor").value !== context.draft) {
-    toast("The assist proposal is ready in Jobs, but the editor changed, so it was not applied.", "error");
+    surfaceNotice("workspace-panel",
+      "The assist proposal is ready in Jobs, but the editor changed, so it was not applied.",
+      "error");
     return;
   }
   try {
@@ -3767,9 +4054,8 @@ function finishAssistJob(job, context) {
     replaceEditorDraft(applyByteEdit(byId("file-editor").value, job.result.edit));
     switchPanel("workspace-panel");
     byId("file-editor").focus();
-    toast("AI proposal applied to the draft. Review it, then save explicitly.");
   } catch (error) {
-    toast(errorMessage(error), "error");
+    surfaceNotice("workspace-panel", errorMessage(error), "error");
   }
 }
 
@@ -3881,7 +4167,8 @@ function bindEvents() {
   });
 
   byId("refresh-settings-button").addEventListener("click", () => {
-    void refreshSettings().catch((error) => toast(errorMessage(error), "error"));
+    const noticeTarget = activeNoticeTarget();
+    void refreshSettings().catch((error) => targetNotice(noticeTarget, errorMessage(error), "error"));
     if (state.thread) void loadThread(state.thread.id);
   });
   byId("refresh-jobs-button").addEventListener("click", () => void refreshKnownJobs());
@@ -3896,7 +4183,10 @@ function bindEvents() {
   byId("goal-job-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const operation = byId("goal-operation").value;
-    if (!supports(operation)) return toast(`${operation} is not supported by this server`, "error");
+    if (!supports(operation)) {
+      surfaceNotice("jobs-panel", `${operation} is not supported by this server`, "error");
+      return;
+    }
     try {
       await submitJob(operation, optionalPayload({
         goal: byId("goal-input").value.trim(),
@@ -3904,7 +4194,7 @@ function bindEvents() {
         model: byId("goal-model").value.trim(),
       }));
       byId("goal-input").value = "";
-    } catch (error) { toast(errorMessage(error), "error"); }
+    } catch (error) { surfaceNotice("jobs-panel", errorMessage(error), "error"); }
   });
 
   byId("image-job-form").addEventListener("submit", async (event) => {
@@ -3947,7 +4237,7 @@ function bindEvents() {
       }
       state.imageJobId = job.id;
       renderImage();
-    } catch (error) { toast(errorMessage(error), "error"); }
+    } catch (error) { surfaceNotice("image-panel", errorMessage(error), "error"); }
     finally {
       state.imageSubmitting = false;
       renderImageOptions();
@@ -3967,7 +4257,7 @@ function bindEvents() {
     const combined = [...state.imageInputs.map((input) => input.file), ...additions];
     const validation = state.imageCatalog
       ? imageFileError(combined, state.imageCatalog.limits) : "Image catalog is unavailable.";
-    if (validation) toast(validation, "error");
+    if (validation) surfaceNotice("image-panel", validation, "error");
     else {
       for (const file of additions) {
         state.imageInputs.push({ file, previewUrl: URL.createObjectURL(file), uploadId: "" });
@@ -4000,7 +4290,7 @@ function bindEvents() {
       }
       const job = await submitJob("video", optionalPayload({ prompt: byId("video-prompt").value.trim(), provider: byId("video-provider").value, model: model ? model.model : "", settings, input_media_ids: await uploadVideoInputs() }), { type: "video" });
       state.videoJobId = job.id; renderVideo();
-    } catch (error) { toast(errorMessage(error), "error"); }
+    } catch (error) { surfaceNotice("video-panel", errorMessage(error), "error"); }
     finally { state.videoSubmitting = false; renderVideoOptions(); }
   });
   byId("video-provider").addEventListener("change", () => renderVideoOptions(true));
@@ -4008,7 +4298,10 @@ function bindEvents() {
   byId("video-input-files").addEventListener("change", (event) => {
     const additions = Array.from(event.target.files || []); state.videoInputs.push(...additions.map((file) => ({ file, uploadId: "" })));
     event.target.value = ""; const validation = videoInputError(selectedVideoModel());
-    if (validation) { state.videoInputs.splice(state.videoInputs.length - additions.length, additions.length); toast(validation, "error"); }
+    if (validation) {
+      state.videoInputs.splice(state.videoInputs.length - additions.length, additions.length);
+      surfaceNotice("video-panel", validation, "error");
+    }
     renderVideoInputList(); renderVideoOptions();
   });
   byId("video-cancel-button").addEventListener("click", () => { if (state.videoJobId) void cancelJob(state.videoJobId); });
@@ -4023,15 +4316,20 @@ function bindEvents() {
   byId("video-download-button").addEventListener("click", downloadGeneratedVideo);
   byId("edit-file-button").addEventListener("click", beginFileEdit);
 
-  byId("new-thread-button").addEventListener("click", () => void startNewChat().catch((error) => {
-    toast(errorMessage(error), "error");
-  }));
+  byId("new-thread-button").addEventListener("click", () => {
+    byId("new-thread-error").textContent = "";
+    void startNewChat().catch((error) => {
+      byId("new-thread-error").textContent = errorMessage(error);
+      openDialog(byId("new-thread-dialog"));
+    });
+  });
   byId("chat-regenerate-button").addEventListener("click", () => void regenerateChat());
   byId("chat-cycle-reasoning-button").addEventListener("click", cycleChatReasoning);
   byId("chat-thinking-button").addEventListener("click", toggleChatThinking);
   byId("refresh-threads-button").addEventListener("click", () => void loadThreads());
   byId("new-thread-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    byId("new-thread-error").textContent = "";
     closeDialog(byId("new-thread-dialog"));
     try {
       const routing = lastChatRouting();
@@ -4042,7 +4340,7 @@ function bindEvents() {
       }), !(byId("thread-provider").value || routing.provider));
       byId("thread-name-input").value = "";
     } catch (error) {
-      toast(errorMessage(error), "error");
+      byId("new-thread-error").textContent = errorMessage(error);
       openDialog(byId("new-thread-dialog"));
     }
   });
@@ -4101,11 +4399,13 @@ function bindEvents() {
       return;
     }
     if (!state.session) return;
+    const sessionId = state.session.id;
     try {
-      const response = await api(`${API_ROOT}/sessions/${encodeURIComponent(state.session.id)}/turns`, {
+      const response = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/turns`, {
         method: "POST",
         body: { text },
       });
+      if (state.session?.id !== sessionId) return;
       state.session.turn_id = response.turn_id;
       state.session.status = "running";
       state.session.active_elapsed_ms = 0;
@@ -4117,7 +4417,20 @@ function bindEvents() {
       };
       byId("agent-turn-input").value = "";
       renderAgent();
-    } catch (error) { toast(errorMessage(error), "error"); }
+    } catch (error) { agentNotice(errorMessage(error), "error", sessionId); }
+  });
+  byId("agent-turn-input").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    if ((event.shiftKey || event.altKey) && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      const input = event.currentTarget;
+      input.setRangeText("\n", input.selectionStart, input.selectionEnd, "end");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    byId("agent-turn-form").requestSubmit();
   });
   byId("cancel-turn-button").addEventListener("click", () => void cancelActiveAgentTurn());
   byId("guard-review-button").addEventListener("click", () => void reviewGuardFile());
@@ -4130,12 +4443,16 @@ function bindEvents() {
   byId("create-directory-button").addEventListener("click", () => openMutation("mkdir"));
   byId("mutation-form").addEventListener("submit", (event) => {
     event.preventDefault();
+    byId("mutation-error").textContent = "";
     void applyMutation().catch((error) => {
       if (error instanceof ApiError && error.code === "revision_conflict") {
         closeDialog(byId("mutation-dialog"));
         showConflict("The workspace changed after this directory was reviewed. Reload the directory before retrying.",
           () => loadDirectory(state.directory.path));
-      } else toast(errorMessage(error), "error");
+      } else {
+        byId("mutation-error").textContent = errorMessage(error);
+        openDialog(byId("mutation-dialog"));
+      }
     });
   });
   byId("file-editor").addEventListener("keydown", (event) => {
@@ -4189,11 +4506,18 @@ function bindEvents() {
   });
   byId("editor-reformat-button").addEventListener("click", reformatEditorDraft);
   byId("save-file-button").addEventListener("click", () => void saveFile());
-  byId("editor-assist-button").addEventListener("click", () => openDialog(byId("assist-dialog")));
+  byId("editor-assist-button").addEventListener("click", () => {
+    byId("assist-error").textContent = "";
+    openDialog(byId("assist-dialog"));
+  });
   byId("assist-form").addEventListener("submit", (event) => {
     event.preventDefault();
+    byId("assist-error").textContent = "";
     void requestAssist(byId("assist-instruction").value.trim(), byId("assist-selection").checked)
-      .catch((error) => toast(errorMessage(error), "error"));
+      .catch((error) => {
+        byId("assist-error").textContent = errorMessage(error);
+        openDialog(byId("assist-dialog"));
+      });
   });
 
   byId("keep-draft-button").addEventListener("click", () => {

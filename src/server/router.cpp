@@ -658,6 +658,9 @@ Response route_request(const http::Request& request,
                         ",\"mime_type\":" + json::quote(stored.mime_type) +
                         ",\"display_name\":" + json::quote(stored.display_name) +
                         ",\"converted\":" + std::string(stored.converted ? "true" : "false") +
+                        ",\"source_byte_size\":" + std::to_string(stored.source_byte_size) +
+                        ",\"conversion_elapsed_us\":" +
+                            std::to_string(stored.conversion_elapsed_us) +
                         ",\"warnings\":" + warnings_json +
                         ",\"byte_size\":" + std::to_string(stored.bytes->size()) +
                         ",\"expires_at\":" +

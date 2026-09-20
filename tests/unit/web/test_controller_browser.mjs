@@ -20,16 +20,22 @@ test("web controller selectors, per-thread saves, workspace settings and history
     provider: "openrouter", model: `model-${id}`, settings_fields: fields,
     settings: { temperature: id === 1 ? "0.2" : "0.8", reasoning: id === 1 ? "high" : "low", stream: "on" },
     messages: [], message_count: 0 }));
-  let nextThreadId = 3, createdProviders = [];
-  let chatUploads = [], chatJobs = [], appendedMessages = [];
+  let nextThreadId = 3, createdProviders = [], failNextThread = false;
+  let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [];
   let workspace = { provider: "openrouter", model: "workspace-model", revision: "1",
     settings_fields: fields, settings: { temperature: "0.5", reasoning: "low", stream: "on" } };
   let session = null, assistRequest = null;
+  const sessionEventStreams = new Set();
+  const agentHistoryMessages = [
+    { seq: 1, role: "user", content: "Earlier request", created_at_ms: 1000 },
+    { seq: 2, role: "assistant", content: "Earlier project work", created_at_ms: 22340,
+      task_elapsed_ms: 21340 },
+  ];
   const jobs = new Map(), models = Array.from({ length: 350 }, (_, i) => `model-${349 - i}`);
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v30.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v23.css"]) {
+  for (const name of ["app-v31.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v24.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -41,7 +47,14 @@ test("web controller selectors, per-thread saves, workspace settings and history
       let body = {};
       if (raw && String(req.headers["content-type"] || "").includes("json")) body = JSON.parse(raw);
       const send = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
-      if (path.endsWith("/events")) { res.setHeader("Content-Type", "text/event-stream"); res.write(": connected\n\n"); return; }
+      if (path.endsWith("/events")) {
+        res.setHeader("Content-Type", "text/event-stream"); res.write(": connected\n\n");
+        if (path.includes("/sessions/")) {
+          sessionEventStreams.add(res);
+          req.on("close", () => sessionEventStreams.delete(res));
+        }
+        return;
+      }
       if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "sessions", "dired", "files", "editor_assist"] });
       if (path.endsWith("/status")) return send({ status: "ready" });
       if (path.endsWith("/images/catalog")) return send({ models: [] });
@@ -52,6 +65,11 @@ test("web controller selectors, per-thread saves, workspace settings and history
       }
       if (path.endsWith("/chat/threads")) {
         if (req.method === "POST") {
+          if (failNextThread) {
+            failNextThread = false;
+            res.statusCode = 500;
+            return send({ error: { code: "create_failed", message: "Could not create test chat" } });
+          }
           createdProviders.push(body.provider || "");
           const thread = { id: nextThreadId++, revision: 1, name: body.name || "New chat",
             provider: body.provider || "none", model: body.model || "", settings_fields: fields,
@@ -62,23 +80,38 @@ test("web controller selectors, per-thread saves, workspace settings and history
       }
       if (path.endsWith("/chat/inputs") && req.method === "POST") {
         const id = `chat_input_${chatUploads.length + 1}`;
-        chatUploads.push({ id, bytes: raw.length });
+        const displayName = String(req.headers["x-ainiux-filename"] || "attachment");
+        const converted = /\.(pdf|docx|xlsx|pptx|html?)$/i.test(displayName);
+        const conversionIndex = chatUploads.filter((item) => item.converted).length;
+        const stored = { id, kind: "text", mime_type: converted ? "text/markdown" : "text/plain",
+          display_name: displayName, converted, source_byte_size: raw.length,
+          conversion_elapsed_us: converted ? 72 + conversionIndex : 0,
+          byte_size: converted ? 54323 + conversionIndex : raw.length,
+          expires_at: "2099-01-01T00:00:00Z",
+          warnings: converted ? [`Conversion warning for ${displayName}`] : [] };
+        chatUploads.push({ ...stored, bytes: raw.length });
         res.statusCode = 201;
-        return send({ id, kind: "text", mime_type: "text/plain", display_name: "notes.txt",
-          converted: false, byte_size: raw.length, expires_at: "2099-01-01T00:00:00Z" });
+        return send(stored);
       }
       const messageMatch = path.match(/\/chat\/threads\/(\d+)\/messages$/);
       if (messageMatch && req.method === "POST") {
         const thread = threads.find((item) => item.id === Number(messageMatch[1]));
         appendedMessages.push(body);
+        const firstOrdinal = thread.message_count;
         thread.revision += 1;
-        thread.messages.push(...(body.messages || []));
+        thread.messages.push(...(body.messages || []).map((message, offset) => {
+          const attachments = (message.input_ids || []).map((id) => chatUploads.find((item) => item.id === id))
+            .filter(Boolean).map(({ kind, mime_type, display_name, byte_size }) =>
+              ({ kind, mime_type, display_name, byte_size }));
+          return { ...message, ordinal: firstOrdinal + offset, attachments };
+        }));
         thread.message_count = thread.messages.length;
         return send({ thread: { id: thread.id, revision: thread.revision,
-          message_count: thread.message_count } });
+          message_count: thread.message_count, first_ordinal: firstOrdinal } });
       }
       if (path.endsWith("/jobs/chat") && req.method === "POST") {
         chatJobs.push(body);
+        await new Promise((resolve) => setTimeout(resolve, 150));
         const job = { id: `chat-${jobs.size}`, operation: "chat", state: "succeeded",
           result: { content: "ok", provider: body.provider || "openrouter", model: body.model || "" } };
         jobs.set(job.id, job); res.statusCode = 202; return send({ job });
@@ -94,6 +127,27 @@ test("web controller selectors, per-thread saves, workspace settings and history
           return send({ id: thread.id, deleted: false, reason: "not_empty" });
         }
         threads.splice(index, 1); return send({ id: thread.id, deleted: true });
+      }
+      const regenerateMatch = path.match(/\/chat\/threads\/(\d+)\/regenerate$/);
+      if (regenerateMatch && req.method === "POST") {
+        const thread = threads.find((item) => item.id === Number(regenerateMatch[1]));
+        let userIndex = thread.messages.length - 1;
+        while (userIndex >= 0 && thread.messages[userIndex].role !== "user") --userIndex;
+        const prompt = userIndex >= 0 ? thread.messages[userIndex].content : "";
+        thread.messages.splice(userIndex + 1);
+        thread.message_count = thread.messages.length;
+        thread.revision += 1;
+        return send({ thread: { id: thread.id, revision: thread.revision,
+          message_count: thread.message_count }, prompt });
+      }
+      const deleteMessageMatch = path.match(/\/chat\/threads\/(\d+)\/delete-message$/);
+      if (deleteMessageMatch && req.method === "POST") {
+        const thread = threads.find((item) => item.id === Number(deleteMessageMatch[1]));
+        const index = thread.messages.findIndex((message) => message.ordinal === body.ordinal);
+        thread.messages.splice(index);
+        thread.message_count = thread.messages.length;
+        thread.revision += 1;
+        return send({ thread });
       }
       const threadMatch = path.match(/\/chat\/threads\/(\d+)(\/settings)?$/);
       if (threadMatch) {
@@ -123,7 +177,27 @@ test("web controller selectors, per-thread saves, workspace settings and history
         return send({ session: { ...session, ...workspace } });
       }
       if (path.endsWith("/sessions")) return send(session ? [{ ...session, ...workspace }] : []);
-      if (path.endsWith("/history")) return send({ turn_id: "", messages: [{ seq: 1, role: "assistant", content: "Earlier project work" }], before: 0 });
+      if (path.endsWith("/history")) return send({ turn_id: "", messages: agentHistoryMessages, before: 0 });
+      if (path.endsWith("/turns") && req.method === "POST") {
+        agentTurns.push(body);
+        const turnId = `turn-${agentTurns.length}`;
+        setTimeout(() => {
+          const firstSeq = agentHistoryMessages.length + 1;
+          agentHistoryMessages.push(
+            { seq: firstSeq, role: "user", content: body.text, created_at_ms: 30000 },
+            { seq: firstSeq + 1, role: "assistant", content: "Live agent answer",
+              created_at_ms: 34960, task_elapsed_ms: 4960 });
+          const events = [
+            { id: 10, type: "turn_started", turn_id: turnId, data: { text: body.text } },
+            { id: 11, type: "turn_completed", turn_id: turnId,
+              data: { content: "Live agent answer", metrics: { elapsed_ms: 4960 } } },
+          ];
+          for (const stream of sessionEventStreams) {
+            for (const event of events) stream.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+          }
+        }, 20);
+        return send({ turn_id: turnId });
+      }
       if (path.includes("/sessions/")) return send({ ...session, ...workspace, reasoning: workspace.settings.reasoning });
       if (path.endsWith("/dired")) return send({ path: ".", revision: "r1", entries: [
         { type: "file", name: "notes.txt", path: "notes.txt", size: 5, revision: "r1" },
@@ -180,9 +254,13 @@ test("web controller selectors, per-thread saves, workspace settings and history
         threadText: document.querySelector("#thread-list")?.textContent,
         provider: document.querySelector("#chat-provider")?.value,
         model: document.querySelector("#chat-model")?.value,
+        chatSave: document.querySelector("#chat-settings-save-status")?.textContent,
+        reasoning: document.querySelector("#chat-reasoning")?.value,
+        reasoningButtonDisabled: document.querySelector("#chat-cycle-reasoning-button")?.disabled,
         picker: document.querySelector(".model-picker")?.open || false,
         heading: document.querySelector("#conversation-heading")?.textContent,
-        toast: document.querySelector("#toast-region")?.textContent,
+        notices: [...document.querySelectorAll(".browser-notice, .inline-notice-area:not([hidden])")]
+          .map((node) => node.textContent),
         authOpen: document.querySelector("#auth-dialog")?.open || false,
         token: localStorage.getItem("ainiux.controller.token.v1"),
         scripts: [...document.scripts].map((node) => node.src),
@@ -197,7 +275,6 @@ test("web controller selectors, per-thread saves, workspace settings and history
     };
     const screenshot = async (name) => {
       if (!process.env.AINIUX_TEST_SCREENSHOTS) return;
-      await evaluate('document.querySelector("#toast-region").replaceChildren()');
       const shot = await command("Page.captureScreenshot", { format: "png" }, sid);
       await writeFile(join(process.env.AINIUX_TEST_SCREENSHOTS, name + ".png"), Buffer.from(shot.data, "base64"));
     };
@@ -272,14 +349,18 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await click("#new-thread-button");
     await wait('document.querySelectorAll(".chat-attach-chip").length === 0 && document.querySelector("#chat-send") && !document.querySelector("#chat-send").disabled');
     await evaluate(`(() => {
-      const file = new File(["hello pdf"], "notes.txt", { type: "text/plain" });
+      const files = [
+        new File(["plain"], "notes.txt", { type: "text/plain" }),
+        new File([new Uint8Array(653 * 1024)], "example.pdf", { type: "application/pdf" }),
+        new File(["<h1>Two</h1>"], "page.html", { type: "text/html" }),
+      ];
       const input = document.querySelector("#chat-attach-files");
       const transfer = new DataTransfer();
-      transfer.items.add(file);
+      for (const file of files) transfer.items.add(file);
       input.files = transfer.files;
       input.dispatchEvent(new Event("change"));
     })()`);
-    await wait('document.querySelectorAll(".chat-attach-chip").length === 1');
+    await wait('document.querySelectorAll(".chat-attach-chip").length === 3');
     await click("#chat-send");
     for (let i = 0; i < 100 && !chatJobs.length; ++i) {
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -289,6 +370,114 @@ test("web controller selectors, per-thread saves, workspace settings and history
       body.messages.some((message) => Array.isArray(message.input_ids) && message.input_ids.length)),
       "send appends the attachment identifiers");
     assert.ok(chatJobs.some((body) => body.thread_id), "chat job uses the stored thread");
+    const optimisticTimeline = await evaluate(`[
+      ...document.querySelectorAll("#chat-messages > article")
+    ].map((node) => ({ text: node.textContent, classes: node.className }))`);
+    assert.deepEqual(optimisticTimeline.slice(0, 5).map(({ text, classes }) =>
+      classes.includes("message user") ? "user" : text.includes("Conversion warning") ? "warning" :
+      text.includes("example.pdf") ? "pdf" : text.includes("page.html") ? "html" : text),
+      ["pdf", "html", "warning", "warning", "user"],
+      "optimistic chat places converted-file notices and warnings before the durable prompt");
+    assert.equal(optimisticTimeline.some(({ text }) => text.includes("notes.txt") &&
+      text.includes("Attached and converted")), false,
+      "unchanged text uploads use chips without a conversion notice");
+    assert.ok(optimisticTimeline[0].text.includes("653.0 KiB") &&
+      optimisticTimeline[0].text.includes("0.072 ms") &&
+      optimisticTimeline[0].text.includes("54,323 bytes of Markdown"));
+    await wait('!document.querySelector("#chat-stream-message") && document.querySelector("#chat-messages .message.assistant")');
+    const reloadedTimeline = await evaluate(`[
+      ...document.querySelectorAll("#chat-messages > article")
+    ].map((node) => ({ text: node.textContent, classes: node.className }))`);
+    assert.deepEqual(reloadedTimeline.slice(0, 5).map(({ text, classes }) =>
+      classes.includes("message user") ? "user" : text.includes("Conversion warning") ? "warning" :
+      text.includes("example.pdf") ? "pdf" : text.includes("page.html") ? "html" : text),
+      ["pdf", "html", "warning", "warning", "user"],
+      "thread reload preserves notice chronology before the associated prompt");
+    assert.equal(await evaluate('document.querySelector("#chat-messages").textContent.includes("Chat response saved to the thread")'), false,
+      "successful chat persistence is silent");
+    await click("#chat-thinking-button");
+    await click("#chat-thinking-button");
+    await click("#chat-cycle-reasoning-button");
+    await wait('document.querySelector("#chat-settings-save-status").textContent === "Saved"');
+    assert.equal(await evaluate('/Thinking traces (shown|hidden)|Chat reasoning:/i.test(document.querySelector("#chat-messages").textContent)'), false,
+      "toolbar state changes do not add transcript notices");
+    await evaluate(`{ const reasoning = document.querySelector("#chat-reasoning");
+      reasoning.value = "auto"; reasoning.dispatchEvent(new Event("change", { bubbles: true })); }`);
+    await wait('document.querySelector("#chat-settings-save-status").textContent === "Saved" && document.querySelector("#chat-cycle-reasoning-button").textContent === "Reasoning: auto"');
+    await evaluate(`{ const input = document.querySelector("#chat-input");
+      input.value = "/theme dark"; document.querySelector("#chat-form").requestSubmit();
+      input.value = "/theme blue"; document.querySelector("#chat-form").requestSubmit(); }`);
+    await wait('document.querySelector("#chat-messages").textContent.includes("Usage: /theme light or /theme dark")');
+    const noticeStyles = await evaluate(`(() => {
+      const rows = [...document.querySelectorAll("#chat-messages .browser-notice")];
+      const row = (kind) => rows.find((node) => node.dataset.severity === kind);
+      const color = (kind) => getComputedStyle(row(kind)).color;
+      const expected = (name) => { const node = document.createElement("span");
+        node.style.color = "var(" + name + ")"; document.body.append(node);
+        const value = getComputedStyle(node).color; node.remove(); return value; };
+      return { prefixes: rows.map((node) => node.querySelector(".role").textContent),
+        message: color("message"), warning: color("warning"), error: color("error"),
+        accent: expected("--accent"), notice: expected("--notice"), danger: expected("--danger") };
+    })()`);
+    assert.ok(noticeStyles.prefixes.includes("💬 message"));
+    assert.ok(noticeStyles.prefixes.includes("⚠️ warning"));
+    assert.ok(noticeStyles.prefixes.includes("⚠️ error"));
+    assert.equal(noticeStyles.message, noticeStyles.accent);
+    assert.equal(noticeStyles.warning, noticeStyles.notice);
+    assert.equal(noticeStyles.error, noticeStyles.danger);
+    assert.equal(await evaluate('document.querySelector("#toast-region") === null'), true);
+    assert.equal(JSON.stringify(appendedMessages).includes("Conversion warning"), false,
+      "transient warnings never enter chat append payloads");
+    assert.equal(JSON.stringify(appendedMessages).includes("Usage: /theme"), false,
+      "transient errors never enter chat append payloads");
+    assert.equal(JSON.stringify(threads.map((thread) => thread.messages)).includes("Conversion warning"), false,
+      "transient warnings never enter mocked server history");
+
+    const scopedThread = threads.find((thread) => thread.id === 2);
+    scopedThread.messages.push({ ordinal: 0, role: "user", content: "Existing server message" });
+    scopedThread.message_count = scopedThread.messages.length;
+    scopedThread.revision += 1;
+    await click("#thread-list .thread-item:nth-child(2) .list-button");
+    await wait('document.querySelector("#chat-model").value === "model-2"');
+    assert.equal(await evaluate('document.querySelector("#chat-messages").textContent.includes("Usage: /theme")'), false,
+      "chat notices are scoped to their originating thread");
+    await click("#thread-list .thread-item:last-child .list-button");
+    await wait('document.querySelector("#chat-messages").textContent.includes("Usage: /theme light or /theme dark")');
+    failNextThread = true;
+    await click("#new-thread-button");
+    await wait('document.querySelector("#new-thread-dialog").open && document.querySelector("#new-thread-error").textContent.includes("Could not create test chat")');
+    await click("#new-thread-dialog .dialog-cancel");
+    assert.equal(await evaluate('document.querySelector("#new-thread-dialog").open'), false);
+    await evaluate(`{ const input = document.querySelector("#chat-input");
+      for (let i = 0; i < 155; ++i) { input.value = "/theme blue";
+        document.querySelector("#chat-form").requestSubmit(); } }`);
+    assert.equal(await evaluate('document.querySelectorAll("#chat-messages .browser-notice").length'), 150,
+      "chat retains only the newest 150 browser notices");
+    const jobsBeforeRegenerate = chatJobs.length;
+    await click("#chat-regenerate-button");
+    await wait('!document.querySelector("#chat-messages").textContent.includes("Usage: /theme light or /theme dark")');
+    for (let i = 0; i < 100 && chatJobs.length === jobsBeforeRegenerate; ++i) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(await evaluate('document.querySelectorAll("#chat-messages .browser-notice").length'), 0,
+      "regeneration prunes notices belonging to the removed answer tail");
+    await wait('!document.querySelector("#chat-stream-message")');
+    await evaluate(`(() => {
+      const file = new File(["delete me"], "delete.pdf", { type: "application/pdf" });
+      const attach = document.querySelector("#chat-attach-files");
+      const transfer = new DataTransfer(); transfer.items.add(file);
+      attach.files = transfer.files; attach.dispatchEvent(new Event("change"));
+      document.querySelector("#chat-input").value = "Delete this prompt";
+      document.querySelector("#chat-form").requestSubmit();
+    })()`);
+    await wait('document.querySelector("#chat-messages").textContent.includes("Attached and converted delete.pdf")');
+    await wait('!document.querySelector("#chat-stream-message")');
+    await evaluate('const buttons = [...document.querySelectorAll("#chat-messages .message.user .delete")]; buttons[buttons.length - 1].click()');
+    await wait('document.querySelector("#confirm-dialog").open');
+    await click("#confirm-submit");
+    await wait('!document.querySelector("#chat-messages").textContent.includes("Attached and converted delete.pdf")');
+    assert.equal(await evaluate('document.querySelectorAll("#chat-messages .browser-notice").length'), 0,
+      "deleting a prompt tail prunes its converted-file notices and diagnostics");
     assert.equal(await evaluate('document.querySelector("#chat-cycle-reasoning-button").textContent'), "Reasoning: auto");
     assert.equal(await evaluate('document.querySelector("#chat-form").querySelectorAll("select:not([hidden]), input:not([hidden]), .model-identity").length'), 0);
     await wait('document.querySelector("#chat-model-status").textContent === ""');
@@ -338,7 +527,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.equal(settingsLayout.modelCountNoise, false);
     assert.ok(Math.max(...settingsLayout.pickerHeights) - Math.min(...settingsLayout.pickerHeights) <= 1,
       "settings pickers and theme control have equal heights");
-    await evaluate('const input = document.querySelector("#chat-settings-fields input"); input.value = "0.7"; input.dispatchEvent(new Event("change"));');
+    await evaluate('{ const input = document.querySelector("#chat-settings-fields input"); input.value = "0.7"; input.dispatchEvent(new Event("change")); }');
     await wait('document.querySelector("#chat-settings-save-status").textContent === "Saved"');
     assert.ok(threads.some((thread) => thread.settings.temperature === "0.7"));
     await click('[data-panel="chat-panel"]'); await click("#thread-list .thread-item:nth-child(2) .list-button");
@@ -349,8 +538,35 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.equal(await evaluate('document.querySelector("#chat-settings-fields input").value'), "0.7");
     await click('[data-panel="agent-panel"]');
     await wait('document.querySelector("#agent-events").textContent.includes("Earlier project work")');
+    assert.equal(await evaluate('document.querySelector("#agent-events").textContent.includes("Task complete in 21.34 seconds.")'), true,
+      "reloaded agent history shows TUI-style task timing below the assistant response");
     assert.equal(await evaluate('document.querySelector("#agent-model").value'), "workspace-model");
     await checkToolbar("agent"); await screenshot("agent-desktop");
+    await evaluate('{ const input = document.querySelector("#agent-turn-input"); input.value = "line"; input.focus(); input.setSelectionRange(4, 4); }');
+    await key("Enter", 8, "Enter");
+    await key("Enter", 1, "Enter");
+    assert.equal(await evaluate('document.querySelector("#agent-turn-input").value'), "line\n\n",
+      "Shift+Enter and Alt+Enter insert Agent composer newlines");
+    await key("Enter", 2, "Enter");
+    await key("Enter", 4, "Enter");
+    await evaluate('document.querySelector("#agent-turn-input").dispatchEvent(new KeyboardEvent("keydown", {key:"Enter", bubbles:true, isComposing:true}))');
+    assert.equal(agentTurns.length, 0,
+      "modifier Enter keys and IME composition do not submit Agent instructions");
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/theme blue"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-events").textContent.includes("Usage: /theme light or /theme dark")');
+    await click('[data-panel="jobs-panel"]');
+    assert.equal(await evaluate('document.querySelector("#agent-events").textContent.includes("Usage: /theme light or /theme dark")'), true,
+      "agent notices remain in memory while another panel is active");
+    await evaluate('document.querySelector("#goal-job-form").dispatchEvent(new Event("submit", {bubbles:true, cancelable:true}))');
+    await wait('!document.querySelector("#jobs-notice").hidden');
+    assert.equal(await evaluate('document.querySelector("#jobs-notice .inline-notice-prefix").textContent'), "⚠️ error");
+    await click("#jobs-notice .inline-notice-dismiss");
+    assert.equal(await evaluate('document.querySelector("#jobs-notice").hidden'), true,
+      "non-conversation notices are dismissible");
+    await click('[data-panel="agent-panel"]');
+    assert.equal(await evaluate('document.querySelector("#agent-events").textContent.includes("Usage: /theme light or /theme dark")'), true,
+      "agent notices return with their originating session");
     await evaluate('document.querySelector("#agent-turn-input").focus()');
     await key("m", 1, "KeyM");
     await wait('document.querySelector(".model-picker").open');
@@ -492,6 +708,49 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await evaluate('document.querySelector("#chat-model").disabled = true');
     await key("m", 1, "KeyM");
     assert.equal(await evaluate('document.querySelector(".model-picker").open'), false);
+
+    await click('[data-panel="agent-panel"]');
+    await wait('!document.querySelector("#agent-turn-input").disabled');
+    await evaluate('{ const input = document.querySelector("#agent-turn-input"); input.value = "Submit with Enter"; input.focus(); }');
+    await key("Enter", 0, "Enter");
+    await wait('document.querySelector("#agent-events").textContent.includes("Live agent answer") && document.querySelector("#agent-events").textContent.includes("Task complete in 4.96 seconds.")');
+    assert.deepEqual(agentTurns, [{ text: "Submit with Enter" }],
+      "unmodified Enter submits one Agent instruction and live completion shows its timing");
+
+    await click('[data-panel="chat-panel"]');
+    await command("Network.enable", {}, sid);
+    await command("Network.emulateNetworkConditions", {
+      offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0,
+    }, sid);
+    await click("#refresh-settings-button");
+    await wait('document.querySelector("#connection-badge").getAttribute("aria-label") === "Reconnecting…" && document.querySelector("#chat-messages").textContent.includes("Connection lost")');
+    await command("Network.emulateNetworkConditions", {
+      offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+    }, sid);
+    await evaluate('window.dispatchEvent(new Event("online"))');
+    await wait('document.querySelector("#connection-badge").getAttribute("aria-label") === "Connected" && document.querySelector("#chat-messages").textContent.includes("Reconnected to the Ainiux control server")');
+    assert.equal(await evaluate('document.querySelector("#chat-messages").textContent.includes("Connection lost")'), false,
+      "successful reconnect clears stale transient notices before posting its message");
+    await evaluate('{ const input = document.querySelector("#chat-input"); input.value = "After reconnect"; input.focus(); }');
+    await key("Enter", 0, "Enter");
+    await wait('document.querySelector("#chat-messages").textContent.includes("After reconnect")');
+    const reconnectOrder = await evaluate(`(() => {
+      const rows = [...document.querySelectorAll("#chat-messages > article")].map((node) => node.textContent);
+      const reconnect = rows.findIndex((text) => text.includes("Reconnected to the Ainiux control server"));
+      let priorAssistant = -1;
+      for (let index = 0; index < reconnect; ++index) {
+        if (rows[index].includes("assistant")) priorAssistant = index;
+      }
+      return { reconnect, user: rows.findIndex((text) => text.includes("After reconnect")), priorAssistant };
+    })()`);
+    assert.ok(reconnectOrder.priorAssistant < reconnectOrder.reconnect &&
+      reconnectOrder.reconnect < reconnectOrder.user,
+      `reconnect notice is between the prior assistant and next user: ${JSON.stringify(reconnectOrder)}`);
+
+    await command("Page.reload", { ignoreCache: true }, sid);
+    await wait('document.querySelector("#connection-badge").getAttribute("aria-label") === "Connected"');
+    assert.equal(await evaluate('document.body.textContent.includes("Reconnected to the Ainiux control server")'), false,
+      "browser-only notices clear on reload");
     assert.deepEqual(errors, []);
   } finally {
     browser.kill();

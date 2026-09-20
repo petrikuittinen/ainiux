@@ -302,4 +302,12 @@ Use `/chat`, `/editor`, `/agent`, or `/mode` for explicit mode handoffs.
 | `Tab` | Command/path completion | Word/path/command completion or indentation |
 | `↑` / `↓` | Visual-row movement (soft wrap) | Logical-line movement |
 
+## Browser Chat and Agent composers
+
+| Shortcut | Action |
+|----------|--------|
+| `Enter` | Submit, except while an IME composition is active |
+| `Shift+Enter` / `Alt+Enter` | Insert a newline |
+| `Ctrl+Enter` / `Command+Enter` | Keep editing multiline input; do not submit |
+
 Related documentation: [documentation index](README.md), [chat TUI](chat.md), [editor help](editor_help.md), [agent workflows](agent.md).

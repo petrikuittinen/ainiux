@@ -167,6 +167,13 @@ Startup chrome shows **Agent preparing** only while local prepare phases run (in
 
 When a task finishes, the activity line reports wall-clock duration and a decode `token/s` estimate. That rate uses only streamed model time after the first token of each round; tool-call time and time-to-first-token are excluded. The estimate is omitted when no stream sample is available.
 
+The WebUI also places the TUI-style `Task complete in …` duration on its own
+muted line below every completed assistant response. Persisted message
+timestamps reconstruct it after refresh, session switching, and reload. In the
+browser Agent composer, unmodified Enter submits; Shift+Enter and Alt+Enter add
+newlines, Ctrl+Enter and Command+Enter remain multiline input, and an active IME
+composition is never submitted.
+
 Returning from editor/dired never re-starts a CLI/startup prompt (`-p`); that used to open a second turn and freeze chrome on “thinking” until Esc. Guard Ask raised while you are in dired stays pending across Ctrl+G (it is not auto-denied); answer with y/n (or r Review, when a script path is present) in the editor or after returning to agent.
 
 - Guard Ask (`y`/`n`) can be answered in the editor if approval is needed while you are reviewing files.

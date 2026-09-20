@@ -665,6 +665,31 @@ Error AgentSessionStore::load_message_page(std::vector<AgentMessageRecord>& mess
     return ok_error();
 }
 
+Error AgentSessionStore::load_latest_user_created_at_before(long long before,
+                                                            long long after,
+                                                            long long& created_at,
+                                                            bool& found) const {
+    created_at = 0;
+    found = false;
+    if (!is_open()) return {ErrorCode::Internal, "agent session store is not open"};
+    Statement statement;
+    Error error = statement.prepare(
+        db_, path_,
+        "SELECT created_at FROM messages WHERE seq<?1 AND seq>?2 AND role='user' "
+        "ORDER BY seq DESC LIMIT 1;");
+    if (!error.ok()) return error;
+    error = statement.bind_int64(db_, path_, 1, before);
+    if (!error.ok()) return error;
+    error = statement.bind_int64(db_, path_, 2, after);
+    if (!error.ok()) return error;
+    const int rc = statement.step();
+    if (rc == SQLITE_DONE) return ok_error();
+    if (rc != SQLITE_ROW) return sqlite_error(db_, "could not load preceding user message", path_);
+    created_at = statement.column_int64(0);
+    found = true;
+    return ok_error();
+}
+
 Error AgentSessionStore::compact_with_summary(const std::string& summary_text, int keep_recent) {
     (void)keep_recent;
     if (summary_text.empty())
