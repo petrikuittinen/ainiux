@@ -2100,6 +2100,21 @@ void test_revision_safe_chat_thread_routes() {
     Response bad_scope = route_request(session_request(
         "POST", thread_path + "/pdf", "{\"scope\":\"all\"}"), auth, status);
     check(bad_scope.status == 400, "chat PDF export rejects an unknown scope");
+    Response thread_docx = route_request(session_request(
+        "POST", thread_path + "/docx", "{\"scope\":\"thread\"}"), auth, status);
+    check(thread_docx.status == 200 &&
+              thread_docx.content_type.find("wordprocessingml.document") != std::string::npos &&
+              thread_docx.content_disposition.find("chat.docx") != std::string::npos &&
+              thread_docx.body.compare(0, 4, "PK\x03\x04") == 0,
+          "chat DOCX export returns a Word package for the whole thread");
+    Response last_docx = route_request(session_request(
+        "POST", thread_path + "/docx", "{\"scope\":\"last\"}"), auth, status);
+    check(last_docx.status == 200 && last_docx.body.compare(0, 4, "PK\x03\x04") == 0 &&
+              last_docx.content_disposition.find("last.docx") != std::string::npos,
+          "last-message DOCX export returns a Word package");
+    Response bad_docx_scope = route_request(session_request(
+        "POST", thread_path + "/docx", "{\"scope\":\"all\"}"), auth, status);
+    check(bad_docx_scope.status == 400, "chat DOCX export rejects an unknown scope");
 
     {
         chat::SqliteStore tui_store;

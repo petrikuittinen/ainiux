@@ -70,8 +70,9 @@ compiled `openai_images`, `replicate_predictions`, `fal_queue`, and
 
 DOCX input/output is local canonical-Markdown conversion, not lossless package
 editing. It does not preserve images, recurring headers/footers, notes, comments,
-macros, themes, or arbitrary Word layout. WebUI DOCX downloads and transcript-to-
-DOCX commands remain unimplemented.
+macros, themes, or arbitrary Word layout. `/chat-to-docx` and `/last-to-docx`
+write that normalized transcript, and the WebUI downloads the same package.
+Images stay placeholders.
 
 XLSX input/output is local canonical-Markdown conversion of worksheet cell values
 to GitHub-flavored tables, not lossless workbook editing. It does not preserve

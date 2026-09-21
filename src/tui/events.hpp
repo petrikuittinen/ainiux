@@ -31,6 +31,7 @@ enum class TuiEventType {
     AttachDone,
     FetchDone,
     ChatPdfDone,
+    ChatDocxDone,
     SearchDone,
     ShellDone,
     ModelsDone,

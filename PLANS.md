@@ -167,7 +167,7 @@ These items are intentional future work, not implied current behavior:
   control API;
 - a native Anthropic Messages adapter and broader live capability probing;
 - richer DOCX support beyond normalized canonical-Markdown conversion (media,
-  story parts, lossless edits, transcript/WebUI export), encrypted
+  story parts, lossless edits), encrypted
   PDF read/write, and broader PDF font/emoji support;
 - richer PPTX semantics beyond normalized conversion (charts, SmartArt,
   animation, themes, lossless editing, and transcript/dedicated WebUI export);

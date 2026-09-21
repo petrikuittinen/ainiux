@@ -19,9 +19,13 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const threads = [1, 2].map((id) => ({ id, revision: 1, name: `Thread ${id}`,
     provider: "openrouter", model: `model-${id}`, settings_fields: fields,
     settings: { temperature: id === 1 ? "0.2" : "0.8", reasoning: id === 1 ? "high" : "low", stream: "on" },
-    messages: [], message_count: 0 }));
+    messages: id === 1 ? [
+      { ordinal: 0, role: "user", content: "Hello" },
+      { ordinal: 1, role: "assistant", content: "The reply" },
+    ] : [],
+    message_count: id === 1 ? 2 : 0 }));
   let nextThreadId = 3, createdProviders = [], failNextThread = false;
-  let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [];
+  let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [], chatExports = [];
   let workspace = { provider: "openrouter", model: "workspace-model", revision: "1",
     settings_fields: fields, settings: { temperature: "0.5", reasoning: "low", stream: "on" } };
   let session = null, assistRequest = null, delayNextSessionRefresh = false;
@@ -55,7 +59,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
         }
         return;
       }
-      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "sessions", "dired", "files", "editor_assist"] });
+      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "chat_pdf", "chat_docx", "sessions", "dired", "files", "editor_assist"] });
       if (path.endsWith("/status")) return send({ status: "ready" });
       if (path.endsWith("/images/catalog")) return send({ models: [] });
       if (path.endsWith("/videos/catalog")) return send({ models: [] });
@@ -99,6 +103,17 @@ test("web controller selectors, per-thread saves, workspace settings and history
         chatUploads.push({ ...stored, bytes: raw.length });
         res.statusCode = 201;
         return send(stored);
+      }
+      const exportMatch = path.match(/\/chat\/threads\/(\d+)\/(pdf|docx)$/);
+      if (exportMatch && req.method === "POST") {
+        const kind = exportMatch[2];
+        const scope = body.scope === "last" ? "last" : "thread";
+        chatExports.push({ kind, scope, thread: Number(exportMatch[1]) });
+        res.setHeader("Content-Type", kind === "docx"
+          ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename="${scope === "last" ? "last" : "chat"}.${kind}"`);
+        return res.end(kind === "docx" ? "PK\u0003\u0004docx" : "%PDF-1.4");
       }
       const messageMatch = path.match(/\/chat\/threads\/(\d+)\/messages$/);
       if (messageMatch && req.method === "POST") {
@@ -364,6 +379,52 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await evaluate(`{ const input = document.querySelector("#thread-search");
       input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
     await wait('document.querySelectorAll("#thread-list .list-button").length === 3');
+    const requestChatExport = async (command) => {
+      await evaluate(`{ const input = document.querySelector("#chat-input");
+        input.value = ${JSON.stringify(command)};
+        document.querySelector("#chat-form").requestSubmit(); }`);
+    };
+    const waitExports = async (count) => {
+      for (let i = 0; i < 80; ++i) {
+        if (chatExports.length >= count) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.fail(`chat exports did not finish: ${JSON.stringify(chatExports)}`);
+    };
+    await requestChatExport("/chat-to-docx");
+    await waitExports(1);
+    await requestChatExport("/last-to-docx");
+    await waitExports(2);
+    assert.equal(chatExports[0].kind, "docx");
+    assert.equal(chatExports[0].scope, "thread");
+    assert.equal(chatExports[1].kind, "docx");
+    assert.equal(chatExports[1].scope, "last");
+    assert.equal(chatExports[0].thread, chatExports[1].thread);
+    assert.ok(chatExports[0].thread > 0);
+    const clickLabeled = (selector, label) => evaluate(
+      `[...document.querySelectorAll(${JSON.stringify(selector)})].find((node) => node.textContent === ${JSON.stringify(label)}).click()`);
+    await click("#thread-list .thread-item:first-child .list-button");
+    await wait('document.querySelector("#chat-messages").textContent.includes("The reply") && document.querySelector("#chat-messages").textContent.includes("Print PDF") && document.querySelector("#chat-messages").textContent.includes("Print docx")');
+    await clickLabeled("#chat-messages button", "Print PDF");
+    await waitExports(3);
+    await clickLabeled("#chat-messages button", "Print docx");
+    await waitExports(4);
+    assert.equal(chatExports[2].kind, "pdf");
+    assert.equal(chatExports[2].scope, "last");
+    assert.equal(chatExports[2].thread, 1);
+    assert.equal(chatExports[3].kind, "docx");
+    assert.equal(chatExports[3].scope, "last");
+    assert.equal(chatExports[3].thread, 1);
+    await clickLabeled("#thread-list .thread-item:first-child button", "Chat to PDF");
+    await waitExports(5);
+    await clickLabeled("#thread-list .thread-item:first-child button", "Chat to docx");
+    await waitExports(6);
+    assert.equal(chatExports[4].kind, "pdf");
+    assert.equal(chatExports[4].scope, "thread");
+    assert.equal(chatExports[4].thread, 1);
+    assert.equal(chatExports[5].kind, "docx");
+    assert.equal(chatExports[5].scope, "thread");
+    assert.equal(chatExports[5].thread, 1);
     assert.equal(await evaluate('document.querySelector("#agent-context").hidden && document.querySelector("#agent-context").textContent === ""'), true,
       "context indicator stays hidden before an Agent session exists");
     assert.deepEqual(createdProviders, ["openrouter"]);
@@ -813,6 +874,14 @@ test("web controller selectors, per-thread saves, workspace settings and history
       return { visible: input.getClientRects().length > 0,
         within: rect.left >= -1 && rect.right <= innerWidth + 1, width: rect.width };
     })()`);
+    const threadActionLayout = await evaluate(`(() => {
+      const buttons = [...document.querySelectorAll(".thread-actions button")];
+      const rectangles = buttons.map((node) => node.getBoundingClientRect()).filter((rect) => rect.width > 0);
+      return { count: buttons.length,
+        within: rectangles.every((rect) => rect.left >= -1 && rect.right <= innerWidth + 1) };
+    })()`);
+    assert.ok(threadActionLayout.count >= 2, "thread export buttons stay available on a narrow viewport");
+    assert.equal(threadActionLayout.within, true, "thread export buttons stay inside the narrow viewport");
     assert.equal(threadSearchBox.visible, true, "thread search stays visible on a narrow viewport");
     assert.equal(threadSearchBox.within, true, "thread search stays inside the narrow viewport");
     assert.ok(threadSearchBox.width > 40, "thread search has a usable width on a narrow viewport");
@@ -822,6 +891,15 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await evaluate(`{ const input = document.querySelector("#thread-search");
       input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
     await wait('document.querySelectorAll("#thread-list .list-button").length >= 3');
+    const mobileExports = chatExports.length;
+    await evaluate(`{ const input = document.querySelector("#chat-input");
+      input.value = "/chat-to-pdf"; document.querySelector("#chat-form").requestSubmit(); }`);
+    for (let i = 0; i < 80 && chatExports.length < mobileExports + 1; ++i) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(chatExports.length, mobileExports + 1);
+    assert.equal(chatExports[chatExports.length - 1].kind, "pdf");
+    assert.equal(chatExports[chatExports.length - 1].scope, "thread");
     await key("m", 1, "KeyM");
     assert.ok(await evaluate('document.querySelector(".model-picker").getBoundingClientRect().width <= innerWidth'));
     await key("Escape");

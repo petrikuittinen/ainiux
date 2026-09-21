@@ -34,6 +34,8 @@ struct TuiFileJobs {
     void start_attach(const std::string& path);
     void start_fetch(const std::string& url);
     void start_chat_pdf(const std::string& path, bool last_message_only);
+    void start_chat_docx(const std::string& path, bool last_message_only);
+    void start_chat_document(const std::string& path, bool last_message_only, bool docx);
     void start_search(const std::string& query);
     void start_shell(const std::string& command, bool to_draft = false);
 };

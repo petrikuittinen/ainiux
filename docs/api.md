@@ -200,6 +200,7 @@ POST   /ainiux/v1/chat/threads/:thread_id/abandon
 POST   /ainiux/v1/chat/threads/:thread_id/edit-message
 POST   /ainiux/v1/chat/threads/:thread_id/delete-message
 POST   /ainiux/v1/chat/threads/:thread_id/pdf
+POST   /ainiux/v1/chat/threads/:thread_id/docx
 POST   /ainiux/v1/chat/inputs
 DELETE /ainiux/v1/chat/inputs/:input_id
 ```
@@ -312,8 +313,10 @@ supplies `messages` without a loadable `thread_id`, each `content` field may be
 up to the 1 MiB JSON body limit; it is not capped at 4096 bytes.
 
 `POST /ainiux/v1/chat/threads/:thread_id/pdf` accepts
-`{"scope":"thread"|"last"}` and returns `application/pdf`. Read-only threads
-may export. Empty threads return an error rather than an empty PDF.
+`{"scope":"thread"|"last"}` and returns `application/pdf`.
+`POST /ainiux/v1/chat/threads/:thread_id/docx` accepts the same body and returns
+a normalized Word package. Images stay `[image: name]` placeholders. Read-only
+threads may export. Empty threads return an error rather than an empty file.
 
 Regenerate accepts `{"revision":N}`. It atomically removes messages after the
 latest user prompt and returns that prompt plus the advanced thread revision;

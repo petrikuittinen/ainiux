@@ -14,6 +14,7 @@
 #include "chat/media_store.hpp"
 #include "chat/settings.hpp"
 #include "chat/transcript.hpp"
+#include "docx/docx.hpp"
 #include "server/limits.hpp"
 #include "server/model_settings.hpp"
 
@@ -738,19 +739,37 @@ Error ChatService::export_pdf(long long thread_id,
                               std::string& pdf,
                               std::string& filename,
                               long long& current_revision) {
+    return export_rendered(thread_id, request_body, false, pdf, filename, current_revision);
+}
+
+Error ChatService::export_docx(long long thread_id,
+                               const std::string& request_body,
+                               std::string& docx,
+                               std::string& filename,
+                               long long& current_revision) {
+    return export_rendered(thread_id, request_body, true, docx, filename, current_revision);
+}
+
+Error ChatService::export_rendered(long long thread_id,
+                                   const std::string& request_body,
+                                   bool word,
+                                   std::string& bytes,
+                                   std::string& filename,
+                                   long long& current_revision) {
     std::lock_guard<std::mutex> lock(mutex_);
-    pdf.clear();
+    bytes.clear();
     filename.clear();
     current_revision = 0;
     Error error = ensure_open();
     if (!error.ok()) return error;
     const json::ParseResult parsed = json::parse(request_body);
+    const char* kind = word ? "DOCX" : "PDF";
     if (!parsed.error.ok() || !parsed.value.is_object()) {
-        return invalid("chat PDF export body must be one JSON object");
+        return invalid(std::string("chat ") + kind + " export body must be one JSON object");
     }
     std::string unknown;
     if (!known_fields(parsed.value, {"revision", "scope"}, unknown)) {
-        return invalid("unknown chat PDF export field: " + unknown);
+        return invalid(std::string("unknown chat ") + kind + " export field: " + unknown);
     }
     std::string scope_name = "thread";
     error = optional_string(parsed.value, "scope", kMaxMetadataBytes, scope_name);
@@ -776,11 +795,20 @@ Error ChatService::export_pdf(long long thread_id,
     error = chat::hydrate_message_text_attachments(store_.path(), session.messages,
                                                    kMaxLoadedContentBytes);
     if (!error.ok()) return error;
-    pdf::WriteOptions write_options;
-    write_options.font_path = defaults_.pdf_font;
-    error = chat::transcript_pdf(session.messages, session.name, scope, write_options, pdf);
-    if (!error.ok()) return error;
-    filename = chat::default_transcript_pdf_path(scope);
+    if (word) {
+        docx::WriteOptions write_options;
+        error = chat::transcript_docx(session.messages, session.name, scope, write_options, bytes);
+        filename = chat::default_transcript_docx_path(scope);
+    } else {
+        pdf::WriteOptions write_options;
+        write_options.font_path = defaults_.pdf_font;
+        error = chat::transcript_pdf(session.messages, session.name, scope, write_options, bytes);
+        filename = chat::default_transcript_pdf_path(scope);
+    }
+    if (!error.ok()) {
+        filename.clear();
+        return error;
+    }
     return ok_error();
 }
 

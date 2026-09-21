@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "common.hpp"
+#include "docx/docx.hpp"
 #include "pdf/pdf.hpp"
 #include "provider/provider.hpp"
 
@@ -25,6 +26,13 @@ Error transcript_pdf(const std::vector<provider::Message>& messages,
                      pdf::WriteOptions& options,
                      std::string& pdf);
 
+Error transcript_docx(const std::vector<provider::Message>& messages,
+                      const std::string& title,
+                      TranscriptScope scope,
+                      const docx::WriteOptions& options,
+                      std::string& docx);
+
 const char* default_transcript_pdf_path(TranscriptScope scope);
+const char* default_transcript_docx_path(TranscriptScope scope);
 
 }  // namespace ainiux::chat

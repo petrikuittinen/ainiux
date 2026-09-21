@@ -342,7 +342,7 @@ PDF input converts to Markdown in `src/pdf/` rather than inserting binary prompt
 
 Opening a PDF, DOCX, XLSX, or PPTX in the standalone or WebUI editor converts it to Markdown and retargets Save to the sibling `.md`. Saving a standalone buffer explicitly to a supported binary ending runs the corresponding writer atomically. Original binary documents are never overwritten with Markdown bytes. WebUI save/create of `.xlsx` and `.pptx` paths runs the bounded writer; PPTX image paths must remain inside the fixed workspace. Dedicated browser Office download commands remain deferred.
 
-`/chat-to-pdf` and `/last-to-pdf` render the in-memory (or loaded) transcript through `chat::transcript_pdf`. Images become `[image: name]` placeholders. The WebUI downloads `application/pdf`; TUI/REPL refuse to overwrite an existing path.
+`/chat-to-pdf` and `/last-to-pdf` render the in-memory (or loaded) transcript through `chat::transcript_pdf`. `/chat-to-docx` and `/last-to-docx` use the same Markdown and `docx::from_markdown`. Images become `[image: name]` placeholders. Assistant `<think>` blocks and thinking-role rows are omitted, so the exported assistant section is the reply text. The WebUI downloads `application/pdf` or a Word package; TUI/REPL refuse to overwrite an existing path.
 
 WebUI chat file input follows the image-generation upload pattern: opaque IDs in a memory-only `ChatInputStore`, not workspace paths. HTML, PDF, DOCX, XLSX, and PPTX convert to Markdown at upload time; OOXML returns additive bounded warnings and raw package/media bytes are discarded. CSV and JSON uploads stay native text. Text attachments use the existing SQLite/media import path so they are not inlined into the 1 MiB message content cap.
 

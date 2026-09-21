@@ -1053,6 +1053,27 @@ void test_chat_transcript_pdf() {
     check(markdown.find("[image: chart.png]") != std::string::npos,
           "images become placeholders in the PDF Markdown");
 
+    messages.push_back(
+        {"assistant", "Before <think>secret plan</think> after the reply."});
+    messages.push_back({"thinking", "private reasoning line"});
+    err = ainiux::chat::transcript_markdown(messages, "Demo thread",
+                                            ainiux::chat::TranscriptScope::Thread, markdown);
+    check(err.ok() && markdown.find("Before ") != std::string::npos &&
+              markdown.find("after the reply.") != std::string::npos &&
+              markdown.find("secret plan") == std::string::npos &&
+              markdown.find("<think>") == std::string::npos &&
+              markdown.find("private reasoning line") == std::string::npos,
+          "thread export keeps the assistant reply and drops thinking traces");
+    err = ainiux::chat::transcript_markdown(messages, "Demo thread",
+                                            ainiux::chat::TranscriptScope::LastMessage, markdown);
+    check(err.ok() && markdown.find("after the reply.") != std::string::npos &&
+              markdown.find("secret plan") == std::string::npos &&
+              markdown.find("Hello there") == std::string::npos &&
+              markdown.find("private reasoning line") == std::string::npos,
+          "last-message export uses the assistant reply when a thinking row follows it");
+    messages.pop_back();
+    messages.pop_back();
+
     err = ainiux::chat::transcript_markdown(messages, "Demo thread",
                                             ainiux::chat::TranscriptScope::LastMessage, markdown);
     check(err.ok() && markdown.find("See this") != std::string::npos &&
@@ -1064,6 +1085,19 @@ void test_chat_transcript_pdf() {
     err = ainiux::chat::transcript_pdf(messages, "Demo thread",
                                        ainiux::chat::TranscriptScope::Thread, write_options, pdf);
     check(err.ok() && pdf.compare(0, 5, "%PDF-") == 0, "thread PDF export starts with a PDF header");
+
+    ainiux::docx::WriteOptions docx_options;
+    std::string docx;
+    err = ainiux::chat::transcript_docx(messages, "Demo thread",
+                                        ainiux::chat::TranscriptScope::Thread, docx_options, docx);
+    check(err.ok() && docx.compare(0, 4, "PK\x03\x04") == 0,
+          "thread DOCX export is a Word package");
+    std::string last_docx;
+    err = ainiux::chat::transcript_docx(messages, "Demo thread",
+                                        ainiux::chat::TranscriptScope::LastMessage, docx_options,
+                                        last_docx);
+    check(err.ok() && last_docx.compare(0, 4, "PK\x03\x04") == 0 && last_docx != docx,
+          "last-message DOCX export is a different package from the whole thread");
 }
 
 void test_chat_sqlite_thread_search() {

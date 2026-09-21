@@ -3,6 +3,7 @@
 #include "app/user_shell.hpp"
 #include "chat/media_store.hpp"
 #include "chat/transcript.hpp"
+#include "docx/docx.hpp"
 #include "fetch/fetch.hpp"
 #include "html/html.hpp"
 #include "input/input.hpp"
@@ -429,7 +430,7 @@ void TuiFileJobs::start_fetch(const std::string& url) {
     status = "Fetching " + url + "...";
 }
 
-void TuiFileJobs::start_chat_pdf(const std::string& path, bool last_message_only) {
+void TuiFileJobs::start_chat_document(const std::string& path, bool last_message_only, bool docx) {
     if (busy()) {
         return;
     }
@@ -437,7 +438,8 @@ void TuiFileJobs::start_chat_pdf(const std::string& path, bool last_message_only
                                                           : chat::TranscriptScope::Thread;
     std::string output_path = path;
     if (output_path.empty()) {
-        output_path = chat::default_transcript_pdf_path(scope);
+        output_path = docx ? chat::default_transcript_docx_path(scope)
+                           : chat::default_transcript_pdf_path(scope);
     }
     output_path = expand_user_path(output_path);
     chat::Session snapshot = session;
@@ -449,13 +451,14 @@ void TuiFileJobs::start_chat_pdf(const std::string& path, bool last_message_only
     const std::string font_path = context.options.pdf_font;
     runtime::EventQueue<TuiEvent>& event_queue = events;
     file_job.start([output_path, scope, snapshot = std::move(snapshot), media_database_path,
-                    persist_available, attachment_limit, font_path, &event_queue](
+                    persist_available, attachment_limit, font_path, docx, &event_queue](
                        runtime::CancellationToken token) mutable {
         TuiEvent event;
-        event.type = TuiEventType::ChatPdfDone;
+        event.type = docx ? TuiEventType::ChatDocxDone : TuiEventType::ChatPdfDone;
         event.text = output_path;
+        const char* label = docx ? "DOCX" : "PDF";
         if (token.cancelled()) {
-            event.error = {ErrorCode::Cancelled, "chat PDF export cancelled"};
+            event.error = {ErrorCode::Cancelled, std::string("chat ") + label + " export cancelled"};
             event_queue.push(std::move(event));
             return;
         }
@@ -477,19 +480,34 @@ void TuiFileJobs::start_chat_pdf(const std::string& path, bool last_message_only
                 return;
             }
         }
-        pdf::WriteOptions write_options;
-        write_options.font_path = font_path;
-        write_options.cancellation = token;
-        std::string pdf;
-        event.error = chat::transcript_pdf(snapshot.messages, snapshot.name, scope, write_options,
-                                           pdf);
+        std::string rendered;
+        if (docx) {
+            docx::WriteOptions write_options;
+            write_options.cancellation = token;
+            event.error = chat::transcript_docx(snapshot.messages, snapshot.name, scope,
+                                                write_options, rendered);
+        } else {
+            pdf::WriteOptions write_options;
+            write_options.font_path = font_path;
+            write_options.cancellation = token;
+            event.error = chat::transcript_pdf(snapshot.messages, snapshot.name, scope,
+                                               write_options, rendered);
+        }
         if (event.error.ok()) {
-            event.error = platform::atomic_write_shared_create(output_path, pdf, true);
+            event.error = platform::atomic_write_shared_create(output_path, rendered, true);
         }
         event_queue.push(std::move(event));
     });
     status = std::string(last_message_only ? "Writing last message to " : "Writing chat to ") +
              output_path + "...";
+}
+
+void TuiFileJobs::start_chat_pdf(const std::string& path, bool last_message_only) {
+    start_chat_document(path, last_message_only, false);
+}
+
+void TuiFileJobs::start_chat_docx(const std::string& path, bool last_message_only) {
+    start_chat_document(path, last_message_only, true);
 }
 
 void TuiFileJobs::start_search(const std::string& query) {

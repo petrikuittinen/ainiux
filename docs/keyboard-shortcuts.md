@@ -107,7 +107,7 @@ Use `/pop` to remove the last user or assistant message.
 
 ### Slash commands (type in input, `Enter` to run if single-line)
 
-`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/chat-to-pdf`, `/last-to-pdf`, `/search`, `/theme`, `/scrollbar`, `/thinking`. In chat, `/clear` wipes the thread. In agent, `/clear` only hides the visible transcript; `/compact all` resets model context.
+`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/chat-to-pdf`, `/last-to-pdf`, `/chat-to-docx`, `/last-to-docx`, `/search`, `/theme`, `/scrollbar`, `/thinking`. In chat, `/clear` wipes the thread. In agent, `/clear` only hides the visible transcript; `/compact all` resets model context.
 
 ---
 

@@ -9,6 +9,7 @@
 #include "chat/media_store.hpp"
 #include "chat/settings.hpp"
 #include "chat/transcript.hpp"
+#include "docx/docx.hpp"
 #include "fetch/fetch.hpp"
 #include "input/input.hpp"
 #include "platform/filesystem.hpp"
@@ -26,7 +27,8 @@ using InputKind = input::Kind;
 
 void print_repl_help() {
     std::cerr << "Commands: /help, /quit, /exit, /save [PATH], /load PATH, /insert FILE_OR_URL, /attach PATH, "
-                 "/fetch URL, /chat-to-pdf [PATH], /last-to-pdf [PATH], /search QUERY, /shell COMMAND, "
+                 "/fetch URL, /chat-to-pdf [PATH], /last-to-pdf [PATH], "
+                 "/chat-to-docx [PATH], /last-to-docx [PATH], /search QUERY, /shell COMMAND, "
                  "!COMMAND, /shell-stdout COMMAND, !!COMMAND, "
                  "/clear, /system TEXT, /model MODEL, /reasoning auto|VALUE|TOKENS\n"
                  "  /shell and ! show a full notice; /shell-stdout and !! print pure stdout "
@@ -39,7 +41,9 @@ bool allowed_for_read_only_session(const std::string& text) {
            text == "/shell" || text.rfind("/shell ", 0) == 0 ||
            text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0 ||
            text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0 ||
-           text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0;
+           text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0 ||
+           text == "/chat-to-docx" || text.rfind("/chat-to-docx ", 0) == 0 ||
+           text == "/last-to-docx" || text.rfind("/last-to-docx ", 0) == 0;
 }
 
 void run_repl_shell(const std::string& command,
@@ -382,14 +386,18 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                 continue;
             }
             if (text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0 ||
-                text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0) {
-                const bool last_only = text.rfind("/last-to-pdf", 0) == 0;
-                const std::string requested = detail::trim_ascii(
-                    text.substr(last_only ? 12 : 12));
+                text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0 ||
+                text == "/chat-to-docx" || text.rfind("/chat-to-docx ", 0) == 0 ||
+                text == "/last-to-docx" || text.rfind("/last-to-docx ", 0) == 0) {
+                const bool docx = text.rfind("/chat-to-docx", 0) == 0 ||
+                                  text.rfind("/last-to-docx", 0) == 0;
+                const bool last_only = text.rfind("/last-to-", 0) == 0;
+                const std::string requested = detail::trim_ascii(text.substr(docx ? 13 : 12));
                 const chat::TranscriptScope scope = last_only ? chat::TranscriptScope::LastMessage
                                                               : chat::TranscriptScope::Thread;
                 std::string output_path = requested.empty()
-                                              ? std::string(chat::default_transcript_pdf_path(scope))
+                                              ? std::string(docx ? chat::default_transcript_docx_path(scope)
+                                                                 : chat::default_transcript_pdf_path(scope))
                                               : expand_user_path(requested);
                 std::error_code exists_error;
                 if (std::filesystem::exists(std::filesystem::u8path(output_path), exists_error) &&
@@ -399,20 +407,27 @@ int run_repl(provider::RequestContext context, chat::Session session, std::ostre
                                      "; pass a different path"});
                     continue;
                 }
-                pdf::WriteOptions write_options;
-                write_options.font_path = context.options.pdf_font;
-                std::string pdf;
-                Error err = chat::transcript_pdf(session.messages, session.name, scope, write_options,
-                                                 pdf);
+                std::string rendered;
+                Error err = ok_error();
+                if (docx) {
+                    docx::WriteOptions write_options;
+                    err = chat::transcript_docx(session.messages, session.name, scope, write_options,
+                                                rendered);
+                } else {
+                    pdf::WriteOptions write_options;
+                    write_options.font_path = context.options.pdf_font;
+                    err = chat::transcript_pdf(session.messages, session.name, scope, write_options,
+                                               rendered);
+                }
                 if (err.ok()) {
-                    err = platform::atomic_write_shared_create(output_path, pdf, true);
+                    err = platform::atomic_write_shared_create(output_path, rendered, true);
                 }
                 if (!err.ok()) {
                     print_error(err);
                     continue;
                 }
                 if (!context.options.quiet) {
-                    std::cerr << "Wrote PDF " << output_path << "\n";
+                    std::cerr << (docx ? "Wrote DOCX " : "Wrote PDF ") << output_path << "\n";
                 }
                 continue;
             }

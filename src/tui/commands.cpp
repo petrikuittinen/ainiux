@@ -32,7 +32,9 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text == "/shell" || text.rfind("/shell ", 0) == 0 ||
            text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0 ||
            text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0 ||
-           text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0;
+           text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0 ||
+           text == "/chat-to-docx" || text.rfind("/chat-to-docx ", 0) == 0 ||
+           text == "/last-to-docx" || text.rfind("/last-to-docx ", 0) == 0;
 }
 
 bool reasoning_change_needs_confirmation(const std::string& requested,
@@ -298,6 +300,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/fetch URL\n"
                 "/chat-to-pdf [PATH] (entire thread to PDF; default chat.pdf)\n"
                 "/last-to-pdf [PATH] (last message to PDF; default last.pdf)\n"
+                "/chat-to-docx [PATH] (entire thread to DOCX; default chat.docx)\n"
+                "/last-to-docx [PATH] (last message to DOCX; default last.docx)\n"
                 "/search QUERY\n"
                 "/shell COMMAND  or  !COMMAND (user shell; display-only notice)\n"
                 "/shell-stdout COMMAND  or  !!COMMAND (stdout → editable input draft)\n"
@@ -1096,6 +1100,22 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
             handlers.start_chat_pdf(app::detail::trim_ascii(text.substr(12)), true);
         } else {
             ctx.status = "Chat PDF export is unavailable";
+        }
+        return;
+    }
+    if (text == "/chat-to-docx" || text.rfind("/chat-to-docx ", 0) == 0) {
+        if (handlers.start_chat_docx) {
+            handlers.start_chat_docx(app::detail::trim_ascii(text.substr(13)), false);
+        } else {
+            ctx.status = "Chat DOCX export is unavailable";
+        }
+        return;
+    }
+    if (text == "/last-to-docx" || text.rfind("/last-to-docx ", 0) == 0) {
+        if (handlers.start_chat_docx) {
+            handlers.start_chat_docx(app::detail::trim_ascii(text.substr(13)), true);
+        } else {
+            ctx.status = "Chat DOCX export is unavailable";
         }
         return;
     }

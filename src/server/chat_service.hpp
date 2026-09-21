@@ -59,10 +59,21 @@ class ChatService {
                      std::string& pdf,
                      std::string& filename,
                      long long& current_revision);
+    Error export_docx(long long thread_id,
+                      const std::string& request_body,
+                      std::string& docx,
+                      std::string& filename,
+                      long long& current_revision);
     Error load_job_messages(long long thread_id, std::vector<provider::Message>& messages);
 
    private:
     Error ensure_open();
+    Error export_rendered(long long thread_id,
+                          const std::string& request_body,
+                          bool word,
+                          std::string& bytes,
+                          std::string& filename,
+                          long long& current_revision);
 
     std::mutex mutex_;
     std::string database_path_;

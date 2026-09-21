@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ainiux/version.hpp"
+#include "docx/docx.hpp"
 #include "encoding/encoding.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
@@ -546,7 +547,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_inputs\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_inputs\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
@@ -901,7 +902,7 @@ Response route_request(const http::Request& request,
             (slash != std::string::npos && action.empty()) ||
             (!action.empty() && action != "messages" && action != "regenerate" &&
              action != "settings" && action != "abandon" && action != "edit-message" &&
-             action != "delete-message" && action != "pdf")) {
+             action != "delete-message" && action != "pdf" && action != "docx")) {
             return error_response(404, "thread_route_not_found", "no chat thread route matches this path");
         }
         if ((action.empty() || action == "settings") && request.method == "GET") {
@@ -941,6 +942,7 @@ Response route_request(const http::Request& request,
                 : action == "edit-message" ? "chat message editing accepts POST only"
                 : action == "delete-message" ? "chat message deletion accepts POST only"
                 : action == "pdf" ? "chat PDF export accepts POST only"
+                : action == "docx" ? "chat DOCX export accepts POST only"
                                       : "message append accepts POST only");
             response.allow = "POST";
             return response;
@@ -957,6 +959,8 @@ Response route_request(const http::Request& request,
                                       ? "chat message deletion requires Content-Type: application/json"
                                   : action == "pdf"
                                       ? "chat PDF export requires Content-Type: application/json"
+                                  : action == "docx"
+                                      ? "chat DOCX export requires Content-Type: application/json"
                                       : "message append requires Content-Type: application/json");
         }
         if (action == "pdf") {
@@ -969,6 +973,18 @@ Response route_request(const http::Request& request,
             response.content_type = "application/pdf";
             response.content_disposition = "attachment; filename=\"" + filename + "\"";
             response.body = std::move(pdf);
+            return response;
+        }
+        if (action == "docx") {
+            std::string docx;
+            std::string filename;
+            long long current_revision = 0;
+            const Error error = status.chat_threads->export_docx(
+                thread_id, request.body, docx, filename, current_revision);
+            if (!error.ok()) return chat_thread_error(error, current_revision);
+            response.content_type = docx::kMimeType;
+            response.content_disposition = "attachment; filename=\"" + filename + "\"";
+            response.body = std::move(docx);
             return response;
         }
         std::string body;

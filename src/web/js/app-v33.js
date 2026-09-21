@@ -208,33 +208,39 @@ function handleThemeCommand(text) {
 function handleChatSlashCommand(text) {
   if (handleThemeCommand(text)) return true;
   const pdf = text.match(/^\/(chat-to-pdf|last-to-pdf)\s*$/i);
-  if (!pdf) return false;
+  const docx = text.match(/^\/(chat-to-docx|last-to-docx)\s*$/i);
+  if (!pdf && !docx) return false;
   if (!state.thread) {
     chatNotice("Select a chat thread first", "error", null);
     return true;
   }
-  if (!supports("chat_pdf")) {
-    chatNotice("This server does not export chat PDFs", "error", state.thread.id);
+  const kind = docx ? "docx" : "pdf";
+  const capability = kind === "docx" ? "chat_docx" : "chat_pdf";
+  if (!supports(capability)) {
+    chatNotice(kind === "docx" ? "This server does not export chat DOCX files" : "This server does not export chat PDFs", "error", state.thread.id);
     return true;
   }
-  void downloadChatPdf(pdf[1].toLowerCase() === "last-to-pdf" ? "last" : "thread");
+  const command = (docx || pdf)[1].toLowerCase();
+  void downloadChatDocument(kind, command.startsWith("last-to-") ? "last" : "thread");
   return true;
 }
 
-async function downloadChatPdf(scope) {
-  const thread = state.thread;
+async function downloadChatDocument(kind, scope, thread = state.thread) {
   const threadId = thread?.id ?? null;
   if (!thread) {
     chatNotice("Select a chat thread first", "error", null);
     return;
   }
+  const docx = kind === "docx";
   try {
     const response = await fetch(
-      `${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/pdf`, {
+      `${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/${docx ? "docx" : "pdf"}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${state.token}`,
-          Accept: "application/pdf",
+          Accept: docx
+            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            : "application/pdf",
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ revision: thread.revision, scope }),
@@ -243,7 +249,7 @@ async function downloadChatPdf(scope) {
         referrerPolicy: "no-referrer",
       });
     if (!response.ok) {
-      let message = "Could not export the chat PDF";
+      let message = docx ? "Could not export the chat DOCX" : "Could not export the chat PDF";
       try {
         const payload = await response.json();
         if (payload?.error?.message) message = payload.error.message;
@@ -255,7 +261,7 @@ async function downloadChatPdf(scope) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = scope === "last" ? "last.pdf" : "chat.pdf";
+    link.download = `${scope === "last" ? "last" : "chat"}.${docx ? "docx" : "pdf"}`;
     document.body.append(link);
     link.click();
     link.remove();
@@ -353,7 +359,7 @@ function appendConversationNotice(container, record, cardClass) {
   container.append(card);
 }
 
-function appendChatTimeline(container, transcript, notices) {
+function appendChatTimeline(container, transcript, notices, allowPrint = false) {
   const ordered = [...notices].sort((left, right) => {
     const leftBoundary = Number.isSafeInteger(left.nextOrdinal)
       ? left.nextOrdinal : Number.MAX_SAFE_INTEGER;
@@ -361,6 +367,8 @@ function appendChatTimeline(container, transcript, notices) {
       ? right.nextOrdinal : Number.MAX_SAFE_INTEGER;
     return leftBoundary - rightBoundary || left.id - right.id;
   });
+  const last = transcript[transcript.length - 1];
+  const printOrdinal = allowPrint && last && last.role === "assistant" ? last.ordinal : null;
   let noticeIndex = 0;
   for (const message of transcript) {
     const ordinal = Number(message.ordinal);
@@ -370,7 +378,7 @@ function appendChatTimeline(container, transcript, notices) {
       appendConversationNotice(container, ordered[noticeIndex++], "message");
     }
     appendChatMessage(container, message.role, message.content, false, message.ordinal,
-      message.attachments);
+      message.attachments, Number(message.ordinal) === Number(printOrdinal));
   }
   while (noticeIndex < ordered.length) {
     appendConversationNotice(container, ordered[noticeIndex++], "message");
@@ -2212,6 +2220,20 @@ function renderThreads() {
       element("small", "", details.join(" · ")));
     button.addEventListener("click", () => void loadThread(thread.id));
     item.append(button);
+    const actions = element("div", "thread-actions");
+    const addExport = (label, kind) => {
+      const capability = kind === "docx" ? "chat_docx" : "chat_pdf";
+      if (!supports(capability)) return;
+      const exportButton = element("button", "thread-export", label);
+      exportButton.type = "button";
+      exportButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void downloadChatDocument(kind, "thread", thread);
+      });
+      actions.append(exportButton);
+    };
+    addExport("Chat to PDF", "pdf");
+    addExport("Chat to docx", "docx");
     if (thread.read_only !== true) {
       const remove = element("button", "thread-delete", "Delete");
       remove.type = "button";
@@ -2219,8 +2241,9 @@ function renderThreads() {
         event.stopPropagation();
         void deleteThread(thread);
       });
-      item.append(remove);
+      actions.append(remove);
     }
+    if (actions.childElementCount) item.append(actions);
     list.append(item);
   }
 }
@@ -2244,7 +2267,7 @@ function appendAttachmentChips(parent, attachments, removable = false) {
   parent.append(row);
 }
 
-function appendChatMessage(container, role, content, streaming = false, ordinal = null, attachments = []) {
+function appendChatMessage(container, role, content, streaming = false, ordinal = null, attachments = [], printActions = false) {
   const card = element("article", `message ${role || "system"}${streaming ? " streaming" : ""}`);
   if (streaming) card.id = "chat-stream-message";
   const output = element("div", "message-content");
@@ -2273,9 +2296,19 @@ function appendChatMessage(container, role, content, streaming = false, ordinal 
     renderChatContent(output, role, content, streaming);
     appendAttachmentChips(output, attachments);
     card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"), output);
+    const actions = element("div", "message-actions");
+    const addPrint = (label, kind) => {
+      const capability = kind === "docx" ? "chat_docx" : "chat_pdf";
+      if (!printActions || !supports(capability)) return;
+      const print = element("button", "", label);
+      print.type = "button";
+      print.addEventListener("click", () => void downloadChatDocument(kind, "last"));
+      actions.append(print);
+    };
+    addPrint("Print PDF", "pdf");
+    addPrint("Print docx", "docx");
     const writable = state.thread && state.thread.read_only !== true && !chatTurnBusy();
     if (!streaming && (role === "assistant" || role === "user") && writable && ordinal != null) {
-      const actions = element("div", "message-actions");
       if (role === "assistant") {
         const edit = element("button", "", "Edit");
         edit.type = "button";
@@ -2286,8 +2319,8 @@ function appendChatMessage(container, role, content, streaming = false, ordinal 
       remove.type = "button";
       remove.addEventListener("click", () => void deleteChatMessage(ordinal));
       actions.append(remove);
-      card.append(actions);
     }
+    if (actions.childElementCount) card.append(actions);
   }
   container.append(card);
 }
@@ -2345,7 +2378,7 @@ function renderChat() {
   if (!transcript.length && !stream && !notices.length) setEmpty(messages, "This thread is empty.");
   else {
     clear(messages);
-    appendChatTimeline(messages, transcript, notices);
+    appendChatTimeline(messages, transcript, notices, !stream);
     if (stream) appendChatMessage(messages, "assistant", stream.streamText, true);
     messages.scrollTop = messages.scrollHeight;
   }

@@ -48,7 +48,7 @@ provides:
   local file attachments (PNG/JPEG/GIF, PDF, DOCX, XLSX, PPTX, CSV, JSON, Markdown,
   plaintext, HTML; PDF/DOCX/XLSX/PPTX/HTML convert to Markdown, CSV/JSON stay native
   text), bounded upload warnings, and `/chat-to-pdf` /
-  `/last-to-pdf` downloads;
+  `/last-to-pdf` plus `/chat-to-docx` / `/last-to-docx` downloads;
 - safe client-side Markdown rendering for Chat and Agent prose, including
   semantic headings, responsive GFM tables, clickable HTTP(S) links, and the
   full TUI set of highlighted fenced-code languages;
@@ -128,7 +128,7 @@ prompt supplies the stored title. A search field above the thread list matches
 that title or user and assistant message text, including chats older than the
 first page. Clearing the field restores the newest threads. Thread rows show the locally formatted
 modified date and message count rather than internal concurrency values.
-Each writable row also has a small **Delete** control under that metadata.
+Each row has **Chat to PDF** and **Chat to docx** under that metadata. They download the whole thread, the same as `/chat-to-pdf` and `/chat-to-docx`. Each writable row also has a small **Delete** control beside those downloads.
 Empty threads delete immediately; threads with user or assistant content ask
 for confirmation first in an in-page dialog (never `alert`/`confirm`/`prompt`).
 Read-only threads cannot be deleted.
@@ -140,6 +140,8 @@ none has been chosen yet. A thread left without
 user or assistant content is revision-safely abandoned when another thread is
 selected or created; reconnection reloads the active thread instead of creating
 another one and keeps that thread while sweeping other empties.
+The latest completed assistant reply has **Print PDF** and **Print docx**. They download that reply, the same as `/last-to-pdf` and `/last-to-docx`.
+
 Completed assistant responses on a writable thread can be edited in place
 (Save or Cancel). User and assistant messages can be deleted after an in-page
 confirmation; deleting a message also removes every message after it, so a
