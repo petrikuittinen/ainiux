@@ -623,6 +623,7 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     size_t history_edit_index = static_cast<size_t>(-1);
     std::vector<chat::ThreadSummary> thread_picker_threads;
+    std::string thread_filter;
     size_t thread_picker_selected = 0;
     std::vector<std::string> picker_items;
     size_t picker_selected = 0;
@@ -722,7 +723,7 @@ app::TuiRunResult run(provider::RequestContext context,
 
     auto panel_text = [&]() {
         if (mode == TuiMode::ThreadList) {
-            return thread_picker_text(thread_picker_threads, thread_picker_selected);
+            return thread_picker_text(thread_picker_threads, thread_picker_selected, thread_filter);
         }
         if (mode == TuiMode::ProviderList) {
             return ui::provider_selector_text(picker_items, picker_selected);
@@ -1696,6 +1697,8 @@ app::TuiRunResult run(provider::RequestContext context,
             status = "Cannot list threads while a model job is running";
             return;
         }
+        thread_filter.clear();
+        picker_nav.reset_for_open();
         Error list_error = sqlite_store.list_threads(thread_picker_threads, 200);
         if (!list_error.ok()) {
             set_status_maybe_agent_error(detail::error_line(list_error), true);
@@ -1707,14 +1710,8 @@ app::TuiRunResult run(provider::RequestContext context,
         history_scroll = 0;
         help_text.clear();
         settings_text.clear();
-        if (thread_picker_threads.empty()) {
-            status = context.options.agent
-                         ? "No saved threads · Esc continues"
-                         : "No saved threads · Tab/Insert new · Esc continues";
-        } else {
-            status = ui::text_selector_status("Selected thread", thread_picker_selected,
-                                              thread_picker_threads.size());
-        }
+        status = thread_list_status(thread_picker_selected, thread_picker_threads.size(), "",
+                                    context.options.agent);
     };
 
     auto start_new_chat_thread = [&](const std::string& name = "") -> bool {
@@ -2609,6 +2606,23 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     picker_callbacks.on_reasoning_confirm_retry =
         [&](const std::string& message) { status = message; };
+    picker_callbacks.on_thread_search = [&](const std::string& query) {
+        std::vector<chat::ThreadSummary> found;
+        const Error list_error = query.empty()
+                                     ? sqlite_store.list_threads(found, 200)
+                                     : sqlite_store.search_threads(query, found, 200);
+        if (!list_error.ok()) {
+            set_status_maybe_agent_error(detail::error_line(list_error), true);
+            return;
+        }
+        thread_picker_threads = std::move(found);
+        thread_picker_selected = 0;
+        pending_thread_delete = static_cast<size_t>(-1);
+        history_scroll = 0;
+        thread_filter = query;
+        status = thread_list_status(thread_picker_selected, thread_picker_threads.size(),
+                                    thread_filter, context.options.agent);
+    };
     picker_callbacks.on_thread_selected = [&](long long thread_id) {
         mode = TuiMode::Chat;
         thread_picker_threads.clear();
@@ -2739,8 +2753,8 @@ app::TuiRunResult run(provider::RequestContext context,
                     thread_picker_selected = std::min(thread_picker_selected,
                                                       thread_picker_threads.size() - 1);
                     mode = TuiMode::ThreadList;
-                    status = ui::text_selector_status("Selected thread", thread_picker_selected,
-                                                      thread_picker_threads.size());
+                    status = thread_list_status(thread_picker_selected, thread_picker_threads.size(),
+                                                thread_filter, context.options.agent);
                 }
             } else {
                 set_status_maybe_agent_error(detail::error_line(remove_error), true);
@@ -4119,6 +4133,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 picker_state.guard_can_review =
                     have_pending_guard_request &&
                     !pending_guard_request.review_path.empty();
+                picker_state.thread_filter = &thread_filter;
                 if (handle_tui_picker_input(ch, picker_state, picker_callbacks)) {
                     if (loaded_thread_requires_provider_selection && mode == TuiMode::Chat) {
                         status = chat_provider_model_required_status(context, true);

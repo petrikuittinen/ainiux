@@ -14,7 +14,13 @@
 
 namespace ainiux::tui {
 
-std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected);
+std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads,
+                              size_t selected,
+                              const std::string& query = {});
+std::string thread_list_status(size_t selected,
+                               size_t count,
+                               const std::string& query,
+                               bool agent_mode);
 std::string thread_picker_label(const chat::ThreadSummary& thread);
 std::string attachment_picker_text(const std::vector<ChatAttachment>& attachments, size_t selected);
 std::string remove_confirm_text(const chat::Session& session);

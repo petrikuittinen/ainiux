@@ -124,7 +124,9 @@ to reload. File drafts likewise remain visible until the user chooses whether to
 keep the draft or reload the current server copy.
 
 An unnamed thread initially appears as “New chat”; its first non-empty user
-prompt supplies the stored title. Thread rows show the locally formatted
+prompt supplies the stored title. A search field above the thread list matches
+that title or user and assistant message text, including chats older than the
+first page. Clearing the field restores the newest threads. Thread rows show the locally formatted
 modified date and message count rather than internal concurrency values.
 Each writable row also has a small **Delete** control under that metadata.
 Empty threads delete immediately; threads with user or assistant content ask

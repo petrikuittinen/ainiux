@@ -39,6 +39,9 @@
                 <button id="refresh-threads-button" class="icon-button ghost" type="button" aria-label="Refresh threads">↻</button>
               </div>
             </div>
+            <label class="sr-only" for="thread-search">Search saved chats</label>
+            <input id="thread-search" class="thread-search" type="search" maxlength="200" placeholder="Search threads" autocomplete="off" spellcheck="false" disabled aria-controls="thread-list">
+            <p id="thread-search-status" class="thread-search-status" role="status" hidden></p>
             <div id="thread-list" class="item-list empty-state">Connect to load threads.</div>
           </aside>
           <section class="conversation" aria-labelledby="conversation-heading">

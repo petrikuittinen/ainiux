@@ -1,5 +1,7 @@
 #include "tui/picker_input.hpp"
 
+#include "chat/sqlite_store.hpp"
+#include "common.hpp"
 #include "provider/provider.hpp"
 #include "tui/agent_widgets.hpp"
 #include "tui/input_handlers.hpp"
@@ -123,6 +125,72 @@ bool handle_list_picker_search_and_sort(unsigned char ch, TuiPickerInputState& s
     return false;
 }
 
+std::string applied_thread_filter(const TuiPickerInputState& state) {
+    return state.thread_filter == nullptr ? std::string() : *state.thread_filter;
+}
+
+void show_thread_list_status(TuiPickerInputState& state, const std::string& query) {
+    state.status = thread_list_status(state.thread_picker_selected, state.thread_picker_threads.size(),
+                                      query, state.agent_mode);
+}
+
+// `/` opens a draft. Enter asks the caller to query the thread library.
+// Esc closes the draft and keeps the list open. Arrows close the draft and move.
+bool handle_thread_filter_keys(unsigned char ch,
+                               TuiPickerInputState& state,
+                               const TuiPickerCallbacks& callbacks) {
+    ui::TextSelectorNavState& nav = state.picker_nav;
+    if (nav.search_active) {
+        if (ch == 27) {
+            nav.search_active = false;
+            nav.search_draft.clear();
+            const PickerEscapeResult result = handle_list_picker_escape(
+                state.thread_picker_threads.size(), state.thread_picker_selected, state.status,
+                "Selected thread");
+            if (result != PickerEscapeResult::Navigated) {
+                show_thread_list_status(state, applied_thread_filter(state));
+            } else if (state.thread_filter != nullptr && !state.thread_filter->empty()) {
+                show_thread_list_status(state, *state.thread_filter);
+            }
+            return true;
+        }
+        if (ch == '\r' || ch == '\n') {
+            const std::string needle = ascii_trim(nav.search_draft);
+            nav.search_active = false;
+            nav.search_draft.clear();
+            if (callbacks.on_thread_search) {
+                callbacks.on_thread_search(needle);
+            } else {
+                if (state.thread_filter != nullptr) {
+                    *state.thread_filter = needle;
+                }
+                show_thread_list_status(state, needle);
+            }
+            return true;
+        }
+        if (ch == 127 || ch == 8) {
+            if (!nav.search_draft.empty()) {
+                nav.search_draft.pop_back();
+            }
+            state.status = nav.draft_status();
+            return true;
+        }
+        if (is_printable_search_char(ch) &&
+            nav.search_draft.size() < chat::kMaxThreadSearchBytes) {
+            nav.search_draft.push_back(static_cast<char>(ch));
+            state.status = nav.draft_status();
+        }
+        return true;
+    }
+    if (ch == '/') {
+        nav.search_active = true;
+        nav.search_draft.clear();
+        state.status = nav.draft_status();
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 bool handle_tui_picker_input(unsigned char ch,
@@ -190,6 +258,9 @@ bool handle_tui_picker_input(unsigned char ch,
     if (state.mode == TuiMode::ThreadList) {
         if (ch == 17) {
             state.quit = true;
+            return true;
+        }
+        if (handle_thread_filter_keys(ch, state, callbacks)) {
             return true;
         }
         if (ch == 27) {

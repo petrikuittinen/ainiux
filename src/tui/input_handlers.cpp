@@ -203,8 +203,35 @@ ui::TextSelectorConfig picker_config(const char* header) {
 
 }  // namespace
 
-std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads, size_t selected) {
-    return ui::render_text_selector(picker_config(ui::kTextSelectorThreadHint), selected, threads.size(),
+std::string thread_list_status(size_t selected,
+                               size_t count,
+                               const std::string& query,
+                               bool agent_mode) {
+    if (count == 0) {
+        if (!query.empty()) {
+            return "No threads match \"" + query + "\" · / filter · Esc cancels";
+        }
+        return agent_mode ? "No saved threads · Esc continues"
+                          : "No saved threads · Tab/Insert new · Esc continues";
+    }
+    std::string status = ui::text_selector_status("Selected thread", selected, count);
+    if (!query.empty()) {
+        status += " · \"";
+        status += query;
+        status += "\"";
+    }
+    return status;
+}
+
+std::string thread_picker_text(const std::vector<chat::ThreadSummary>& threads,
+                              size_t selected,
+                              const std::string& query) {
+    std::string header = ui::kTextSelectorThreadHint;
+    if (!query.empty()) {
+        header += " · ";
+        header += query;
+    }
+    return ui::render_text_selector(picker_config(header.c_str()), selected, threads.size(),
                                     [&](size_t index) { return thread_summary_label(threads[index]); });
 }
 

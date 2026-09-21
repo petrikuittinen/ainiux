@@ -222,6 +222,8 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .chat-layout { height: 100%; display: grid; grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr); }
 .thread-sidebar, .conversation, .agent-console, .content-pane, .dired-panel, .editor-panel { min-width: 0; min-height: 0; }
 .thread-sidebar { display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); }
+.thread-search { flex: 0 0 auto; width: auto; margin: 0.4rem 0.45rem 0.15rem; min-height: 1.8rem; }
+.thread-search-status { flex: 0 0 auto; margin: 0 0.55rem 0.25rem; color: var(--muted); font-size: 0.68rem; }
 .item-list { flex: 1; min-height: 0; overflow: auto; }
 .list-button { display: block; width: 100%; min-height: 0; margin: 0; padding: 0.42rem 0.5rem; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: left; }
 .thread-item { border-bottom: 1px solid var(--soft-border); }

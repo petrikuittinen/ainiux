@@ -76,7 +76,14 @@ test("web controller selectors, per-thread saves, workspace settings and history
             settings: { temperature: "", reasoning: "auto", stream: "on" }, messages: [], message_count: 0 };
           threads.push(thread); res.statusCode = 201; return send({ thread });
         }
-        return send({ threads });
+        const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+        const visible = q ? threads.filter((thread) => {
+          const title = String(thread.name || "").toLowerCase();
+          const messages = Array.isArray(thread.messages) ? thread.messages : [];
+          return title.includes(q) || messages.some((message) =>
+            message.role !== "system" && String(message.content || "").toLowerCase().includes(q));
+        }) : threads;
+        return send({ threads: visible, truncated: false });
       }
       if (path.endsWith("/chat/inputs") && req.method === "POST") {
         const id = `chat_input_${chatUploads.length + 1}`;
@@ -348,6 +355,15 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
     await command("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/ui/` }, sid);
     await wait('document.querySelectorAll("#thread-list .list-button").length === 3 && document.querySelector("#chat-provider").value === "openrouter"');
+    await evaluate(`{ const input = document.querySelector("#thread-search");
+      input.value = "Thread 2"; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
+    await wait('document.querySelectorAll("#thread-list .list-button").length === 1 && document.querySelector("#thread-list").textContent.includes("Thread 2")');
+    await evaluate(`{ const input = document.querySelector("#thread-search");
+      input.value = "no-such-thread"; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
+    await wait('document.querySelector("#thread-list").textContent.includes("No threads match")');
+    await evaluate(`{ const input = document.querySelector("#thread-search");
+      input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
+    await wait('document.querySelectorAll("#thread-list .list-button").length === 3');
     assert.equal(await evaluate('document.querySelector("#agent-context").hidden && document.querySelector("#agent-context").textContent === ""'), true,
       "context indicator stays hidden before an Agent session exists");
     assert.deepEqual(createdProviders, ["openrouter"]);
@@ -791,6 +807,21 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await command("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sid);
     await click('[data-panel="agent-panel"]'); await checkToolbar("agent", true, false); await screenshot("agent-mobile");
     await click('[data-panel="chat-panel"]'); await checkToolbar("chat", true, false); await screenshot("chat-mobile");
+    const threadSearchBox = await evaluate(`(() => {
+      const input = document.querySelector("#thread-search");
+      const rect = input.getBoundingClientRect();
+      return { visible: input.getClientRects().length > 0,
+        within: rect.left >= -1 && rect.right <= innerWidth + 1, width: rect.width };
+    })()`);
+    assert.equal(threadSearchBox.visible, true, "thread search stays visible on a narrow viewport");
+    assert.equal(threadSearchBox.within, true, "thread search stays inside the narrow viewport");
+    assert.ok(threadSearchBox.width > 40, "thread search has a usable width on a narrow viewport");
+    await evaluate(`{ const input = document.querySelector("#thread-search");
+      input.focus(); input.value = "Thread 1"; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
+    await wait('document.querySelectorAll("#thread-list .list-button").length === 1 && document.querySelector("#thread-list").textContent.includes("Thread 1")');
+    await evaluate(`{ const input = document.querySelector("#thread-search");
+      input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
+    await wait('document.querySelectorAll("#thread-list .list-button").length >= 3');
     await key("m", 1, "KeyM");
     assert.ok(await evaluate('document.querySelector(".model-picker").getBoundingClientRect().width <= innerWidth'));
     await key("Escape");

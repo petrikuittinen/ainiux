@@ -16,7 +16,7 @@ selection. See [Native Windows](windows.md).
 
 ## Threads and persistence
 
-Chat opens the thread selector at startup. Choose a saved thread or press `Tab`/`Insert` for a new one. `Ctrl+L` or `/list` reopens the selector. Threads are stored newest-first in `~/.ainiux/ainiux.db` using SQLite WAL mode.
+Chat opens the thread selector at startup. Choose a saved thread or press `Tab`/`Insert` for a new one. `Ctrl+L` or `/list` reopens the selector. Press `/`, type a query, and press Enter to filter by thread title or by user and assistant message text. The lookup includes threads older than the first page. An empty query restores the newest threads. `Esc` leaves the filter draft without closing the list. Threads are stored newest-first in `~/.ainiux/ainiux.db` using SQLite WAL mode.
 
 Thread records include messages, provider, endpoint, model, generation settings, usage, attachments, and compaction events. Keys and authorization headers are not stored. Text and small canonical Markdown attachments may stay in SQLite; images and larger managed Markdown are content-addressed below `~/.ainiux/media/`.
 

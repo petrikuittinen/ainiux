@@ -12,7 +12,7 @@ namespace ainiux::ui {
 constexpr const char kTextSelectorStandardHint[] =
     "↑↓ move · / search · . sort · type to jump · Enter select · Esc cancel";
 constexpr const char kTextSelectorThreadHint[] =
-    "Newest first · Enter opens · Tab/Insert new · DEL delete · Esc cancels";
+    "Newest first · / filter · Enter opens · Tab/Insert new · DEL delete · Esc cancels";
 constexpr const char kTextSelectorBufferHint[] =
     "Buffers - Enter opens - / search - . sort - Tab/Insert new - DEL close - Esc cancels";
 constexpr const char kTextSelectorAttachmentHint[] = "↑↓ move · DEL delete · Esc close";

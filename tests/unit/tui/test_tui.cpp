@@ -251,6 +251,86 @@ void test_agent_model_picker_slash_search() {
           "agent model picker /query+Enter jumps to the matching model");
 }
 
+void test_tui_thread_picker_slash_filter() {
+    ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ThreadList;
+    bool quit = false;
+    std::string status;
+    std::vector<std::string> items;
+    size_t selected = 0;
+    bool picker_cancel_quits = false;
+    ainiux::chat::ThreadSummary alpha;
+    alpha.id = 1;
+    alpha.name = "Alpha";
+    ainiux::chat::ThreadSummary zebra;
+    zebra.id = 2;
+    zebra.name = "Zebra";
+    std::vector<ainiux::chat::ThreadSummary> threads = {alpha, zebra};
+    size_t thread_selected = 0;
+    size_t pending_thread_delete = static_cast<size_t>(-1);
+    ainiux::ui::TextSelectorNavState picker_nav;
+    std::string thread_filter;
+    ainiux::tui::TuiPickerInputState state{
+        mode,
+        quit,
+        status,
+        items,
+        selected,
+        picker_cancel_quits,
+        threads,
+        thread_selected,
+        true,
+        pending_thread_delete,
+        false,
+        picker_nav,
+    };
+    state.thread_filter = &thread_filter;
+    std::string applied;
+    ainiux::tui::TuiPickerCallbacks callbacks;
+    callbacks.on_thread_search = [&](const std::string& query) {
+        applied = query;
+        thread_filter = query;
+        status = ainiux::tui::thread_list_status(thread_selected, threads.size(), query, false);
+    };
+
+    check(ainiux::tui::handle_tui_picker_input('/', state, callbacks) &&
+              picker_nav.search_active && status == "/" && mode == ainiux::tui::TuiMode::ThreadList,
+          "TUI thread picker / opens a filter draft");
+    check(ainiux::tui::handle_tui_picker_input('z', state, callbacks) &&
+              status == "/z" && thread_selected == 0,
+          "TUI thread filter draft does not jump the selection");
+    check(ainiux::tui::handle_tui_picker_input('\n', state, callbacks) &&
+              !picker_nav.search_active && applied == "z" &&
+              mode == ainiux::tui::TuiMode::ThreadList && status.find("\"z\"") != std::string::npos,
+          "TUI thread filter Enter submits the query and keeps the list open");
+
+    picker_nav.search_draft.assign(ainiux::chat::kMaxThreadSearchBytes, 'a');
+    picker_nav.search_active = true;
+    check(ainiux::tui::handle_tui_picker_input('b', state, callbacks) &&
+              picker_nav.search_draft.size() == ainiux::chat::kMaxThreadSearchBytes,
+          "TUI thread filter draft stops at 200 bytes");
+
+    picker_nav.search_active = true;
+    picker_nav.search_draft = "   ";
+    applied.clear();
+    check(ainiux::tui::handle_tui_picker_input('\n', state, callbacks) && applied.empty(),
+          "TUI thread filter Enter on a blank draft clears the query");
+
+    check(ainiux::tui::handle_tui_picker_input('z', state, callbacks) && thread_selected == 1,
+          "TUI thread picker still jumps by letter when no filter draft is open");
+
+    ainiux::editor::clear_terminal_input_queue();
+    check(ainiux::tui::handle_tui_picker_input('/', state, callbacks) && picker_nav.search_active,
+          "TUI thread filter can be opened again");
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) &&
+              !picker_nav.search_active && mode == ainiux::tui::TuiMode::ThreadList,
+          "TUI thread filter Esc leaves the draft and keeps the list open");
+
+    const std::string filtered = ainiux::tui::thread_picker_text(threads, 0, "invoice");
+    check(filtered.find("Newest first") != std::string::npos &&
+              filtered.find("invoice") != std::string::npos,
+          "TUI thread picker shows the active filter in its header");
+}
+
 void test_tui_reasoning_picker_input() {
     ainiux::tui::TuiMode mode = ainiux::tui::TuiMode::ReasoningList;
     bool quit = false;
@@ -2616,6 +2696,7 @@ void run_all() {
     test_tui_provider_change_resets_only_on_actual_change();
     test_tui_provider_change_openai_responses_to_gemini();
     test_agent_model_picker_slash_search();
+    test_tui_thread_picker_slash_filter();
     test_tui_reasoning_picker_input();
     test_tui_session_load_model_mismatch_detection();
     test_tui_session_load_model_confirm_text();

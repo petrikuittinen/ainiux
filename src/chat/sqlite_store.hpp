@@ -32,6 +32,9 @@ struct ThreadSummary {
     std::string read_only_reason;
 };
 
+// Bound for a thread-library search needle, in bytes after ASCII trimming.
+constexpr std::size_t kMaxThreadSearchBytes = 200;
+
 struct MediaCleanupResult {
     long long objects_expired = 0;
     long long files_removed = 0;
@@ -84,6 +87,13 @@ class SqliteStore {
                        Session& session,
                        const LoadSessionOptions& options = LoadSessionOptions());
     Error list_threads(std::vector<ThreadSummary>& threads, int limit = 200);
+    // Empty or whitespace-only query lists newest threads. Otherwise the query
+    // is a case-insensitive ASCII substring of the thread name or of user and
+    // assistant message text. '%' and '_' match literally. Deleted threads stay
+    // hidden. On failure, threads is empty.
+    Error search_threads(const std::string& query,
+                         std::vector<ThreadSummary>& threads,
+                         int limit = 200);
     Error last_thread_id(long long& thread_id, bool& found);
     Error set_last_thread_id(long long thread_id);
     Error app_state(const std::string& key, std::string& value, bool& found);

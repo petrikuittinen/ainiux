@@ -1743,17 +1743,75 @@ Error SqliteStore::load_session(long long thread_id,
     return options.update_last_thread ? set_last_thread_id(thread_id) : ok_error();
 }
 
+namespace {
+
+ThreadSummary thread_summary_from_row(Statement& stmt) {
+    ThreadSummary summary;
+    summary.id = stmt.column_int64(0);
+    summary.revision = stmt.column_int64(1);
+    summary.name = stmt.column_text(2);
+    summary.created_at = stmt.column_text(3);
+    summary.modified_at = stmt.column_text(4);
+    summary.last_provider = stmt.column_text(5);
+    summary.last_base_url = stmt.column_text(6);
+    summary.last_model = stmt.column_text(7);
+    summary.message_count = stmt.column_int64(8);
+    summary.read_only = stmt.column_int64(9) != 0;
+    summary.read_only_reason = stmt.column_text(10);
+    return summary;
+}
+
+Error append_thread_rows(sqlite3* db,
+                         const std::string& path,
+                         Statement& stmt,
+                         std::vector<ThreadSummary>& threads,
+                         const char* action) {
+    while (true) {
+        const int rc = stmt.step();
+        if (rc == SQLITE_DONE) {
+            return ok_error();
+        }
+        if (rc != SQLITE_ROW) {
+            return sqlite_error(db, path, action, rc);
+        }
+        threads.push_back(thread_summary_from_row(stmt));
+    }
+}
+
+int clamp_thread_list_limit(int limit) {
+    if (limit <= 0) {
+        return 200;
+    }
+    if (limit > 1000) {
+        return 1000;
+    }
+    return limit;
+}
+
+// SQLite LIKE is case-insensitive for ASCII. Escape '%', '_', and the
+// backslash so those characters in the user's query match literally.
+std::string like_literal_substring(const std::string& needle) {
+    std::string pattern;
+    pattern.reserve(needle.size() + 2);
+    pattern.push_back('%');
+    for (unsigned char ch : needle) {
+        if (ch == '%' || ch == '_' || ch == '\\') {
+            pattern.push_back('\\');
+        }
+        pattern.push_back(static_cast<char>(ch));
+    }
+    pattern.push_back('%');
+    return pattern;
+}
+
+}  // namespace
+
 Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) {
     threads.clear();
     if (db_ == nullptr) {
         return {ErrorCode::Internal, "SQLite database is not open"};
     }
-    if (limit <= 0) {
-        limit = 200;
-    }
-    if (limit > 1000) {
-        limit = 1000;
-    }
+    limit = clamp_thread_list_limit(limit);
     Statement stmt(db_, path_);
     Error err = stmt.prepare(
         "SELECT id, revision, name, created_at, modified_at, last_provider, last_base_url, last_model, message_count, "
@@ -1766,28 +1824,44 @@ Error SqliteStore::list_threads(std::vector<ThreadSummary>& threads, int limit) 
     if (!err.ok()) {
         return err;
     }
-    while (true) {
-        const int rc = stmt.step();
-        if (rc == SQLITE_DONE) {
-            return ok_error();
-        }
-        if (rc != SQLITE_ROW) {
-            return sqlite_error(db_, path_, "could not list SQLite threads", rc);
-        }
-        ThreadSummary summary;
-        summary.id = stmt.column_int64(0);
-        summary.revision = stmt.column_int64(1);
-        summary.name = stmt.column_text(2);
-        summary.created_at = stmt.column_text(3);
-        summary.modified_at = stmt.column_text(4);
-        summary.last_provider = stmt.column_text(5);
-        summary.last_base_url = stmt.column_text(6);
-        summary.last_model = stmt.column_text(7);
-        summary.message_count = stmt.column_int64(8);
-        summary.read_only = stmt.column_int64(9) != 0;
-        summary.read_only_reason = stmt.column_text(10);
-        threads.push_back(std::move(summary));
+    return append_thread_rows(db_, path_, stmt, threads, "could not list SQLite threads");
+}
+
+Error SqliteStore::search_threads(const std::string& query,
+                                  std::vector<ThreadSummary>& threads,
+                                  int limit) {
+    threads.clear();
+    const std::string needle = ascii_trim(query);
+    if (needle.empty()) {
+        return list_threads(threads, limit);
     }
+    if (needle.size() > kMaxThreadSearchBytes) {
+        return {ErrorCode::BadArgs,
+                "thread search is limited to " + std::to_string(kMaxThreadSearchBytes) +
+                    " bytes; shorten the query"};
+    }
+    if (db_ == nullptr) {
+        return {ErrorCode::Internal, "SQLite database is not open"};
+    }
+    limit = clamp_thread_list_limit(limit);
+    Statement stmt(db_, path_);
+    Error err = stmt.prepare(
+        "SELECT t.id, t.revision, t.name, t.created_at, t.modified_at, t.last_provider, "
+        "t.last_base_url, t.last_model, t.message_count, t.read_only, t.read_only_reason "
+        "FROM threads t "
+        "WHERE t.deleted_at IS NULL AND ("
+        "t.name LIKE ?1 ESCAPE '\\' OR EXISTS ("
+        "SELECT 1 FROM messages m WHERE m.thread_id = t.id "
+        "AND m.role IN ('user', 'assistant') AND m.content LIKE ?1 ESCAPE '\\')) "
+        "ORDER BY t.modified_at DESC, t.id DESC LIMIT ?2;");
+    if (!err.ok()) {
+        return err;
+    }
+    err = BindChain(stmt).text(1, like_literal_substring(needle)).int64(2, limit).error();
+    if (!err.ok()) {
+        return err;
+    }
+    return append_thread_rows(db_, path_, stmt, threads, "could not search SQLite threads");
 }
 
 Error SqliteStore::import_media(const std::string& bytes,

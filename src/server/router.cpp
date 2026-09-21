@@ -257,6 +257,34 @@ Error decode_query_component(const std::string& encoded, std::string& decoded) {
     return ok_error();
 }
 
+Error single_named_query(const http::Request& request,
+                         const std::string& name,
+                         bool& present,
+                         std::string& value) {
+    present = false;
+    value.clear();
+    if (request.query.empty()) return ok_error();
+    std::size_t start = 0;
+    while (start <= request.query.size()) {
+        const std::size_t ampersand = request.query.find('&', start);
+        const std::string item = request.query.substr(
+            start, ampersand == std::string::npos ? std::string::npos : ampersand - start);
+        const std::size_t equals = item.find('=');
+        if (equals == std::string::npos || item.substr(0, equals) != name) {
+            return {ErrorCode::BadArgs, "chat thread listing accepts only a q parameter"};
+        }
+        if (present) {
+            return {ErrorCode::BadArgs, "chat thread listing accepts only one q parameter"};
+        }
+        Error decoded = decode_query_component(item.substr(equals + 1U), value);
+        if (!decoded.ok()) return decoded;
+        present = true;
+        if (ampersand == std::string::npos) break;
+        start = ampersand + 1U;
+    }
+    return ok_error();
+}
+
 Error query_path(const http::Request& request, bool required, std::string& path) {
     path.clear();
     if (request.query.empty()) {
@@ -814,19 +842,28 @@ Response route_request(const http::Request& request,
         if (status.chat_threads == nullptr) {
             return error_response(503, "chat_unavailable", "the chat thread service is unavailable");
         }
-        if (!request.query.empty()) {
-            return error_response(400, "invalid_request", "chat thread routes do not accept query parameters");
-        }
         const bool cleanup = request.path != chat_threads_prefix;
         if (!cleanup && request.method == "GET") {
             if (!request.body.empty()) {
                 return error_response(400, "invalid_request", "thread listing does not accept a body");
             }
+            bool has_query = false;
+            std::string search_query;
+            if (!request.query.empty()) {
+                const Error query_error = single_named_query(request, "q", has_query, search_query);
+                if (!query_error.ok()) {
+                    return error_response(400, "invalid_request", query_error.message);
+                }
+            }
+            (void)has_query;
             std::string body;
-            const Error error = status.chat_threads->list(body);
+            const Error error = status.chat_threads->list(body, search_query);
             if (!error.ok()) return chat_thread_error(error);
             response.body = std::move(body);
             return response;
+        }
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "chat thread routes do not accept query parameters");
         }
         if (request.method != "POST") {
             response = error_response(405, "method_not_allowed",

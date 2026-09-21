@@ -2036,6 +2036,39 @@ void test_revision_safe_chat_thread_routes() {
     check(listed.status == 200 && listed.body.find("\"name\":\"hello\"") != std::string::npos,
           "the first user prompt becomes the persisted title of an unnamed thread");
 
+    Response searched = route_request(session_request("GET", "/ainiux/v1/chat/threads?q=hi", ""),
+                                      auth, status);
+    check(searched.status == 200 && searched.body.find("\"name\":\"hello\"") != std::string::npos &&
+              searched.body.find("\"content\"") == std::string::npos,
+          "thread search matches assistant text without returning message bodies");
+    Response searched_case = route_request(
+        session_request("GET", "/ainiux/v1/chat/threads?q=HELLO", ""), auth, status);
+    check(searched_case.status == 200 &&
+              searched_case.body.find("\"name\":\"hello\"") != std::string::npos,
+          "thread search matches a title case-insensitively");
+    Response literal_underscore = route_request(
+        session_request("GET", "/ainiux/v1/chat/threads?q=h_llo", ""), auth, status);
+    check(literal_underscore.status == 200 &&
+              literal_underscore.body.find("\"threads\":[]") != std::string::npos,
+          "thread search treats underscore as a literal character");
+    Response blank_query = route_request(
+        session_request("GET", "/ainiux/v1/chat/threads?q=%20%20", ""), auth, status);
+    check(blank_query.status == 200 && blank_query.body.find("\"name\":\"hello\"") != std::string::npos,
+          "a whitespace thread search query lists threads");
+    Response rejected_query = route_request(
+        session_request("GET", "/ainiux/v1/chat/threads?limit=1", ""), auth, status);
+    check(rejected_query.status == 400 &&
+              rejected_query.body.find("accepts only a q parameter") != std::string::npos,
+          "thread listing rejects query parameters other than q");
+    Response long_query = route_request(
+        session_request("GET", "/ainiux/v1/chat/threads?q=" + std::string(201, 'q'), ""),
+        auth, status);
+    check(long_query.status == 400, "thread search rejects a query longer than 200 bytes");
+    Response cleanup_query = route_request(
+        session_request("POST", "/ainiux/v1/chat/threads/cleanup-empty?q=hello", "{}"),
+        auth, status);
+    check(cleanup_query.status == 400, "empty-thread cleanup rejects a search query");
+
     Response stale = route_request(session_request(
         "POST", thread_path + "/messages",
         "{\"revision\":1,\"messages\":[{\"role\":\"user\",\"content\":\"stale write\"}]}"),

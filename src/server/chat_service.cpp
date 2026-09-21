@@ -383,14 +383,19 @@ Error ChatService::ensure_open() {
     return error.ok() ? error : safe_store_error(error, "open the chat library");
 }
 
-Error ChatService::list(std::string& body) {
+Error ChatService::list(std::string& body, const std::string& query) {
     std::lock_guard<std::mutex> lock(mutex_);
     body.clear();
     Error error = ensure_open();
     if (!error.ok()) return error;
     std::vector<chat::ThreadSummary> threads;
-    error = store_.list_threads(threads, kListLimit + 1);
-    if (!error.ok()) return safe_store_error(error, "list chat threads");
+    const std::string needle = ascii_trim(query);
+    error = needle.empty() ? store_.list_threads(threads, kListLimit + 1)
+                           : store_.search_threads(needle, threads, kListLimit + 1);
+    if (!error.ok()) {
+        if (error.code == ErrorCode::BadArgs) return error;
+        return safe_store_error(error, "list chat threads");
+    }
     const bool truncated = threads.size() > static_cast<std::size_t>(kListLimit);
     if (truncated) threads.resize(kListLimit);
     body = "{\"threads\":[";

@@ -94,6 +94,7 @@ Use `/pop` to remove the last user or assistant message.
 **Thread list** (`Ctrl+L` / `/list`):
 
 - `↑`/`↓`, `PageUp`/`PageDown`, `Home`/`End` — move selection
+- `/` — filter by thread title or message text. Type the query and press Enter. An empty query restores the newest threads. `Esc` leaves the draft and keeps the list open. The lookup includes threads older than the first page.
 - Letter/number keys — jump to the next label containing that character (wraps; no match keeps selection)
 - `Enter` — open thread
 - `Tab` / `Insert` — new thread
@@ -226,7 +227,8 @@ Full guide: [dired-mode.md](dired-mode.md).
 | `Ctrl+Q` | Quit ainiux (global) |
 | `Enter` | Enter dir / view file RO (dirty + history → line bg diff); again leaves view for list |
 | `←` / `→` | Parent directory / enter selected directory |
-| `o` | Open file for edit (exits dired) |
+| `o` | Open file for edit from list or RO preview (exits dired) |
+| `e` / `E` (RO preview) | Alias for `o`; open the previewed file for edit (exits dired) |
 | `g` | Refresh |
 | `r` / `R` | Rename |
 | `c` | Copy |

@@ -1066,6 +1066,88 @@ void test_chat_transcript_pdf() {
     check(err.ok() && pdf.compare(0, 5, "%PDF-") == 0, "thread PDF export starts with a PDF header");
 }
 
+void test_chat_sqlite_thread_search() {
+    const std::string path = "build/unit-thread-search-ainiux.db";
+    std::filesystem::remove(path);
+    std::filesystem::remove(path + "-wal");
+    std::filesystem::remove(path + "-shm");
+
+    ainiux::provider::RequestContext context;
+    context.profile.name = "lm_studio";
+    context.base_url = "http://localhost:1234/v1";
+    context.options.model = "local-model";
+
+    ainiux::chat::SqliteStore store;
+    ainiux::Error err = store.open(path);
+    check(err.ok(), "SQLite thread-search database opens");
+
+    auto save = [&](const std::string& name, std::vector<ainiux::provider::Message> messages) {
+        ainiux::chat::Session session = ainiux::chat::new_session(context);
+        session.name = name;
+        session.messages = std::move(messages);
+        const ainiux::Error save_error = store.save_session(session);
+        check(save_error.ok(), "SQLite thread-search save keeps " + name);
+        return session;
+    };
+
+    const ainiux::chat::Session titled = save("Quarterly Invoice", {{"user", "status please"}});
+    const ainiux::chat::Session body = save(
+        "Notes", {{"system", "secret phrase zebra"}, {"user", "see the Widget"}, {"assistant", "noted"}});
+    const ainiux::chat::Session system_only =
+        save("System only", {{"system", "secret phrase zebra"}});
+    const ainiux::chat::Session percents = save("Percents", {{"user", "100%_done"}});
+    const ainiux::chat::Session plain = save("Plain", {{"user", "100Xdone"}});
+    check(titled.thread_id > 0 && body.thread_id > titled.thread_id &&
+              plain.thread_id > percents.thread_id,
+          "SQLite thread-search sessions receive increasing ids");
+
+    std::vector<ainiux::chat::ThreadSummary> threads;
+    err = store.search_threads("   ", threads, 20);
+    check(err.ok() && threads.size() == 5, "whitespace thread search lists every saved thread");
+
+    err = store.search_threads("invoice", threads, 20);
+    check(err.ok() && threads.size() == 1 && threads[0].id == titled.thread_id &&
+              threads[0].name == "Quarterly Invoice",
+          "thread search matches a title case-insensitively");
+
+    err = store.search_threads("widget", threads, 20);
+    check(err.ok() && threads.size() == 1 && threads[0].id == body.thread_id,
+          "thread search matches user and assistant message text once per thread");
+
+    err = store.search_threads("zebra", threads, 20);
+    check(err.ok() && threads.empty(), "thread search ignores system-message text");
+    (void)system_only;
+
+    err = store.search_threads("100%_done", threads, 20);
+    check(err.ok() && threads.size() == 1 && threads[0].id == percents.thread_id,
+          "thread search treats percent and underscore as literal characters");
+    err = store.search_threads("%", threads, 20);
+    check(err.ok() && threads.size() == 1 && threads[0].id == percents.thread_id,
+          "a percent query does not match every thread");
+    err = store.search_threads("_", threads, 20);
+    check(err.ok() && threads.size() == 1 && threads[0].id == percents.thread_id,
+          "an underscore query does not match every character");
+    err = store.search_threads("100_done", threads, 20);
+    check(err.ok() && threads.empty(), "an underscore query does not span neighboring characters");
+    (void)plain;
+
+    err = store.soft_delete_thread(titled.thread_id);
+    check(err.ok(), "SQLite thread-search soft delete succeeds");
+    err = store.search_threads("invoice", threads, 20);
+    check(err.ok() && threads.empty(), "thread search hides soft-deleted threads");
+
+    err = store.search_threads(std::string(ainiux::chat::kMaxThreadSearchBytes + 1, 'q'), threads, 20);
+    check(err.code == ainiux::ErrorCode::BadArgs && threads.empty(),
+          "thread search rejects a needle longer than 200 bytes");
+
+    const ainiux::chat::Session older = save("Alpha match", {{"user", "shared token"}});
+    const ainiux::chat::Session newer = save("Beta match", {{"assistant", "shared token"}});
+    err = store.search_threads("shared token", threads, 1);
+    check(err.ok() && threads.size() == 1 && threads[0].id == newer.thread_id &&
+              threads[0].id != older.thread_id,
+          "thread search returns the newest match when the limit is one");
+}
+
 }  // namespace
 
 void run_all() {
@@ -1079,6 +1161,7 @@ void run_all() {
     test_chat_markdown_attachment_storage_tiers();
     test_chat_sqlite_v4_markdown_migration();
     test_chat_sqlite_thread_name_from_first_user_prompt();
+    test_chat_sqlite_thread_search();
     test_chat_sqlite_remove_empty_threads();
     test_chat_sqlite_missing_thread_and_corrupt_database();
     test_chat_settings_helpers();

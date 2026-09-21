@@ -19,6 +19,8 @@ struct TuiPickerCallbacks {
     std::function<void()> on_reasoning_confirm_rejected;
     std::function<void(const std::string&)> on_reasoning_confirm_retry;
     std::function<void(long long)> on_thread_selected;
+    // Applies a thread-library filter. Empty restores the newest-first list.
+    std::function<void(const std::string&)> on_thread_search;
     std::function<void()> on_thread_new;
     std::function<void()> on_thread_list_cancelled;
     std::function<void()> on_remove_accepted;
@@ -59,6 +61,8 @@ struct TuiPickerInputState {
     ui::TextSelectorNavState& picker_nav;
     int* history_scroll = nullptr;
     bool guard_can_review = false;
+    // When set, holds the filter currently applied to thread_picker_threads.
+    std::string* thread_filter = nullptr;
 };
 
 bool handle_tui_picker_input(unsigned char ch,

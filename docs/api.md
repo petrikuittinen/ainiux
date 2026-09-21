@@ -205,7 +205,12 @@ DELETE /ainiux/v1/chat/inputs/:input_id
 ```
 
 Listing returns at most 200 newest summaries with `id`, `revision`, `name`,
-timestamps, provider/model labels, message count, and read-only state. Loading
+timestamps, provider/model labels, message count, and read-only state. Optional
+`q` is a substring of the thread name or of user and assistant message text.
+ASCII letters match regardless of case, and the query can match threads older
+than the unfiltered page. `%` and `_` are literal. An empty `q` is the
+unfiltered list. Any other query parameter is rejected. Message bodies are not
+included in the list response. Loading
 a thread returns its transcript. Loads are bounded to the newest 512 messages
 and 4 MiB of message content; `message_count`, per-message `ordinal`, and
 `messages_truncated` tell a client whether older content was omitted. Remote

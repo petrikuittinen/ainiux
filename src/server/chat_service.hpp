@@ -22,7 +22,9 @@ class ChatService {
     ChatService(const ChatService&) = delete;
     ChatService& operator=(const ChatService&) = delete;
 
-    Error list(std::string& body);
+    // `query` empty lists the newest threads. A non-empty query searches thread
+    // names and user/assistant message text. See SqliteStore::search_threads.
+    Error list(std::string& body, const std::string& query = {});
     Error load(long long thread_id, std::string& body);
     Error create(const std::string& request_body, std::string& body);
     Error settings(long long thread_id, const std::string& request_body,

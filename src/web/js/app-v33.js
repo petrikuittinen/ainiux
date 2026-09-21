@@ -1611,6 +1611,7 @@ function applyCapabilities() {
   populateProviders();
   refreshModelControls();
   byId("new-thread-button").disabled = !supports("chat_threads");
+  byId("thread-search").disabled = !supports("chat_threads");
   syncChatSendButton();
   byId("chat-attach-button").disabled = !state.thread || state.thread.read_only === true ||
     !supports("chat_inputs");
@@ -2175,10 +2176,28 @@ async function refreshKnownJobs() {
   await Promise.allSettled([...state.jobs.keys()].map((id) => refreshJob(id)));
 }
 
+function threadSearchQuery() {
+  const field = byId("thread-search");
+  return field ? field.value.trim() : "";
+}
+
+function renderThreadSearchStatus(truncated) {
+  const status = byId("thread-search-status");
+  const query = threadSearchQuery();
+  if (query && truncated) {
+    status.hidden = false;
+    status.textContent = "Showing the 200 newest matches.";
+  } else {
+    status.hidden = true;
+    status.textContent = "";
+  }
+}
+
 function renderThreads() {
   const list = byId("thread-list");
   if (!state.threads.length) {
-    setEmpty(list, "No saved threads.");
+    const query = threadSearchQuery();
+    setEmpty(list, query ? `No threads match "${query}".` : "No saved threads.");
     return;
   }
   clear(list);
@@ -2340,14 +2359,34 @@ function renderChat() {
   renderThreads();
 }
 
+let threadListSequence = 0;
+let threadSearchTimer = null;
+
 async function loadThreads() {
+  const query = threadSearchQuery();
+  const sequence = ++threadListSequence;
+  const path = query
+    ? `${API_ROOT}/chat/threads?q=${encodeURIComponent(query)}`
+    : `${API_ROOT}/chat/threads`;
   try {
-    const response = await api(`${API_ROOT}/chat/threads`);
+    const response = await api(path);
+    if (sequence !== threadListSequence) return;
     state.threads = Array.isArray(response.threads) ? response.threads : [];
+    renderThreadSearchStatus(response.truncated === true);
     renderThreads();
   } catch (error) {
+    if (sequence !== threadListSequence) return;
+    renderThreadSearchStatus(false);
     setEmpty(byId("thread-list"), errorMessage(error));
   }
+}
+
+function scheduleThreadSearch() {
+  if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer);
+  threadSearchTimer = window.setTimeout(() => {
+    threadSearchTimer = null;
+    void loadThreads();
+  }, 200);
 }
 
 async function loadThread(threadId) {
@@ -4389,6 +4428,23 @@ function bindEvents() {
   byId("chat-thinking-button").addEventListener("click", toggleChatThinking);
   byId("chat-web-search-button").addEventListener("click", toggleChatWebSearch);
   byId("refresh-threads-button").addEventListener("click", () => void loadThreads());
+  byId("thread-search").addEventListener("input", scheduleThreadSearch);
+  byId("thread-search").addEventListener("search", () => {
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer);
+      threadSearchTimer = null;
+    }
+    void loadThreads();
+  });
+  byId("thread-search").addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer);
+      threadSearchTimer = null;
+    }
+    void loadThreads();
+  });
   byId("new-thread-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     byId("new-thread-error").textContent = "";
