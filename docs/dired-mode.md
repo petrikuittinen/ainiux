@@ -90,7 +90,7 @@ Example (Linux):
 | Focus | How you get there | Navigation |
 | --- | --- | --- |
 | **List** (default) | Enter dired; press **Enter** while viewing a file | Up/down, page, home/end move the **selection** in the listing |
-| **View** | **Enter** on a regular file, or Guard **Review** of a script | Arrows / page / home/end scroll the **file**; `Ctrl+Home` / `Ctrl+End` go to start/end of the file. The minibuffer shows `space/PageDown down, PageUp/b back, n next dirty block, p previous dirty block, q quit`. **q** leaves dired (does not return to the list) |
+| **View** | **Enter** on a regular file, or Guard **Review** of a script | Arrows / page / home/end scroll the **file**; `Ctrl+Home` / `Ctrl+End` go to start/end of the file. The minibuffer starts with `e edit`, followed by paging, changed-block, and quit hints. **q** leaves dired (does not return to the list) |
 
 - **Enter** on a directory enters it; on `../` goes to the parent.
 - **Enter** again while viewing returns to the **list**.
@@ -125,7 +125,8 @@ Example (Linux):
 
 | Key | Action |
 | --- | --- |
-| `o` | Open the selected **file** for editing and **exit dired** |
+| `o` / `O` | Open the selected **file** for editing from list or view and **exit dired** |
+| `e` / `E` | **View only:** edit the previewed file; alias for `o` |
 | `n` | Create a new file (path prompt; opens it in the editor and leaves dired) |
 | `m` | Create a directory with `mkdir -p` semantics (e.g. `templates/poll`) |
 
@@ -224,7 +225,7 @@ Git status coloring and freeform git commands are **not** part of this release.
 1. After an agent turn, open dired on the project root (`F4` or `ainiux -d .`).
 2. Use `g` to refresh and scan for `*` dirty files; press **`p`** on each file to mark it reviewed (or again to mark dirty).
 3. **Enter** to preview one file at a time with highlight (and history line backgrounds when a `.bak` exists); **Enter** again for the list. In a file, `f` or `/` finds text; Space/`b` page like less.
-4. **`o`** when you need to edit; that exits dired into the normal multi-buffer editor (history line marks apply only in dired read-only view).
+4. **`e`** in the preview (or **`o`** in either focus) when you need to edit; that exits dired into the normal multi-buffer editor through the same size, recovery, and lock checks. History line marks apply only in dired read-only view.
 5. Use `←` / `→` to walk the tree without hunting for `../`.
 
 ## Related documentation

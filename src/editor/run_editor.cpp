@@ -3918,7 +3918,7 @@ app::EditorRunResult run_editor(const std::string& path,
                     minibuffer_message(minibuffer, "");
                     return;
                 }
-                if (ch == 'o' || ch == 'O') {
+                if (dired_key_opens_for_edit(dired.focus, ch)) {
                     dired_open_for_edit();
                     return;
                 }
@@ -4088,7 +4088,7 @@ app::EditorRunResult run_editor(const std::string& path,
                 }
                 return;
             }
-            if (ch == 'o' || ch == 'O') {
+            if (dired_key_opens_for_edit(dired.focus, ch)) {
                 dired_open_for_edit();
                 return;
             }

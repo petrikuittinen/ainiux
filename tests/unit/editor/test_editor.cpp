@@ -3811,12 +3811,25 @@ void test_editor_dired() {
     using ainiux::editor::DiredState;
     using ainiux::editor::EditorSettings;
     using ainiux::editor::MovementKey;
+    using ainiux::editor::dired_key_opens_for_edit;
     using ainiux::editor::is_dired_f4_sequence;
 
     check(is_dired_f4_sequence("OS"), "F4 xterm OS sequence recognized");
     check(is_dired_f4_sequence("[14~"), "F4 [14~ sequence recognized");
     check(is_dired_f4_sequence("[[D"), "F4 linux console sequence recognized");
     check(!is_dired_f4_sequence("[13~"), "F3 is not F4");
+
+    check(dired_key_opens_for_edit(DiredFocus::List, 'o') &&
+              dired_key_opens_for_edit(DiredFocus::List, 'O'),
+          "o/O open for edit from the dired list");
+    check(!dired_key_opens_for_edit(DiredFocus::List, 'e') &&
+              !dired_key_opens_for_edit(DiredFocus::List, 'E'),
+          "e/E do not open for edit from the dired list");
+    check(dired_key_opens_for_edit(DiredFocus::View, 'o') &&
+              dired_key_opens_for_edit(DiredFocus::View, 'O') &&
+              dired_key_opens_for_edit(DiredFocus::View, 'e') &&
+              dired_key_opens_for_edit(DiredFocus::View, 'E'),
+          "o/O and e/E open for edit from the read-only preview");
 
     check(ainiux::editor::dired_hash_bytes("alpha") == ainiux::editor::dired_hash_bytes("alpha"),
           "content hash is stable");
@@ -4012,10 +4025,11 @@ void test_editor_dired() {
     check(view_err.ok(), "enter opens file view: " + view_err.message);
     check(state.focus == DiredFocus::View, "focus switches to view");
     check(state.view.read_only, "view is read-only");
-    check(std::string(ainiux::editor::kDiredViewHelp).find("q quit") != std::string::npos &&
+    check(std::string(ainiux::editor::kDiredViewHelp).find("e edit") != std::string::npos &&
+              std::string(ainiux::editor::kDiredViewHelp).find("q quit") != std::string::npos &&
               std::string(ainiux::editor::kDiredViewHelp).find("space/PageDown") !=
                   std::string::npos,
-          "RO view helper names paging keys and q quit");
+          "RO view helper names edit, paging, and quit keys");
     check(state.view.text.str().find("world") != std::string::npos, "view loads file content");
     check(!state.view_has_history_baseline && state.view_changed_lines.empty(),
           "clean/non-project view has no history diff marks");

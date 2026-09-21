@@ -655,6 +655,11 @@ bool is_dired_f4_sequence(const std::string& sequence) {
     return sequence == "OS" || sequence == "[14~" || sequence == "[[D";
 }
 
+bool dired_key_opens_for_edit(DiredFocus focus, unsigned char ch) {
+    return ch == 'o' || ch == 'O' ||
+           (focus == DiredFocus::View && (ch == 'e' || ch == 'E'));
+}
+
 std::string dired_sort_label(DiredSortKey key, bool ascending) {
     const char* name = "name";
     switch (key) {
