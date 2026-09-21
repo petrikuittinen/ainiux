@@ -45,6 +45,7 @@ These documents preserve audit context. Their dates and code references matter; 
 - [PDF conversion speed (extract and write)](pdf_to_md_benchmark.md)
 - [Markdown-to-PDF write speed](md_to_pdf_benchmark.md)
 - [DOCX conversion benchmark](docx_conversion_benchmark.md)
+- [XLSX conversion benchmark](xlsx_conversion_benchmark.md)
 - [PPTX conversion benchmark](pptx_conversion_benchmark.md)
 
 ## Other project material
