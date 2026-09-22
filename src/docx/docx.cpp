@@ -1402,16 +1402,26 @@ class DocumentWriter {
         if (!run.url.empty()) xml += "</w:hyperlink>";
     }
 
+    // Twips. 12pt after body paragraphs, code, and tables; 16pt after headings.
+    // Page margins stay at one inch. A table has no spacing property, so the
+    // gap is a collapsed paragraph after it.
+    static constexpr int kParagraphSpaceAfter = 240;
+    static constexpr int kHeadingSpaceAfter = 320;
+
     void write_paragraph(const std::vector<markdown::Run>& runs,
                          std::string& xml,
                          const std::string& style,
                          int list_id = 0,
                          int list_level = 0,
-                         bool rule = false) {
+                         bool rule = false,
+                         int space_after = -1) {
         xml += "<w:p>";
-        if (!style.empty() || list_id > 0 || rule || has_rtl_runs(runs)) {
+        if (!style.empty() || list_id > 0 || rule || space_after >= 0 || has_rtl_runs(runs)) {
             xml += "<w:pPr>";
             if (!style.empty()) xml += "<w:pStyle w:val=\"" + style + "\"/>";
+            if (space_after >= 0) {
+                xml += "<w:spacing w:after=\"" + std::to_string(space_after) + "\"/>";
+            }
             if (list_id > 0) {
                 xml += "<w:numPr><w:ilvl w:val=\"" + std::to_string(list_level) +
                        "\"/><w:numId w:val=\"" + std::to_string(list_id) + "\"/></w:numPr>";
@@ -1448,6 +1458,10 @@ class DocumentWriter {
             xml += "</w:tr>";
         }
         xml += "</w:tbl>";
+        xml += "<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"" +
+               std::to_string(kParagraphSpaceAfter) +
+               "\" w:line=\"20\" w:lineRule=\"exact\"/>"
+               "<w:rPr><w:sz w:val=\"2\"/><w:szCs w:val=\"2\"/></w:rPr></w:pPr></w:p>";
     }
 
     void write_block(const markdown::Block& block,
@@ -1457,7 +1471,8 @@ class DocumentWriter {
         switch (block.kind) {
             case markdown::BlockKind::Heading:
                 write_paragraph(block.runs, xml, "Heading" + std::to_string(
-                    std::max(1, std::min(6, block.heading_level))));
+                    std::max(1, std::min(6, block.heading_level))),
+                                0, 0, false, kHeadingSpaceAfter);
                 break;
             case markdown::BlockKind::ListItem:
                 write_paragraph(block.runs, xml, "ListParagraph", list_ids_[index],
@@ -1471,7 +1486,7 @@ class DocumentWriter {
                 markdown::Run run;
                 run.text = block.text;
                 run.style = static_cast<unsigned>(markdown::RunStyle::Code);
-                write_paragraph({run}, xml, "Code");
+                write_paragraph({run}, xml, "Code", 0, 0, false, kParagraphSpaceAfter);
                 break;
             }
             case markdown::BlockKind::Table:
@@ -1482,7 +1497,7 @@ class DocumentWriter {
                 break;
             case markdown::BlockKind::Html:
             case markdown::BlockKind::Paragraph:
-                write_paragraph(block.runs, xml, forced_style);
+                write_paragraph(block.runs, xml, forced_style, 0, 0, false, kParagraphSpaceAfter);
                 break;
         }
     }

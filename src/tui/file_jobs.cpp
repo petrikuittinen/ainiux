@@ -443,16 +443,10 @@ void TuiFileJobs::start_chat_document(const std::string& path, bool last_message
     }
     output_path = expand_user_path(output_path);
     chat::Session snapshot = session;
-    const std::string media_database_path = sqlite_path;
-    const bool persist_available = sqlite_available;
-    const long attachment_limit = context.options.max_input_bytes > 0
-                                      ? context.options.max_input_bytes
-                                      : 10485760;
     const std::string font_path = context.options.pdf_font;
     runtime::EventQueue<TuiEvent>& event_queue = events;
-    file_job.start([output_path, scope, snapshot = std::move(snapshot), media_database_path,
-                    persist_available, attachment_limit, font_path, docx, &event_queue](
-                       runtime::CancellationToken token) mutable {
+    file_job.start([output_path, scope, snapshot = std::move(snapshot), font_path, docx,
+                    &event_queue](runtime::CancellationToken token) mutable {
         TuiEvent event;
         event.type = docx ? TuiEventType::ChatDocxDone : TuiEventType::ChatPdfDone;
         event.text = output_path;
@@ -470,15 +464,6 @@ void TuiFileJobs::start_chat_document(const std::string& path, bool last_message
                                "; pass a different path"};
             event_queue.push(std::move(event));
             return;
-        }
-        if (persist_available && !media_database_path.empty()) {
-            event.error = chat::hydrate_message_text_attachments(
-                media_database_path, snapshot.messages, static_cast<size_t>(attachment_limit),
-                token);
-            if (!event.error.ok()) {
-                event_queue.push(std::move(event));
-                return;
-            }
         }
         std::string rendered;
         if (docx) {

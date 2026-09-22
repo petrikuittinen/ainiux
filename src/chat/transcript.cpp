@@ -56,22 +56,11 @@ void append_message_markdown(std::string& markdown, const provider::Message& mes
         markdown += image.display_name.empty() ? std::string("attached image") : image.display_name;
         markdown += "]\n";
     }
-    if (!message.text_attachments.empty()) {
-        markdown += "\n# Attached Markdown\n\n";
-        for (size_t i = 0; i < message.text_attachments.size(); ++i) {
-            const provider::TextAttachment& attachment = message.text_attachments[i];
-            markdown += "---";
-            markdown += attachment.display_name.empty() ? std::string("attachment")
-                                                        : attachment.display_name;
-            markdown += "---\n";
-            markdown += attachment.markdown_content;
-            if (!attachment.markdown_content.empty() && attachment.markdown_content.back() != '\n') {
-                markdown += '\n';
-            }
-            if (i + 1 < message.text_attachments.size()) {
-                markdown += '\n';
-            }
-        }
+    for (const provider::TextAttachment& attachment : message.text_attachments) {
+        markdown += "\nAttached: ";
+        markdown += attachment.display_name.empty() ? std::string("attachment")
+                                                    : attachment.display_name;
+        markdown += '\n';
     }
     markdown += '\n';
 }

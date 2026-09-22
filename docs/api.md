@@ -326,7 +326,9 @@ A failed fetch does not remove inputs already queued.
 `POST /ainiux/v1/chat/threads/:thread_id/pdf` accepts
 `{"scope":"thread"|"last"}` and returns `application/pdf`.
 `POST /ainiux/v1/chat/threads/:thread_id/docx` accepts the same body and returns
-a normalized Word package. Images stay `[image: name]` placeholders. Read-only
+a normalized Word package. Images stay `[image: name]` placeholders. Each converted
+attachment is named (`Attached: report.pdf`) and its Markdown body is omitted.
+The saved chat and the model request still include that text. Read-only
 threads may export. Empty threads return an error rather than an empty file.
 `POST /ainiux/v1/chat/threads/:thread_id/json` accepts the same scope and returns
 the TUI `/save` JSON document (`chat.json` or `last.json`). Scope `last` keeps

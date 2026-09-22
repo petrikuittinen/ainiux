@@ -787,15 +787,12 @@ Error ChatService::export_rendered(long long thread_id,
     options.max_messages = kMaxLoadedMessages;
     options.max_content_bytes = kMaxLoadedContentBytes;
     options.max_attachments_per_message = kMaxAttachmentsPerMessage;
-    options.metadata_only_attachments = false;
+    options.metadata_only_attachments = true;
     options.load_compactions = false;
     options.update_last_thread = false;
     error = store_.load_session(thread_id, session, options);
     if (!error.ok()) return safe_store_error(error, "load the chat thread");
     current_revision = session.revision;
-    error = chat::hydrate_message_text_attachments(store_.path(), session.messages,
-                                                   kMaxLoadedContentBytes);
-    if (!error.ok()) return error;
     if (word) {
         docx::WriteOptions write_options;
         error = chat::transcript_docx(session.messages, session.name, scope, write_options, bytes);

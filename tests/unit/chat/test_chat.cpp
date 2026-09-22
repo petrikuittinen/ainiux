@@ -1052,6 +1052,20 @@ void test_chat_transcript_pdf() {
           "roles become Markdown headings");
     check(markdown.find("[image: chart.png]") != std::string::npos,
           "images become placeholders in the PDF Markdown");
+    ainiux::provider::Message attached{"user", "Please summarize"};
+    ainiux::provider::TextAttachment text_attachment;
+    text_attachment.display_name = "report.pdf";
+    text_attachment.markdown_content = "UNIQUE_CONVERTED_BODY_SHOULD_STAY_OUT";
+    attached.text_attachments.push_back(std::move(text_attachment));
+    messages.push_back(std::move(attached));
+    err = ainiux::chat::transcript_markdown(messages, "Demo thread",
+                                            ainiux::chat::TranscriptScope::Thread, markdown);
+    check(err.ok() && markdown.find("Please summarize") != std::string::npos &&
+              markdown.find("Attached: report.pdf") != std::string::npos &&
+              markdown.find("UNIQUE_CONVERTED_BODY_SHOULD_STAY_OUT") == std::string::npos &&
+              markdown.find("# Attached Markdown") == std::string::npos,
+          "PDF Markdown names an attachment and omits its converted body");
+    messages.pop_back();
 
     messages.push_back(
         {"assistant", "Before <think>secret plan</think> after the reply."});
