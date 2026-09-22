@@ -41,6 +41,17 @@ class ChatInputStore {
               std::string filename,
               std::string bytes,
               StoredChatInput& output);
+    // Stores bytes that are already the attachment payload. display_name is kept
+    // as given. Image bytes must already be valid.
+    Error add_prepared(ChatInputKind kind,
+                       std::string mime_type,
+                       std::string display_name,
+                       std::string bytes,
+                       bool converted,
+                       std::size_t source_byte_size,
+                       long long conversion_elapsed_us,
+                       std::vector<std::string> warnings,
+                       StoredChatInput& output);
     Error resolve(const std::vector<std::string>& ids, std::vector<StoredChatInput>& output);
     bool erase(const std::string& id);
 

@@ -204,6 +204,63 @@ Error ChatInputStore::add(std::string mime_type,
     return ok_error();
 }
 
+Error ChatInputStore::add_prepared(ChatInputKind kind,
+                                   std::string mime_type,
+                                   std::string display_name,
+                                   std::string bytes,
+                                   bool converted,
+                                   std::size_t source_byte_size,
+                                   long long conversion_elapsed_us,
+                                   std::vector<std::string> warnings,
+                                   StoredChatInput& output) {
+    if (bytes.size() > Limits::upload_body_bytes) {
+        return {ErrorCode::BadArgs, "chat upload exceeds the 20 MiB per-file limit"};
+    }
+    if (display_name.size() > 240) display_name.resize(240);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        erase_expired_locked(std::chrono::system_clock::now());
+    }
+    std::size_t observed = budget_->resident.load(std::memory_order_acquire);
+    do {
+        if (observed > budget_->capacity || bytes.size() > budget_->capacity - observed) {
+            return {ErrorCode::RateLimit,
+                    "temporary chat upload storage is full; remove inputs or retry later"};
+        }
+    } while (!budget_->resident.compare_exchange_weak(
+        observed, observed + bytes.size(), std::memory_order_acq_rel));
+
+    const std::shared_ptr<Budget> budget = budget_;
+    const std::size_t byte_count = bytes.size();
+    std::shared_ptr<const std::string> body(
+        new std::string(std::move(bytes)),
+        [budget, byte_count](const std::string* value) {
+            delete value;
+            budget->resident.fetch_sub(byte_count, std::memory_order_acq_rel);
+        });
+    const auto expires = std::chrono::system_clock::now() + lifetime_;
+    std::string id;
+    Error error;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            std::string random;
+            error = platform::secure_random_hex(16U, random);
+            if (!error.ok()) return error;
+            id = "chat_" + random;
+            if (entries_.find(id) == entries_.end()) break;
+            id.clear();
+        }
+        if (id.empty()) {
+            return {ErrorCode::Internal, "could not allocate a unique chat upload identifier"};
+        }
+        entries_.emplace(id, Entry{kind, mime_type, display_name, converted, warnings, body, expires});
+    }
+    output = {std::move(id), kind, std::move(mime_type), std::move(display_name), converted,
+              source_byte_size, conversion_elapsed_us, std::move(warnings), std::move(body), expires};
+    return ok_error();
+}
+
 Error ChatInputStore::resolve(const std::vector<std::string>& ids,
                               std::vector<StoredChatInput>& output) {
     output.clear();

@@ -80,7 +80,7 @@
 - Expand runtime cancellation tests to cover interrupted streaming HTTP and slow file jobs.
 - Add interrupted-stream cancellation tests for streaming parser/provider paths.
 - Add leak checks for more success, error, failure, interrupted-stream, and cancellation paths.
-- Continue safe URL-fetching hardening for control-server and WebUI callers.
+- WebUI chat queues a fetched URL as a chat input (`POST /ainiux/v1/chat/inputs/fetch`). Continue safe URL-fetching hardening: disconnect cancellation and domain allow/block lists remain open.
 - Harden the TUI foundation with interactive resize tests, model-output rendering tests, scrollback polish, better Unicode cell-width handling, and broader command coverage.
 
 ## Document Conversion Follow-ups

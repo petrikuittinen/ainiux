@@ -59,7 +59,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
         }
         return;
       }
-      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "chat_pdf", "chat_docx", "sessions", "dired", "files", "editor_assist"] });
+      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "chat_pdf", "chat_docx", "chat_inputs", "sessions", "dired", "files", "editor_assist"] });
       if (path.endsWith("/status")) return send({ status: "ready" });
       if (path.endsWith("/images/catalog")) return send({ models: [] });
       if (path.endsWith("/videos/catalog")) return send({ models: [] });
@@ -88,6 +88,24 @@ test("web controller selectors, per-thread saves, workspace settings and history
             message.role !== "system" && String(message.content || "").toLowerCase().includes(q));
         }) : threads;
         return send({ threads: visible, truncated: false });
+      }
+      if (path.endsWith("/chat/inputs/fetch") && req.method === "POST") {
+        const url = String(body.url || "");
+        if (!/^https?:\/\//i.test(url)) {
+          res.statusCode = 400;
+          return send({ error: { code: "invalid_request", message: "URL fetch requires an http(s) URL" } });
+        }
+        if (/^https?:\/\/(?:127\.|10\.|192\.168\.|localhost|169\.254\.|\[::1\])/i.test(url)) {
+          res.statusCode = 400;
+          return send({ error: { code: "invalid_request", message: "refusing to fetch private, loopback, link-local, multicast, or metadata URL without --allow-private-url-fetch: " + url } });
+        }
+        res.statusCode = 201;
+        return send({ id: `chat_fetch_${chatUploads.length + 1}`, kind: "text", mime_type: "text/markdown",
+          display_name: url, converted: true, source_byte_size: 1200, conversion_elapsed_us: 1800,
+          warnings: [], byte_size: 640, expires_at: "2099-01-01T00:00:00Z" });
+      }
+      if (req.method === "DELETE" && /\/chat\/inputs\/[^/]+$/.test(path)) {
+        return send({ deleted: true });
       }
       if (path.endsWith("/chat/inputs") && req.method === "POST") {
         const id = `chat_input_${chatUploads.length + 1}`;
@@ -456,6 +474,26 @@ test("web controller selectors, per-thread saves, workspace settings and history
     })()`);
     assert.ok(composerLayout.aligned, JSON.stringify(composerLayout));
     assert.equal(composerLayout.sendEnabled, true);
+    await evaluate(`{ const input = document.querySelector("#chat-input");
+      input.value = "/fetch http://127.0.0.1/secret";
+      document.querySelector("#chat-form").requestSubmit(); }`);
+    await wait('document.querySelector("#chat-messages").textContent.includes("private") && document.querySelectorAll(".chat-attach-chip").length === 0');
+    await evaluate(`{ const input = document.querySelector("#chat-input");
+      input.value = "/fetch https://example.com/guide";
+      document.querySelector("#chat-form").requestSubmit(); }`);
+    await wait('document.querySelectorAll(".chat-attach-chip").length === 1 && document.querySelector(".chat-attach-chip").textContent.includes("example.com/guide")');
+    assert.equal(await evaluate('[...document.querySelectorAll("#chat-messages .browser-notice")].filter((node) => node.textContent.includes("Attached and converted")).length'), 0,
+      "fetch queues the page without a conversion notice");
+    await click(".chat-attach-chip button");
+    await wait('document.querySelectorAll(".chat-attach-chip").length === 0');
+    await click("#chat-fetch-button");
+    await wait('document.querySelector("#fetch-dialog").open === true');
+    await evaluate(`{ const input = document.querySelector("#fetch-url");
+      input.value = "https://example.com/from-dialog";
+      document.querySelector("#fetch-form").requestSubmit(); }`);
+    await wait('document.querySelector("#fetch-dialog").open !== true && document.querySelectorAll(".chat-attach-chip").length === 1 && document.querySelector(".chat-attach-chip").textContent.includes("from-dialog")');
+    await click(".chat-attach-chip button");
+    await wait('document.querySelectorAll(".chat-attach-chip").length === 0');
     await evaluate(`(() => {
       const file = new File(["hold me"], "sticky.txt", { type: "text/plain" });
       const input = document.querySelector("#chat-attach-files");
@@ -465,6 +503,10 @@ test("web controller selectors, per-thread saves, workspace settings and history
       input.dispatchEvent(new Event("change"));
     })()`);
     await wait('document.querySelectorAll(".chat-attach-chip").length === 1');
+    await evaluate(`{ const input = document.querySelector("#chat-input");
+      input.value = "/fetch example.com/page";
+      document.querySelector("#chat-form").requestSubmit(); }`);
+    await wait('document.querySelector("#chat-messages").textContent.includes("Fetch requires an absolute URL") && document.querySelectorAll(".chat-attach-chip").length === 1 && document.querySelector(".chat-attach-chip").textContent.includes("sticky.txt") && document.querySelector("#chat-input").value === ""');
     await click("#new-thread-button");
     await wait('document.querySelectorAll(".chat-attach-chip").length === 0 && document.querySelector("#chat-send") && !document.querySelector("#chat-send").disabled');
     await evaluate(`(() => {
@@ -882,6 +924,12 @@ test("web controller selectors, per-thread saves, workspace settings and history
     })()`);
     assert.ok(threadActionLayout.count >= 2, "thread export buttons stay available on a narrow viewport");
     assert.equal(threadActionLayout.within, true, "thread export buttons stay inside the narrow viewport");
+    const fetchLayout = await evaluate(`(() => {
+      const buttons = ["#chat-fetch-button", "#chat-attach-button", "#chat-send"].map((selector) =>
+        document.querySelector(selector).getBoundingClientRect());
+      return buttons.every((rect) => rect.width > 0 && rect.left >= -1 && rect.right <= innerWidth + 1);
+    })()`);
+    assert.equal(fetchLayout, true, "fetch, attach, and send stay inside the narrow composer");
     assert.equal(threadSearchBox.visible, true, "thread search stays visible on a narrow viewport");
     assert.equal(threadSearchBox.within, true, "thread search stays inside the narrow viewport");
     assert.ok(threadSearchBox.width > 40, "thread search has a usable width on a narrow viewport");

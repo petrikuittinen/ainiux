@@ -370,16 +370,18 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .composer { flex: 0 0 auto; display: grid; gap: 0.34rem; padding: 0.42rem 0.55rem 0.5rem; border-top: 1px solid var(--border); background: var(--panel); }
 .composer textarea { max-height: 10rem; resize: none; }
 .chat-composer {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  grid-template-areas: "chips chips chips" "input attach send";
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-areas: "chips chips chips chips" "input fetch attach send";
   align-items: end;
 }
 .chat-composer .chat-attach-list { grid-area: chips; display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .chat-composer .chat-attach-list:empty { display: none; }
 .chat-attach-chip { display: inline-flex; align-items: center; gap: 0.28rem; max-width: 100%; padding: 0.18rem 0.4rem; border: 1px solid var(--border); border-radius: 999px; background: var(--code); font-size: 0.75rem; }
+.chat-attach-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
 .chat-attach-chip button { min-height: 1.2rem; padding: 0 0.28rem; font-size: 0.7rem; }
 .chat-composer .sr-only { grid-area: input; }
 .chat-composer textarea { grid-area: input; }
+.chat-composer #chat-fetch-button { grid-area: fetch; min-width: 4.2rem; }
 .chat-composer #chat-attach-button { grid-area: attach; min-width: 4.5rem; }
 .chat-composer #chat-send { grid-area: send; min-width: 5rem; }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
@@ -561,6 +563,10 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
   .brand { padding-inline: 0.5rem; }
   .primary-nav button, .nav-action { padding-inline: 0.58rem; }
   .chat-layout { grid-template-columns: 1fr; grid-template-rows: minmax(7rem, 11rem) minmax(0, 1fr); }
+  .chat-composer {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "chips chips chips" "input input input" "fetch attach send";
+  }
   .thread-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   .conversation-bar { align-items: flex-start; flex-direction: column; gap: 0.25rem; }
   .editor-toolbar { align-items: flex-start; }

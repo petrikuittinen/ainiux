@@ -202,6 +202,7 @@ POST   /ainiux/v1/chat/threads/:thread_id/delete-message
 POST   /ainiux/v1/chat/threads/:thread_id/pdf
 POST   /ainiux/v1/chat/threads/:thread_id/docx
 POST   /ainiux/v1/chat/inputs
+POST   /ainiux/v1/chat/inputs/fetch
 DELETE /ainiux/v1/chat/inputs/:input_id
 ```
 
@@ -311,6 +312,13 @@ PDF. Client `messages` are not length-checked or used in that case, and job
 PDF, HTML, and base64 image bodies never appear in thread JSON. When a job
 supplies `messages` without a loadable `thread_id`, each `content` field may be
 up to the 1 MiB JSON body limit; it is not capped at 4096 bytes.
+
+`POST /ainiux/v1/chat/inputs/fetch` accepts `{"url","provider","model"}`.
+`url` is required. The server fetches it with the same private-address, size,
+and timeout rules as `--fetch-url`. HTML, PDF, DOCX, XLSX, and PPTX are stored
+as Markdown. CSV and JSON stay native text. PNG, JPEG, and GIF are stored only
+when the named chat model accepts images. The response matches a chat upload.
+A failed fetch does not remove inputs already queued.
 
 `POST /ainiux/v1/chat/threads/:thread_id/pdf` accepts
 `{"scope":"thread"|"last"}` and returns `application/pdf`.

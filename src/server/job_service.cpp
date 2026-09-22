@@ -1,5 +1,6 @@
 #include "server/job_service.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <optional>
@@ -8,6 +9,8 @@
 
 #include "app/app.hpp"
 #include "app/operations.hpp"
+#include "fetch/fetch.hpp"
+#include "html/html.hpp"
 #include "chat/media_store.hpp"
 #include "config/model_catalog.hpp"
 #include "input/input.hpp"
@@ -188,6 +191,100 @@ Error JobService::add_chat_input(std::string mime_type,
                                  std::string bytes,
                                  StoredChatInput& output) {
     return chat_inputs_.add(std::move(mime_type), std::move(filename), std::move(bytes), output);
+}
+
+namespace {
+
+bool model_accepts_url_images(const ModelCatalog& catalog,
+                              const std::string& provider,
+                              const std::string& model) {
+    if (model.empty()) return false;
+    const ModelCapability* capability =
+        config::resolve_model_capability(catalog, provider, "chat", model);
+    if (capability == nullptr) {
+        capability = config::resolve_model_capability(catalog, provider, "responses", model);
+    }
+    if (capability != nullptr && capability->images.has_value()) {
+        return *capability->images;
+    }
+    const std::string lower = ascii_lower(model);
+    return lower.find("vision") != std::string::npos || lower.find("gpt-4o") != std::string::npos ||
+           lower.find("gpt-4.1") != std::string::npos || lower.find("gpt-5") != std::string::npos ||
+           lower.find("llava") != std::string::npos || lower.find("pixtral") != std::string::npos ||
+           lower.find("gemini") != std::string::npos;
+}
+
+std::string image_mime_for_fetch(const fetch::FetchedDocument& document, const std::string& url) {
+    std::string mime = fetch::fetched_media_type(document.content_type);
+    if (mime == "image/jpg") mime = "image/jpeg";
+    if (mime == "image/png" || mime == "image/jpeg" || mime == "image/gif") return mime;
+    const std::string lower = ascii_lower(url);
+    if (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".png") == 0) return "image/png";
+    if (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".gif") == 0) return "image/gif";
+    if (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".jpg") == 0) return "image/jpeg";
+    if (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".jpeg") == 0) return "image/jpeg";
+    return "image/png";
+}
+
+}  // namespace
+
+Error JobService::fetch_chat_input(const std::string& url,
+                                   const std::string& provider,
+                                   const std::string& model,
+                                   StoredChatInput& output) {
+    if (url.empty()) {
+        return {ErrorCode::BadArgs, "URL fetch requires a non-empty URL"};
+    }
+    if (url.size() > 8192) {
+        return {ErrorCode::BadArgs, "URL fetch is limited to 8192 bytes; shorten the URL"};
+    }
+    fetch::Options options = app::fetch_options_for(base_options_);
+    options.allow_images = model_accepts_url_images(base_options_.model_catalog, provider, model);
+    const auto started = std::chrono::steady_clock::now();
+    fetch::FetchedDocument document;
+    Error error = fetch::fetch_document(url, options, document);
+    if (!error.ok()) return error;
+    const long long elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now() - started)
+                                     .count();
+    std::string payload;
+    std::string mime = "text/markdown";
+    ChatInputKind kind = ChatInputKind::Text;
+    bool converted = false;
+    if (document.kind == fetch::DocumentKind::Image) {
+        kind = ChatInputKind::Image;
+        mime = image_mime_for_fetch(document, url);
+        error = input::validate_image_bytes(document.body, mime);
+        if (!error.ok()) return error;
+        payload = std::move(document.body);
+    } else if (document.kind == fetch::DocumentKind::Csv) {
+        mime = "text/csv";
+        payload = std::move(document.body);
+    } else if (document.kind == fetch::DocumentKind::Json) {
+        mime = "application/json";
+        payload = std::move(document.body);
+    } else if (document.kind == fetch::DocumentKind::Plaintext) {
+        mime = "text/plain";
+        payload = std::move(document.body);
+    } else if (document.kind == fetch::DocumentKind::Html) {
+        try {
+            payload = html::convert(document.body, html::OutputFormat::Markdown);
+        } catch (const std::bad_alloc&) {
+            return {ErrorCode::Internal, "not enough memory to convert fetched HTML"};
+        } catch (const std::length_error&) {
+            return {ErrorCode::UnsupportedFeature, "converted HTML is too large to attach"};
+        }
+        converted = true;
+    } else {
+        payload = std::move(document.markdown);
+        converted = true;
+    }
+    std::string display = url;
+    if (display.size() > 180) display.resize(180);
+    const std::size_t source_bytes = document.source_bytes > 0 ? document.source_bytes : payload.size();
+    return chat_inputs_.add_prepared(kind, std::move(mime), std::move(display), std::move(payload),
+                                     converted, source_bytes, elapsed_us,
+                                     std::move(document.warnings), output);
 }
 
 bool JobService::remove_chat_input(const std::string& id) {

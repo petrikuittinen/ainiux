@@ -351,6 +351,9 @@ ordinary network outages retain it and trigger automatic reconnect. The token
 is never put in a cookie, URL, log, or rendered page content. The same-origin WUI covers
 chat threads, jobs and images, interactive agent/Guard flows, workspace review
 and mutations, revision-safe file editing/assist, and non-secret server status.
+Chat can queue a fetched page with `/fetch URL` or the Fetch button. The server
+stores HTML and Office documents as Markdown, keeps CSV and JSON as text, and
+accepts PNG, JPEG, and GIF only when the selected model allows images.
 It follows the system light/dark preference and also has an explicit theme
 selector. Chat and Agent prose is rendered as safe client-side Markdown with
 semantic headings, responsive tables, TUI-derived syntax colors, and explicit

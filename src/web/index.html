@@ -65,6 +65,7 @@
               <label class="sr-only" for="chat-input">Message</label>
               <textarea id="chat-input" rows="3" maxlength="262144" placeholder="Ask Ainiux…" disabled aria-keyshortcuts="Alt+P Alt+M Control+R Alt+T Alt+W Alt+S Escape"></textarea>
               <input id="chat-attach-files" type="file" accept="image/png,image/jpeg,image/gif,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/markdown,text/plain,text/html,text/csv,application/json,.md,.markdown,.txt,.html,.htm,.pdf,.docx,.xlsx,.pptx,.csv,.json,.png,.jpg,.jpeg,.gif" multiple hidden>
+              <button id="chat-fetch-button" class="ghost" type="button" disabled title="Fetch a URL into this message">Fetch</button>
               <button id="chat-attach-button" class="ghost" type="button" disabled title="Attach files">Attach</button>
               <div id="chat-model-controls" hidden>
                 <label>Provider <select id="chat-provider" class="provider-select"></select></label>
@@ -237,6 +238,16 @@
 
   <dialog id="conflict-dialog" aria-labelledby="conflict-title">
     <div class="dialog-card"><h2 id="conflict-title">Remote content changed</h2><p id="conflict-message">Reload the newest server version before saving again. Your draft remains in this tab until you choose reload.</p><div class="dialog-actions"><button id="keep-draft-button" class="ghost" type="button">Keep draft</button><button id="reload-conflict-button" type="button">Reload server copy</button></div></div>
+  </dialog>
+
+  <dialog id="fetch-dialog" aria-labelledby="fetch-title">
+    <form id="fetch-form" class="dialog-card">
+      <h2 id="fetch-title">Fetch URL</h2>
+      <p>The page is queued with this message. Use an absolute URL. HTML and Office documents become Markdown. CSV and JSON stay text. Images are kept only when this model accepts them.</p>
+      <p id="fetch-error" class="error-text" role="alert"></p>
+      <label>URL <input id="fetch-url" type="text" inputmode="url" maxlength="8192" required autocomplete="off" spellcheck="false" placeholder="example.com/page"></label>
+      <div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Fetch</button></div>
+    </form>
   </dialog>
 
   <dialog id="confirm-dialog" aria-labelledby="confirm-title">

@@ -49,6 +49,12 @@ class JobService {
                          std::string filename,
                          std::string bytes,
                          StoredChatInput& output);
+    // Fetches url with the server URL policy and stores one chat attachment.
+    // Images are stored only when provider/model accepts them.
+    Error fetch_chat_input(const std::string& url,
+                           const std::string& provider,
+                           const std::string& model,
+                           StoredChatInput& output);
     bool remove_chat_input(const std::string& id);
     ChatInputStore& chat_inputs() { return chat_inputs_; }
     void set_chat_threads(ChatService* service) { chat_threads_ = service; }

@@ -140,6 +140,66 @@ bool parse_event_id(const std::string& value, std::uint64_t& output) {
     return true;
 }
 
+bool known_json_fields(const json::Value& object,
+                      const std::vector<std::string>& allowed,
+                      std::string& unknown) {
+    unknown.clear();
+    if (!object.is_object()) return false;
+    for (const auto& entry : object.object) {
+        bool found = false;
+        for (const std::string& name : allowed) {
+            if (entry.first == name) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            unknown = entry.first;
+            return false;
+        }
+    }
+    return true;
+}
+
+Error json_string_field(const json::Value& object,
+                        const std::string& name,
+                        bool required,
+                        std::size_t max_bytes,
+                        std::string& value) {
+    value.clear();
+    const json::Value* field = object.get(name);
+    if (field == nullptr || field->is_null()) {
+        if (required) return {ErrorCode::BadArgs, name + " is required"};
+        return ok_error();
+    }
+    if (!field->is_string()) return {ErrorCode::BadArgs, name + " must be a string"};
+    if (field->string.size() > max_bytes) {
+        return {ErrorCode::BadArgs, name + " exceeds " + std::to_string(max_bytes) + " bytes"};
+    }
+    value = ascii_trim(field->string);
+    if (required && value.empty()) return {ErrorCode::BadArgs, name + " is required"};
+    return ok_error();
+}
+
+std::string stored_chat_input_json(const StoredChatInput& stored) {
+    std::string warnings_json = "[";
+    for (std::size_t i = 0; i < stored.warnings.size(); ++i) {
+        if (i != 0) warnings_json.push_back(',');
+        warnings_json += json::quote(stored.warnings[i]);
+    }
+    warnings_json.push_back(']');
+    return "{\"id\":" + json::quote(stored.id) +
+           ",\"kind\":" + json::quote(stored.kind == ChatInputKind::Image ? "image" : "text") +
+           ",\"mime_type\":" + json::quote(stored.mime_type) +
+           ",\"display_name\":" + json::quote(stored.display_name) +
+           ",\"converted\":" + std::string(stored.converted ? "true" : "false") +
+           ",\"source_byte_size\":" + std::to_string(stored.source_byte_size) +
+           ",\"conversion_elapsed_us\":" + std::to_string(stored.conversion_elapsed_us) +
+           ",\"warnings\":" + warnings_json +
+           ",\"byte_size\":" + std::to_string(stored.bytes ? stored.bytes->size() : 0) +
+           ",\"expires_at\":" + json::quote(image_input_expiry_timestamp(stored.expires_at)) + "}";
+}
+
 bool json_content_type(const http::Request& request) {
     const auto found = request.headers.find("content-type");
     if (found == request.headers.end()) return false;
@@ -676,24 +736,56 @@ Response route_request(const http::Request& request,
                                   "invalid_chat_input", error.message);
         }
         response.status = 201;
-        std::string warnings_json = "[";
-        for (std::size_t i = 0; i < stored.warnings.size(); ++i) {
-            if (i != 0) warnings_json.push_back(',');
-            warnings_json += json::quote(stored.warnings[i]);
+        response.body = stored_chat_input_json(stored);
+        return response;
+    }
+    if (request.path == chat_inputs_path + "/fetch") {
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed", "chat URL fetch accepts POST only");
+            response.allow = "POST";
+            return response;
         }
-        warnings_json.push_back(']');
-        response.body = "{\"id\":" + json::quote(stored.id) +
-                        ",\"kind\":" + json::quote(stored.kind == ChatInputKind::Image ? "image" : "text") +
-                        ",\"mime_type\":" + json::quote(stored.mime_type) +
-                        ",\"display_name\":" + json::quote(stored.display_name) +
-                        ",\"converted\":" + std::string(stored.converted ? "true" : "false") +
-                        ",\"source_byte_size\":" + std::to_string(stored.source_byte_size) +
-                        ",\"conversion_elapsed_us\":" +
-                            std::to_string(stored.conversion_elapsed_us) +
-                        ",\"warnings\":" + warnings_json +
-                        ",\"byte_size\":" + std::to_string(stored.bytes->size()) +
-                        ",\"expires_at\":" +
-                            json::quote(image_input_expiry_timestamp(stored.expires_at)) + "}";
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "chat URL fetch does not accept query parameters");
+        }
+        if (!json_content_type(request)) {
+            return error_response(415, "unsupported_media_type",
+                                  "chat URL fetch requires Content-Type: application/json");
+        }
+        if (status.jobs == nullptr) {
+            return error_response(503, "chat_unavailable", "the chat upload service is unavailable");
+        }
+        const json::ParseResult parsed = json::parse(request.body);
+        if (!parsed.error.ok() || !parsed.value.is_object()) {
+            return error_response(400, "invalid_request", "chat URL fetch body must be one JSON object");
+        }
+        std::string unknown;
+        if (!known_json_fields(parsed.value, {"url", "provider", "model"}, unknown)) {
+            return error_response(400, "invalid_request", "unknown chat URL fetch field: " + unknown);
+        }
+        std::string url;
+        std::string provider;
+        std::string model;
+        Error field = json_string_field(parsed.value, "url", true, 8192, url);
+        if (field.ok()) field = json_string_field(parsed.value, "provider", false, 128, provider);
+        if (field.ok()) field = json_string_field(parsed.value, "model", false, 512, model);
+        if (!field.ok()) return error_response(400, "invalid_request", field.message);
+        StoredChatInput stored;
+        const Error error = status.jobs->fetch_chat_input(url, provider, model, stored);
+        if (!error.ok()) {
+            if (error.code == ErrorCode::RateLimit) {
+                return error_response(429, "chat_input_capacity", error.message);
+            }
+            if (error.code == ErrorCode::UnsupportedFeature) {
+                return error_response(415, "invalid_chat_input", error.message);
+            }
+            if (error.code == ErrorCode::HttpStatus) {
+                return error_response(502, "fetch_failed", error.message);
+            }
+            return error_response(400, "invalid_request", error.message);
+        }
+        response.status = 201;
+        response.body = stored_chat_input_json(stored);
         return response;
     }
     if (request.path.rfind(chat_inputs_path + "/", 0) == 0) {

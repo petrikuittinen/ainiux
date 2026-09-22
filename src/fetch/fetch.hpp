@@ -20,6 +20,8 @@ struct Options {
     bool allow_private = false;
     // Follow HTTP redirects (each hop still uses private-address socket checks).
     bool follow_redirects = true;
+    // PNG, JPEG, and GIF stay raw bytes. Other callers leave this off.
+    bool allow_images = false;
 };
 
 enum class DocumentKind {
@@ -31,15 +33,17 @@ enum class DocumentKind {
     Pptx,
     Csv,
     Json,
+    Image,
 };
 
 struct FetchedDocument {
     DocumentKind kind = DocumentKind::Html;
     std::string content_type;
-    // UTF-8 HTML or plaintext. Empty for binary documents converted to Markdown.
+    // UTF-8 HTML or plaintext, native CSV/JSON, or raw image bytes.
     std::string body;
-    // Markdown for Pdf/Docx/Xlsx/Pptx/Csv/Json (always) and for Html/Plaintext after conversion.
+    // Markdown for Pdf/Docx/Xlsx/Pptx/Csv/Json. HTML conversion is left to the caller.
     std::string markdown;
+    std::size_t source_bytes = 0;
     // Bounded conversion diagnostics produced by OOXML conversion.
     std::vector<std::string> warnings;
 };

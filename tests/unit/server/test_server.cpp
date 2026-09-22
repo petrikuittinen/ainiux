@@ -179,6 +179,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("<kbd>Ctrl+R</kbd>") == std::string::npos &&
               index.body.find("<kbd>Alt+T</kbd>") == std::string::npos &&
               index.body.find("id=\"chat-form\" class=\"composer chat-composer\"") != std::string::npos &&
+              index.body.find("id=\"chat-fetch-button\"") != std::string::npos &&
+              index.body.find("id=\"fetch-dialog\"") != std::string::npos &&
+              index.body.find("id=\"fetch-url\"") != std::string::npos &&
               index.body.find("application/vnd.openxmlformats-officedocument.wordprocessingml.document") !=
                   std::string::npos &&
               index.body.find(".docx") != std::string::npos &&
@@ -312,6 +315,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               javascript.body.find("function appendChatTimeline") != std::string::npos &&
               javascript.body.find("function pruneChatNoticesFrom") != std::string::npos &&
               javascript.body.find("function formatConversionNotice") != std::string::npos &&
+              javascript.body.find("async function fetchChatUrl") != std::string::npos &&
+              javascript.body.find("/chat/inputs/fetch") != std::string::npos &&
+              javascript.body.find("Fetch requires an absolute URL") != std::string::npos &&
               javascript.body.find("function formatTaskComplete") != std::string::npos &&
               javascript.body.find("function renderAgentContext") != std::string::npos &&
               javascript.body.find("💬 message") != std::string::npos &&
@@ -846,6 +852,26 @@ void test_chat_input_uploads() {
     check(!preflight_request_body(text, Limits::upload_body_bytes + 1U, auth, status, denial) &&
               denial.status == 413,
           "chat uploads use the 20 MiB body preflight, not the 1 MiB JSON cap");
+
+    http::Request private_fetch = parsed_request(
+        "POST /ainiux/v1/chat/inputs/fetch HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer controller\r\nContent-Type: application/json\r\n"
+        "Content-Length: 0\r\n\r\n");
+    private_fetch.body = "{\"url\":\"http://127.0.0.1/secret\"}";
+    Response private_response = route_request(private_fetch, auth, status);
+    check(private_response.status == 400 &&
+              private_response.body.find("private") != std::string::npos,
+          "chat URL fetch refuses a loopback address");
+    http::Request missing_fetch = private_fetch;
+    missing_fetch.body = "{\"provider\":\"openrouter\"}";
+    Response missing_response = route_request(missing_fetch, auth, status);
+    check(missing_response.status == 400, "chat URL fetch requires a url");
+    http::Request relative_fetch = private_fetch;
+    relative_fetch.body = "{\"url\":\"example.com/page\"}";
+    Response relative_response = route_request(relative_fetch, auth, status);
+    check(relative_response.status == 400 &&
+              relative_response.body.find("absolute") != std::string::npos,
+          "chat URL fetch requires an absolute URL");
     jobs.shutdown();
 }
 

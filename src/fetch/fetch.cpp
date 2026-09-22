@@ -194,14 +194,37 @@ bool url_has_extension(const std::string& url, const char* extension) {
            path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+bool media_type_is_chat_image(const std::string& media_type) {
+    return media_type == "image/png" || media_type == "image/jpeg" || media_type == "image/jpg" ||
+           media_type == "image/gif";
+}
+
+bool body_looks_like_chat_image(std::string_view body) {
+    return (body.size() >= 8 && body.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0) ||
+           (body.size() >= 3 && static_cast<unsigned char>(body[0]) == 0xff &&
+            static_cast<unsigned char>(body[1]) == 0xd8 &&
+            static_cast<unsigned char>(body[2]) == 0xff) ||
+           (body.size() >= 6 && (body.compare(0, 6, "GIF87a") == 0 ||
+                                 body.compare(0, 6, "GIF89a") == 0));
+}
+
 bool classify_fetched_kind(const std::string& media_type,
                            const std::string& body,
                            const std::string& url,
                            FetchAccept accept,
+                           bool allow_images,
                            DocumentKind& kind) {
     const bool allow_plain = accept == FetchAccept::HtmlOrPlain || accept == FetchAccept::Document;
     const bool allow_binary = accept == FetchAccept::HtmlOrBinaryDocument ||
                               accept == FetchAccept::Document;
+    if (media_type_is_chat_image(media_type) ||
+        (allow_images && (media_type.empty() || media_type == "application/octet-stream") &&
+         (url_has_extension(url, ".png") || url_has_extension(url, ".jpg") ||
+          url_has_extension(url, ".jpeg") || url_has_extension(url, ".gif") ||
+          body_looks_like_chat_image(body)))) {
+        kind = DocumentKind::Image;
+        return allow_images && allow_binary;
+    }
     if (media_type_is_pdf(media_type)) {
         kind = DocumentKind::Pdf;
         return allow_binary;
@@ -393,7 +416,14 @@ Error fetch_body(const std::string& url,
                 "HTTP " + std::to_string(result.response.status) + " while fetching URL: " + url};
     }
     if (!classify_fetched_kind(media_type_of(result.response.content_type), result.response.body,
-                               url, accept, kind)) {
+                               url, accept, options.allow_images, kind)) {
+        const std::string media = media_type_of(result.response.content_type);
+        if (!options.allow_images &&
+            (media_type_is_chat_image(media) || body_looks_like_chat_image(result.response.body))) {
+            return {ErrorCode::UnsupportedFeature,
+                    "the selected chat model does not accept image URL attachments: " + url +
+                        "; fetch a document or choose a vision model"};
+        }
         return {ErrorCode::UnsupportedFeature,
                 std::string("fetched URL did not return ") + unsupported_type_message(accept) + url +
                     " (Content-Type: " + result.response.content_type + ")"};
@@ -735,6 +765,22 @@ Error fetch_document(const std::string& url,
     if (!err.ok()) return err;
     document.kind = kind;
     document.content_type = content_type;
+    document.source_bytes = body.size();
+    if (kind == DocumentKind::Image) {
+        document.body = std::move(body);
+        return ok_error();
+    }
+    if (kind == DocumentKind::Csv) {
+        body = normalize_body_to_utf8(std::move(body), content_type);
+        document.body = body;
+        return convert_csv_body(url, std::move(body), options, document.markdown,
+                                &document.warnings, cancellation);
+    }
+    if (kind == DocumentKind::Json) {
+        body = normalize_body_to_utf8(std::move(body), content_type);
+        document.body = body;
+        return convert_json_body(url, std::move(body), options, document.markdown, cancellation);
+    }
     if (kind == DocumentKind::Pdf) {
         return convert_pdf_body(url, std::move(body), options, document.markdown, cancellation);
     }
@@ -749,13 +795,6 @@ Error fetch_document(const std::string& url,
     if (kind == DocumentKind::Pptx) {
         return convert_pptx_body(url, std::move(body), options, document.markdown,
                                  &document.warnings, cancellation);
-    }
-    if (kind == DocumentKind::Csv) {
-        return convert_csv_body(url, std::move(body), options, document.markdown,
-                                &document.warnings, cancellation);
-    }
-    if (kind == DocumentKind::Json) {
-        return convert_json_body(url, std::move(body), options, document.markdown, cancellation);
     }
     document.body = normalize_body_to_utf8(std::move(body), content_type);
     return ok_error();
@@ -775,6 +814,10 @@ Error fetch_markdown(const std::string& url,
         return {ErrorCode::Cancelled, "URL fetch cancelled: " + url};
     }
     if (warnings != nullptr) *warnings = document.warnings;
+    if (document.kind == DocumentKind::Image) {
+        return {ErrorCode::UnsupportedFeature,
+                "fetched URL is an image, not a document: " + url};
+    }
     if (document.kind == DocumentKind::Pdf || document.kind == DocumentKind::Docx ||
         document.kind == DocumentKind::Xlsx || document.kind == DocumentKind::Pptx ||
         document.kind == DocumentKind::Csv ||

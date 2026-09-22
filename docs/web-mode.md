@@ -47,7 +47,10 @@ provides:
 - concurrency-safe ordinary chat threads with live streamed model responses,
   local file attachments (PNG/JPEG/GIF, PDF, DOCX, XLSX, PPTX, CSV, JSON, Markdown,
   plaintext, HTML; PDF/DOCX/XLSX/PPTX/HTML convert to Markdown, CSV/JSON stay native
-  text), bounded upload warnings, and `/chat-to-pdf` /
+  text), bounded upload warnings, `/fetch URL` plus a Fetch button that queues
+  the page with the next message (HTML and Office become Markdown, CSV and JSON
+  stay text, images only when the model accepts them, and a failure leaves other
+  queued files in place), and `/chat-to-pdf` /
   `/last-to-pdf` plus `/chat-to-docx` / `/last-to-docx` downloads;
 - safe client-side Markdown rendering for Chat and Agent prose, including
   semantic headings, responsive GFM tables, clickable HTTP(S) links, and the

@@ -207,6 +207,21 @@ function handleThemeCommand(text) {
 
 function handleChatSlashCommand(text) {
   if (handleThemeCommand(text)) return true;
+  if (activePanelId() === "chat-panel") {
+    const fetchMatch = text.match(/^\/fetch(?:\s+(\S+))?\s*$/i);
+    if (fetchMatch) {
+      if (!state.thread) {
+        chatNotice("Select a chat thread first", "error", null);
+        return true;
+      }
+      if (!fetchMatch[1]) {
+        chatNotice("Usage: /fetch URL", "error", state.thread.id);
+        return true;
+      }
+      void fetchChatUrl(fetchMatch[1]);
+      return true;
+    }
+  }
   const pdf = text.match(/^\/(chat-to-pdf|last-to-pdf)\s*$/i);
   const docx = text.match(/^\/(chat-to-docx|last-to-docx)\s*$/i);
   if (!pdf && !docx) return false;
@@ -1621,8 +1636,9 @@ function applyCapabilities() {
   byId("new-thread-button").disabled = !supports("chat_threads");
   byId("thread-search").disabled = !supports("chat_threads");
   syncChatSendButton();
-  byId("chat-attach-button").disabled = !state.thread || state.thread.read_only === true ||
-    !supports("chat_inputs");
+  const chatAttachBlocked = !state.thread || state.thread.read_only === true || !supports("chat_inputs");
+  byId("chat-attach-button").disabled = chatAttachBlocked;
+  byId("chat-fetch-button").disabled = chatAttachBlocked;
   for (const control of byId("agent-panel").querySelectorAll("select, input, textarea, button")) {
     control.disabled = !supports("sessions");
   }
@@ -2364,6 +2380,8 @@ function renderChat() {
       setEmpty(messages, state.startingNewChat ? "Starting new chat…" : "Choose or create a thread.");
     }
     byId("chat-input").disabled = true;
+    byId("chat-fetch-button").disabled = true;
+    byId("chat-attach-button").disabled = true;
     syncChatSendButton();
     renderChatAttachList();
     renderChatToolbar();
@@ -2385,7 +2403,9 @@ function renderChat() {
   const readOnly = state.thread.read_only === true;
   if (readOnly) byId("thread-meta").textContent += " · read-only";
   byId("chat-input").disabled = readOnly;
-  byId("chat-attach-button").disabled = readOnly || !supports("chat_inputs");
+  const attachBlocked = readOnly || !supports("chat_inputs");
+  byId("chat-attach-button").disabled = attachBlocked;
+  byId("chat-fetch-button").disabled = attachBlocked;
   syncChatSendButton();
   renderChatAttachList();
   renderChatToolbar();
@@ -2686,13 +2706,81 @@ async function appendThreadMessages(threadId, revision, messages, metadata = nul
   });
 }
 
+function chatInputName(input) {
+  return input.file ? input.file.name : (input.name || "attachment");
+}
+
+function chatInputSize(input) {
+  if (input.file) return input.file.size;
+  const size = Number(input.size);
+  return Number.isFinite(size) && size >= 0 ? size : 0;
+}
+
+async function fetchChatUrl(url, errorNode = null) {
+  const target = String(url || "").trim();
+  const thread = state.thread;
+  const report = (message, severity = "error") => {
+    if (errorNode) errorNode.textContent = message;
+    else chatNotice(message, severity, thread?.id ?? null);
+  };
+  if (!thread) {
+    report("Select a chat thread first");
+    return false;
+  }
+  if (thread.read_only === true) {
+    report("This thread is read-only");
+    return false;
+  }
+  if (!supports("chat_inputs")) {
+    report("This server does not accept chat attachments");
+    return false;
+  }
+  if (!/^https?:\/\//i.test(target)) {
+    report("Fetch requires an absolute URL");
+    return false;
+  }
+  if (state.chatInputs.length >= 16) {
+    report("Chat accepts at most 16 attachments");
+    return false;
+  }
+  try {
+    const stored = await api(`${API_ROOT}/chat/inputs/fetch`, {
+      method: "POST",
+      body: {
+        url: target,
+        provider: thread.provider || "",
+        model: thread.model || "",
+      },
+    });
+    if (state.thread?.id !== thread.id) {
+      if (stored?.id) {
+        await api(`${API_ROOT}/chat/inputs/${encodeURIComponent(stored.id)}`, { method: "DELETE" }).catch(() => {});
+      }
+      return false;
+    }
+    state.chatInputs.push({
+      file: null,
+      name: stored.display_name || target,
+      size: Number(stored.byte_size) || 0,
+      uploadId: stored.id,
+      kind: stored.kind,
+      stored,
+    });
+    renderChat();
+    return true;
+  } catch (error) {
+    report(errorMessage(error));
+    return false;
+  }
+}
+
 function renderChatAttachList() {
   const list = byId("chat-attach-list");
   if (!list) return;
   clear(list);
   for (const input of state.chatInputs) {
     const chip = element("span", "chat-attach-chip");
-    chip.append(element("span", "", `${input.file.name} · ${formatBytes(input.file.size)}`));
+    chip.append(element("span", "", `${chatInputName(input)} · ${formatBytes(chatInputSize(input))}`));
     const remove = element("button", "ghost", "Remove");
     remove.type = "button";
     remove.addEventListener("click", () => void removeChatInput(input));
@@ -2808,7 +2896,7 @@ async function sendChatMessage(text) {
       model: sendingThread.model || "",
     };
     const pendingInputs = [...state.chatInputs];
-    const attachedName = pendingInputs[0]?.file?.name || "";
+    const attachedName = pendingInputs[0] ? chatInputName(pendingInputs[0]) : "";
     const uploaded = pendingInputs.length
       ? await uploadChatInputs(controller.signal, pendingInputs)
       : { ids: [], stored: [] };
@@ -4509,6 +4597,21 @@ function bindEvents() {
     if (text || state.chatInputs.length) void sendChatMessage(text);
   });
   byId("chat-attach-button").addEventListener("click", () => byId("chat-attach-files").click());
+  byId("chat-fetch-button").addEventListener("click", () => {
+    byId("fetch-error").textContent = "";
+    byId("fetch-url").value = "";
+    openDialog(byId("fetch-dialog"));
+    byId("fetch-url").focus();
+  });
+  byId("fetch-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    byId("fetch-error").textContent = "";
+    const ok = await fetchChatUrl(byId("fetch-url").value, byId("fetch-error"));
+    if (ok) {
+      byId("fetch-url").value = "";
+      closeDialog(byId("fetch-dialog"));
+    }
+  });
   byId("chat-attach-files").addEventListener("change", (event) => {
     queueChatFiles(event.target.files || []);
     event.target.value = "";
