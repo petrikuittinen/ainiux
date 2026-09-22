@@ -35,6 +35,7 @@ struct Session {
 std::string current_timestamp_utc();
 bool session_has_chat_messages(const Session& session);
 Session new_session(const provider::RequestContext& context);
+Error parse_session_json(const std::string& data, const std::string& source, Session& session);
 Error load_session(const std::string& path, Session& session);
 Error save_session_atomic(const std::string& path, Session session);
 std::string session_to_json(const Session& session);

@@ -64,6 +64,15 @@ class ChatService {
                       std::string& docx,
                       std::string& filename,
                       long long& current_revision);
+    Error export_json(long long thread_id,
+                      const std::string& request_body,
+                      std::string& json,
+                      std::string& filename,
+                      long long& current_revision);
+    Error import_json(const std::string& request_body, std::string& body);
+    Error export_table_xlsx(const std::string& request_body,
+                            std::string& xlsx,
+                            std::string& filename);
     Error load_job_messages(long long thread_id, std::vector<provider::Message>& messages);
 
    private:

@@ -201,6 +201,9 @@ POST   /ainiux/v1/chat/threads/:thread_id/edit-message
 POST   /ainiux/v1/chat/threads/:thread_id/delete-message
 POST   /ainiux/v1/chat/threads/:thread_id/pdf
 POST   /ainiux/v1/chat/threads/:thread_id/docx
+POST   /ainiux/v1/chat/threads/:thread_id/json
+POST   /ainiux/v1/chat/import
+POST   /ainiux/v1/chat/tables/xlsx
 POST   /ainiux/v1/chat/inputs
 POST   /ainiux/v1/chat/inputs/fetch
 DELETE /ainiux/v1/chat/inputs/:input_id
@@ -325,6 +328,14 @@ A failed fetch does not remove inputs already queued.
 `POST /ainiux/v1/chat/threads/:thread_id/docx` accepts the same body and returns
 a normalized Word package. Images stay `[image: name]` placeholders. Read-only
 threads may export. Empty threads return an error rather than an empty file.
+`POST /ainiux/v1/chat/threads/:thread_id/json` accepts the same scope and returns
+the TUI `/save` JSON document (`chat.json` or `last.json`). Scope `last` keeps
+one message and its stored text, including thinking traces. PDF and DOCX still
+omit those traces.
+`POST /ainiux/v1/chat/import` accepts that same JSON document, up to 20 MiB, and
+creates a new thread. It does not replace the open thread.
+`POST /ainiux/v1/chat/tables/xlsx` accepts `{"markdown":"..."}` for one Markdown
+table and returns an XLSX package. CSV table downloads are built in the browser.
 
 Regenerate accepts `{"revision":N}`. It atomically removes messages after the
 latest user prompt and returns that prompt plus the advanced thread revision;

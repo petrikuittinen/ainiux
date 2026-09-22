@@ -240,22 +240,53 @@ function handleChatSlashCommand(text) {
   return true;
 }
 
-async function downloadChatDocument(kind, scope, thread = state.thread) {
-  const threadId = thread?.id ?? null;
-  if (!thread) {
-    chatNotice("Select a chat thread first", "error", null);
-    return;
+function chatExportAvailable() {
+  return supports("chat_pdf") || supports("chat_docx") || supports("chat_json");
+}
+
+function chatExportRoute(kind) {
+  if (kind === "docx") {
+    return {
+      path: "docx",
+      accept: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      extension: "docx",
+      fallback: "Could not export the chat DOCX",
+    };
   }
-  const docx = kind === "docx";
+  if (kind === "json") {
+    return {
+      path: "json",
+      accept: "application/json",
+      extension: "json",
+      fallback: "Could not export the chat JSON",
+    };
+  }
+  return {
+    path: "pdf",
+    accept: "application/pdf",
+    extension: "pdf",
+    fallback: "Could not export the chat PDF",
+  };
+}
+
+async function downloadChatDocument(kind, scope, thread = state.thread, errorNode = null) {
+  const threadId = thread?.id ?? null;
+  const report = (message) => {
+    if (errorNode) errorNode.textContent = message;
+    chatNotice(message, "error", threadId);
+  };
+  if (!thread) {
+    report("Select a chat thread first");
+    return false;
+  }
+  const route = chatExportRoute(kind);
   try {
     const response = await fetch(
-      `${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/${docx ? "docx" : "pdf"}`, {
+      `${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/${route.path}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${state.token}`,
-          Accept: docx
-            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            : "application/pdf",
+          Accept: route.accept,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ revision: thread.revision, scope }),
@@ -264,7 +295,7 @@ async function downloadChatDocument(kind, scope, thread = state.thread) {
         referrerPolicy: "no-referrer",
       });
     if (!response.ok) {
-      let message = docx ? "Could not export the chat DOCX" : "Could not export the chat PDF";
+      let message = route.fallback;
       try {
         const payload = await response.json();
         if (payload?.error?.message) message = payload.error.message;
@@ -276,13 +307,86 @@ async function downloadChatDocument(kind, scope, thread = state.thread) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${scope === "last" ? "last" : "chat"}.${docx ? "docx" : "pdf"}`;
+    link.download = `${scope === "last" ? "last" : "chat"}.${route.extension}`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch (error) {
+    report(errorMessage(error));
+    return false;
+  }
+}
+
+function openChatExport(thread, scope) {
+  if (!thread || !chatExportAvailable()) return;
+  state.chatExport = { thread, scope };
+  byId("export-description").textContent = scope === "last"
+    ? "Export this message." : "Export this thread.";
+  byId("export-error").textContent = "";
+  byId("export-json").hidden = !supports("chat_json");
+  byId("export-pdf").hidden = !supports("chat_pdf");
+  byId("export-docx").hidden = !supports("chat_docx");
+  openDialog(byId("export-dialog"));
+}
+
+async function importChatFile(file) {
+  if (!supports("chat_threads")) {
+    chatNotice("This server does not accept chat import", "error", state.thread?.id ?? null);
+    return;
+  }
+  try {
+    const created = await api(`${API_ROOT}/chat/import`, {
+      method: "POST",
+      rawBody: await file.text(),
+      contentType: "application/json",
+    });
+    await loadThreads();
+    if (created?.thread?.id) await loadThread(created.thread.id);
+  } catch (error) {
+    chatNotice(errorMessage(error), "error", state.thread?.id ?? null);
+  }
+}
+
+async function exportChatTable(markdown, filename) {
+  if (!supports("chat_xlsx")) {
+    chatNotice("This server does not export tables to XLSX", "error", state.thread?.id ?? null);
+    return;
+  }
+  try {
+    const response = await fetch(`${API_ROOT}/chat/tables/xlsx`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${state.token}`,
+        Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ markdown }),
+      credentials: "omit",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+    });
+    if (!response.ok) {
+      let message = "Could not export the table";
+      try {
+        const payload = await response.json();
+        if (payload?.error?.message) message = payload.error.message;
+      } catch (_) {}
+      if (response.status === 401) invalidateAuthentication();
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || "table.xlsx";
     document.body.append(link);
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
-    chatNotice(errorMessage(error), "error", threadId);
+    chatNotice(errorMessage(error), "error", state.thread?.id ?? null);
   }
 }
 
@@ -519,9 +623,13 @@ function chatDisplaySegments(content) {
   return segments;
 }
 
-function appendMarkdown(parent, text) {
+function appendMarkdown(parent, text, interactive = false) {
   try {
-    parent.append(renderMarkdown(text));
+    parent.append(renderMarkdown(text, document, interactive ? {
+      blocks: true,
+      onNotice: (message) => chatNotice(message, "error", state.thread?.id ?? null),
+      onExportTable: (markdown, filename) => void exportChatTable(markdown, filename),
+    } : null));
   } catch (_) {
     parent.append(element("pre", "", text));
   }
@@ -539,13 +647,13 @@ function renderChatContent(output, role, content, streaming) {
     const segments = chatDisplaySegments(content);
     for (const segment of segments) {
       if (segment.kind === "thinking") output.append(element("pre", "thinking-trace", segment.text));
-      else appendMarkdown(output, segment.text);
+      else appendMarkdown(output, segment.text, !streaming);
     }
     if (!output.textContent.trim() && streaming) output.append(element("pre", "", "Thinking…"));
     return;
   }
   if (role === "user") {
-    appendMarkdown(output, String(content || ""));
+    appendMarkdown(output, String(content || ""), true);
     return;
   }
   output.append(element("pre", "", String(content || "")));
@@ -1634,6 +1742,7 @@ function applyCapabilities() {
   populateProviders();
   refreshModelControls();
   byId("new-thread-button").disabled = !supports("chat_threads");
+  byId("import-thread-button").disabled = !supports("chat_threads");
   byId("thread-search").disabled = !supports("chat_threads");
   syncChatSendButton();
   const chatAttachBlocked = !state.thread || state.thread.read_only === true || !supports("chat_inputs");
@@ -2237,19 +2346,15 @@ function renderThreads() {
     button.addEventListener("click", () => void loadThread(thread.id));
     item.append(button);
     const actions = element("div", "thread-actions");
-    const addExport = (label, kind) => {
-      const capability = kind === "docx" ? "chat_docx" : "chat_pdf";
-      if (!supports(capability)) return;
-      const exportButton = element("button", "thread-export", label);
+    if (chatExportAvailable()) {
+      const exportButton = element("button", "thread-export", "Export");
       exportButton.type = "button";
       exportButton.addEventListener("click", (event) => {
         event.stopPropagation();
-        void downloadChatDocument(kind, "thread", thread);
+        openChatExport(thread, "thread");
       });
       actions.append(exportButton);
-    };
-    addExport("Chat to PDF", "pdf");
-    addExport("Chat to docx", "docx");
+    }
     if (thread.read_only !== true) {
       const remove = element("button", "thread-delete", "Delete");
       remove.type = "button";
@@ -2313,16 +2418,12 @@ function appendChatMessage(container, role, content, streaming = false, ordinal 
     appendAttachmentChips(output, attachments);
     card.append(element("div", "role", streaming ? "assistant · streaming" : role || "message"), output);
     const actions = element("div", "message-actions");
-    const addPrint = (label, kind) => {
-      const capability = kind === "docx" ? "chat_docx" : "chat_pdf";
-      if (!printActions || !supports(capability)) return;
-      const print = element("button", "", label);
-      print.type = "button";
-      print.addEventListener("click", () => void downloadChatDocument(kind, "last"));
-      actions.append(print);
-    };
-    addPrint("Print PDF", "pdf");
-    addPrint("Print docx", "docx");
+    if (printActions && chatExportAvailable()) {
+      const exportButton = element("button", "", "Export");
+      exportButton.type = "button";
+      exportButton.addEventListener("click", () => openChatExport(state.thread, "last"));
+      actions.append(exportButton);
+    }
     const writable = state.thread && state.thread.read_only !== true && !chatTurnBusy();
     if (!streaming && (role === "assistant" || role === "user") && writable && ordinal != null) {
       if (role === "assistant") {
@@ -4597,6 +4698,24 @@ function bindEvents() {
     if (text || state.chatInputs.length) void sendChatMessage(text);
   });
   byId("chat-attach-button").addEventListener("click", () => byId("chat-attach-files").click());
+  for (const kind of ["json", "pdf", "docx"]) {
+    byId(`export-${kind}`).addEventListener("click", async () => {
+      const target = state.chatExport;
+      if (!target) return;
+      byId("export-error").textContent = "";
+      const ok = await downloadChatDocument(kind, target.scope, target.thread, byId("export-error"));
+      if (ok) closeDialog(byId("export-dialog"));
+    });
+  }
+  byId("import-thread-button").addEventListener("click", () => {
+    const input = byId("import-thread-file");
+    input.value = "";
+    input.click();
+  });
+  byId("import-thread-file").addEventListener("change", () => {
+    const file = byId("import-thread-file").files && byId("import-thread-file").files[0];
+    if (file) void importChatFile(file);
+  });
   byId("chat-fetch-button").addEventListener("click", () => {
     byId("fetch-error").textContent = "";
     byId("fetch-url").value = "";

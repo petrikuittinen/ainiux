@@ -110,27 +110,19 @@ std::string session_to_json(const Session& session) {
     return out.str();
 }
 
-Error load_session(const std::string& path, Session& session) {
-    const std::string resolved = expand_user_path(path);
-    std::string data;
-    Error read_error = platform::read_file_bounded(resolved, 512U * 1024U * 1024U, data);
-    if (!read_error.ok()) {
-        return {ErrorCode::FileRead,
-                "could not open chat file for reading: " + resolved + ": " +
-                    read_error.message};
-    }
+Error parse_session_json(const std::string& data, const std::string& source, Session& session) {
     json::ParseResult parsed = json::parse(data);
     if (!parsed.error.ok()) {
         return parsed.error;
     }
     if (!parsed.value.is_object()) {
-        return {ErrorCode::ProviderSchema, "chat file root is not an object: " + resolved};
+        return {ErrorCode::ProviderSchema, "chat file root is not an object: " + source};
     }
 
     Session loaded;
     if (const json::Value* version = parsed.value.get("schema_version")) {
         if (version->type != json::Value::Type::Number || version->number < 1.0) {
-            return {ErrorCode::ProviderSchema, "chat file schema_version is invalid: " + resolved};
+            return {ErrorCode::ProviderSchema, "chat file schema_version is invalid: " + source};
         }
         loaded.schema_version = static_cast<int>(version->number);
     } else {
@@ -171,12 +163,12 @@ Error load_session(const std::string& path, Session& session) {
     }
     for (const json::Value& item : messages->array) {
         if (!item.is_object()) {
-            return {ErrorCode::ProviderSchema, "chat file message is not an object: " + resolved};
+            return {ErrorCode::ProviderSchema, "chat file message is not an object: " + source};
         }
         const json::Value* role = item.get("role");
         const json::Value* content = item.get("content");
         if (role == nullptr || !role->is_string() || content == nullptr || !content->is_string()) {
-            return {ErrorCode::ProviderSchema, "chat file message requires string role and content: " + resolved};
+            return {ErrorCode::ProviderSchema, "chat file message requires string role and content: " + source};
         }
         if (role->string != "system" && role->string != "user" && role->string != "assistant") {
             return {ErrorCode::ProviderSchema, "chat file message has unsupported role: " + role->string};
@@ -186,11 +178,11 @@ Error load_session(const std::string& path, Session& session) {
 
     if (const json::Value* events = parsed.value.get("compaction_events")) {
         if (!events->is_array()) {
-            return {ErrorCode::ProviderSchema, "chat file compaction_events is not an array: " + resolved};
+            return {ErrorCode::ProviderSchema, "chat file compaction_events is not an array: " + source};
         }
         for (const json::Value& item : events->array) {
             if (!item.is_object()) {
-                return {ErrorCode::ProviderSchema, "chat file compaction event is not an object: " + resolved};
+                return {ErrorCode::ProviderSchema, "chat file compaction event is not an object: " + source};
             }
             context::CompactionEvent event;
             const json::Value* timestamp = item.get("timestamp");
@@ -205,7 +197,7 @@ Error load_session(const std::string& path, Session& session) {
                 request == nullptr || request->type != json::Value::Type::Number ||
                 notice == nullptr || !notice->is_string() || count->number < 0.0 ||
                 original->number < 0.0 || request->number < 0.0) {
-                return {ErrorCode::ProviderSchema, "chat file compaction event fields are invalid: " + resolved};
+                return {ErrorCode::ProviderSchema, "chat file compaction event fields are invalid: " + source};
             }
             event.timestamp = timestamp->string;
             event.policy = policy->string;
@@ -218,6 +210,18 @@ Error load_session(const std::string& path, Session& session) {
     }
     session = std::move(loaded);
     return ok_error();
+}
+
+Error load_session(const std::string& path, Session& session) {
+    const std::string resolved = expand_user_path(path);
+    std::string data;
+    Error read_error = platform::read_file_bounded(resolved, 512U * 1024U * 1024U, data);
+    if (!read_error.ok()) {
+        return {ErrorCode::FileRead,
+                "could not open chat file for reading: " + resolved + ": " +
+                    read_error.message};
+    }
+    return parse_session_json(data, resolved, session);
 }
 
 Error save_session_atomic(const std::string& path, Session session) {

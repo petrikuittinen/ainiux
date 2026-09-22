@@ -36,7 +36,9 @@
               <h2 id="threads-heading">Threads</h2>
               <div class="button-row">
                 <button id="new-thread-button" type="button">New</button>
+                <button id="import-thread-button" type="button" disabled>Import</button>
                 <button id="refresh-threads-button" class="icon-button ghost" type="button" aria-label="Refresh threads">↻</button>
+                <input id="import-thread-file" type="file" accept="application/json,.json" hidden>
               </div>
             </div>
             <label class="sr-only" for="thread-search">Search saved chats</label>
@@ -238,6 +240,20 @@
 
   <dialog id="conflict-dialog" aria-labelledby="conflict-title">
     <div class="dialog-card"><h2 id="conflict-title">Remote content changed</h2><p id="conflict-message">Reload the newest server version before saving again. Your draft remains in this tab until you choose reload.</p><div class="dialog-actions"><button id="keep-draft-button" class="ghost" type="button">Keep draft</button><button id="reload-conflict-button" type="button">Reload server copy</button></div></div>
+  </dialog>
+
+  <dialog id="export-dialog" aria-labelledby="export-title">
+    <form id="export-form" class="dialog-card">
+      <h2 id="export-title">Export</h2>
+      <p id="export-description">Choose a format.</p>
+      <p id="export-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="export-json" type="button">JSON</button>
+        <button id="export-pdf" type="button">PDF</button>
+        <button id="export-docx" type="button">DOCX</button>
+        <button class="ghost dialog-cancel" type="button">Cancel</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="fetch-dialog" aria-labelledby="fetch-title">

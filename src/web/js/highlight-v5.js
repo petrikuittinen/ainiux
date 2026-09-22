@@ -13,6 +13,75 @@ function appendText(documentRef, parent, text) {
   if (text) parent.append(documentRef.createTextNode(text));
 }
 
+const CODE_EXTENSIONS = {
+  python: "py", javascript: "js", typescript: "ts", c: "c", cpp: "cpp",
+  html: "html", htmlonly: "html", css: "css", bash: "sh", markdown: "md",
+  text: "txt", csharp: "cs", java: "java", xml: "xml", json: "json",
+  php: "php", perl: "pl", ruby: "rb", rust: "rs", go: "go",
+  powershell: "ps1", assembly: "asm", sql: "sql", toml: "toml",
+  yaml: "yml", ini: "ini",
+};
+
+function codeExtension(language) {
+  return CODE_EXTENSIONS[canonicalLanguage(language)] || "txt";
+}
+
+function numberedDownloadName(stem, extension, index) {
+  return `${stem}${index > 1 ? `-${index}` : ""}.${extension}`;
+}
+
+function downloadBlob(documentRef, filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = createElement(documentRef, "a");
+  link.href = url;
+  link.download = filename;
+  (documentRef.body || documentRef.documentElement).append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function actionButton(documentRef, label, onClick) {
+  const button = createElement(documentRef, "button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onClick(event);
+  });
+  return button;
+}
+
+function blockActions(documentRef, buttons) {
+  const row = createElement(documentRef, "div", "markdown-block-actions");
+  for (const button of buttons) row.append(button);
+  return row;
+}
+
+function csvField(value) {
+  const text = String(value || "");
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, "\"\"")}"` : text;
+}
+
+function tableCsv(headers, rows) {
+  const lines = [headers.map(csvField).join(",")];
+  for (const row of rows) {
+    lines.push(headers.map((_, column) => csvField(row[column] || "")).join(","));
+  }
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function copyCode(source, options) {
+  const notify = options && typeof options.onNotice === "function" ? options.onNotice : () => {};
+  const clipboard = navigator.clipboard;
+  if (!clipboard || typeof clipboard.writeText !== "function") {
+    notify("Could not copy the code block");
+    return;
+  }
+  clipboard.writeText(source).catch(() => notify("Could not copy the code block"));
+}
+
 function leadingIndent(line) {
   let width = 0;
   let offset = 0;
@@ -420,7 +489,7 @@ function blockStart(lines, index) {
   return index + 1 < lines.length && Boolean(line.trim()) && setextLevel(lines[index + 1]) > 0;
 }
 
-function appendList(documentRef, parent, lines, start, depth) {
+function appendList(documentRef, parent, lines, start, depth, blocks = null) {
   const first = listMarker(lines[start]);
   const list = createElement(documentRef, first.ordered ? "ol" : "ul");
   if (first.ordered && first.start !== 1) list.setAttribute("start", String(first.start));
@@ -440,16 +509,17 @@ function appendList(documentRef, parent, lines, start, depth) {
     }
     while (itemLines.length && !itemLines[itemLines.length - 1].trim()) itemLines.pop();
     const item = createElement(documentRef, "li");
-    appendBlocks(documentRef, item, itemLines, depth + 1);
+    appendBlocks(documentRef, item, itemLines, depth + 1, blocks);
     list.append(item);
   }
   parent.append(list);
   return index;
 }
 
-function appendTable(documentRef, parent, lines, start) {
+function appendTable(documentRef, parent, lines, start, blocks = null) {
   const headers = splitTableRow(lines[start]);
   const aligns = tableSeparator(lines[start + 1]);
+  const rows = [];
   const wrapper = createElement(documentRef, "div", "markdown-table-scroll");
   wrapper.setAttribute("role", "region");
   wrapper.setAttribute("aria-label", "Markdown table");
@@ -470,6 +540,7 @@ function appendTable(documentRef, parent, lines, start) {
   while (index < lines.length && lines[index].trim()) {
     const sourceCells = splitTableRow(lines[index]);
     if (!sourceCells || tableSeparator(lines[index])) break;
+    rows.push(sourceCells);
     const row = createElement(documentRef, "tr");
     for (let column = 0; column < headers.length; column += 1) {
       const cell = createElement(documentRef, "td", `md-align-${aligns[column]}`);
@@ -481,11 +552,26 @@ function appendTable(documentRef, parent, lines, start) {
   }
   table.append(body);
   wrapper.append(table);
+  if (blocks) {
+    blocks.table += 1;
+    const tableLines = lines.slice(start, index);
+    const filenameStem = blocks.table > 1 ? `table-${blocks.table}` : "table";
+    wrapper.insertBefore(blockActions(documentRef, [
+      actionButton(documentRef, "CSV", () => downloadBlob(
+        documentRef, `${filenameStem}.csv`,
+        new Blob([tableCsv(headers, rows)], { type: "text/csv;charset=utf-8" }))),
+      actionButton(documentRef, "XLSX", () => {
+        if (blocks.options && typeof blocks.options.onExportTable === "function") {
+          blocks.options.onExportTable(tableLines.join("\n"), `${filenameStem}.xlsx`);
+        }
+      }),
+    ]), table);
+  }
   parent.append(wrapper);
   return index;
 }
 
-function appendBlocks(documentRef, parent, lines, depth = 0) {
+function appendBlocks(documentRef, parent, lines, depth = 0, blocks = null) {
   if (depth > MAX_INLINE_DEPTH) {
     appendText(documentRef, parent, lines.join("\n"));
     return;
@@ -517,7 +603,19 @@ function appendBlocks(documentRef, parent, lines, depth = 0) {
       const source = codeLines.join("\n");
       appendHighlightedCode(documentRef, code, source, canonicalLanguage(safeLanguage));
       pre.append(code);
-      parent.append(pre);
+      if (blocks) {
+        blocks.code += 1;
+        const filename = numberedDownloadName("example", codeExtension(safeLanguage), blocks.code);
+        const wrap = createElement(documentRef, "div", "md-code-wrap");
+        wrap.append(blockActions(documentRef, [
+          actionButton(documentRef, "Copy", () => copyCode(source, blocks.options)),
+          actionButton(documentRef, "Save", () => downloadBlob(
+            documentRef, filename, new Blob([source], { type: "text/plain;charset=utf-8" }))),
+        ]), pre);
+        parent.append(wrap);
+      } else {
+        parent.append(pre);
+      }
       continue;
     }
     const atx = heading(lines[index]);
@@ -537,7 +635,7 @@ function appendBlocks(documentRef, parent, lines, depth = 0) {
       continue;
     }
     if (isTableStart(lines, index)) {
-      index = appendTable(documentRef, parent, lines, index);
+      index = appendTable(documentRef, parent, lines, index, blocks);
       continue;
     }
     const quoted = quoteText(lines[index]);
@@ -550,13 +648,13 @@ function appendBlocks(documentRef, parent, lines, depth = 0) {
         index += 1;
       }
       const blockquote = createElement(documentRef, "blockquote");
-      appendBlocks(documentRef, blockquote, quoteLines, depth + 1);
+      appendBlocks(documentRef, blockquote, quoteLines, depth + 1, blocks);
       parent.append(blockquote);
       continue;
     }
     const marker = listMarker(lines[index]);
     if (marker) {
-      index = appendList(documentRef, parent, lines, index, depth);
+      index = appendList(documentRef, parent, lines, index, depth, blocks);
       continue;
     }
     if (isHorizontalRule(lines[index])) {
@@ -590,11 +688,12 @@ function appendBlocks(documentRef, parent, lines, depth = 0) {
   }
 }
 
-export function renderMarkdown(markdown, documentRef = document) {
+export function renderMarkdown(markdown, documentRef = document, options = null) {
   const fragment = documentRef.createDocumentFragment();
   const root = createElement(documentRef, "div", "markdown-body");
   const lines = String(markdown ?? "").replace(/\r\n?/g, "\n").split("\n");
-  appendBlocks(documentRef, root, lines);
+  const blocks = options && options.blocks ? { code: 0, table: 0, options } : null;
+  appendBlocks(documentRef, root, lines, 0, blocks);
   fragment.append(root);
   return fragment;
 }

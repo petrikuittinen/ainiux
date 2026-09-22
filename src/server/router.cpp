@@ -11,6 +11,7 @@
 
 #include "ainiux/version.hpp"
 #include "docx/docx.hpp"
+#include "xlsx/xlsx.hpp"
 #include "encoding/encoding.hpp"
 #include "json/json.hpp"
 #include "provider/provider.hpp"
@@ -421,13 +422,15 @@ bool preflight_request_body(const http::Request& request,
     const bool image_upload = request.method == "POST" && request.path == "/ainiux/v1/images/inputs";
     const bool video_upload = request.method == "POST" && request.path == "/ainiux/v1/videos/inputs";
     const bool chat_upload = request.method == "POST" && request.path == "/ainiux/v1/chat/inputs";
+    const bool chat_import = request.method == "POST" && request.path == "/ainiux/v1/chat/import";
     const bool upload = image_upload || video_upload || chat_upload;
     const std::size_t limit = video_upload ? Limits::video_upload_body_bytes :
-                              (image_upload || chat_upload) ? Limits::upload_body_bytes
+                              (image_upload || chat_upload || chat_import) ? Limits::upload_body_bytes
                                                            : Limits::json_body_bytes;
     if (content_length > limit) {
         denial = error_response(413, "content_too_large",
                                 video_upload ? "video reference upload exceeds the 200 MiB per-file limit" :
+                                chat_import ? "chat import exceeds the 20 MiB limit" :
                                 upload ? "upload exceeds the 20 MiB per-file limit"
                                        : "HTTP request body exceeds the 1 MiB JSON limit");
         return false;
@@ -607,7 +610,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_inputs\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_json\",\"chat_xlsx\",\"chat_inputs\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
@@ -929,6 +932,66 @@ Response route_request(const http::Request& request,
         return response;
     }
 
+    if (request.path == "/ainiux/v1/chat/import") {
+        if (status.chat_threads == nullptr) {
+            return error_response(503, "chat_unavailable", "the chat thread service is unavailable");
+        }
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed", "chat import accepts POST only");
+            response.allow = "POST";
+            return response;
+        }
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "chat import does not accept query parameters");
+        }
+        if (!json_content_type(request)) {
+            return error_response(415, "unsupported_media_type",
+                                  "chat import requires Content-Type: application/json");
+        }
+        std::string body;
+        const Error error = status.chat_threads->import_json(request.body, body);
+        if (!error.ok()) {
+            if (error.code == ErrorCode::ProviderSchema || error.code == ErrorCode::JsonParse ||
+                error.code == ErrorCode::BadArgs) {
+                return error_response(400, "invalid_request", error.message);
+            }
+            return chat_thread_error(error);
+        }
+        response.status = 201;
+        response.body = std::move(body);
+        return response;
+    }
+    if (request.path == "/ainiux/v1/chat/tables/xlsx") {
+        if (status.chat_threads == nullptr) {
+            return error_response(503, "chat_unavailable", "the chat thread service is unavailable");
+        }
+        if (request.method != "POST") {
+            response = error_response(405, "method_not_allowed", "table export accepts POST only");
+            response.allow = "POST";
+            return response;
+        }
+        if (!request.query.empty()) {
+            return error_response(400, "invalid_request", "table export does not accept query parameters");
+        }
+        if (!json_content_type(request)) {
+            return error_response(415, "unsupported_media_type",
+                                  "table export requires Content-Type: application/json");
+        }
+        std::string bytes;
+        std::string filename;
+        const Error error = status.chat_threads->export_table_xlsx(request.body, bytes, filename);
+        if (!error.ok()) {
+            if (error.code == ErrorCode::BadArgs || error.code == ErrorCode::JsonParse) {
+                return error_response(400, "invalid_request", error.message);
+            }
+            return error_response(400, "invalid_table", error.message);
+        }
+        response.content_type = xlsx::kMimeType;
+        response.content_disposition = "attachment; filename=\"" + filename + "\"";
+        response.body = std::move(bytes);
+        return response;
+    }
+
     const std::string chat_threads_prefix = "/ainiux/v1/chat/threads";
     if (request.path == chat_threads_prefix ||
         request.path == chat_threads_prefix + "/cleanup-empty") {
@@ -994,7 +1057,8 @@ Response route_request(const http::Request& request,
             (slash != std::string::npos && action.empty()) ||
             (!action.empty() && action != "messages" && action != "regenerate" &&
              action != "settings" && action != "abandon" && action != "edit-message" &&
-             action != "delete-message" && action != "pdf" && action != "docx")) {
+             action != "delete-message" && action != "pdf" && action != "docx" &&
+             action != "json")) {
             return error_response(404, "thread_route_not_found", "no chat thread route matches this path");
         }
         if ((action.empty() || action == "settings") && request.method == "GET") {
@@ -1035,6 +1099,7 @@ Response route_request(const http::Request& request,
                 : action == "delete-message" ? "chat message deletion accepts POST only"
                 : action == "pdf" ? "chat PDF export accepts POST only"
                 : action == "docx" ? "chat DOCX export accepts POST only"
+                : action == "json" ? "chat JSON export accepts POST only"
                                       : "message append accepts POST only");
             response.allow = "POST";
             return response;
@@ -1053,6 +1118,8 @@ Response route_request(const http::Request& request,
                                       ? "chat PDF export requires Content-Type: application/json"
                                   : action == "docx"
                                       ? "chat DOCX export requires Content-Type: application/json"
+                                  : action == "json"
+                                      ? "chat JSON export requires Content-Type: application/json"
                                       : "message append requires Content-Type: application/json");
         }
         if (action == "pdf") {
@@ -1077,6 +1144,18 @@ Response route_request(const http::Request& request,
             response.content_type = docx::kMimeType;
             response.content_disposition = "attachment; filename=\"" + filename + "\"";
             response.body = std::move(docx);
+            return response;
+        }
+        if (action == "json") {
+            std::string json_text;
+            std::string filename;
+            long long current_revision = 0;
+            const Error error = status.chat_threads->export_json(
+                thread_id, request.body, json_text, filename, current_revision);
+            if (!error.ok()) return chat_thread_error(error, current_revision);
+            response.content_type = "application/json; charset=utf-8";
+            response.content_disposition = "attachment; filename=\"" + filename + "\"";
+            response.body = std::move(json_text);
             return response;
         }
         std::string body;

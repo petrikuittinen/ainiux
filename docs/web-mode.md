@@ -131,7 +131,7 @@ prompt supplies the stored title. A search field above the thread list matches
 that title or user and assistant message text, including chats older than the
 first page. Clearing the field restores the newest threads. Thread rows show the locally formatted
 modified date and message count rather than internal concurrency values.
-Each row has **Chat to PDF** and **Chat to docx** under that metadata. They download the whole thread, the same as `/chat-to-pdf` and `/chat-to-docx`. Each writable row also has a small **Delete** control beside those downloads.
+**Import**, beside **New**, reads a chat JSON file in the same shape as TUI `/load` and creates a new thread. Each row has one **Export** control under its metadata. It opens a dialog for JSON, PDF, or DOCX of the whole thread, the same files as `/save`, `/chat-to-pdf`, and `/chat-to-docx`. Each writable row also has a small **Delete** control beside Export. Read-only rows keep Export and hide Delete.
 Empty threads delete immediately; threads with user or assistant content ask
 for confirmation first in an in-page dialog (never `alert`/`confirm`/`prompt`).
 Read-only threads cannot be deleted.
@@ -143,7 +143,7 @@ none has been chosen yet. A thread left without
 user or assistant content is revision-safely abandoned when another thread is
 selected or created; reconnection reloads the active thread instead of creating
 another one and keeps that thread while sweeping other empties.
-The latest completed assistant reply has **Print PDF** and **Print docx**. They download that reply, the same as `/last-to-pdf` and `/last-to-docx`.
+The latest completed assistant reply has one **Export** button beside Edit and Delete. It offers JSON, PDF, or DOCX for that message only, the same as `/last-to-pdf` and `/last-to-docx`. PDF and DOCX omit thinking traces. JSON keeps the stored message, including thinking text. Finished fenced code blocks have Copy and Save; Save downloads `example.py` for Python and the matching extension for other languages. Finished Markdown tables have CSV, built in the browser, and XLSX, converted on the server.
 
 Completed assistant responses on a writable thread can be edited in place
 (Save or Cancel). User and assistant messages can be deleted after an in-page

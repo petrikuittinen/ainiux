@@ -2141,6 +2141,50 @@ void test_revision_safe_chat_thread_routes() {
     Response bad_docx_scope = route_request(session_request(
         "POST", thread_path + "/docx", "{\"scope\":\"all\"}"), auth, status);
     check(bad_docx_scope.status == 400, "chat DOCX export rejects an unknown scope");
+    Response thread_json = route_request(session_request(
+        "POST", thread_path + "/json", "{\"scope\":\"thread\"}"), auth, status);
+    check(thread_json.status == 200 &&
+              thread_json.content_type.find("application/json") != std::string::npos &&
+              thread_json.content_disposition.find("chat.json") != std::string::npos &&
+              thread_json.body.find("hello") != std::string::npos &&
+              thread_json.body.find("hi") != std::string::npos &&
+              thread_json.body.find("schema_version") != std::string::npos,
+          "chat JSON export returns the saved transcript");
+    Response last_json = route_request(session_request(
+        "POST", thread_path + "/json", "{\"scope\":\"last\"}"), auth, status);
+    check(last_json.status == 200 &&
+              last_json.content_disposition.find("last.json") != std::string::npos &&
+              last_json.body.find("hello") == std::string::npos &&
+              last_json.body.find("hi") != std::string::npos,
+          "last-message JSON export keeps only that message");
+    Response bad_json_scope = route_request(session_request(
+        "POST", thread_path + "/json", "{\"scope\":\"all\"}"), auth, status);
+    check(bad_json_scope.status == 400, "chat JSON export rejects an unknown scope");
+    Response imported = route_request(session_request(
+        "POST", "/ainiux/v1/chat/import",
+        "{\"schema_version\":1,\"created_at\":\"2026-01-01T00:00:00Z\","
+        "\"updated_at\":\"2026-01-01T00:00:00Z\",\"provider\":\"deepseek\","
+        "\"base_url\":\"https://api.deepseek.com\",\"model\":\"deepseek-flash\","
+        "\"messages\":[{\"role\":\"user\",\"content\":\"imported greeting\"},"
+        "{\"role\":\"assistant\",\"content\":\"imported reply\"}]}"),
+        auth, status);
+    check(imported.status == 201 && imported.body.find("imported greeting") != std::string::npos,
+          "chat JSON import creates a new thread");
+    Response bad_import = route_request(session_request(
+        "POST", "/ainiux/v1/chat/import", "{\"schema_version\":1}"), auth, status);
+    check(bad_import.status == 400, "chat JSON import rejects an incomplete file");
+    Response table_xlsx = route_request(session_request(
+        "POST", "/ainiux/v1/chat/tables/xlsx",
+        "{\"markdown\":\"| Name | Value |\\n| --- | --- |\\n| Ada | 7 |\\n\"}"),
+        auth, status);
+    check(table_xlsx.status == 200 &&
+              table_xlsx.content_type.find("spreadsheetml.sheet") != std::string::npos &&
+              table_xlsx.content_disposition.find("table.xlsx") != std::string::npos &&
+              table_xlsx.body.compare(0, 4, "PK\x03\x04") == 0,
+          "a Markdown table exports as an XLSX package");
+    Response bad_table = route_request(session_request(
+        "POST", "/ainiux/v1/chat/tables/xlsx", "{}"), auth, status);
+    check(bad_table.status == 400, "table export requires markdown");
 
     {
         chat::SqliteStore tui_store;

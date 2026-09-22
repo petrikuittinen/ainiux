@@ -16,6 +16,7 @@
 #include "chat/transcript.hpp"
 #include "docx/docx.hpp"
 #include "server/limits.hpp"
+#include "xlsx/xlsx.hpp"
 #include "server/model_settings.hpp"
 
 namespace ainiux::server {
@@ -809,6 +810,114 @@ Error ChatService::export_rendered(long long thread_id,
         filename.clear();
         return error;
     }
+    return ok_error();
+}
+
+Error ChatService::export_json(long long thread_id,
+                               const std::string& request_body,
+                               std::string& json_text,
+                               std::string& filename,
+                               long long& current_revision) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    json_text.clear();
+    filename.clear();
+    current_revision = 0;
+    Error error = ensure_open();
+    if (!error.ok()) return error;
+    const json::ParseResult parsed = json::parse(request_body);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return invalid("chat JSON export body must be one JSON object");
+    }
+    std::string unknown;
+    if (!known_fields(parsed.value, {"revision", "scope"}, unknown)) {
+        return invalid("unknown chat JSON export field: " + unknown);
+    }
+    std::string scope_name = "thread";
+    error = optional_string(parsed.value, "scope", kMaxMetadataBytes, scope_name);
+    if (!error.ok()) return error;
+    if (scope_name.empty()) scope_name = "thread";
+    const bool last = scope_name == "last";
+    if (!last && scope_name != "thread") {
+        return invalid("scope must be 'thread' or 'last'");
+    }
+    chat::Session session;
+    chat::LoadSessionOptions options;
+    options.max_messages = kMaxLoadedMessages;
+    options.max_content_bytes = kMaxLoadedContentBytes;
+    options.max_attachments_per_message = kMaxAttachmentsPerMessage;
+    options.metadata_only_attachments = false;
+    options.load_compactions = true;
+    options.update_last_thread = false;
+    error = store_.load_session(thread_id, session, options);
+    if (!error.ok()) return safe_store_error(error, "load the chat thread");
+    current_revision = session.revision;
+    if (session.messages.empty()) {
+        return invalid("chat export needs at least one message");
+    }
+    if (last) {
+        const provider::Message* kept = nullptr;
+        for (auto it = session.messages.rbegin(); it != session.messages.rend(); ++it) {
+            if (it->role == "thinking") continue;
+            kept = &*it;
+            break;
+        }
+        if (kept == nullptr || kept->content.empty()) {
+            return invalid("the last chat message is empty");
+        }
+        provider::Message message = *kept;
+        session.messages.clear();
+        session.messages.push_back(std::move(message));
+        session.compaction_events.clear();
+    }
+    json_text = chat::session_to_json(session);
+    filename = last ? "last.json" : "chat.json";
+    return ok_error();
+}
+
+Error ChatService::import_json(const std::string& request_body, std::string& body) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    body.clear();
+    Error error = ensure_open();
+    if (!error.ok()) return error;
+    if (request_body.size() > Limits::upload_body_bytes) {
+        return {ErrorCode::BadArgs, "chat import exceeds the 20 MiB limit"};
+    }
+    chat::Session session;
+    error = chat::parse_session_json(request_body, "request", session);
+    if (!error.ok()) return error;
+    session.thread_id = 0;
+    session.revision = 0;
+    session.name.clear();
+    session.read_only = false;
+    session.read_only_reason.clear();
+    error = store_.save_session(session);
+    if (!error.ok()) return safe_store_error(error, "import the chat thread");
+    body = "{\"thread\":" + session_json(session, defaults_) + "}";
+    return ok_error();
+}
+
+Error ChatService::export_table_xlsx(const std::string& request_body,
+                                     std::string& xlsx_bytes,
+                                     std::string& filename) {
+    xlsx_bytes.clear();
+    filename.clear();
+    const json::ParseResult parsed = json::parse(request_body);
+    if (!parsed.error.ok() || !parsed.value.is_object()) {
+        return invalid("table export body must be one JSON object");
+    }
+    std::string unknown;
+    if (!known_fields(parsed.value, {"markdown"}, unknown)) {
+        return invalid("unknown table export field: " + unknown);
+    }
+    std::string markdown;
+    Error error = optional_string(parsed.value, "markdown", Limits::json_body_bytes, markdown);
+    if (!error.ok()) return error;
+    if (markdown.empty()) return invalid("table export requires markdown");
+    xlsx::WriteOptions options;
+    options.max_bytes = Limits::json_body_bytes;
+    error = xlsx::from_markdown(markdown, options, xlsx_bytes);
+    if (!error.ok()) return error;
+    filename = "table.xlsx";
     return ok_error();
 }
 

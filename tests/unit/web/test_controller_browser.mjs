@@ -21,7 +21,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     settings: { temperature: id === 1 ? "0.2" : "0.8", reasoning: id === 1 ? "high" : "low", stream: "on" },
     messages: id === 1 ? [
       { ordinal: 0, role: "user", content: "Hello" },
-      { ordinal: 1, role: "assistant", content: "The reply" },
+      { ordinal: 1, role: "assistant", content: "The reply\n\n```python\nprint(1)\n```\n\n| Name | Value |\n| --- | --- |\n| Ada | 7 |\n" },
     ] : [],
     message_count: id === 1 ? 2 : 0 }));
   let nextThreadId = 3, createdProviders = [], failNextThread = false;
@@ -59,7 +59,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
         }
         return;
       }
-      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "chat_pdf", "chat_docx", "chat_inputs", "sessions", "dired", "files", "editor_assist"] });
+      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "chat_pdf", "chat_docx", "chat_json", "chat_xlsx", "chat_inputs", "sessions", "dired", "files", "editor_assist"] });
       if (path.endsWith("/status")) return send({ status: "ready" });
       if (path.endsWith("/images/catalog")) return send({ models: [] });
       if (path.endsWith("/videos/catalog")) return send({ models: [] });
@@ -122,16 +122,21 @@ test("web controller selectors, per-thread saves, workspace settings and history
         res.statusCode = 201;
         return send(stored);
       }
-      const exportMatch = path.match(/\/chat\/threads\/(\d+)\/(pdf|docx)$/);
+      if (path.endsWith("/chat/tables/xlsx") && req.method === "POST") {
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", "attachment; filename=\"table.xlsx\"");
+        return res.end("PK\u0003\u0004xlsx");
+      }
+      const exportMatch = path.match(/\/chat\/threads\/(\d+)\/(pdf|docx|json)$/);
       if (exportMatch && req.method === "POST") {
         const kind = exportMatch[2];
         const scope = body.scope === "last" ? "last" : "thread";
         chatExports.push({ kind, scope, thread: Number(exportMatch[1]) });
         res.setHeader("Content-Type", kind === "docx"
           ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : "application/pdf");
+          : kind === "json" ? "application/json" : "application/pdf");
         res.setHeader("Content-Disposition", `attachment; filename="${scope === "last" ? "last" : "chat"}.${kind}"`);
-        return res.end(kind === "docx" ? "PK\u0003\u0004docx" : "%PDF-1.4");
+        return res.end(kind === "docx" ? "PK\u0003\u0004docx" : kind === "json" ? "{\"messages\":[]}" : "%PDF-1.4");
       }
       const messageMatch = path.match(/\/chat\/threads\/(\d+)\/messages$/);
       if (messageMatch && req.method === "POST") {
@@ -422,21 +427,35 @@ test("web controller selectors, per-thread saves, workspace settings and history
     const clickLabeled = (selector, label) => evaluate(
       `[...document.querySelectorAll(${JSON.stringify(selector)})].find((node) => node.textContent === ${JSON.stringify(label)}).click()`);
     await click("#thread-list .thread-item:first-child .list-button");
-    await wait('document.querySelector("#chat-messages").textContent.includes("The reply") && document.querySelector("#chat-messages").textContent.includes("Print PDF") && document.querySelector("#chat-messages").textContent.includes("Print docx")');
-    await clickLabeled("#chat-messages button", "Print PDF");
+    await wait('document.querySelector("#chat-messages").textContent.includes("The reply") && document.querySelector("#chat-messages .message.assistant .message-actions").textContent.includes("Export") && !document.querySelector("#chat-messages").textContent.includes("Print PDF") && !document.querySelector("#chat-messages").textContent.includes("Chat to PDF")');
+    assert.equal(await evaluate('[...document.querySelectorAll("#chat-messages .markdown-block-actions button")].map((node) => node.textContent).join(",")'),
+      "Copy,Save,CSV,XLSX", "code blocks and tables offer copy, save, and table export");
+    await clickLabeled("#chat-messages .message.assistant .message-actions button", "Export");
+    await wait('document.querySelector("#export-dialog").open === true && !document.querySelector("#export-json").hidden && !document.querySelector("#export-pdf").hidden && !document.querySelector("#export-docx").hidden');
+    await click("#export-pdf");
     await waitExports(3);
-    await clickLabeled("#chat-messages button", "Print docx");
+    await wait('document.querySelector("#export-dialog").open === false');
+    await clickLabeled("#chat-messages .message.assistant .message-actions button", "Export");
+    await wait('document.querySelector("#export-dialog").open === true');
+    await click("#export-docx");
     await waitExports(4);
+    await wait('document.querySelector("#export-dialog").open === false');
     assert.equal(chatExports[2].kind, "pdf");
     assert.equal(chatExports[2].scope, "last");
     assert.equal(chatExports[2].thread, 1);
     assert.equal(chatExports[3].kind, "docx");
     assert.equal(chatExports[3].scope, "last");
     assert.equal(chatExports[3].thread, 1);
-    await clickLabeled("#thread-list .thread-item:first-child button", "Chat to PDF");
+    await clickLabeled("#thread-list .thread-item:first-child .thread-export", "Export");
+    await wait('document.querySelector("#export-dialog").open === true');
+    await click("#export-pdf");
     await waitExports(5);
-    await clickLabeled("#thread-list .thread-item:first-child button", "Chat to docx");
+    await wait('document.querySelector("#export-dialog").open === false');
+    await clickLabeled("#thread-list .thread-item:first-child .thread-export", "Export");
+    await wait('document.querySelector("#export-dialog").open === true');
+    await click("#export-docx");
     await waitExports(6);
+    await wait('document.querySelector("#export-dialog").open === false');
     assert.equal(chatExports[4].kind, "pdf");
     assert.equal(chatExports[4].scope, "thread");
     assert.equal(chatExports[4].thread, 1);
@@ -922,8 +941,8 @@ test("web controller selectors, per-thread saves, workspace settings and history
       return { count: buttons.length,
         within: rectangles.every((rect) => rect.left >= -1 && rect.right <= innerWidth + 1) };
     })()`);
-    assert.ok(threadActionLayout.count >= 2, "thread export buttons stay available on a narrow viewport");
-    assert.equal(threadActionLayout.within, true, "thread export buttons stay inside the narrow viewport");
+    assert.ok(threadActionLayout.count >= 2, "thread export and delete stay available on a narrow viewport");
+    assert.equal(threadActionLayout.within, true, "thread export and delete stay inside the narrow viewport");
     const fetchLayout = await evaluate(`(() => {
       const buttons = ["#chat-fetch-button", "#chat-attach-button", "#chat-send"].map((selector) =>
         document.querySelector(selector).getBoundingClientRect());

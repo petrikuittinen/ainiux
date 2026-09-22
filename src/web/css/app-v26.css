@@ -235,6 +235,8 @@ main { min-width: 0; min-height: 0; overflow: hidden; }
 .list-button small { margin-top: 0.12rem; color: var(--muted); font-size: 0.7rem; font-weight: 500; }
 .thread-actions { display: flex; flex-wrap: wrap; gap: 0.15rem 0.55rem; padding: 0 0.5rem 0.38rem; }
 .thread-actions button { min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--accent); font-size: 0.7rem; font-weight: 650; text-align: left; }
+.markdown-block-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem; margin: 0 0 0.2rem; }
+.markdown-block-actions button { min-height: 1.4rem; padding: 0.08rem 0.4rem; background: transparent; color: var(--accent); font-size: 0.72rem; }
 .thread-actions .thread-delete { color: var(--danger); }
 .message-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.38rem; }
 .message-actions button { min-height: 1.55rem; padding: 0.12rem 0.42rem; background: transparent; color: var(--accent); font-size: 0.72rem; }
