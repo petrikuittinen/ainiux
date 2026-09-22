@@ -837,16 +837,22 @@ void test_config_reads_models_template() {
     const ainiux::ModelCapability* deepseek_v4 =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "deepseek", "chat", "deepseek-v4-pro");
-    check(deepseek_v4 != nullptr &&
+    check(deepseek_v4 != nullptr && deepseek_v4->id == "deepseek-official-v4" &&
               deepseek_v4->context_window_tokens == 1000000 &&
-              deepseek_v4->images.has_value() && !*deepseek_v4->images,
-          "DeepSeek V4 catalog record supplies its documented 1M context fallback as text-to-text");
+              deepseek_v4->images.has_value() && *deepseek_v4->images,
+          "official DeepSeek API deepseek-v4-pro is served as image-capable V4.1 Flash");
+    const ainiux::ModelCapability* deepseek_v4_routed =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "deepseek/deepseek-v4-pro");
+    check(deepseek_v4_routed != nullptr && deepseek_v4_routed->id == "deepseek-v4" &&
+              deepseek_v4_routed->images.has_value() && !*deepseek_v4_routed->images,
+          "routed DeepSeek V4 Pro checkpoints stay text-to-text");
     const ainiux::ModelCapability* deepseek_v4_flash =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "deepseek", "chat", "deepseek-v4-flash");
-    check(deepseek_v4_flash != nullptr && deepseek_v4_flash->id == "deepseek-v4" &&
-              deepseek_v4_flash->images.has_value() && !*deepseek_v4_flash->images,
-          "legacy DeepSeek V4 Flash stays on the text-to-text family");
+    check(deepseek_v4_flash != nullptr && deepseek_v4_flash->id == "deepseek-official-v4" &&
+              deepseek_v4_flash->images.has_value() && *deepseek_v4_flash->images,
+          "official DeepSeek API legacy deepseek-v4-flash is served as image-capable V4.1 Flash");
     const ainiux::ModelCapability* deepseek_flash =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "deepseek", "chat", "deepseek-flash");
@@ -867,8 +873,9 @@ void test_config_reads_models_template() {
             options.model_catalog, "openrouter", "chat",
             "deepseek/deepseek-v4-flash-0731");
     check(deepseek_v4_dated != nullptr && deepseek_v4_dated->id == "deepseek-v4" &&
+              deepseek_v4_dated->images.has_value() && !*deepseek_v4_dated->images &&
               !deepseek_v4_dated->reasoning_options.empty(),
-          "DeepSeek V4 family rule covers dated OpenRouter-style flash revisions");
+          "DeepSeek V4 family rule covers dated OpenRouter-style flash revisions as text-to-text");
     const ainiux::ModelCapability* deepseek_vision =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "deepseek", "chat",
@@ -1037,6 +1044,51 @@ void test_config_reads_models_template() {
           "GLM-5.3-Flash is cataloged as text-image-to-text with always-on thinking");
     check(glm53_flash_routed != nullptr && glm53_flash_routed->id == "zai-glm-5.3-flash",
           "GLM-5.3-Flash family rule covers routed OpenRouter-style ids");
+    const ainiux::ModelCapability* glm53_flashx = ainiux::config::resolve_model_capability(
+        options.model_catalog, "zai", "chat", "glm-5.3-flashx");
+    check(glm53_flashx != nullptr && glm53_flashx->id == "zai-glm-5.3-flash" &&
+              glm53_flashx->images.has_value() && *glm53_flashx->images &&
+              glm53_flashx->reasoning_default == ainiux::ReasoningSelection::named("max"),
+          "GLM-5.3-FlashX uses the Flash record");
+    const ainiux::ModelCapability* mimo25 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "xiaomi", "chat", "mimo-v2.5-pro");
+    check(mimo25 != nullptr && mimo25->id == "xiaomi-mimo-v2-chat" &&
+              mimo25->images.has_value() && *mimo25->images &&
+              mimo25->context_window_tokens == 1000000 &&
+              mimo25->temperature_max == 1.5,
+          "MiMo-V2.5-Pro stays on the V2.5 full-modal chat record");
+    const ainiux::ModelCapability* mimo26 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "xiaomi", "chat", "MiMo-V2.6-Pro-RL");
+    const ainiux::ModelCapability* mimo26_flash = ainiux::config::resolve_model_capability(
+        options.model_catalog, "xiaomi", "chat", "mimo-v2.6-flash");
+    check(mimo26 != nullptr && mimo26->id == "xiaomi-mimo-v2.6-chat" &&
+              mimo26_flash != nullptr && mimo26_flash->id == "xiaomi-mimo-v2.6-chat" &&
+              mimo26->images.has_value() && *mimo26->images &&
+              mimo26->context_window_tokens == 1000000 &&
+              mimo26->reasoning_protocol == ainiux::ReasoningProtocol::ThinkingToggle &&
+              mimo26->reasoning_default == ainiux::ReasoningSelection::named("enabled"),
+          "MiMo-V2.6 Pro and Flash are full-modal thinking-toggle models");
+    const ainiux::ModelCapability* mimo26_distill = ainiux::config::resolve_model_capability(
+        options.model_catalog, "llamacpp", "chat", "MiMo-V2.6-Distill-Qwen-9B");
+    check(mimo26_distill != nullptr && mimo26_distill->id == "xiaomi-mimo-v2.6-distill" &&
+              mimo26_distill->images.has_value() && *mimo26_distill->images &&
+              mimo26_distill->reasoning_protocol == ainiux::ReasoningProtocol::QwenChat,
+          "MiMo-V2.6-Distill-Qwen-9B uses the Qwen thinking toggle");
+    const ainiux::ModelCapability* hy4 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai_compat", "chat", "hy4-preview");
+    check(hy4 != nullptr && hy4->id == "tencent-hy4" &&
+              hy4->reasoning_protocol == ainiux::ReasoningProtocol::Hy3Template &&
+              hy4->reasoning_default == ainiux::ReasoningSelection::named("high") &&
+              hy4->context_window_tokens == 1000000 &&
+              hy4->reasoning_options.size() == 2,
+          "Hy4 preview uses the Hy3 template with high and no_think");
+    const ainiux::ModelCapability* step5 = ainiux::config::resolve_model_capability(
+        options.model_catalog, "stepfun", "chat", "step-5-preview");
+    check(step5 != nullptr && step5->id == "stepfun-step-5" &&
+              step5->images.has_value() && *step5->images &&
+              step5->context_window_tokens == 1000000 &&
+              step5->reasoning_default == ainiux::ReasoningSelection::named("medium"),
+          "Step 5 Preview is text-image-to-text with low|medium|high effort");
     ainiux::ReasoningSelection glm53_off = ainiux::ReasoningSelection::named("off");
     const ainiux::Error glm53_off_error = ainiux::config::resolve_reasoning_off(
         options.model_catalog, "zai", "chat", "glm-5.3", glm53_off);

@@ -666,9 +666,13 @@ void test_image_capability_detection() {
     deepseek.profile.capabilities.images = true;
     deepseek.options.model_catalog = catalog_options.model_catalog;
     deepseek.options.model = "deepseek-v4-flash";
-    check(!ainiux::provider::detected_capabilities_for(deepseek).images &&
-              !ainiux::provider::validate_image_input(deepseek).ok(),
-          "legacy DeepSeek V4 Flash remains text-to-text in auto image mode");
+    check(ainiux::provider::detected_capabilities_for(deepseek).images &&
+              ainiux::provider::validate_image_input(deepseek).ok(),
+          "official DeepSeek API legacy deepseek-v4-flash is image-capable in auto mode");
+    deepseek.options.model = "deepseek-v4-pro";
+    check(ainiux::provider::detected_capabilities_for(deepseek).images &&
+              ainiux::provider::validate_image_input(deepseek).ok(),
+          "official DeepSeek API deepseek-v4-pro is image-capable in auto mode");
     deepseek.options.model = "deepseek-flash";
     check(ainiux::provider::detected_capabilities_for(deepseek).images &&
               ainiux::provider::validate_image_input(deepseek).ok(),
@@ -681,9 +685,14 @@ void test_image_capability_detection() {
     check(ainiux::provider::validate_image_input(deepseek).ok(),
           "DeepSeek vision model accepts Responses image input");
     deepseek.api_kind = ainiux::provider::ApiKind::ChatCompletions;
-    deepseek.options.model = "deepseek-v4-flash";
-    deepseek.options.image_capability = "allow";
-    check(ainiux::provider::validate_image_input(deepseek).ok(),
+    ainiux::provider::RequestContext routed_deepseek = deepseek;
+    routed_deepseek.profile.name = "openrouter";
+    routed_deepseek.options.model = "deepseek/deepseek-v4-pro";
+    check(!ainiux::provider::detected_capabilities_for(routed_deepseek).images &&
+              !ainiux::provider::validate_image_input(routed_deepseek).ok(),
+          "routed DeepSeek V4 Pro remains text-to-text in auto image mode");
+    routed_deepseek.options.image_capability = "allow";
+    check(ainiux::provider::validate_image_input(routed_deepseek).ok(),
           "explicit allow still overrides DeepSeek text-only catalog records");
 
     ainiux::provider::RequestContext zai;
@@ -699,6 +708,10 @@ void test_image_capability_detection() {
     check(ainiux::provider::detected_capabilities_for(zai).images &&
               ainiux::provider::validate_image_input(zai).ok(),
           "GLM-5.3-Flash is image-capable in auto mode");
+    zai.options.model = "glm-5.3-flashx";
+    check(ainiux::provider::detected_capabilities_for(zai).images &&
+              ainiux::provider::validate_image_input(zai).ok(),
+          "GLM-5.3-FlashX is image-capable in auto mode");
     zai.options.model = "glm-5.2";
     check(!ainiux::provider::detected_capabilities_for(zai).images &&
               !ainiux::provider::validate_image_input(zai).ok(),

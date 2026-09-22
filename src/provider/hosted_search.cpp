@@ -55,6 +55,7 @@ bool family_requires_responses(const ModelCapability& capability) {
 
 bool deepseek_native_search_requires_anthropic(const std::string& catalog_id) {
     return catalog_id == "deepseek-v4" ||
+           catalog_id == "deepseek-official-v4" ||
            catalog_id == "deepseek-v4-flash-vision" ||
            catalog_id == "deepseek-v4.1-flash";
 }
