@@ -327,7 +327,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if (arg == "webserver" && verb_after_globals()) {
             opts.server = true;
             opts.webui = true;
-        } else if (arg == "--webui") {
+        } else if (arg == "--webui" || arg == "-w") {
+            opts.server = true;
             opts.webui = true;
             opts.server_options_seen = true;
         } else if (arg == "--insecure-plain-bind") {
@@ -1396,6 +1397,8 @@ Usage:
                [--resolution VALUE] [--ar W:H] [--audio on|off] [--output PATH]
   ainiux server [--workspace PATH] [--bind ADDRESS] [--port PORT]
                 [--tls-cert PATH --tls-key PATH] [--server-secret-file PATH]
+  ainiux -w [--workspace PATH] [--bind ADDRESS] [--port PORT]
+  ainiux --webui [--workspace PATH] [--bind ADDRESS] [--port PORT]
   ainiux server --webui [--workspace PATH] [--bind ADDRESS] [--port PORT]
   ainiux webserver [--workspace PATH] [--bind ADDRESS] [--port PORT]
 
@@ -1444,7 +1447,7 @@ Examples:
   ainiux image --provider replicate -m p-image -p "a cute chubby cat"
   ainiux image --provider gemini -p "a cute chubby cat" --size 1k --ar 1:1
   ainiux image --provider gemini -m gemini-3.1-flash-lite-image -p "a ramen shop at night"
-  ainiux webserver --workspace .
+  ainiux -w
 
 Options:
   Mode:
@@ -1498,8 +1501,8 @@ Options:
       --video                   Generate one MP4 with a videos.conf model
                                 (also: ainiux video ...).
       --server                  Start the Ainiux control API (also: ainiux server).
-      --webui                   Browser-oriented server startup; use with server.
-                                The equivalent subcommand is ainiux webserver.
+  -w, --webui                   Start the browser-oriented server (also: ainiux
+                                webserver). Workspace defaults to the current directory.
       --workspace PATH          Fixed server workspace; default current directory.
       --bind ADDRESS            IPv4 listen address; server defaults to 127.0.0.1,
                                 webserver/--webui defaults to 0.0.0.0.

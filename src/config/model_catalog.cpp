@@ -178,6 +178,7 @@ bool parse_reasoning_protocol(const std::string& text, ReasoningProtocol& protoc
         {"gemini_thinking_level", ReasoningProtocol::GeminiThinkingLevel},
         {"gemma_thinking_level", ReasoningProtocol::GemmaThinkingLevel},
         {"anthropic_budget", ReasoningProtocol::AnthropicBudget},
+        {"anthropic_effort", ReasoningProtocol::AnthropicEffort},
         {"thinking_toggle", ReasoningProtocol::ThinkingToggle},
         {"qwen_chat", ReasoningProtocol::QwenChat},
         {"qwen_chat_effort", ReasoningProtocol::QwenChatEffort},
@@ -201,9 +202,9 @@ bool parse_reasoning_protocol(const std::string& text, ReasoningProtocol& protoc
 
 std::string reasoning_protocol_names() {
     return "none, generic_thinking, openai_effort, openrouter, gemini_effort, "
-           "gemini_thinking_level, gemma_thinking_level, anthropic_budget, thinking_toggle, "
-           "qwen_chat, qwen_chat_effort, qwen_responses, deepseek, kimi_effort, zai, xai_effort, "
-           "minimax_responses, nemotron_template, or hy3_template";
+           "gemini_thinking_level, gemma_thinking_level, anthropic_budget, anthropic_effort, "
+           "thinking_toggle, qwen_chat, qwen_chat_effort, qwen_responses, deepseek, kimi_effort, "
+           "zai, xai_effort, minimax_responses, nemotron_template, or hy3_template";
 }
 
 bool parse_temperature_support(const std::string& text, TemperatureSupport& support) {

@@ -82,6 +82,24 @@ bool allowed_host(const std::string& host, const PublicStatus& status) {
     return name == bind;
 }
 
+bool browser_control_mutation(const http::Request& request) {
+    const bool unsafe_method = request.method == "POST" || request.method == "PUT" ||
+                               request.method == "PATCH" || request.method == "DELETE";
+    if (!unsafe_method || request.path.rfind("/ainiux/v1/", 0) != 0) return false;
+    // Origin is sent for browser fetch mutations. Fetch Metadata covers browsers
+    // that suppress Origin under a privacy policy, while non-browser API clients
+    // retain the existing bearer-only contract.
+    return request.headers.find("origin") != request.headers.end() ||
+           request.headers.find("sec-fetch-site") != request.headers.end();
+}
+
+bool valid_csrf_token(const http::Request& request, const AuthConfig& auth) {
+    if (!browser_control_mutation(request)) return true;
+    const auto token = request.headers.find("x-ainiux-csrf-token");
+    return token != request.headers.end() && !auth.csrf_token.empty() &&
+           constant_time_equal(token->second, auth.csrf_token);
+}
+
 Response error_response(int status,
                         const std::string& code,
                         const std::string& message,
@@ -423,7 +441,7 @@ bool preflight_request_body(const http::Request& request,
     const bool video_upload = request.method == "POST" && request.path == "/ainiux/v1/videos/inputs";
     const bool chat_upload = request.method == "POST" && request.path == "/ainiux/v1/chat/inputs";
     const bool chat_import = request.method == "POST" && request.path == "/ainiux/v1/chat/import";
-    const bool upload = image_upload || video_upload || chat_upload;
+    const bool upload = image_upload || video_upload || chat_upload || chat_import;
     const std::size_t limit = video_upload ? Limits::video_upload_body_bytes :
                               (image_upload || chat_upload || chat_import) ? Limits::upload_body_bytes
                                                            : Limits::json_body_bytes;
@@ -454,6 +472,11 @@ bool preflight_request_body(const http::Request& request,
     if (authenticate(request, auth) != AuthScope::FullControl) {
         denial = error_response(401, "authentication_failed",
                                 "a valid Bearer controller credential is required");
+        return false;
+    }
+    if (!valid_csrf_token(request, auth)) {
+        denial = error_response(403, "csrf_validation_failed",
+                                "browser control mutations require a valid CSRF token");
         return false;
     }
     const auto type = request.headers.find("content-type");
@@ -548,6 +571,10 @@ Response route_request(const http::Request& request,
     if (scope != AuthScope::FullControl) {
         return error_response(403, "insufficient_scope", "this credential cannot access the control API");
     }
+    if (!valid_csrf_token(request, auth)) {
+        return error_response(403, "csrf_validation_failed",
+                              "browser control mutations require a valid CSRF token");
+    }
     Response response;
     if (request.path == "/ainiux/v1/health") {
         if (request.method != "GET") {
@@ -557,6 +584,21 @@ Response route_request(const http::Request& request,
         }
         if (!request.body.empty()) return error_response(400, "invalid_request", "health does not accept a body");
         response.body = "{\"status\":\"ok\"}";
+        return response;
+    }
+    if (request.path == "/ainiux/v1/csrf") {
+        if (request.method != "GET") {
+            response = error_response(405, "method_not_allowed", "csrf accepts GET only");
+            response.allow = "GET";
+            return response;
+        }
+        if (!request.query.empty() || !request.body.empty()) {
+            return error_response(400, "invalid_request", "csrf does not accept a query or body");
+        }
+        if (auth.csrf_token.empty()) {
+            return error_response(503, "csrf_unavailable", "browser CSRF protection is unavailable");
+        }
+        response.body = "{\"token\":" + json::quote(auth.csrf_token) + "}";
         return response;
     }
     if (request.path == "/ainiux/v1/status") {
@@ -610,7 +652,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_json\",\"chat_xlsx\",\"chat_inputs\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"csrf\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_json\",\"chat_xlsx\",\"chat_inputs\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +

@@ -1421,6 +1421,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         std::string api = "any";
         std::optional<std::string> regex;
         std::optional<long long> context_window_tokens;
+        std::optional<long long> max_output_tokens;
         int priority = 0;
         std::optional<ReasoningProtocol> protocol;
         std::optional<ReasoningSelection> reasoning_default;
@@ -1470,6 +1471,11 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
                 Error err = context_window_tokens(entry, value);
                 if (!err.ok()) return err;
                 partial.context_window_tokens = value;
+            } else if (key == "max_output_tokens") {
+                long long value = 0;
+                Error err = context_window_tokens(entry, value);
+                if (!err.ok()) return err;
+                partial.max_output_tokens = value;
             } else if (key == "priority") {
                 Error err = require_type(entry, Value::Type::Integer);
                 if (!err.ok()) return err;
@@ -1597,6 +1603,7 @@ Error apply_configured_model_catalog(const Document& document, cli::Options& can
         capability.api = partial.api;
         capability.model_regex = *partial.regex;
         capability.context_window_tokens = partial.context_window_tokens;
+        capability.max_output_tokens = partial.max_output_tokens;
         capability.priority = partial.priority;
         capability.reasoning_protocol = *partial.protocol;
         capability.reasoning_default = partial.reasoning_default;

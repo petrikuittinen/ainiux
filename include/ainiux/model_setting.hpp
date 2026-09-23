@@ -53,6 +53,7 @@ enum class ReasoningProtocol {
     GeminiThinkingLevel,
     GemmaThinkingLevel,
     AnthropicBudget,
+    AnthropicEffort,
     ThinkingToggle,
     QwenChat,
     QwenChatEffort,
@@ -79,6 +80,7 @@ struct ModelCapability {
     std::string api = "any";
     std::string model_regex;
     std::optional<std::int64_t> context_window_tokens;
+    std::optional<std::int64_t> max_output_tokens;
     int priority = 0;
     ReasoningProtocol reasoning_protocol = ReasoningProtocol::None;
     std::optional<ReasoningSelection> reasoning_default;

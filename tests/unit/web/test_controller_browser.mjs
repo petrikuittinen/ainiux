@@ -11,6 +11,9 @@ import { spawn } from "node:child_process";
 test("web controller selectors, per-thread saves, workspace settings and history", {
   skip: !process.env.AINIUX_TEST_BROWSER, timeout: 30000,
 }, async () => {
+  const hostileText = "<script>globalThis.__ainiuxXss = 1</script> " +
+    "<img src=x onerror=globalThis.__ainiuxXss=1> < > & ' \"";
+  let csrfToken = "test-csrf-token";
   const fields = [
     { id: "temperature", optional: true, choices: [], hint: "0–2" },
     { id: "reasoning", optional: false, choices: ["auto", "low", "high"] },
@@ -21,11 +24,12 @@ test("web controller selectors, per-thread saves, workspace settings and history
     settings: { temperature: id === 1 ? "0.2" : "0.8", reasoning: id === 1 ? "high" : "low", stream: "on" },
     messages: id === 1 ? [
       { ordinal: 0, role: "user", content: "Hello" },
-      { ordinal: 1, role: "assistant", content: "The reply\n\n```python\nprint(1)\n```\n\n| Name | Value |\n| --- | --- |\n| Ada | 7 |\n" },
+      { ordinal: 1, role: "assistant", content: "The reply\n\n```python\nprint(1)\n```\n\n| Name | Value |\n| --- | --- |\n| Ada | 7 |\n\n" + hostileText },
     ] : [],
     message_count: id === 1 ? 2 : 0 }));
   let nextThreadId = 3, createdProviders = [], failNextThread = false;
   let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [], chatExports = [];
+  let csrfHeadersSeen = 0, csrfFetches = 0, rejectedCsrfHeaders = 0;
   let workspace = { provider: "openrouter", model: "workspace-model", revision: "1",
     settings_fields: fields, settings: { temperature: "0.5", reasoning: "low", stream: "on" } };
   let session = null, assistRequest = null, delayNextSessionRefresh = false;
@@ -39,7 +43,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v33.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v26.css"]) {
+  for (const name of ["app-v34.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v26.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -51,6 +55,15 @@ test("web controller selectors, per-thread saves, workspace settings and history
       let body = {};
       if (raw && String(req.headers["content-type"] || "").includes("json")) body = JSON.parse(raw);
       const send = (value) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(value)); };
+      if (path.endsWith("/csrf")) { csrfFetches += 1; return send({ token: csrfToken }); }
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+        if (req.headers["x-ainiux-csrf-token"] !== csrfToken) {
+          rejectedCsrfHeaders += 1;
+          res.statusCode = 403;
+          return send({ error: { code: "csrf_validation_failed", message: "stale CSRF token" } });
+        }
+        csrfHeadersSeen += 1;
+      }
       if (path.endsWith("/events")) {
         res.setHeader("Content-Type", "text/event-stream"); res.write(": connected\n\n");
         if (path.includes("/sessions/")) {
@@ -393,6 +406,10 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
     await command("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/ui/` }, sid);
     await wait('document.querySelectorAll("#thread-list .list-button").length === 3 && document.querySelector("#chat-provider").value === "openrouter"');
+    assert.ok(csrfHeadersSeen > 0, "browser mutations carry the bootstrapped CSRF token");
+    assert.equal(await evaluate('Object.keys(localStorage).some((key) => key.toLowerCase().includes("csrf"))'), false,
+      "the CSRF token remains in memory instead of persistent browser storage");
+    csrfToken = "rotated-csrf-token";
     await evaluate(`{ const input = document.querySelector("#thread-search");
       input.value = "Thread 2"; input.dispatchEvent(new Event("input", { bubbles: true })); }`);
     await wait('document.querySelectorAll("#thread-list .list-button").length === 1 && document.querySelector("#thread-list").textContent.includes("Thread 2")');
@@ -416,6 +433,8 @@ test("web controller selectors, per-thread saves, workspace settings and history
     };
     await requestChatExport("/chat-to-docx");
     await waitExports(1);
+    assert.equal(rejectedCsrfHeaders, 1, "a stale CSRF token is rejected before the mutation");
+    assert.equal(csrfFetches, 2, "the controller refreshes a rotated CSRF token once");
     await requestChatExport("/last-to-docx");
     await waitExports(2);
     assert.equal(chatExports[0].kind, "docx");
@@ -428,6 +447,18 @@ test("web controller selectors, per-thread saves, workspace settings and history
       `[...document.querySelectorAll(${JSON.stringify(selector)})].find((node) => node.textContent === ${JSON.stringify(label)}).click()`);
     await click("#thread-list .thread-item:first-child .list-button");
     await wait('document.querySelector("#chat-messages").textContent.includes("The reply") && document.querySelector("#chat-messages .message.assistant .message-actions").textContent.includes("Export") && !document.querySelector("#chat-messages").textContent.includes("Print PDF") && !document.querySelector("#chat-messages").textContent.includes("Chat to PDF")');
+    assert.equal(await evaluate('globalThis.__ainiuxXss'), undefined,
+      "model-provided tags do not execute");
+    assert.equal(await evaluate('document.querySelectorAll("#chat-messages script, #chat-messages img").length'), 0,
+      "model-provided tags are represented as text nodes");
+    const renderedHostileText = await evaluate('document.querySelector("#chat-messages").textContent');
+    assert.ok(renderedHostileText.includes("<script>") &&
+      renderedHostileText.includes("</script>") && renderedHostileText.includes("<img"),
+      "model-provided tags remain visible as safe text");
+    for (const character of ["<", ">", "&", "'", "\""]) {
+      assert.ok(renderedHostileText.includes(character),
+        `HTML-special character ${character} remains visible as safe text`);
+    }
     assert.equal(await evaluate('[...document.querySelectorAll("#chat-messages .markdown-block-actions button")].map((node) => node.textContent).join(",")'),
       "Copy,Save,CSV,XLSX", "code blocks and tables offer copy, save, and table export");
     await clickLabeled("#chat-messages .message.assistant .message-actions button", "Export");

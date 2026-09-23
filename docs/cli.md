@@ -4,6 +4,13 @@ Ainiux reserves `stdout` for intentional model or conversion output. Status, war
 
 Other agents calling Ainiux from a shell should follow the [CLI skill](skills/ainiux-cli/SKILL.md).
 
+## Major modes
+
+The principal interactive entry points are `-i` / `--repl`, `-c` / `--chat`,
+`-e` / `--editor`, `-d` / `--dired`, `-a` / `--agent`, and `-w` / `--webui`.
+The WebUI can also be started as `ainiux webserver`; its workspace defaults to
+the current directory, the same as `--workspace .`. See the [WebUI guide](web-mode.md).
+
 ## One-shot chat and REPL
 
 ```sh

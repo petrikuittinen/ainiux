@@ -33,7 +33,7 @@ approved specification says otherwise.
 
 ## Current foundation
 
-Implementation status (2026-09-16): **v1.37**.
+Implementation status (2026-09-23): **v1.38**.
 
 The main product surfaces are shipped. The current foundation includes
 Chat Completions and Responses, provider/model catalogs, cancellable streaming,
@@ -56,6 +56,11 @@ browser indentation/reformatting. v1.36–v1.37 added bounded native XLSX and
 PPTX↔Markdown conversion across CLI, fetch/chat, editor, control API, and WebUI
 workspace surfaces, with deterministic packages and exact CLI PPTX image
 sidecars.
+
+v1.38 promotes the WebUI to a major mode with `-w`, standalone `--webui`, and
+`webserver` entry points, all defaulting to the current directory when no
+workspace is supplied. It also hardens browser mutations with an ephemeral CSRF
+token and extends the model catalog for GPT-6 and Claude Opus 5 families.
 
 Native Windows x64 implementation is present but unreleased pending the UCRT64
 parity gate. The code index intentionally stores definitions and static importance,

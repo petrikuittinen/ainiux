@@ -20,10 +20,10 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |
 | [Control API](api.md) | Start the loopback-by-default v1.30 server; configure TLS/direct access; use jobs, sessions, revision-safe chat threads, workspace editing/assist, and MCP |
-| [Browser controller](web-mode.md) | Use the embedded responsive vanilla-JavaScript WUI for chat, jobs, agent/Guard, images, and revision-safe workspace work |
+| [WebUI](web-mode.md) | Start the major browser mode with `-w`, `--webui`, or `webserver` for chat, jobs, Agent/Guard, media generation, and revision-safe workspace work |
 | [Security](security.md) | Credential, persistence, fetch, attachment, image/video generation, and agent boundaries |
 | [Testing](../TESTING.md) | Test targets and selection policy |
-| [Version history](version-history.md) | Compact v0.0–v1.37 release timeline |
+| [Version history](version-history.md) | Compact v0.0–v1.38 release timeline |
 
 ## Architecture and implementation references
 

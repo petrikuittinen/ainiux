@@ -33,12 +33,13 @@ query-string credentials, cookies, and `AINIUX_API_KEY` are not accepted.
 Every API and MCP endpoint requires `Authorization: Bearer TOKEN`, including
 health. This keeps control requests free of ambient loopback authority. Static,
 non-secret WUI boot assets are the only exception; the browser supplies the
-token on every API request and event stream. The three discovery routes are:
+token on every API request and event stream. The discovery routes are:
 
 ```text
 GET /ainiux/v1/health
 GET /ainiux/v1/status
 GET /ainiux/v1/capabilities
+GET /ainiux/v1/csrf
 ```
 
 `health` returns only `{"status":"ok"}`. `status` reports the API version,
@@ -46,9 +47,15 @@ full-control scope, bind/transport state, and public connection/job
 limits. `capabilities` lists the currently routed discovery operations, built-in
 provider names without credentials, authentication configuration, and disabled
 optional adapters. It advertises MCP as enabled separately from the control
-API job operation list.
+API job operation list. After bearer authentication, `csrf` returns the
+ephemeral per-server browser CSRF token as `{"token":"..."}`. The WUI keeps
+that value in memory and sends it as `X-Ainiux-CSRF-Token` on every POST, PUT,
+PATCH, and DELETE. Browser-classified control mutations (requests with `Origin`
+or Fetch Metadata) fail with `csrf_validation_failed` when the header is missing
+or incorrect. Non-browser API clients that do not send browser context headers
+retain the bearer-only contract; `/mcp` remains a separate non-browser scope.
 
-## Embedded browser controller
+## WebUI
 
 `GET /ui/` loads the controller without a bearer token so a browser can show
 the connection form. `/ui` and `/ui/index.html` return the same no-store HTML
@@ -66,11 +73,14 @@ jobs. CORS remains disabled.
 The browser saves a successfully validated controller token in origin-scoped
 `localStorage`, clears it on a 401 or explicit sign-out, and retains it through
 network/server outages while reconnecting. It is never accepted through a query
-string, cookie, or ambient browser credential. See [the browser guide](web-mode.md).
+string, cookie, or ambient browser credential. The separate CSRF token is never
+persisted and is refreshed during login and reconnect. See [the browser guide](web-mode.md).
 
 ## TLS and direct non-loopback access
 
-`ainiux webserver` and `ainiux server --webui` are browser-oriented entry points.
+`ainiux -w`, `ainiux --webui`, and `ainiux webserver` are equivalent
+browser-oriented entry points; `ainiux server --webui` is the longer form.
+Without `--workspace`, they serve the current directory (`--workspace .`).
 Without an explicit `--bind`, they listen on `0.0.0.0`, print loopback and active
 IPv4 interface `/ui/` links, warn about plaintext exposure, and make a best-effort
 local browser launch. This web-mode choice is the explicit acknowledgement for

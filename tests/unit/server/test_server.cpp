@@ -152,7 +152,7 @@ void test_strict_framing_and_limits() {
 }
 
 void test_embedded_web_ui_assets_and_browser_security() {
-    AuthConfig config{"controller", "mcp-token"};
+    AuthConfig config{"controller", "mcp-token", "csrf-token"};
     std::atomic<std::size_t> active{0};
     PublicStatus status{8766, 64, 128, &active};
     auto public_get = [](const std::string& path) {
@@ -162,7 +162,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
               index.body.find("/ui/assets/app-v26.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v33.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v34.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -280,10 +280,12 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v33.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v34.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
+              javascript.body.find("X-Ainiux-CSRF-Token") != std::string::npos &&
+              javascript.body.find("/csrf") != std::string::npos &&
               javascript.body.find("Invalid authentication") != std::string::npos &&
               javascript.body.find("Reconnecting") != std::string::npos &&
               javascript.body.find("window.addEventListener(\"online\"") != std::string::npos &&
@@ -557,6 +559,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
               route_request(public_get("/ui/assets/highlight-v4.js"), config, status).status == 404 &&
               route_request(public_get("/ui/assets/syntax-v3.js"), config, status).status == 404,
           "the first-batch WUI syntax assets are superseded after full language parity");
+    check(route_request(public_get("/ui/assets/app-v33.js"), config, status).status == 404,
+          "the pre-CSRF WUI controller asset is superseded");
     http::Request post = parsed_request("POST /ui/ HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                                         "Content-Length: 0\r\n\r\n");
     check(route_request(post, config, status).status == 405,
@@ -573,7 +577,7 @@ void test_auth_and_routes() {
     check(constant_time_equal("same", "same") && !constant_time_equal("same", "samf") &&
               !constant_time_equal("same", "same-longer"),
           "constant-time credential comparison handles equality and unequal lengths");
-    AuthConfig config{"controller", "mcp-token"};
+    AuthConfig config{"controller", "mcp-token", "csrf-token"};
     http::Request full = parsed_request(request_text());
     check(authenticate(full, config) == AuthScope::FullControl,
           "full-control credential authenticates control route");
@@ -606,8 +610,31 @@ void test_auth_and_routes() {
     check(capability_response.status == 200 &&
               capability_response.body.find("\"mcp\":true") != std::string::npos &&
               capability_response.body.find("\"web_ui\":true") != std::string::npos &&
-              capability_response.body.find("controller") == std::string::npos,
+              capability_response.body.find("controller") == std::string::npos &&
+              capability_response.body.find("csrf-token") == std::string::npos,
           "capabilities advertise MCP and the WUI without exposing a secret");
+
+    Response csrf_response = route_request(
+        parsed_request(request_text("/ainiux/v1/csrf")), config, status);
+    check(csrf_response.status == 200 &&
+              csrf_response.body == "{\"token\":\"csrf-token\"}",
+          "an authenticated controller can bootstrap the ephemeral CSRF token");
+    check(route_request(parsed_request(
+              "GET /ainiux/v1/csrf HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"),
+              config, status).status == 401,
+          "the CSRF token cannot be bootstrapped without bearer authentication");
+    http::Request browser_mutation = parsed_request(
+        "POST /ainiux/v1/not-a-route HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Origin: http://127.0.0.1\r\nAuthorization: Bearer controller\r\n"
+        "Content-Type: application/json\r\nContent-Length: 2\r\n\r\n{}");
+    check(route_request(browser_mutation, config, status).status == 403,
+          "same-origin browser mutations reject a missing CSRF token");
+    browser_mutation.headers["x-ainiux-csrf-token"] = "wrong";
+    check(route_request(browser_mutation, config, status).status == 403,
+          "same-origin browser mutations reject an incorrect CSRF token");
+    browser_mutation.headers["x-ainiux-csrf-token"] = "csrf-token";
+    check(route_request(browser_mutation, config, status).status == 404,
+          "same-origin browser mutations pass CSRF validation with the current token");
 
     http::Request bad_host = full;
     bad_host.headers["host"] = "example.com";
@@ -680,7 +707,7 @@ void test_image_catalog_uploads_and_job_references() {
     capability.max_edge = 2048;
     options.image_catalog.models.push_back(capability);
     JobService jobs(std::move(options), ".", 8U);
-    AuthConfig auth{"controller", "mcp-token"};
+    AuthConfig auth{"controller", "mcp-token", "csrf-token"};
     std::atomic<std::size_t> active{0};
     PublicStatus status{8766, 64, 8, &active};
     status.jobs = &jobs;
@@ -715,6 +742,14 @@ void test_image_catalog_uploads_and_job_references() {
     check(!preflight_request_body(unauthorized, Limits::upload_body_bytes, auth, status, denial) &&
               denial.status == 401,
           "large upload authorization is checked before its body is accepted");
+    http::Request browser_upload = upload;
+    browser_upload.headers["origin"] = "http://127.0.0.1";
+    check(!preflight_request_body(browser_upload, png.size(), auth, status, denial) &&
+              denial.status == 403 && denial.body.find("csrf_validation_failed") != std::string::npos,
+          "browser upload preflight rejects a missing CSRF token before reading the body");
+    browser_upload.headers["x-ainiux-csrf-token"] = "csrf-token";
+    check(preflight_request_body(browser_upload, png.size(), auth, status, denial),
+          "browser upload preflight accepts the current CSRF token");
     http::Request ordinary = upload;
     ordinary.path = "/ainiux/v1/jobs/chat";
     check(!preflight_request_body(ordinary, Limits::json_body_bytes + 1U, auth, status, denial) &&
@@ -2554,18 +2589,25 @@ void test_server_cli_contract() {
     const char* webserver[] = {"ainiux", "webserver"};
     parsed = cli::parse_args(2, const_cast<char**>(webserver));
     check(parsed.error.ok() && parsed.options.server && parsed.options.webui &&
+              parsed.options.workspace == "." &&
               !parsed.options.server_bind_explicit &&
               validate_server_options(parsed.options).ok(),
-          "webserver alias selects browser mode with its safe parser defaults");
+          "webserver selects browser mode with the current workspace by default");
     const char* server_webui[] = {"ainiux", "server", "--webui"};
     parsed = cli::parse_args(3, const_cast<char**>(server_webui));
     check(parsed.error.ok() && parsed.options.server && parsed.options.webui &&
               validate_server_options(parsed.options).ok(),
           "server --webui selects the browser-oriented server mode");
-    const char* stray_webui[] = {"ainiux", "--webui"};
-    parsed = cli::parse_args(2, const_cast<char**>(stray_webui));
-    check(parsed.error.ok() && !validate_server_options(parsed.options).ok(),
-          "standalone --webui is rejected without server mode");
+    const char* standalone_webui[] = {"ainiux", "--webui"};
+    parsed = cli::parse_args(2, const_cast<char**>(standalone_webui));
+    check(parsed.error.ok() && parsed.options.server && parsed.options.webui &&
+              parsed.options.workspace == "." && validate_server_options(parsed.options).ok(),
+          "standalone --webui starts browser mode in the current workspace");
+    const char* short_webui[] = {"ainiux", "-w"};
+    parsed = cli::parse_args(2, const_cast<char**>(short_webui));
+    check(parsed.error.ok() && parsed.options.server && parsed.options.webui &&
+              parsed.options.workspace == "." && validate_server_options(parsed.options).ok(),
+          "-w starts browser mode in the current workspace");
     const char* loopback_webui[] = {"ainiux", "webserver", "--bind", "127.0.0.1"};
     parsed = cli::parse_args(4, const_cast<char**>(loopback_webui));
     check(parsed.error.ok() && parsed.options.server_bind_explicit &&

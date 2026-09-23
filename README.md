@@ -2,11 +2,11 @@
 
 ![Ainiux logo](docs/ainiux_logo.png)
 
-Ainiux is a C++17 command-line and terminal client for OpenAI and OpenAI-compatible APIs. It combines a script-friendly chat CLI, a full-screen chat client, a standalone editor with optional AI assistance, local agent workflows, document conversion, CLI image and video generation, benchmarks, and judge grading in one binary. You can freely cycle between the modes from chat/agent to editor by pressing ctrl+g. One binary to rule them all.
+Ainiux is a C++17 command-line, terminal, and WebUI client for OpenAI and OpenAI-compatible APIs. It combines a script-friendly chat CLI, a full-screen chat client, a standalone editor with optional AI assistance, a dependency-free browser workspace, local agent workflows, document conversion, image and video generation, benchmarks, and judge grading in one binary. You can freely cycle between the terminal modes from chat/agent to editor by pressing ctrl+g. One binary to rule them all.
 
 You can use a local server such as LM Studio, llama-server, vllm or Ollama, a supported cloud provider such as OpenRouter, Google, Anthropic or Deepseek, or a custom OpenAI-compatible endpoint. Offline editing and conversion do not require a model.
 
-Current release: **v1.37**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
+Current release: **v1.38**. See the [version history](docs/version-history.md) for earlier releases and [PLANS.md](PLANS.md) for unfinished work.
 
 The name began with the author’s child Aini and echoes the Chinese phrase 爱你 *ài nǐ* (“love you”). The command and project spelling is `ainiux`. It also signifies the future aims of this ambitious project: versatile AI tool (current state) → Ainiux programming language (new programming language for AI era) → Ainiux operating system.
 
@@ -16,9 +16,9 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 - **Local and cloud providers share one interface.** Provider profiles supply endpoint, authentication, and capability defaults without spreading provider-specific behavior through the UI.
 - **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, configurable AI commands, and a full-screen **dired** directory browser (`ainiux -d`, `F4`, or `Ctrl+X d`).
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
-- **Browser and terminal share model workflows.** The [Web UI](docs/web-mode.md) has searchable, keyboard-navigable provider/model pickers, per-thread chat settings, and a remembered workspace agent/editor configuration.
+- **The WebUI is a major mode.** Start it with `ainiux -w`, `ainiux --webui`, or `ainiux webserver`. It provides chat, Agent/Guard, image and video generation, dired, and live workspace editing from a browser.
 - **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
-- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, zlib, optional OpenSSL for control-server TLS, native POSIX/Win32 platform backends, and ANSI/VT rendering. Its core CLI and terminal modes do not require Electron, a browser, or ncurses, and the optional browser controller is dependency-free vanilla JavaScript. And it won't eat all of your RAM.
+- **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, zlib, optional OpenSSL for control-server TLS, native POSIX/Win32 platform backends, and ANSI/VT rendering. Its CLI and terminal modes do not require Electron, a browser, or ncurses, and the embedded WebUI is dependency-free vanilla JavaScript. And it won't eat all of your RAM.
 
 ## Platform support
 
@@ -48,7 +48,7 @@ make
 
 Some Ubuntu releases name the curl runtime package `libcurl4t64`; the dependency script selects the available package. `./scripts/install.sh --user` installs below `~/.local`, and `make optimized` creates a stripped release-style build. A normal install verifies the executable selected by `PATH`; when an older regular writable `~/.local/bin/ainiux` would shadow a new system install, it and its adjacent immutable share assets are atomically synchronized to the new installation. Unsafe symlinks and other mismatched shadows stop installation with both paths reported. Detailed package, installation, upgrade, and platform notes are in [Getting started](docs/getting-started.md).
 
-## Four ways to start
+## Five ways to start
 
 One-shot chat is the simplest scripted path:
 
@@ -86,6 +86,13 @@ Start an interactive project agent with `-a`:
 ainiux deepseek -m "deepseek-flash" -a
 ```
 
+Start the WebUI with `-w`. It serves the current directory by default, exactly
+as if `--workspace .` had been supplied:
+
+```sh
+ainiux -w
+```
+
 ![Interactive agent](docs/ainiux_agent.png)
 
 ![Agent code editing](docs/ainux_agent_code_edit.png)
@@ -103,7 +110,7 @@ testing the current agent, reasoning, tool-calling, and local OpenAI-compatible
 server paths. Exact model availability and identifiers still depend on the
 selected provider or local server.
 
-## Current v1.37 capabilities
+## Current v1.38 capabilities
 
 The product is actively developed, but its primary surfaces are implemented and share production-oriented foundations: incremental SSE parsing, explicit connect and request timeouts, cancellation during active streams, credential redaction, structured errors, bounded inputs, and RAII ownership of network, database, terminal, and file resources. A network chunk is never assumed to be one complete SSE event, and partial UTF-8 is kept out of terminal rendering.
 
@@ -326,7 +333,7 @@ Fault, integration, SQLite/TUI, sanitizer, and Valgrind suites are available but
 
 The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). Design rationale is in [docs/decisions.md](docs/decisions.md); short active work is in [TODO.md](TODO.md).
 
-## Control API and web UI (v1.30)
+## WebUI and control API
 
 The control server exposes authenticated discovery and asynchronous one-shot
 chat, run, plan, image, and video jobs, plus a stateless MCP 2026-07-28 endpoint for
@@ -334,13 +341,18 @@ MCP-only clients. It also exposes bounded interactive agent sessions with
 replayable events, cancellation, remote Guard approvals, workspace review,
 revision-safe dired/file mutations and editor assist, and revision-safe access
 to the existing personal chat-thread library. Its embedded responsive browser
-controller uses only vanilla HTML, CSS, and JavaScript. The easiest browser-first
-startup is:
+controller uses only vanilla HTML, CSS, and JavaScript. The WebUI is a major
+mode with three equivalent browser-first entry points:
 
 ```sh
-ainiux webserver --workspace .
-# equivalent: ainiux server --webui --workspace .
+ainiux -w
+ainiux --webui
+ainiux webserver
 ```
+
+When `--workspace` is omitted, all three serve the current directory; this is
+the same as passing `--workspace .`. The longer `ainiux server --webui` form is
+also retained.
 
 Web UI mode creates or reuses a 256-bit token at `~/.ainiux/server-secret`,
 prints the reachable `/ui/` links and managed token, and makes a best-effort
@@ -450,7 +462,7 @@ See [PLANS.md](PLANS.md) and [TODO.md](TODO.md) for active and deferred work.
 
 ## Documentation
 
-Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.37 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
+Start at the [documentation index](docs/README.md). It links current user guides, [dired mode](docs/dired-mode.md), keyboard and editor references, architecture decisions, security material, testing instructions, audits, and the compact [v0.0–v1.38 history](docs/version-history.md). Other agents that should invoke Ainiux from a shell can follow the [CLI skill](docs/skills/ainiux-cli/SKILL.md).
 
 For the complete current option list, run:
 

@@ -507,6 +507,7 @@ void test_config_applies_model_catalog() {
         "model = \"^qwen3[.]6(?:[-.].*)?$\"\n"
         "value = low|1024\n"
         "context_window = 1M\n"
+        "max_output_tokens = 128000\n"
         "priority = 100\n"
         "reasoning_protocol = qwen_chat\n"
         "reasoning_default = medium\n"
@@ -537,6 +538,7 @@ void test_config_applies_model_catalog() {
               capability.reasoning_options[0] == ainiux::ReasoningSelection::named("low") &&
               capability.reasoning_options[1] == ainiux::ReasoningSelection::token_budget(1024) &&
               capability.context_window_tokens == 1000000 &&
+              capability.max_output_tokens == 128000 &&
               capability.temperature == ainiux::TemperatureSupport::Supported &&
               capability.temperature_max == 2.0,
           "model capability, context fallback, and compact reasoning values are stored");
@@ -834,6 +836,66 @@ void test_config_reads_models_template() {
     check(gpt_oss_20b != nullptr && gpt_oss_20b->id == "openai-gpt-oss" &&
               gpt_oss_120b != nullptr && gpt_oss_120b->id == "openai-gpt-oss",
           "GPT OSS family rule covers both 20B and 120B through arbitrary prefixes");
+    const ainiux::ModelCapability* gpt6_astra = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "responses", "openai/GPT-6-ASTRA");
+    const ainiux::ModelCapability* gpt6_sol = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "chat", "gpt-6-sol");
+    const ainiux::ModelCapability* gpt6_luna = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openrouter", "chat", "openai/gpt-6-luna");
+    check(gpt6_astra != nullptr && gpt6_astra->id == "openai-gpt-6-astra" &&
+              gpt6_astra->context_window_tokens == 1000000 &&
+              gpt6_astra->max_output_tokens == 128000 &&
+              gpt6_astra->reasoning_options.size() == 5 &&
+              gpt6_astra->reasoning_options.front() ==
+                  ainiux::ReasoningSelection::named("low"),
+          "GPT-6 Astra has its non-disableable effort ladder and token limits");
+    check(gpt6_sol != nullptr && gpt6_sol->id == "openai-gpt-6-sol-luna" &&
+              gpt6_luna != nullptr && gpt6_luna->id == "openai-gpt-6-sol-luna" &&
+              gpt6_sol->context_window_tokens == 1000000 &&
+              gpt6_sol->max_output_tokens == 128000 &&
+              gpt6_sol->reasoning_options.size() == 6 &&
+              gpt6_sol->reasoning_options.front() ==
+                  ainiux::ReasoningSelection::named("none"),
+          "GPT-6 Sol and Luna have the disableable effort ladder and token limits");
+    ainiux::ReasoningSelection gpt6_astra_off =
+        ainiux::ReasoningSelection::named("off");
+    ainiux::ReasoningSelection gpt6_sol_off =
+        ainiux::ReasoningSelection::named("off");
+    const ainiux::Error gpt6_astra_off_error = ainiux::config::resolve_reasoning_off(
+        options.model_catalog, "openai", "responses", "gpt-6-astra", gpt6_astra_off);
+    const ainiux::Error gpt6_sol_off_error = ainiux::config::resolve_reasoning_off(
+        options.model_catalog, "openai", "responses", "gpt-6-sol", gpt6_sol_off);
+    check(!gpt6_astra_off_error.ok() && gpt6_sol_off_error.ok() &&
+              gpt6_sol_off == ainiux::ReasoningSelection::named("none"),
+          "reasoning off is rejected for Astra and resolves to none for Sol");
+    const ainiux::ModelCapability* claude_opus_5 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "anthropic", "chat", "claude-opus-5");
+    const ainiux::ModelCapability* claude_opus_5_3 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "anthropic/claude-opus-5.3");
+    const ainiux::ModelCapability* claude_opus_5_5 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "anthropic", "chat", "claude-opus-5-5");
+    check(claude_opus_5 != nullptr &&
+              claude_opus_5->id == "anthropic-claude-opus-5" &&
+              claude_opus_5_3 != nullptr &&
+              claude_opus_5_3->id == "anthropic-claude-opus-5" &&
+              claude_opus_5->reasoning_default ==
+                  ainiux::ReasoningSelection::named("high") &&
+              claude_opus_5->reasoning_protocol ==
+                  ainiux::ReasoningProtocol::AnthropicEffort &&
+              claude_opus_5->context_window_tokens == 1000000 &&
+              claude_opus_5->max_output_tokens == 128000,
+          "Claude Opus 5 family regex covers base and minor versions");
+    check(claude_opus_5_5 != nullptr &&
+              claude_opus_5_5->id == "anthropic-claude-opus-5.5" &&
+              claude_opus_5_5->reasoning_default ==
+                  ainiux::ReasoningSelection::named("medium") &&
+              claude_opus_5_5->reasoning_options.size() == 5 &&
+              claude_opus_5_5->reasoning_options.back() ==
+                  ainiux::ReasoningSelection::named("max"),
+          "Claude Opus 5.5 overrides the family default with medium effort");
     const ainiux::ModelCapability* deepseek_v4 =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "deepseek", "chat", "deepseek-v4-pro");

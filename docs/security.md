@@ -5,8 +5,9 @@
 Plain `ainiux server` is loopback-only unless `--bind` selects another IPv4
 address. Its direct non-loopback startup fails closed without TLS;
 `--insecure-plain-bind` is the explicit operator acknowledgement for plaintext.
-Browser-oriented `ainiux webserver` / `ainiux server --webui` is a separate
-explicit choice: it defaults to wildcard IPv4, prints plaintext exposure
+Browser-oriented `ainiux -w` / `ainiux --webui` / `ainiux webserver` is a
+separate explicit choice: it defaults to the current directory and wildcard
+IPv4, prints plaintext exposure
 warnings and concrete interface links, and can be constrained to loopback with
 `--bind 127.0.0.1`.
 TLS uses an optional OpenSSL-backed RAII context, requires TLS 1.2 or newer, and
@@ -174,13 +175,18 @@ An optional distinct `AINIUX_MCP_SECRET` / `--mcp-secret-file` is path-bound to
 `/mcp`; it cannot call controller routes, and the controller token is not accepted
 as the MCP token. The MCP adapter exposes only bounded job tools and opaque task
 handles; it does not expose provider credentials, project databases, or filesystem
-paths. Tokens
-are accepted only in the `Authorization: Bearer` header, compared without an
-early content-dependent exit, and never returned in errors or discovery data.
+paths. Controller and MCP bearer tokens are accepted only in the
+`Authorization: Bearer` header, compared without an early content-dependent
+exit, and never returned in errors or discovery data.
 
 The parser rejects ambiguous framing, transfer encodings, duplicate headers,
 encoded paths, traversal, invalid Host values, and cross-origin requests. Request
 sizes, read timeouts, keep-alive requests, and active connections are bounded.
+The embedded WUI also fetches an authenticated, ephemeral 256-bit CSRF token and
+sends it in `X-Ainiux-CSRF-Token` for every state-changing request. The router
+validates it in constant time for browser-classified mutations, including during
+large-upload preflight before accepting the body. The token is regenerated at
+server startup and is never written to browser storage.
 Ctrl+C stops accepts, shuts down active client sockets, and joins every worker.
 Jobs accept only bounded operation fields, never remote credentials, arbitrary
 provider URLs, attachment paths, or filesystem roots. Provider chat/image work
@@ -206,8 +212,10 @@ Browser CSP limits scripts, styles, and API/event connections to the same
 origin, permits `data:` only for image results, and denies framing, base URLs,
 and form submission. Additional headers disable referrer disclosure and
 sensitive browser features. Dynamic model, tool, error, and file content is
-created with DOM APIs and `textContent`, never raw HTML. The safe settings view
-shows only the existing public status/capability DTOs.
+created with DOM APIs, text nodes, and `textContent`, never raw HTML. In these
+text contexts the browser safely represents HTML-special characters such as
+`<`, `>`, `&`, `'`, and `"` without interpreting them as tags or attributes.
+The safe settings view shows only the existing public status/capability DTOs.
 
 Workspace mutation authority is limited to the server's one fixed canonical
 root. Wire paths are slash-separated relative targets and are checked with the

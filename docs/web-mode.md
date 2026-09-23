@@ -1,18 +1,24 @@
-# Embedded browser controller
+# WebUI
 
-Ainiux v1.37 serves a responsive browser controller from `/ui/` while
-`ainiux server` is running. It is embedded in the executable and uses only
+Ainiux v1.38 includes the responsive WebUI as a major application mode. It is
+served from `/ui/`, embedded in the executable, and uses only
 vanilla HTML, CSS, and JavaScript ES modules: there is no Node.js runtime,
 framework, npm bundle, CDN, hosted font, or external script.
 
 ## Start and connect
 
-Start the browser-oriented server from the workspace you want to control:
+Start the WebUI from the workspace you want to control. These commands are
+equivalent:
 
 ```sh
-ainiux webserver --workspace .
-# equivalent: ainiux server --webui --workspace .
+ainiux -w
+ainiux --webui
+ainiux webserver
 ```
+
+If `--workspace` is omitted, Ainiux serves the current directory, so each form
+above is equivalent to `ainiux -w --workspace .`. `ainiux server --webui`
+remains available as the longer control-server form.
 
 The command creates or reuses a private 256-bit token in
 `~/.ainiux/server-secret`, prints the managed token and all detected `/ui/`
@@ -32,7 +38,7 @@ transient disconnects with bounded exponential backoff and restores known jobs,
 threads, sessions, workspace state, and event streams after reconnecting. The
 token never appears in cookies, URLs, logs, or rendered output.
 
-`webserver` defaults to `0.0.0.0` for browser access from another device and
+WebUI mode defaults to `0.0.0.0` for browser access from another device and
 warns prominently when that means plaintext HTTP. Prefer TLS for an untrusted
 network, or add `--bind 127.0.0.1` for local-only use. Plain `ainiux server`
 keeps its loopback default, does not launch a browser, and never prints a token.
@@ -355,6 +361,13 @@ server's secret source/file, environment variables, database paths, TLS material
 absolute workspace paths, and hidden project state remain server-side. See
 [Security](security.md) and the [control API](api.md) for the complete trust and
 network boundary.
+
+After bearer authentication, the WUI fetches the server's ephemeral CSRF token
+from `GET /ainiux/v1/csrf`. It retains the value only in memory and adds
+`X-Ainiux-CSRF-Token` to POST, PUT, PATCH, and DELETE requests. Login and
+reconnection refresh it; sign-out discards it. The server validates the token
+for browser-originated mutations in addition to its existing exact Host/Origin,
+bearer-authentication, CSP, no-CORS, and `credentials: "omit"` boundaries.
 
 ## Testing
 

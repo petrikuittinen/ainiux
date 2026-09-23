@@ -24,7 +24,8 @@ std::string redact_secrets(std::string text, const std::vector<std::string>& sec
 bool is_sensitive_header_name(const std::string& name) {
     const std::string lower = ascii_lower(name);
     return lower == "authorization" || lower == "api-key" || lower == "x-api-key" ||
-           lower == "x-goog-api-key" || lower == "cookie" || lower == "set-cookie";
+           lower == "x-goog-api-key" || lower == "x-ainiux-csrf-token" ||
+           lower == "cookie" || lower == "set-cookie";
 }
 
 void append_request_secrets(const provider::RequestContext& context,

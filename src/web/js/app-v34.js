@@ -19,6 +19,7 @@ import {
 
 const API_ROOT = "/ainiux/v1";
 const TOKEN_STORAGE_KEY = "ainiux.controller.token.v1";
+const CSRF_HEADER = "X-Ainiux-CSRF-Token";
 const THEME_STORAGE_KEY = "ainiux.ui.theme.v1";
 const THINKING_STORAGE_KEY = "ainiux.chat.thinking.v1";
 const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
@@ -34,6 +35,7 @@ const SURFACE_NOTICE_IDS = new Map([
 
 const state = {
   token: "",
+  csrfToken: "",
   authenticated: false,
   connected: false,
   reconnectAttempt: 0,
@@ -281,11 +283,10 @@ async function downloadChatDocument(kind, scope, thread = state.thread, errorNod
   }
   const route = chatExportRoute(kind);
   try {
-    const response = await fetch(
+    const response = await controlFetch(
       `${API_ROOT}/chat/threads/${encodeURIComponent(thread.id)}/${route.path}`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${state.token}`,
           Accept: route.accept,
           "Content-Type": "application/json",
         },
@@ -355,10 +356,9 @@ async function exportChatTable(markdown, filename) {
     return;
   }
   try {
-    const response = await fetch(`${API_ROOT}/chat/tables/xlsx`, {
+    const response = await controlFetch(`${API_ROOT}/chat/tables/xlsx`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${state.token}`,
         Accept: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Type": "application/json",
       },
@@ -764,10 +764,43 @@ function wirePath(path) {
   return String(path).split("/").map((part) => encodeURIComponent(part)).join("/");
 }
 
+function mutationMethod(method) {
+  return ["POST", "PUT", "PATCH", "DELETE"].includes(String(method || "GET").toUpperCase());
+}
+
+function controlHeaders(method, initial = {}, token = state.token, csrfToken = state.csrfToken) {
+  if (!token) throw new ApiError(401, "not_connected", "Connect with a controller token first");
+  const headers = new Headers(initial);
+  headers.set("Authorization", `Bearer ${token}`);
+  if (mutationMethod(method)) {
+    if (!csrfToken) throw new ApiError(403, "csrf_unavailable", "Reconnect to refresh CSRF protection");
+    headers.set(CSRF_HEADER, csrfToken);
+  }
+  return headers;
+}
+
+async function controlFetch(path, options = {}, retryCsrf = true) {
+  const method = String(options.method || "GET").toUpperCase();
+  const response = await fetch(path, {
+    ...options,
+    method,
+    headers: controlHeaders(method, options.headers || {}),
+  });
+  if (retryCsrf && mutationMethod(method) && response.status === 403) {
+    let failure = {};
+    try { failure = (await response.clone().json()).error || {}; } catch (_) { /* handled by caller */ }
+    if (failure.code === "csrf_validation_failed") {
+      state.csrfToken = "";
+      await refreshCsrfToken();
+      return controlFetch(path, options, false);
+    }
+  }
+  return response;
+}
+
 async function api(path, options = {}) {
-  if (!state.token) throw new ApiError(401, "not_connected", "Connect with a controller token first");
+  const method = String(options.method || "GET").toUpperCase();
   const headers = new Headers(options.headers || {});
-  headers.set("Authorization", `Bearer ${state.token}`);
   headers.set("Accept", "application/json");
   let body;
   if (options.rawBody !== undefined) {
@@ -779,8 +812,8 @@ async function api(path, options = {}) {
   }
   let response;
   try {
-    response = await fetch(path, {
-      method: options.method || "GET",
+    response = await controlFetch(path, {
+      method,
       headers,
       body,
       signal: options.signal,
@@ -809,6 +842,14 @@ async function api(path, options = {}) {
     throw error;
   }
   return payload;
+}
+
+async function refreshCsrfToken() {
+  const payload = await api(`${API_ROOT}/csrf`);
+  if (!payload || typeof payload.token !== "string" || !payload.token) {
+    throw new ApiError(502, "invalid_response", "Server returned an invalid CSRF token");
+  }
+  state.csrfToken = payload.token;
 }
 
 async function readSse(response, onEvent, signal) {
@@ -895,8 +936,7 @@ function startStream(key, path, onMessage, onExpired, isDone, after = 0) {
     let cursor = after;
     while (state.connected && !controller.signal.aborted && !isDone()) {
       try {
-        const headers = new Headers({
-          Authorization: `Bearer ${state.token}`,
+        const headers = controlHeaders("GET", {
           Accept: "text/event-stream",
         });
         if (cursor > 0) headers.set("Last-Event-ID", String(cursor));
@@ -1600,11 +1640,12 @@ async function removeImageInput(input) {
 
 function releaseAllImageInputs() {
   const token = state.token;
+  const csrfToken = state.csrfToken;
   for (const input of state.imageInputs) {
     URL.revokeObjectURL(input.previewUrl);
-    if (input.uploadId && token) {
+    if (input.uploadId && token && csrfToken) {
       void fetch(`${API_ROOT}/images/inputs/${encodeURIComponent(input.uploadId)}`, {
-        method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+        method: "DELETE", headers: controlHeaders("DELETE", {}, token, csrfToken),
         credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
       }).catch(() => {});
     }
@@ -1715,7 +1756,8 @@ async function removeVideoInput(input) {
 
 function releaseAllVideoInputs() {
   const token = state.token;
-  for (const input of state.videoInputs) if (input.uploadId && token) void fetch(`${API_ROOT}/videos/inputs/${encodeURIComponent(input.uploadId)}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` }, credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer" }).catch(() => {});
+  const csrfToken = state.csrfToken;
+  for (const input of state.videoInputs) if (input.uploadId && token && csrfToken) void fetch(`${API_ROOT}/videos/inputs/${encodeURIComponent(input.uploadId)}`, { method: "DELETE", headers: controlHeaders("DELETE", {}, token, csrfToken), credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer" }).catch(() => {});
   state.videoInputs = []; renderVideoInputList();
 }
 
@@ -1905,6 +1947,8 @@ async function attemptReconnect() {
   if (!state.authenticated || state.connected || !state.token) return;
   setConnectionStatus("Reconnecting…", "reconnecting");
   try {
+    state.csrfToken = "";
+    await refreshCsrfToken();
     await refreshSettings();
     await markConnected(true);
   } catch (error) {
@@ -1917,8 +1961,10 @@ async function connect(token, previouslyValidated = false) {
   const cleaned = token.trim();
   if (!cleaned) throw new ApiError(401, "missing_token", "Enter a controller token");
   state.token = cleaned;
+  state.csrfToken = "";
   state.authenticated = previouslyValidated;
   try {
+    await refreshCsrfToken();
     await refreshSettings();
   } catch (error) {
     if (previouslyValidated && !(error instanceof ApiError && error.status === 401)) {
@@ -1929,6 +1975,7 @@ async function connect(token, previouslyValidated = false) {
       return false;
     }
     state.token = "";
+    state.csrfToken = "";
     state.authenticated = false;
     throw error;
   }
@@ -1950,6 +1997,7 @@ function forgetAuthentication(message = "") {
   if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
   state.videoObjectUrl = "";
   state.token = "";
+  state.csrfToken = "";
   state.authenticated = false;
   state.connected = false;
   state.reconnectAttempt = 0;
@@ -2123,7 +2171,7 @@ function downloadGeneratedImage() {
 
 async function loadVideoArtifact(jobId) {
   const response = await fetch(`${API_ROOT}/jobs/${encodeURIComponent(jobId)}/artifact`, {
-    headers: { Authorization: `Bearer ${state.token}`, Accept: "video/mp4" },
+    headers: controlHeaders("GET", { Accept: "video/mp4" }),
     credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
   });
   if (!response.ok) {
@@ -2902,11 +2950,12 @@ async function removeChatInput(input) {
 
 function releaseChatInputs() {
   const token = state.token;
+  const csrfToken = state.csrfToken;
   for (const input of state.chatInputs) {
-    if (input.uploadId && token) {
+    if (input.uploadId && token && csrfToken) {
       void fetch(`${API_ROOT}/chat/inputs/${encodeURIComponent(input.uploadId)}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: controlHeaders("DELETE", {}, token, csrfToken),
         credentials: "omit",
         cache: "no-store",
         referrerPolicy: "no-referrer",

@@ -471,6 +471,14 @@ std::string reasoning_fields_json(const RequestContext& context) {
             return append_pair(fields,
                                "thinking",
                                "{\"type\":\"enabled\",\"budget_tokens\":" + scalar + "}");
+        case ReasoningProtocol::AnthropicEffort:
+            if (selection.kind == ReasoningSelectionKind::TokenBudget) {
+                return append_pair(
+                    fields,
+                    "output_config",
+                    "{\"task_budget\":{\"type\":\"tokens\",\"total\":" + scalar + "}}");
+            }
+            return append_pair(fields, "output_config", reasoning_effort_object(wire_selection));
         case ReasoningProtocol::ThinkingToggle:
             return append_pair(
                 fields,

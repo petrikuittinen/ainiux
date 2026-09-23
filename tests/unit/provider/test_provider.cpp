@@ -1753,6 +1753,23 @@ void test_provider_reasoning_request_compatibility() {
     check_string_field(field(request, "thinking"), "type", "disabled",
                        "Anthropic maps a documented disable value to disabled thinking");
 
+    context = chat_context(ainiux::ReasoningProtocol::AnthropicEffort,
+                           ainiux::ReasoningSelection::named("xhigh"));
+    request = serialized_request_json(context);
+    const ainiux::json::Value* output_config = field(request, "output_config");
+    check_string_field(output_config, "effort", "xhigh",
+                       "newer Anthropic models use output_config.effort");
+    check(field(request, "thinking") == nullptr,
+          "Anthropic effort does not emit a legacy manual thinking budget");
+    context.options.reasoning = ainiux::ReasoningSelection::token_budget(64000);
+    request = serialized_request_json(context);
+    output_config = field(request, "output_config");
+    const ainiux::json::Value* task_budget = field(output_config, "task_budget");
+    check_string_field(task_budget, "type", "tokens",
+                       "Anthropic numeric reasoning selects a token task budget");
+    check_number_field(task_budget, "total", 64000.0,
+                       "Anthropic task budget preserves the exact token total");
+
     context = chat_context(ainiux::ReasoningProtocol::ThinkingToggle,
                            ainiux::ReasoningSelection::named("ultra"));
     request = serialized_request_json(context);

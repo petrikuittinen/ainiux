@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke-test the v1.30 PR 10 control server and embedded WUI with curl.
+# Smoke-test the current control server and embedded WebUI with curl.
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ MCP_SECRET="ainiux-control-smoke-${$}-mcp"
 
 usage() {
     cat <<'EOF'
-Smoke-test the Ainiux v1.30 PR 10 control server and embedded WUI.
+Smoke-test the current Ainiux control server and embedded WebUI.
 
 Usage: scripts/test-control-server.sh [options]
 
@@ -170,19 +170,20 @@ FULL_AUTH=(--header "Authorization: Bearer ${FULL_SECRET}")
 MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
 request 200 "public embedded WUI index" "${BASE_URL}/ui/"
-expect_body '/ui/assets/app-v20.css' "WUI stylesheet reference"
-expect_body '/ui/assets/app-v25.js' "WUI JavaScript reference"
+expect_body '/ui/assets/app-v26.css' "WUI stylesheet reference"
+expect_body '/ui/assets/app-v34.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
-    "${BASE_URL}/ui/assets/app-v25.js"
+    "${BASE_URL}/ui/assets/app-v34.js"
 expect_body 'localStorage' "persistent browser token storage"
+expect_body 'X-Ainiux-CSRF-Token' "browser CSRF protection"
 expect_body 'Invalid authentication' "invalid browser authentication state"
 expect_body 'Last-Event-ID' "authenticated SSE replay"
 expect_body 'updateVisibleChatStream' "live chat delta rendering"
 expect_body 'cancelActiveAgentTurn' "agent keyboard cancellation"
 expect_body 'resetImageForm' "image form reset behavior"
-grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
-    die "versioned WUI asset did not receive immutable caching"
+grep -Fq 'Cache-Control: no-store' "${WUI_HEADERS}" || \
+    die "versioned WUI asset did not disable caching"
 grep -Fq "Content-Security-Policy: default-src 'none'; script-src 'self'" "${WUI_HEADERS}" || \
     die "WUI response did not receive the strict same-origin CSP"
 grep -Fq 'Referrer-Policy: no-referrer' "${WUI_HEADERS}" || \
@@ -192,16 +193,16 @@ request 200 "versioned WUI Markdown renderer" --dump-header "${WUI_HEADERS}" \
 expect_body 'export function renderMarkdown' "client-side Markdown renderer"
 expect_body 'createDocumentFragment' "safe Markdown DOM construction"
 expect_body 'noopener noreferrer' "safe Markdown link navigation"
-grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
-    die "versioned WUI Markdown asset did not receive immutable caching"
+grep -Fq 'Cache-Control: no-store' "${WUI_HEADERS}" || \
+    die "versioned WUI Markdown asset did not disable caching"
 request 200 "versioned WUI programming-language highlighter" --dump-header "${WUI_HEADERS}" \
     "${BASE_URL}/ui/assets/syntax-v4.js"
 expect_body 'appendHighlightedCode' "client-side programming-language highlighter"
 expect_body 'javascript' "JavaScript fence support"
 expect_body 'scanHtml' "HTML embedded-language support"
 expect_body 'analyzeStructuralLine' "bounded structural line analysis"
-grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
-    die "versioned WUI syntax asset did not receive immutable caching"
+grep -Fq 'Cache-Control: no-store' "${WUI_HEADERS}" || \
+    die "versioned WUI syntax asset did not disable caching"
 request 200 "versioned WUI image option module" \
     "${BASE_URL}/ui/assets/image-options-v1.js"
 expect_body 'normalizeImageCatalog' "config-driven image option module"
@@ -211,10 +212,10 @@ expect_body 'normalizeVideoCatalog' "config-driven video option module"
 request 200 "versioned WUI editor indentation module" --dump-header "${WUI_HEADERS}" \
     "${BASE_URL}/ui/assets/editor-indentation-v1.js"
 expect_body 'reformatEditorSnapshot' "adaptive browser editor reformatting"
-grep -Fq 'Cache-Control: public, max-age=31536000, immutable' "${WUI_HEADERS}" || \
-    die "versioned WUI indentation asset did not receive immutable caching"
+grep -Fq 'Cache-Control: no-store' "${WUI_HEADERS}" || \
+    die "versioned WUI indentation asset did not disable caching"
 request 404 "WUI directory serving rejection" "${BASE_URL}/ui/assets/"
-request 404 "superseded WUI JavaScript rejection" "${BASE_URL}/ui/assets/app-v22.js"
+request 404 "superseded WUI JavaScript rejection" "${BASE_URL}/ui/assets/app-v33.js"
 request 404 "superseded WUI syntax rejection" "${BASE_URL}/ui/assets/syntax-v3.js"
 
 request 200 "authenticated health" "${FULL_AUTH[@]}" "${BASE_URL}/ainiux/v1/health"
@@ -241,9 +242,14 @@ expect_body '"video_catalog"' "video catalog capability operation"
 expect_body '"video_inputs"' "video upload capability operation"
 expect_body '"models"' "model-list capability operation"
 expect_body '"chat"' "chat capability operation"
-expect_body '"chat_threads"]' "chat-thread capability operation"
+expect_body '"chat_threads"' "chat-thread capability operation"
+expect_body '"csrf"' "browser CSRF capability operation"
 expect_body '"mcp":true' "MCP adapter availability"
 expect_body '"web_ui":true' "embedded WUI availability"
+
+request 200 "authenticated CSRF bootstrap" "${FULL_AUTH[@]}" \
+    "${BASE_URL}/ainiux/v1/csrf"
+expect_body '"token":"' "ephemeral browser CSRF token"
 
 request 200 "effective image catalog" "${FULL_AUTH[@]}" \
     "${BASE_URL}/ainiux/v1/images/catalog"

@@ -21,7 +21,7 @@ core modules rather than being reimplemented by each UI or protocol surface.
 
 ## Current baseline
 
-Current release: **v1.37**. Linux and other POSIX-like source builds are the
+Current release: **v1.38**. Linux and other POSIX-like source builds are the
 primary supported path, Apple Silicon macOS source builds are supported, and a
 native Windows 10 1903+/Windows 11 x64 MSYS2 UCRT64 implementation is present.
 Windows remains unreleased until the parity gate in `docs/windows.md` passes.
@@ -41,7 +41,8 @@ Implemented entry points include:
 | Interactive agent | `agent` / `-a` / `--agent` |
 | One-shot Act and Plan | `run` / `-r` / `--run`, `plan` / `--plan` |
 | Image generation | `image` / `--image` |
-| Control API and browser | `server` / `--server`, `webserver`, `server --webui` |
+| WebUI | `-w` / `--webui`, `webserver` (current directory is the default workspace) |
+| Control API | `server` / `--server` |
 
 The control server, revision-safe chat/workspace/editor operations, MCP server
 adapter, interactive remote Agent/Guard sessions, and embedded dependency-free
@@ -280,8 +281,8 @@ agent loops, approval decisions, or filesystem mutation logic in a UI.
   an OpenAI-only endpoint for jobs, sessions, cancellation, Guard, or revisions.
 - One server owns one fixed workspace. Wire paths are relative; reject traversal,
   unsafe symlink/reparse paths, protected state, stale revisions, and arbitrary roots.
-- Plain `ainiux server` defaults to `127.0.0.1`. Browser-oriented `webserver` /
-  `server --webui` defaults to `0.0.0.0` with prominent plaintext warnings and can
+- Plain `ainiux server` defaults to `127.0.0.1`. Browser-oriented `-w` /
+  `--webui` / `webserver` defaults to `0.0.0.0` with prominent plaintext warnings and can
   be constrained to loopback. Direct non-loopback plain server mode requires TLS
   unless the explicit insecure override is supplied.
 - Keep full-control and MCP-only secrets separate; never reuse provider keys.

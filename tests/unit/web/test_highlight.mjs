@@ -165,13 +165,16 @@ test("creates only safe absolute HTTP links", () => {
 });
 
 test("keeps raw HTML and image Markdown inert", () => {
-  const root = render("<script>alert('x')</script> <img src=https://example.test/x onerror=alert(1)> " +
-    "![remote](https://example.test/image.png)");
+  const source = "<script>alert('x')</script> <img src=https://example.test/x onerror=alert(1)> " +
+    "![remote](https://example.test/image.png) < > & ' \"";
+  const root = render(source);
   assert.equal(descendants(root, "SCRIPT").length, 0);
   assert.equal(descendants(root, "IMG").length, 0);
   assert.equal(descendants(root, "A").length, 0);
   assert.match(root.textContent, /<script>/);
   assert.match(root.textContent, /!\[remote\]\(https:\/\/example\.test\/image\.png\)/);
+  assert.ok(root.textContent.endsWith("< > & ' \""),
+    "reserved HTML characters remain visible text instead of markup or attributes");
 });
 
 test("preserves incomplete streaming input and Unicode", () => {

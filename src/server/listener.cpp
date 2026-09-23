@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "platform/filesystem.hpp"
 #include "server/http_parser.hpp"
 #include "server/chat_service.hpp"
 #include "server/job_service.hpp"
@@ -332,6 +333,13 @@ Error Listener::start(ListenerConfig config) {
     if (!impl_->network.ok()) return {ErrorCode::Connect, "could not initialize the socket runtime"};
     if (config.max_connections == 0) return {ErrorCode::BadArgs, "--max-connections must be positive"};
     if (config.bind_address.empty()) return {ErrorCode::BadArgs, "--bind must not be empty"};
+    if (config.auth.csrf_token.empty()) {
+        Error random_error = platform::secure_random_hex(32U, config.auth.csrf_token);
+        if (!random_error.ok()) {
+            return {random_error.code,
+                    "could not initialize browser CSRF protection: " + random_error.message};
+        }
+    }
     impl_->config = std::move(config);
     Error tls_error = impl_->tls.initialize(impl_->config.tls_cert_file,
                                              impl_->config.tls_key_file);

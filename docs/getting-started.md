@@ -161,9 +161,10 @@ ainiux lmstudio -c                  # saved-thread chat
 ainiux none -e notes.md             # offline editor
 ainiux lmstudio -m MODEL -a         # interactive project agent
 ainiux lmstudio -m MODEL -r "inspect this project"
+ainiux -w                            # WebUI for the current directory
 ```
 
-The editor and conversion paths can use `none` without inventing a model endpoint. Chat and AI assistance need a provider and model. Agent mode is separate from chat because it can use project tools.
+The editor and conversion paths can use `none` without inventing a model endpoint. Chat and AI assistance need a provider and model. Agent mode is separate from chat because it can use project tools. `-w`, `--webui`, and `webserver` are equivalent WebUI entry points; without `--workspace`, they use the current directory (`--workspace .`).
 
 ## Where data goes
 
@@ -174,6 +175,7 @@ User chat threads and media are stored under `~/.ainiux/`. Interactive and one-s
 - Read [CLI and scripting](cli.md) for pipelines, output formats, and `ainiux image`.
 - Read [Chat TUI](chat.md) or [Editor help](editor_help.md) for interactive use.
 - Read [Agent workflows](agent.md) before granting workspace permissions.
+- Read [WebUI](web-mode.md) for browser startup, authentication, and workspace behavior.
 - Use [Configuration](configuration.md) for endpoints, models, themes, and custom commands.
 
 Related documentation: [documentation index](README.md), [security](security.md), [license](../LICENSE).
