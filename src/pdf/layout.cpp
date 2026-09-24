@@ -41,6 +41,8 @@ constexpr double kQuoteBarGap = 6.0;
 constexpr double kQuoteThickness = 3.0;
 constexpr double kCodePadding = 4.5;
 constexpr double kTablePadding = 4.5;
+constexpr double kWidthEps = 0.05;
+constexpr double kBlockGap = kSizeBody * kLineHeight;
 constexpr double kRuleGap = 8.0;
 constexpr double kRuleThickness = 0.5;
 constexpr int kMaxTableCols = 20;
@@ -425,6 +427,218 @@ struct Layout {
                a.url == b.url && a.cid_kind == b.cid_kind;
     }
 
+    static bool is_space_frag(const Frag& frag) {
+        return frag.cid_kind == 0 && !frag.winansi.empty() &&
+               (frag.winansi[0] == ' ' || frag.winansi[0] == '\t');
+    }
+
+    static double positive_width(const std::vector<Frag>& frags) {
+        double w = 0;
+        for (const Frag& frag : frags) {
+            if (frag.width >= 0) {
+                w += frag.width;
+            }
+        }
+        return w;
+    }
+
+    static double char_width(const Frag& frag, unsigned char ch) {
+        return glyph_width_em(frag.font, ch) * frag.size / 1000.0;
+    }
+
+    std::vector<Frag> split_frag_to_width(const Frag& frag, double max_width) {
+        std::vector<Frag> out;
+        if (frag.empty()) {
+            return out;
+        }
+        if (frag.cid_kind != 0 || frag.winansi.size() <= 1 ||
+            (max_width > 0 && frag.width <= max_width + kWidthEps)) {
+            out.push_back(frag);
+            return out;
+        }
+        Frag cur = frag;
+        cur.winansi.clear();
+        cur.width = 0;
+        for (unsigned char ch : frag.winansi) {
+            const double cw = char_width(frag, ch);
+            const bool overflow =
+                !cur.winansi.empty() && (max_width <= 0 || cur.width + cw > max_width + kWidthEps);
+            if (overflow) {
+                out.push_back(cur);
+                cur.winansi.clear();
+                cur.width = 0;
+            }
+            cur.winansi.push_back(static_cast<char>(ch));
+            cur.width += cw;
+        }
+        if (!cur.winansi.empty()) {
+            out.push_back(cur);
+        }
+        return out;
+    }
+
+    std::vector<std::vector<Frag>> wrap_frags(const std::vector<Frag>& words, double width) {
+        std::vector<std::vector<Frag>> lines;
+        std::vector<Frag> line;
+        double used = 0;
+        auto flush = [&]() {
+            if (line.empty()) {
+                return;
+            }
+            lines.push_back(std::move(line));
+            line.clear();
+            used = 0;
+        };
+        for (const Frag& word : words) {
+            std::vector<Frag> pieces;
+            if (!is_space_frag(word) && (width <= 0 || word.width > width + kWidthEps)) {
+                pieces = split_frag_to_width(word, width);
+            } else {
+                pieces.push_back(word);
+            }
+            for (const Frag& piece : pieces) {
+                if (is_space_frag(piece) && line.empty()) {
+                    continue;
+                }
+                if (!line.empty() && used + piece.width > width + kWidthEps && !is_space_frag(piece)) {
+                    flush();
+                }
+                line.push_back(piece);
+                used += piece.width >= 0 ? piece.width : 0;
+            }
+        }
+        flush();
+        return lines;
+    }
+
+    void apply_rtl_order(std::vector<Frag>& frags, bool rtl_para) {
+        if (!rtl_para) {
+            return;
+        }
+        bool any_rtl = false;
+        for (const Frag& frag : frags) {
+            if (frag.cid_kind == 2) {
+                any_rtl = true;
+                break;
+            }
+        }
+        if (!any_rtl) {
+            return;
+        }
+        const std::size_t n = frags.size();
+        enum { DirL = 0, DirR = 1, DirN = 2 };
+        std::vector<int> cls(n, DirN);
+        auto is_ltr_word = [](const Frag& frag) {
+            if (frag.cid_kind != 0) {
+                return false;
+            }
+            for (unsigned char ch : frag.winansi) {
+                if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (std::size_t i = 0; i < n; ++i) {
+            if (frags[i].cid_kind == 2) {
+                cls[i] = DirR;
+            } else if (frags[i].cid_kind == 1 || is_ltr_word(frags[i])) {
+                cls[i] = DirL;
+            }
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (cls[i] != DirN) {
+                continue;
+            }
+            int prev = DirR;
+            int next = DirR;
+            std::size_t p = i;
+            while (p > 0) {
+                --p;
+                if (cls[p] != DirN) {
+                    prev = cls[p];
+                    break;
+                }
+            }
+            std::size_t q = i + 1;
+            while (q < n && cls[q] == DirN) {
+                ++q;
+            }
+            if (q < n) {
+                next = cls[q];
+            }
+            cls[i] = (prev == next) ? prev : DirR;
+        }
+        struct Run {
+            std::size_t begin;
+            std::size_t end;
+            int dir;
+        };
+        std::vector<Run> runs;
+        std::size_t i = 0;
+        while (i < n) {
+            Run run{i, i, cls[i]};
+            ++i;
+            while (i < n && cls[i] == run.dir) {
+                ++i;
+            }
+            run.end = i;
+            runs.push_back(run);
+        }
+        std::vector<Frag> ordered;
+        ordered.reserve(n);
+        for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
+            std::vector<Frag> slice(frags.begin() + static_cast<std::ptrdiff_t>(it->begin),
+                                    frags.begin() + static_cast<std::ptrdiff_t>(it->end));
+            if (it->dir == DirR) {
+                for (Frag& frag : slice) {
+                    if (frag.cid_kind == 0 && frag.winansi.size() == 1) {
+                        const unsigned mirrored =
+                            mirror_cp(static_cast<unsigned char>(frag.winansi[0]));
+                        frag.winansi[0] = static_cast<char>(mirrored);
+                    }
+                }
+                std::reverse(slice.begin(), slice.end());
+            }
+            ordered.insert(ordered.end(), slice.begin(), slice.end());
+        }
+        frags.swap(ordered);
+    }
+
+    void paint_frags(const std::vector<Frag>& frags, double left, double text_x, double baseline) {
+        double x = text_x;
+        size_t i = 0;
+        while (i < frags.size()) {
+            const Frag& frag = frags[i];
+            if (frag.empty()) {
+                if (frag.width >= 0) {
+                    x += frag.width;
+                }
+                ++i;
+                continue;
+            }
+            const double fx = frag.width < 0 ? left + frag.width : x;
+            Frag joined = frag;
+            double total_w = frag.width < 0 ? -frag.width : frag.width;
+            size_t j = i + 1;
+            if (frag.width >= 0) {
+                while (j < frags.size() && frags[j].width >= 0 && !frags[j].empty() &&
+                       same_paint(joined, frags[j])) {
+                    joined.winansi += frags[j].winansi;
+                    joined.cids.insert(joined.cids.end(), frags[j].cids.begin(), frags[j].cids.end());
+                    total_w += frags[j].width;
+                    ++j;
+                }
+            }
+            joined.width = total_w;
+            show_frag(joined, fx, baseline);
+            if (frag.width >= 0) {
+                x += total_w;
+            }
+            i = j;
+        }
+    }
+
     double measure_utf8(std::string_view text, double size, BaseFont font) {
         markdown::Run run;
         run.text.assign(text.data(), text.size());
@@ -459,37 +673,7 @@ struct Layout {
         if (!err.ok()) {
             return err;
         }
-        double x = text_x;
-        size_t i = 0;
-        while (i < frags.size()) {
-            const Frag& frag = frags[i];
-            if (frag.empty()) {
-                if (frag.width >= 0) {
-                    x += frag.width;
-                }
-                ++i;
-                continue;
-            }
-            const double fx = frag.width < 0 ? left + frag.width : x;
-            Frag joined = frag;
-            double total_w = frag.width < 0 ? -frag.width : frag.width;
-            size_t j = i + 1;
-            if (frag.width >= 0) {
-                while (j < frags.size() && frags[j].width >= 0 && !frags[j].empty() &&
-                       same_paint(joined, frags[j])) {
-                    joined.winansi += frags[j].winansi;
-                    joined.cids.insert(joined.cids.end(), frags[j].cids.begin(), frags[j].cids.end());
-                    total_w += frags[j].width;
-                    ++j;
-                }
-            }
-            joined.width = total_w;
-            show_frag(joined, fx, y);
-            if (frag.width >= 0) {
-                x += total_w;
-            }
-            i = j;
-        }
+        paint_frags(frags, left, text_x, y);
         y -= lineheight;
         return ok_error();
     }
@@ -520,114 +704,12 @@ struct Layout {
             lead.width = -text_width(lead.font, lead.winansi, lead.size);
             line.push_back(lead);
         }
-        auto line_text_width = [](const std::vector<Frag>& frags) {
-            double w = 0;
-            for (const Frag& frag : frags) {
-                if (frag.width >= 0) {
-                    w += frag.width;
-                }
-            }
-            return w;
-        };
-        auto prepare_rtl = [&](std::vector<Frag>& frags) {
-            if (!rtl_para) {
-                return;
-            }
-            bool any_rtl = false;
-            for (const Frag& frag : frags) {
-                if (frag.cid_kind == 2) {
-                    any_rtl = true;
-                    break;
-                }
-            }
-            if (!any_rtl) {
-                return;
-            }
-            const std::size_t n = frags.size();
-            enum { DirL = 0, DirR = 1, DirN = 2 };
-            std::vector<int> cls(n, DirN);
-            auto is_ltr_word = [](const Frag& frag) {
-                if (frag.cid_kind != 0) {
-                    return false;
-                }
-                for (unsigned char ch : frag.winansi) {
-                    if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
-                        return true;
-                    }
-                }
-                return false;
-            };
-            for (std::size_t i = 0; i < n; ++i) {
-                if (frags[i].cid_kind == 2) {
-                    cls[i] = DirR;
-                } else if (frags[i].cid_kind == 1 || is_ltr_word(frags[i])) {
-                    cls[i] = DirL;
-                }
-            }
-            for (std::size_t i = 0; i < n; ++i) {
-                if (cls[i] != DirN) {
-                    continue;
-                }
-                int prev = DirR;
-                int next = DirR;
-                std::size_t p = i;
-                while (p > 0) {
-                    --p;
-                    if (cls[p] != DirN) {
-                        prev = cls[p];
-                        break;
-                    }
-                }
-                std::size_t q = i + 1;
-                while (q < n && cls[q] == DirN) {
-                    ++q;
-                }
-                if (q < n) {
-                    next = cls[q];
-                }
-                cls[i] = (prev == next) ? prev : DirR;
-            }
-            struct Run {
-                std::size_t begin;
-                std::size_t end;
-                int dir;
-            };
-            std::vector<Run> runs;
-            std::size_t i = 0;
-            while (i < n) {
-                Run run{i, i, cls[i]};
-                ++i;
-                while (i < n && cls[i] == run.dir) {
-                    ++i;
-                }
-                run.end = i;
-                runs.push_back(run);
-            }
-            std::vector<Frag> ordered;
-            ordered.reserve(n);
-            for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
-                std::vector<Frag> slice(frags.begin() + static_cast<std::ptrdiff_t>(it->begin),
-                                        frags.begin() + static_cast<std::ptrdiff_t>(it->end));
-                if (it->dir == DirR) {
-                    for (Frag& frag : slice) {
-                        if (frag.cid_kind == 0 && frag.winansi.size() == 1) {
-                            const unsigned mirrored =
-                                mirror_cp(static_cast<unsigned char>(frag.winansi[0]));
-                            frag.winansi[0] = static_cast<char>(mirrored);
-                        }
-                    }
-                    std::reverse(slice.begin(), slice.end());
-                }
-                ordered.insert(ordered.end(), slice.begin(), slice.end());
-            }
-            frags.swap(ordered);
-        };
         auto flush = [&]() -> Error {
             if (line.empty()) {
                 return ok_error();
             }
-            prepare_rtl(line);
-            const double text_x = rtl_para ? right - line_text_width(line) : left;
+            apply_rtl_order(line, rtl_para);
+            const double text_x = rtl_para ? right - positive_width(line) : left;
             Error err = render_line(left, text_x, line, lineheight);
             line.clear();
             used = 0;
@@ -635,23 +717,26 @@ struct Layout {
         };
         for (size_t i = 0; i < words.size(); ++i) {
             Frag word = words[i];
-            const bool space = !word.winansi.empty() && word.winansi[0] == ' ';
+            const bool space = is_space_frag(word);
             if (space && line.empty()) {
                 continue;
             }
-            if (!line.empty() && used + word.width > width && !space) {
+            if (!line.empty() && used + word.width > width + kWidthEps && !space) {
                 Error err = flush();
                 if (!err.ok()) {
                     return err;
                 }
             }
-            if (!space && word.width > width && line.empty()) {
-                std::vector<Frag> one{word};
-                prepare_rtl(one);
-                const double text_x = rtl_para ? right - line_text_width(one) : left;
-                Error err = render_line(left, text_x, one, lineheight);
-                if (!err.ok()) {
-                    return err;
+            if (!space && word.width > width + kWidthEps && line.empty()) {
+                const std::vector<Frag> pieces = split_frag_to_width(word, width);
+                for (Frag piece : pieces) {
+                    std::vector<Frag> one{std::move(piece)};
+                    apply_rtl_order(one, rtl_para);
+                    const double text_x = rtl_para ? right - positive_width(one) : left;
+                    Error err = render_line(left, text_x, one, lineheight);
+                    if (!err.ok()) {
+                        return err;
+                    }
                 }
                 continue;
             }
@@ -706,6 +791,99 @@ struct Layout {
         return ok_error();
     }
 
+    void allocate_table_widths(std::vector<double>& widths, const std::vector<double>& mins,
+                               double avail) const {
+        const size_t n = widths.size();
+        if (n == 0) {
+            return;
+        }
+        for (double& w : widths) {
+            if (w > avail) {
+                w = avail;
+            }
+        }
+        double sum = 0;
+        for (double w : widths) {
+            sum += w;
+        }
+        if (sum <= avail || sum <= 0) {
+            return;
+        }
+        std::vector<char> done(n, 0);
+        double remaining = avail;
+        size_t left = n;
+        while (left > 0) {
+            const double fair = remaining / static_cast<double>(left);
+            bool assigned = false;
+            for (size_t i = 0; i < n; ++i) {
+                if (done[i]) {
+                    continue;
+                }
+                if (widths[i] <= fair + 1e-9) {
+                    remaining -= widths[i];
+                    done[i] = 1;
+                    --left;
+                    assigned = true;
+                }
+            }
+            if (assigned) {
+                continue;
+            }
+            double pref_sum = 0;
+            for (size_t i = 0; i < n; ++i) {
+                if (!done[i]) {
+                    pref_sum += widths[i];
+                }
+            }
+            for (size_t i = 0; i < n; ++i) {
+                if (done[i]) {
+                    continue;
+                }
+                if (pref_sum > 0) {
+                    widths[i] = remaining * widths[i] / pref_sum;
+                } else {
+                    widths[i] = remaining / static_cast<double>(left);
+                }
+                if (widths[i] < mins[i]) {
+                    widths[i] = mins[i];
+                }
+            }
+            break;
+        }
+        sum = 0;
+        for (double w : widths) {
+            sum += w;
+        }
+        if (sum <= avail) {
+            return;
+        }
+        double extra = 0;
+        for (size_t i = 0; i < n; ++i) {
+            extra += std::max(0.0, widths[i] - mins[i]);
+        }
+        const double overflow = sum - avail;
+        if (extra > 0) {
+            for (size_t i = 0; i < n; ++i) {
+                widths[i] -= overflow * std::max(0.0, widths[i] - mins[i]) / extra;
+            }
+        } else {
+            double min_sum = 0;
+            for (double m : mins) {
+                min_sum += m;
+            }
+            if (min_sum <= 0) {
+                const double share = avail / static_cast<double>(n);
+                for (double& w : widths) {
+                    w = share;
+                }
+            } else {
+                for (size_t i = 0; i < n; ++i) {
+                    widths[i] = mins[i] * avail / min_sum;
+                }
+            }
+        }
+    }
+
     Error format_table(const markdown::Block& table, double left, double right) {
         if (table.table_cells.empty()) {
             return ok_error();
@@ -719,51 +897,136 @@ struct Layout {
         if (cols == 0) {
             return ok_error();
         }
-        std::vector<double> widths(cols, 0);
-        for (const auto& row : table.table_cells) {
-            for (size_t c = 0; c < cols && c < row.size(); ++c) {
-                double w = 0;
-                for (const markdown::Run& run : row[c]) {
-                    w += measure_utf8(run.text, kSizeTable, BaseFont::Regular);
-                }
-                widths[c] = std::max(widths[c], w + 2 * kTablePadding);
-            }
-        }
-        double table_width = 0;
-        for (double w : widths) {
-            table_width += w;
-        }
-        const double avail = right - left;
-        if (table_width > avail && table_width > 0) {
-            const double scale = avail / table_width;
-            for (double& w : widths) {
-                w *= scale;
-            }
-        }
-        const double lineheight = kSizeTable * kLineHeight;
+        const double fallback_glyph =
+            glyph_width_em(BaseFont::Regular, static_cast<unsigned char>('M')) * kSizeTable / 1000.0;
+        std::vector<double> preferred(cols, 0);
+        std::vector<double> max_glyph(cols, fallback_glyph);
         for (size_t r = 0; r < rows; ++r) {
-            Error err = ensure_space(lineheight + kTablePadding);
+            const BaseFont row_font = r == 0 ? BaseFont::Bold : BaseFont::Regular;
+            for (size_t c = 0; c < cols && c < table.table_cells[r].size(); ++c) {
+                double w = 0;
+                for (const markdown::Run& run : table.table_cells[r][c]) {
+                    for (const Frag& frag : split_run(run, kSizeTable, row_font)) {
+                        if (frag.width >= 0) {
+                            w += frag.width;
+                        }
+                        if (frag.cid_kind != 0) {
+                            if (frag.width > max_glyph[c]) {
+                                max_glyph[c] = frag.width;
+                            }
+                        } else {
+                            for (unsigned char ch : frag.winansi) {
+                                if (ch == ' ' || ch == '\t') {
+                                    continue;
+                                }
+                                const double gw = char_width(frag, ch);
+                                if (gw > max_glyph[c]) {
+                                    max_glyph[c] = gw;
+                                }
+                            }
+                        }
+                    }
+                }
+                preferred[c] = std::max(preferred[c], w + 2 * kTablePadding);
+            }
+        }
+        std::vector<double> mins(cols);
+        for (size_t c = 0; c < cols; ++c) {
+            mins[c] = 2 * kTablePadding + max_glyph[c];
+            if (preferred[c] < mins[c]) {
+                preferred[c] = mins[c];
+            }
+        }
+        std::vector<double> widths = preferred;
+        allocate_table_widths(widths, mins, right - left);
+
+        const double lineheight = kSizeTable * kLineHeight;
+        struct CellLay {
+            std::vector<std::vector<Frag>> lines;
+            bool rtl = false;
+        };
+        for (size_t r = 0; r < rows; ++r) {
+            Error err = cancelled();
             if (!err.ok()) {
                 return err;
             }
-            double x = left;
             const BaseFont row_font = r == 0 ? BaseFont::Bold : BaseFont::Regular;
+            std::vector<CellLay> cells(cols);
+            size_t row_lines = 1;
             for (size_t c = 0; c < cols; ++c) {
-                const double cell_right = x + widths[c];
-                std::vector<markdown::Run> runs;
+                std::vector<Frag> words;
                 if (c < table.table_cells[r].size()) {
-                    runs = table.table_cells[r][c];
+                    for (const markdown::Run& run : table.table_cells[r][c]) {
+                        if (utf8_has_rtl(run.text)) {
+                            cells[c].rtl = true;
+                        }
+                        auto parts = split_run(run, kSizeTable, row_font);
+                        words.insert(words.end(), parts.begin(), parts.end());
+                    }
                 }
-                const double saved_y = y;
-                err = format_runs(runs, kSizeTable, x + kTablePadding, cell_right - kTablePadding,
-                                  row_font, "");
+                double inner = widths[c] - 2 * kTablePadding;
+                if (inner < max_glyph[c]) {
+                    inner = max_glyph[c];
+                }
+                if (inner < 1) {
+                    inner = 1;
+                }
+                cells[c].lines = wrap_frags(words, inner);
+                if (cells[c].lines.size() > row_lines) {
+                    row_lines = cells[c].lines.size();
+                }
+            }
+
+            const double row_h = static_cast<double>(row_lines) * lineheight;
+            const double page_body = kPageTop - kPageBottom;
+            if (y - row_h < kPageBottom && row_h <= page_body + 1e-9) {
+                err = new_page();
                 if (!err.ok()) {
                     return err;
                 }
-                y = saved_y;
-                x = cell_right;
             }
-            y -= lineheight + kTablePadding;
+
+            size_t line_i = 0;
+            while (line_i < row_lines) {
+                err = ensure_space(lineheight);
+                if (!err.ok()) {
+                    return err;
+                }
+                size_t fit = 0;
+                double yy = y;
+                while (yy - lineheight >= kPageBottom - 1e-9) {
+                    ++fit;
+                    yy -= lineheight;
+                }
+                if (fit == 0) {
+                    err = new_page();
+                    if (!err.ok()) {
+                        return err;
+                    }
+                    continue;
+                }
+                const size_t take = std::min(fit, row_lines - line_i);
+                for (size_t li = 0; li < take; ++li) {
+                    const double baseline = y;
+                    double x = left;
+                    for (size_t c = 0; c < cols; ++c) {
+                        const double inner_left = x + kTablePadding;
+                        const double inner_right = x + widths[c] - kTablePadding;
+                        const size_t idx = line_i + li;
+                        if (idx < cells[c].lines.size()) {
+                            std::vector<Frag> line = cells[c].lines[idx];
+                            apply_rtl_order(line, cells[c].rtl);
+                            const double tw = positive_width(line);
+                            const double text_x = cells[c].rtl ? inner_right - tw : inner_left;
+                            paint_frags(line, inner_left, text_x, baseline);
+                        }
+                        x += widths[c];
+                    }
+                    y -= lineheight;
+                }
+                line_i += take;
+            }
+            y -= kTablePadding;
         }
         return ok_error();
     }
@@ -826,6 +1089,7 @@ Error Layout::format_blocks(const std::vector<markdown::Block>& blocks, double l
                 if (!err.ok()) {
                     return err;
                 }
+                y -= kBlockGap;
                 break;
             case markdown::BlockKind::ListItem: {
                 const double indent = left + kListPadding + static_cast<double>(block.indent) * 0.5;
@@ -872,6 +1136,7 @@ Error Layout::format_blocks(const std::vector<markdown::Block>& blocks, double l
                 if (!err.ok()) {
                     return err;
                 }
+                y -= kBlockGap;
                 break;
             case markdown::BlockKind::Html:
                 err = format_runs(block.runs, kSizeBody, left, right, def_font, "");

@@ -2,6 +2,7 @@
 
 #include "html/html.hpp"
 #include "pdf/document.hpp"
+#include "pdf/fonts.hpp"
 #include "pdf/pdf.hpp"
 #include "pdf/rtl.hpp"
 #include "pdf/stream.hpp"
@@ -11,6 +12,8 @@
 #include "runtime/runtime.hpp"
 #include "support/test_support.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -833,6 +836,285 @@ void test_empty_markdown_is_one_page() {
     check(document.page_count() == 1, "empty markdown yields one page");
 }
 
+struct ShowOp {
+    double x = 0;
+    double y = 0;
+    std::string text;
+};
+
+std::vector<ShowOp> parse_show_ops(const std::string& content) {
+    std::vector<ShowOp> out;
+    double x = 0;
+    double y = 0;
+    size_t pos = 0;
+    while (pos < content.size()) {
+        const size_t tm = content.find(" Tm\n", pos);
+        const size_t tj = content.find(") Tj\n", pos);
+        if (tm == std::string::npos && tj == std::string::npos) {
+            break;
+        }
+        if (tm != std::string::npos && (tj == std::string::npos || tm < tj)) {
+            const size_t line_start = content.rfind('\n', tm);
+            const std::string line =
+                content.substr(line_start == std::string::npos ? 0 : line_start + 1, tm);
+            double a = 0, b = 0, c = 0, d = 0, e = 0, f = 0;
+            if (std::sscanf(line.c_str(), "%lf %lf %lf %lf %lf %lf Tm", &a, &b, &c, &d, &e, &f) == 6) {
+                x = e;
+                y = f;
+            }
+            pos = tm + 4;
+            continue;
+        }
+        const size_t open = content.rfind('(', tj);
+        if (open != std::string::npos && open < tj) {
+            ShowOp op;
+            op.x = x;
+            op.y = y;
+            op.text = content.substr(open + 1, tj - (open + 1));
+            out.push_back(std::move(op));
+        }
+        pos = tj + 5;
+    }
+    return out;
+}
+
+bool body_show(const ShowOp& op) { return op.y > 70.0 && op.y < 730.0; }
+
+std::string write_markdown_pdf(const std::string& markdown) {
+    ainiux::pdf::WriteOptions options;
+    std::string pdf;
+    const ainiux::Error err = ainiux::pdf::from_markdown(markdown, options, pdf);
+    check(err.ok(), "table markdown to PDF: " + err.message);
+    return pdf;
+}
+
+void test_from_markdown_table_wraps_and_advances_row() {
+    const std::string input =
+        "| HeadA | HeadB |\n"
+        "| --- | --- |\n"
+        "| WrapSentenceStart " +
+        std::string(
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron "
+            "pi rho sigma tau upsilon phi chi psi omega alpha beta gamma delta epsilon zeta eta "
+            "theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega "
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron") +
+        " WrapSentenceEnd | short |\n"
+        "| NextRowHere | z |\n";
+    const std::string pdf = write_markdown_pdf(input);
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "wrapped table extract: " + extract_err.message);
+    check(markdown.find("WrapSentenceStart") != std::string::npos, "wrapped table keeps sentence start");
+    check(markdown.find("WrapSentenceEnd") != std::string::npos, "wrapped table keeps sentence end");
+    check(markdown.find("NextRowHere") != std::string::npos, "wrapped table keeps next row");
+
+    ainiux::pdf::Document document;
+    check(ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document).ok(),
+          "wrapped table PDF opens");
+    std::string content;
+    check(document.page_content(0, content).ok(), "wrapped table page content");
+    const std::vector<ShowOp> shows = parse_show_ops(content);
+    double first_y = -1;
+    double next_y = -1;
+    double last_wrap_y = -1;
+    for (const ShowOp& op : shows) {
+        if (!body_show(op)) {
+            continue;
+        }
+        if (op.text.find("WrapSentenceStart") != std::string::npos) {
+            first_y = op.y;
+            last_wrap_y = op.y;
+        }
+        if (first_y >= 0 && next_y < 0 &&
+            (op.text.find("alpha") != std::string::npos || op.text.find("omega") != std::string::npos ||
+             op.text.find("WrapSentenceEnd") != std::string::npos)) {
+            last_wrap_y = std::min(last_wrap_y, op.y);
+        }
+        if (op.text.find("NextRowHere") != std::string::npos) {
+            next_y = op.y;
+        }
+    }
+    check(first_y > 0 && next_y > 0, "wrapped table locates both rows");
+    check(first_y - next_y >= 32.0,
+          "next table row sits below the wrapped cell, not on the first line: dy=" +
+              std::to_string(first_y - next_y));
+    check(last_wrap_y > next_y - 0.01, "wrapped lines stay above the following row");
+}
+
+void test_from_markdown_table_splits_long_token() {
+    const std::string token(80, 'A');
+    const std::string input =
+        "| H1 | H2 | H3 | H4 |\n"
+        "| --- | --- | --- | --- |\n"
+        "| 1 | " +
+        token +
+        " | 2 | 3 |\n";
+    const std::string pdf = write_markdown_pdf(input);
+    ainiux::pdf::Document document;
+    check(ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document).ok(),
+          "token table PDF opens");
+    std::string content;
+    check(document.page_content(0, content).ok(), "token table page content");
+    const std::vector<ShowOp> shows = parse_show_ops(content);
+    std::vector<ShowOp> pieces;
+    std::string rebuilt;
+    for (const ShowOp& op : shows) {
+        if (!body_show(op)) {
+            continue;
+        }
+        if (!op.text.empty() && op.text.find_first_not_of('A') == std::string::npos) {
+            pieces.push_back(op);
+            rebuilt += op.text;
+        }
+    }
+    check(pieces.size() >= 2, "unbreakable table token is split across lines: " +
+                                  std::to_string(pieces.size()));
+    check(rebuilt == token, "split token pieces reassemble to the original");
+    const double full_w = ainiux::pdf::text_width(ainiux::pdf::BaseFont::Regular, token, 10.0);
+    double min_x = pieces[0].x;
+    double max_right = pieces[0].x;
+    for (const ShowOp& piece : pieces) {
+        const double w = ainiux::pdf::text_width(ainiux::pdf::BaseFont::Regular, piece.text, 10.0);
+        check(w + 0.5 < full_w, "token piece is shorter than the unwrapped token: " +
+                                    std::to_string(w));
+        check(w <= 451.3, "token piece fits in the page content width: " + std::to_string(w));
+        min_x = std::min(min_x, piece.x);
+        max_right = std::max(max_right, piece.x + w);
+    }
+    for (const ShowOp& op : shows) {
+        if (!body_show(op) || op.text == "H2") {
+            continue;
+        }
+        if (op.text == "1" || op.text == "2" || op.text == "3" || op.text == "H1" || op.text == "H3" ||
+            op.text == "H4") {
+            const bool header = op.text.size() == 2 && op.text[0] == 'H';
+            const double width = ainiux::pdf::text_width(
+                header ? ainiux::pdf::BaseFont::Bold : ainiux::pdf::BaseFont::Regular, op.text, 10.0);
+            const bool overlaps = op.x < max_right - 0.5 && op.x + width > min_x + 0.5;
+            check(!overlaps, "neighbor cell '" + op.text + "' does not overlap the wrapped token column");
+        }
+    }
+}
+
+void test_from_markdown_table_cells_do_not_overlap() {
+    const std::string input =
+        "| A | B | C | D | E | F |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| short | a somewhat longer phrase for column B | C | "
+        "supercalifragilisticexpialidociousURLTOKEN0123456789 | E | 99 |\n"
+        "| 1 | 2 | 3 | 4 | 5 | 6 |\n";
+    const std::string pdf = write_markdown_pdf(input);
+    ainiux::pdf::Document document;
+    check(ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document).ok(),
+          "overlap table PDF opens");
+    std::string content;
+    check(document.page_content(0, content).ok(), "overlap table page content");
+    std::vector<ShowOp> shows;
+    for (ShowOp op : parse_show_ops(content)) {
+        if (body_show(op) && !op.text.empty()) {
+            shows.push_back(std::move(op));
+        }
+    }
+    for (size_t i = 0; i < shows.size(); ++i) {
+        const bool header = shows[i].text.size() == 1 && shows[i].text[0] >= 'A' && shows[i].text[0] <= 'F';
+        const double wi = ainiux::pdf::text_width(
+            header ? ainiux::pdf::BaseFont::Bold : ainiux::pdf::BaseFont::Regular, shows[i].text, 10.0);
+        for (size_t j = i + 1; j < shows.size(); ++j) {
+            if (std::fabs(shows[i].y - shows[j].y) > 0.5) {
+                continue;
+            }
+            const bool header_j =
+                shows[j].text.size() == 1 && shows[j].text[0] >= 'A' && shows[j].text[0] <= 'F';
+            const double wj = ainiux::pdf::text_width(
+                header_j ? ainiux::pdf::BaseFont::Bold : ainiux::pdf::BaseFont::Regular, shows[j].text,
+                10.0);
+            const double left_i = shows[i].x;
+            const double right_i = shows[i].x + wi;
+            const double left_j = shows[j].x;
+            const double right_j = shows[j].x + wj;
+            const bool overlap = left_i < right_j - 0.75 && left_j < right_i - 0.75;
+            check(!overlap, "table shows on one baseline do not overlap: '" + shows[i].text + "' vs '" +
+                                shows[j].text + "'");
+        }
+    }
+}
+
+void test_from_markdown_table_keeps_two_digit_cells() {
+    const std::string pdf = write_markdown_pdf("| N | Text |\n| --- | --- |\n| 9 | nine |\n| 10 | ten |\n| 50 | fifty |\n");
+    ainiux::pdf::Document document;
+    check(ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document).ok(),
+          "two-digit table PDF opens");
+    std::string content;
+    check(document.page_content(0, content).ok(), "two-digit table page content");
+    check(content.find("(10)") != std::string::npos, "two-digit 10 stays on one line: " + content);
+    check(content.find("(50)") != std::string::npos, "two-digit 50 stays on one line");
+}
+
+void test_from_markdown_paragraph_table_block_gap() {
+    const std::string pdf = write_markdown_pdf(
+        "IntroParaNeedle\n\n| HeadA | HeadB |\n| --- | --- |\n| CellA | CellB |\n\nAfterParaNeedle\n");
+    ainiux::pdf::Document document;
+    check(ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document).ok(),
+          "paragraph/table gap PDF opens");
+    std::string content;
+    check(document.page_content(0, content).ok(), "paragraph/table gap page content");
+    double intro_y = -1;
+    double head_y = -1;
+    double cell_y = -1;
+    double after_y = -1;
+    for (const ShowOp& op : parse_show_ops(content)) {
+        if (!body_show(op)) {
+            continue;
+        }
+        if (op.text.find("IntroParaNeedle") != std::string::npos) {
+            intro_y = op.y;
+        } else if (op.text.find("HeadA") != std::string::npos) {
+            head_y = op.y;
+        } else if (op.text.find("CellA") != std::string::npos) {
+            cell_y = op.y;
+        } else if (op.text.find("AfterParaNeedle") != std::string::npos) {
+            after_y = op.y;
+        }
+    }
+    check(intro_y > 0 && head_y > 0 && cell_y > 0 && after_y > 0,
+          "paragraph/table gap locates intro, header, cell, and follow-on text");
+    check(intro_y - head_y >= 26.0,
+          "about one blank line sits between the paragraph and table header: dy=" +
+              std::to_string(intro_y - head_y));
+    check(cell_y - after_y >= 28.0,
+          "about one blank line sits after the table before the next paragraph: dy=" +
+              std::to_string(cell_y - after_y));
+}
+
+void test_from_markdown_table_paginates() {
+    std::string input = "| N | Text |\n| --- | --- |\n";
+    for (int i = 1; i <= 80; ++i) {
+        input += "| " + std::to_string(i) + " | hello" + std::to_string(i) + " |\n";
+    }
+    const std::string pdf = write_markdown_pdf(input);
+    ainiux::pdf::Document document;
+    check(ainiux::pdf::Document::open_bytes(pdf, ainiux::pdf::Options{}, document).ok(),
+          "paged table PDF opens");
+    check(document.page_count() > 1, "long table spans more than one page");
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "paged table extract: " + extract_err.message);
+    check(markdown.find("hello1") != std::string::npos, "paged table keeps first row");
+    check(markdown.find("hello80") != std::string::npos, "paged table keeps last row");
+}
+
+void test_from_markdown_everything_table_needles() {
+    const std::string input = read_fixture("tests/highlight/everything.md");
+    const std::string pdf = write_markdown_pdf(input);
+    std::string markdown;
+    const ainiux::Error extract_err = ainiux::pdf::to_markdown_bytes(pdf, ainiux::pdf::Options{}, markdown);
+    check(extract_err.ok(), "everything.md PDF extract: " + extract_err.message);
+    check(markdown.find("Feature") != std::string::npos, "everything table keeps Feature");
+    check(markdown.find("Emphasis") != std::string::npos, "everything table keeps Emphasis");
+    check(markdown.find("alpha") != std::string::npos, "everything table keeps alpha");
+    check(markdown.find("beta") != std::string::npos, "everything table keeps beta");
+}
+
 void test_pdf_write_cancel() {
     ainiux::runtime::CancellationSource source;
     source.cancel();
@@ -904,6 +1186,13 @@ void run_all() {
     test_pdf_md_pdf_hebrew_needles();
     test_pdf_md_pdf_arabic_needles();
     test_empty_markdown_is_one_page();
+    test_from_markdown_table_wraps_and_advances_row();
+    test_from_markdown_table_splits_long_token();
+    test_from_markdown_table_cells_do_not_overlap();
+    test_from_markdown_table_keeps_two_digit_cells();
+    test_from_markdown_paragraph_table_block_gap();
+    test_from_markdown_table_paginates();
+    test_from_markdown_everything_table_needles();
     test_pdf_write_cancel();
     run_adversarial();
 }
