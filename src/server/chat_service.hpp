@@ -4,6 +4,7 @@
 #include <string>
 
 #include "chat/sqlite_store.hpp"
+#include "chat/transcript.hpp"
 #include "common.hpp"
 #include "cli/args.hpp"
 #include "provider/provider.hpp"
@@ -64,6 +65,11 @@ class ChatService {
                       std::string& docx,
                       std::string& filename,
                       long long& current_revision);
+    Error export_markdown(long long thread_id,
+                          const std::string& request_body,
+                          std::string& markdown,
+                          std::string& filename,
+                          long long& current_revision);
     Error export_json(long long thread_id,
                       const std::string& request_body,
                       std::string& json,
@@ -79,7 +85,7 @@ class ChatService {
     Error ensure_open();
     Error export_rendered(long long thread_id,
                           const std::string& request_body,
-                          bool word,
+                          chat::TranscriptFormat format,
                           std::string& bytes,
                           std::string& filename,
                           long long& current_revision);

@@ -171,10 +171,10 @@ MCP_AUTH=(--header "Authorization: Bearer ${MCP_SECRET}")
 
 request 200 "public embedded WUI index" "${BASE_URL}/ui/"
 expect_body '/ui/assets/app-v26.css' "WUI stylesheet reference"
-expect_body '/ui/assets/app-v34.js' "WUI JavaScript reference"
+expect_body '/ui/assets/app-v35.js' "WUI JavaScript reference"
 WUI_HEADERS="${TEMP_DIR}/wui-headers.txt"
 request 200 "versioned WUI JavaScript" --dump-header "${WUI_HEADERS}" \
-    "${BASE_URL}/ui/assets/app-v34.js"
+    "${BASE_URL}/ui/assets/app-v35.js"
 expect_body 'localStorage' "persistent browser token storage"
 expect_body 'X-Ainiux-CSRF-Token' "browser CSRF protection"
 expect_body 'Invalid authentication' "invalid browser authentication state"

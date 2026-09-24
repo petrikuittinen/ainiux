@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "chat/session.hpp"
+#include "chat/transcript.hpp"
 #include "chat/sqlite_store.hpp"
 #include "agent/prompts.hpp"
 #include "agent/compact.hpp"
@@ -51,6 +52,18 @@ struct AgentSlashCommand {
 
 AgentSlashCommand parse_agent_slash_command(const std::string& text);
 
+enum class ChatFileAction { None, Export, Import, Invalid };
+
+struct ChatFileCommand {
+    ChatFileAction action = ChatFileAction::None;
+    chat::TranscriptFormat format = chat::TranscriptFormat::Json;
+    chat::TranscriptScope scope = chat::TranscriptScope::Thread;
+    std::string path;
+    std::string error;
+};
+
+ChatFileCommand parse_chat_file_command(const std::string& text);
+
 struct TuiCommandHandlers {
     std::function<void()> quit;
     std::function<void()> start_history_edit;
@@ -81,15 +94,13 @@ struct TuiCommandHandlers {
     std::function<void(const std::string&)> persist_settings_change;
     std::function<void()> refresh_settings_panel_if_visible;
     std::function<void()> open_settings_widget;
-    std::function<void(const std::string&)> start_save;
-    std::function<void(const std::string&)> start_load;
+    std::function<void(chat::TranscriptFormat, const std::string&, bool)> start_export;
+    std::function<void(const std::string&)> start_import;
     std::function<void()> pop_last_message;
     std::function<void()> start_response_to_unanswered_user;
     std::function<void(const std::string&)> start_insert;
     std::function<void(const std::string&)> start_attach;
     std::function<void(const std::string&)> start_fetch;
-    std::function<void(const std::string&, bool)> start_chat_pdf;
-    std::function<void(const std::string&, bool)> start_chat_docx;
     std::function<void(const std::string&)> start_search;
     // command body only; second arg is true for /shell-stdout / !! (draft fill).
     std::function<void(const std::string&, bool)> start_shell;

@@ -211,6 +211,7 @@ POST   /ainiux/v1/chat/threads/:thread_id/edit-message
 POST   /ainiux/v1/chat/threads/:thread_id/delete-message
 POST   /ainiux/v1/chat/threads/:thread_id/pdf
 POST   /ainiux/v1/chat/threads/:thread_id/docx
+POST   /ainiux/v1/chat/threads/:thread_id/md
 POST   /ainiux/v1/chat/threads/:thread_id/json
 POST   /ainiux/v1/chat/import
 POST   /ainiux/v1/chat/tables/xlsx
@@ -335,15 +336,20 @@ A failed fetch does not remove inputs already queued.
 
 `POST /ainiux/v1/chat/threads/:thread_id/pdf` accepts
 `{"scope":"thread"|"last"}` and returns `application/pdf`.
+
+`POST /ainiux/v1/chat/threads/:thread_id/md` accepts the same body and returns
+`text/markdown; charset=utf-8` as `chat.md` or `last.md`. The `chat_md`
+capability advertises this route.
+
 `POST /ainiux/v1/chat/threads/:thread_id/docx` accepts the same body and returns
 a normalized Word package. Images stay `[image: name]` placeholders. Each converted
 attachment is named (`Attached: report.pdf`) and its Markdown body is omitted.
 The saved chat and the model request still include that text. Read-only
 threads may export. Empty threads return an error rather than an empty file.
 `POST /ainiux/v1/chat/threads/:thread_id/json` accepts the same scope and returns
-the TUI `/save` JSON document (`chat.json` or `last.json`). Scope `last` keeps
-one message and its stored text, including thinking traces. PDF and DOCX still
-omit those traces.
+the TUI `/export` JSON document (`chat.json` or `last.json`). Scope `last` keeps
+one message and its stored text, including thinking traces. Markdown, PDF, and
+DOCX omit those traces.
 `POST /ainiux/v1/chat/import` accepts that same JSON document, up to 20 MiB, and
 creates a new thread. It does not replace the open thread.
 `POST /ainiux/v1/chat/tables/xlsx` accepts `{"markdown":"..."}` for one Markdown

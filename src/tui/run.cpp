@@ -634,6 +634,7 @@ app::TuiRunResult run(provider::RequestContext context,
     size_t attachment_picker_selected = 0;
     size_t pending_attachment_delete = static_cast<size_t>(-1);
     size_t pending_thread_delete = static_cast<size_t>(-1);
+    std::optional<PendingChatExport> pending_chat_export;
     size_t attachments_committed_for_turn = 0;
     std::vector<provider::ImageInput> queued_regen_images;
     std::vector<provider::TextAttachment> queued_regen_text_attachments;
@@ -765,6 +766,11 @@ app::TuiRunResult run(provider::RequestContext context,
                 return "Delete thread:\n  " + label + "\nPress y to delete · n or Esc to cancel";
             }
             return std::string("No thread selected to delete");
+        }
+        if (mode == TuiMode::ExportOverwriteConfirm) {
+            if (!pending_chat_export) return std::string("No chat export is pending");
+            return "Overwrite existing export?\n  " + pending_chat_export->path +
+                   "\n\n(1) [Y]es\n(2) [N]o";
         }
         if (mode == TuiMode::RemoveConfirm) {
             return remove_confirm_text(session);
@@ -2336,17 +2342,34 @@ app::TuiRunResult run(provider::RequestContext context,
     command_handlers.persist_settings_change = persist_settings_change;
     command_handlers.refresh_settings_panel_if_visible = refresh_settings_panel_if_visible;
     command_handlers.open_settings_widget = open_settings_widget;
-    command_handlers.start_save = [&](const std::string& path) { start_save(path, session); };
-    command_handlers.start_load = [&](const std::string& path) { file_jobs.start_load(path); };
+    command_handlers.start_export = [&](chat::TranscriptFormat format,
+                                        const std::string& path,
+                                        bool last_message_only) {
+        if (file_jobs.busy()) return;
+        PendingChatExport request;
+        const chat::TranscriptScope scope = last_message_only
+                                                ? chat::TranscriptScope::LastMessage
+                                                : chat::TranscriptScope::Thread;
+        const Error error = prepare_chat_export(path, format, scope, session, request);
+        if (!error.ok()) {
+            status = detail::error_line(error);
+            return;
+        }
+        if (request.target_fingerprint.exists) {
+            pending_chat_export = std::move(request);
+            help_text.clear();
+            settings_text.clear();
+            history_scroll = 0;
+            mode = TuiMode::ExportOverwriteConfirm;
+            status = "Export destination exists; confirm overwrite";
+            return;
+        }
+        file_jobs.start_chat_export(std::move(request));
+    };
+    command_handlers.start_import = [&](const std::string& path) { file_jobs.start_load(path); };
     command_handlers.pop_last_message = pop_last_message;
     command_handlers.start_response_to_unanswered_user = start_response_to_unanswered_user;
     command_handlers.start_insert = [&](const std::string& path) { file_jobs.start_insert(path); };
-    command_handlers.start_chat_pdf = [&](const std::string& path, bool last_message_only) {
-        file_jobs.start_chat_pdf(path, last_message_only);
-    };
-    command_handlers.start_chat_docx = [&](const std::string& path, bool last_message_only) {
-        file_jobs.start_chat_docx(path, last_message_only);
-    };
     command_handlers.start_attach = [&](const std::string& path) {
         if (path.empty()) {
             if (active_job != ActiveJob::None) {
@@ -2505,7 +2528,7 @@ app::TuiRunResult run(provider::RequestContext context,
         if (context.options.agent) {
             static const std::vector<std::string> chat_only = {
                 "/clone",        "/cleanup", "/remove", "/remove-empty",
-                "/pop",          "/load",    "/save",   "/prompt",
+                "/pop",          "/import",  "/export", "/export-last", "/prompt",
                 "/regenerate"};
             for (const std::string& command : chat_only) {
                 if (text == command || text.rfind(command + " ", 0) == 0) {
@@ -2775,6 +2798,24 @@ app::TuiRunResult run(provider::RequestContext context,
         status = "Delete cancelled";
     };
     picker_callbacks.on_thread_delete_retry = [&](const std::string& message) { status = message; };
+    picker_callbacks.on_export_overwrite_accepted = [&]() {
+        if (!pending_chat_export) {
+            mode = TuiMode::Chat;
+            status = "No chat export is pending";
+            return;
+        }
+        PendingChatExport request = std::move(*pending_chat_export);
+        pending_chat_export.reset();
+        mode = TuiMode::Chat;
+        file_jobs.start_chat_export(std::move(request));
+    };
+    picker_callbacks.on_export_overwrite_rejected = [&]() {
+        pending_chat_export.reset();
+        mode = TuiMode::Chat;
+        status = "Export cancelled";
+    };
+    picker_callbacks.on_export_overwrite_retry =
+        [&](const std::string& message) { status = message; };
     picker_callbacks.on_model_confirm_accepted = [&]() {
         app::refresh_session_metadata(session, context);
         mode = TuiMode::Chat;
@@ -3775,15 +3816,11 @@ app::TuiRunResult run(provider::RequestContext context,
                     }
                     break;
                 }
-                case TuiEventType::ChatPdfDone:
-                case TuiEventType::ChatDocxDone:
+                case TuiEventType::ChatExportDone:
                     file_job.join();
                     completed_file_job = true;
                     if (event.error.ok()) {
-                        status = std::string(event.type == TuiEventType::ChatDocxDone
-                                                 ? "Wrote DOCX "
-                                                 : "Wrote PDF ") +
-                                 event.text;
+                        status = "Exported " + event.inserted_text + " to " + event.text;
                     } else {
                         set_status_maybe_agent_error(detail::error_line(event.error), true);
                     }

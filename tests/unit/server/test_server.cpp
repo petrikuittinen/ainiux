@@ -162,7 +162,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
               index.body.find("/ui/assets/app-v26.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v34.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v35.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -280,7 +280,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v34.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v35.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&
@@ -610,6 +610,7 @@ void test_auth_and_routes() {
     check(capability_response.status == 200 &&
               capability_response.body.find("\"mcp\":true") != std::string::npos &&
               capability_response.body.find("\"web_ui\":true") != std::string::npos &&
+              capability_response.body.find("chat_md") != std::string::npos &&
               capability_response.body.find("controller") == std::string::npos &&
               capability_response.body.find("csrf-token") == std::string::npos,
           "capabilities advertise MCP and the WUI without exposing a secret");
@@ -2075,6 +2076,17 @@ void test_revision_safe_chat_thread_routes() {
     const long long thread_id = static_cast<long long>(id_value->number);
     const std::string thread_path = "/ainiux/v1/chat/threads/" + std::to_string(thread_id);
 
+    Response empty_md = route_request(session_request(
+        "POST", thread_path + "/md", "{\"scope\":\"thread\"}"), auth, status);
+    check(empty_md.status == 400,
+          "chat Markdown export rejects an empty transcript");
+    http::Request wrong_md_type = session_request(
+        "POST", thread_path + "/md", "{\"scope\":\"thread\"}");
+    wrong_md_type.headers["content-type"] = "text/plain";
+    Response rejected_md_type = route_request(wrong_md_type, auth, status);
+    check(rejected_md_type.status == 415,
+          "chat Markdown export requires JSON content type");
+
     Response listed = route_request(session_request("GET", "/ainiux/v1/chat/threads", ""),
                                     auth, status);
     check(listed.status == 200 && listed.body.find("New chat") != std::string::npos &&
@@ -2176,6 +2188,25 @@ void test_revision_safe_chat_thread_routes() {
     Response bad_docx_scope = route_request(session_request(
         "POST", thread_path + "/docx", "{\"scope\":\"all\"}"), auth, status);
     check(bad_docx_scope.status == 400, "chat DOCX export rejects an unknown scope");
+    Response thread_md = route_request(session_request(
+        "POST", thread_path + "/md", "{\"scope\":\"thread\"}"), auth, status);
+    check(thread_md.status == 200 &&
+              thread_md.content_type == "text/markdown; charset=utf-8" &&
+              thread_md.content_disposition.find("chat.md") != std::string::npos &&
+              thread_md.body.find("# hello") != std::string::npos &&
+              thread_md.body.find("## Assistant") != std::string::npos,
+          "chat Markdown export returns the whole thread with its filename and MIME type");
+    Response last_md = route_request(session_request(
+        "POST", thread_path + "/md", "{\"scope\":\"last\"}"), auth, status);
+    check(last_md.status == 200 && last_md.content_disposition.find("last.md") != std::string::npos &&
+              last_md.body.find("hi") != std::string::npos &&
+              last_md.body.find("## User") == std::string::npos,
+          "chat Markdown export returns only the latest message when requested");
+    Response bad_md_scope = route_request(session_request(
+        "POST", thread_path + "/md", "{\"scope\":\"all\"}"), auth, status);
+    check(bad_md_scope.status == 400, "chat Markdown export rejects an unknown scope");
+    Response md_get = route_request(session_request("GET", thread_path + "/md", ""), auth, status);
+    check(md_get.status == 405, "chat Markdown export accepts POST only");
     Response thread_json = route_request(session_request(
         "POST", thread_path + "/json", "{\"scope\":\"thread\"}"), auth, status);
     check(thread_json.status == 200 &&

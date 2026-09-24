@@ -48,7 +48,17 @@ const std::vector<std::string>& chat_command_completions() {
         "/highlight ",
         "/insert ",
         "/list",
-        "/load ",
+        "/export json ",
+        "/export pdf ",
+        "/export docx ",
+        "/export md ",
+        "/export-last json ",
+        "/export-last pdf ",
+        "/export-last docx ",
+        "/export-last md ",
+        "/export-last xlsx ",
+        "/export-last csv ",
+        "/import ",
         "/model ",
         "/models",
         "/mode ",
@@ -60,7 +70,6 @@ const std::vector<std::string>& chat_command_completions() {
         "/remove",
         "/remove-empty",
         "/response",
-        "/save ",
         "/search ",
         "/scrollbar ",
         "/setting",
@@ -127,7 +136,7 @@ const std::vector<std::string>& agent_command_completions() {
 }
 
 bool is_path_command(const std::string& command) {
-    return command == "/save" || command == "/load" || command == "/attach" ||
+    return command == "/import" || command == "/attach" ||
            command == "/insert";
 }
 
@@ -160,7 +169,6 @@ ChatCompletionContext chat_completion_context(const EditorState& state) {
     while (command_end < first_line_end && !is_token_separator(buffer[command_end])) {
         ++command_end;
     }
-
     if (cursor <= command_end) {
         context.kind = ChatCompletionContextKind::Command;
         return context;
@@ -170,6 +178,20 @@ ChatCompletionContext chat_completion_context(const EditorState& state) {
     if (command_end < first_line_end && is_token_separator(buffer[command_end]) &&
         is_path_command(command)) {
         context.kind = ChatCompletionContextKind::Path;
+    } else if (command == "/export" || command == "/export-last") {
+        std::size_t format_start = command_end;
+        while (format_start < first_line_end && is_token_separator(buffer[format_start])) {
+            ++format_start;
+        }
+        std::size_t format_end = format_start;
+        while (format_end < first_line_end && !is_token_separator(buffer[format_end])) {
+            ++format_end;
+        }
+        if (format_end == first_line_end) {
+            context.kind = ChatCompletionContextKind::Command;
+        } else {
+            context.kind = ChatCompletionContextKind::Path;
+        }
     }
     return context;
 }
@@ -475,6 +497,11 @@ PathCompletionResult ContextualCompleter::complete_command(EditorState& state) {
     const size_t first_line_end = newline == std::string::npos ? buffer.size() : newline;
     while (command_end < first_line_end && !is_token_separator(buffer[command_end])) {
         ++command_end;
+    }
+    if ((buffer.compare(0, 8, "/export ") == 0 ||
+         buffer.compare(0, 13, "/export-last ") == 0) &&
+        cursor > command_end) {
+        command_end = cursor;
     }
 
     const std::string token = buffer.substr(0, cursor);

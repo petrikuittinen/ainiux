@@ -24,17 +24,14 @@ bool allowed_for_read_only_thread(const std::string& text) {
            text == "/remove-empty" || text == "/cleanup" ||
            text == "/new" || text.rfind("/new ", 0) == 0 ||
            text == "/index-code" || text == "/show-index" ||
-           text == "/save" || text.rfind("/save ", 0) == 0 ||
-           text.rfind("/load ", 0) == 0 || text == "/theme" ||
+           text == "/export" || text.rfind("/export ", 0) == 0 ||
+           text.rfind("/export-last ", 0) == 0 ||
+           text.rfind("/import ", 0) == 0 || text == "/theme" ||
            text.rfind("/theme ", 0) == 0 || text == "/highlight" ||
            text.rfind("/highlight ", 0) == 0 ||
            text == "/scrollbar" || text.rfind("/scrollbar ", 0) == 0 ||
            text == "/shell" || text.rfind("/shell ", 0) == 0 ||
-           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0 ||
-           text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0 ||
-           text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0 ||
-           text == "/chat-to-docx" || text.rfind("/chat-to-docx ", 0) == 0 ||
-           text == "/last-to-docx" || text.rfind("/last-to-docx ", 0) == 0;
+           text == "/shell-stdout" || text.rfind("/shell-stdout ", 0) == 0;
 }
 
 bool reasoning_change_needs_confirmation(const std::string& requested,
@@ -245,6 +242,51 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
     return command;
 }
 
+ChatFileCommand parse_chat_file_command(const std::string& text) {
+    ChatFileCommand command;
+    if (text == "/import" || text.rfind("/import ", 0) == 0) {
+        command.path = app::detail::trim_ascii(text.substr(7));
+        if (command.path.empty()) {
+            command.action = ChatFileAction::Invalid;
+            command.error = "Usage: /import PATH";
+        } else {
+            command.action = ChatFileAction::Import;
+        }
+        return command;
+    }
+    if (text != "/export" && text.rfind("/export ", 0) != 0 &&
+        text != "/export-last" && text.rfind("/export-last ", 0) != 0) {
+        return command;
+    }
+    const bool last = text.rfind("/export-last", 0) == 0;
+    command.scope = last ? chat::TranscriptScope::LastMessage : chat::TranscriptScope::Thread;
+    const std::size_t command_size = last ? 12U : 7U;
+    const std::string arguments = app::detail::trim_ascii(text.substr(command_size));
+    std::string format_name;
+    if (arguments.empty()) {
+        if (last) {
+            command.action = ChatFileAction::Invalid;
+            command.error = "Usage: /export-last json|pdf|docx|md|xlsx|csv [PATH]";
+            return command;
+        }
+        format_name = "json";
+    } else {
+        const std::size_t split = arguments.find_first_of(" \t");
+        format_name = split == std::string::npos ? arguments : arguments.substr(0, split);
+        if (split != std::string::npos) {
+            command.path = app::detail::trim_ascii(arguments.substr(split + 1));
+        }
+    }
+    const Error error = chat::parse_transcript_format(format_name, command.scope, command.format);
+    if (!error.ok()) {
+        command.action = ChatFileAction::Invalid;
+        command.error = error.message;
+    } else {
+        command.action = ChatFileAction::Export;
+    }
+    return command;
+}
+
 void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiCommandHandlers& handlers) {
     if (text == "/quit" || text == "/exit") {
         handlers.quit();
@@ -287,8 +329,9 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 + std::string(ctx.context.options.agent
                                   ? ""
                                   : "/clone\n"
-                                    "/save [PATH]\n"
-                                    "/load PATH\n"
+                                    "/export [json|pdf|docx|md] [PATH]\n"
+                                    "/export-last json|pdf|docx|md|xlsx|csv [PATH]\n"
+                                    "/import PATH\n"
                                     "/remove\n"
                                     "/remove-empty\n"
                                     "/cleanup (expire inactive managed media)\n"
@@ -298,10 +341,6 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                 "/attach [PATH|URL] (queue text or image for next prompt; bare shows list, DEL deletes;\n"
                 "  agent: images request-local for that turn only, not stored in project/media)\n"
                 "/fetch URL\n"
-                "/chat-to-pdf [PATH] (entire thread to PDF; default chat.pdf)\n"
-                "/last-to-pdf [PATH] (last message to PDF; default last.pdf)\n"
-                "/chat-to-docx [PATH] (entire thread to DOCX; default chat.docx)\n"
-                "/last-to-docx [PATH] (last message to DOCX; default last.docx)\n"
                 "/search QUERY\n"
                 "/shell COMMAND  or  !COMMAND (user shell; display-only notice)\n"
                 "/shell-stdout COMMAND  or  !!COMMAND (stdout → editable input draft)\n"
@@ -994,26 +1033,18 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         handlers.start_models(ModelsRequestPurpose::Preview);
         return;
     }
-    if (text.rfind("/save", 0) == 0) {
-        std::string path = app::detail::trim_ascii(text.substr(5));
-        if (path.empty()) {
-            path = ctx.context.options.save_chat_path;
-        }
-        if (path.empty()) {
-            ctx.status = "Usage: /save PATH";
-            return;
-        }
-        handlers.start_save(path);
-        ctx.status = "Saving " + path;
+    const ChatFileCommand file_command = parse_chat_file_command(text);
+    if (file_command.action == ChatFileAction::Invalid) {
+        ctx.status = file_command.error;
         return;
     }
-    if (text.rfind("/load", 0) == 0) {
-        const std::string path = app::detail::trim_ascii(text.substr(5));
-        if (path.empty()) {
-            ctx.status = "Usage: /load PATH";
-            return;
-        }
-        handlers.start_load(path);
+    if (file_command.action == ChatFileAction::Export) {
+        handlers.start_export(file_command.format, file_command.path,
+                              file_command.scope == chat::TranscriptScope::LastMessage);
+        return;
+    }
+    if (file_command.action == ChatFileAction::Import) {
+        handlers.start_import(file_command.path);
         return;
     }
     if (text == "/remove") {
@@ -1085,38 +1116,6 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
     }
     if (text == "/fetch" || text.rfind("/fetch ", 0) == 0) {
         handlers.start_fetch(app::detail::trim_ascii(text.substr(6)));
-        return;
-    }
-    if (text == "/chat-to-pdf" || text.rfind("/chat-to-pdf ", 0) == 0) {
-        if (handlers.start_chat_pdf) {
-            handlers.start_chat_pdf(app::detail::trim_ascii(text.substr(12)), false);
-        } else {
-            ctx.status = "Chat PDF export is unavailable";
-        }
-        return;
-    }
-    if (text == "/last-to-pdf" || text.rfind("/last-to-pdf ", 0) == 0) {
-        if (handlers.start_chat_pdf) {
-            handlers.start_chat_pdf(app::detail::trim_ascii(text.substr(12)), true);
-        } else {
-            ctx.status = "Chat PDF export is unavailable";
-        }
-        return;
-    }
-    if (text == "/chat-to-docx" || text.rfind("/chat-to-docx ", 0) == 0) {
-        if (handlers.start_chat_docx) {
-            handlers.start_chat_docx(app::detail::trim_ascii(text.substr(13)), false);
-        } else {
-            ctx.status = "Chat DOCX export is unavailable";
-        }
-        return;
-    }
-    if (text == "/last-to-docx" || text.rfind("/last-to-docx ", 0) == 0) {
-        if (handlers.start_chat_docx) {
-            handlers.start_chat_docx(app::detail::trim_ascii(text.substr(13)), true);
-        } else {
-            ctx.status = "Chat DOCX export is unavailable";
-        }
         return;
     }
     if (text == "/search" || text.rfind("/search ", 0) == 0) {

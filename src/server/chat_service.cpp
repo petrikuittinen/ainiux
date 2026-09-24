@@ -740,7 +740,8 @@ Error ChatService::export_pdf(long long thread_id,
                               std::string& pdf,
                               std::string& filename,
                               long long& current_revision) {
-    return export_rendered(thread_id, request_body, false, pdf, filename, current_revision);
+    return export_rendered(thread_id, request_body, chat::TranscriptFormat::Pdf,
+                           pdf, filename, current_revision);
 }
 
 Error ChatService::export_docx(long long thread_id,
@@ -748,12 +749,22 @@ Error ChatService::export_docx(long long thread_id,
                                std::string& docx,
                                std::string& filename,
                                long long& current_revision) {
-    return export_rendered(thread_id, request_body, true, docx, filename, current_revision);
+    return export_rendered(thread_id, request_body, chat::TranscriptFormat::Docx,
+                           docx, filename, current_revision);
+}
+
+Error ChatService::export_markdown(long long thread_id,
+                                   const std::string& request_body,
+                                   std::string& markdown,
+                                   std::string& filename,
+                                   long long& current_revision) {
+    return export_rendered(thread_id, request_body, chat::TranscriptFormat::Markdown,
+                           markdown, filename, current_revision);
 }
 
 Error ChatService::export_rendered(long long thread_id,
                                    const std::string& request_body,
-                                   bool word,
+                                   chat::TranscriptFormat format,
                                    std::string& bytes,
                                    std::string& filename,
                                    long long& current_revision) {
@@ -764,7 +775,9 @@ Error ChatService::export_rendered(long long thread_id,
     Error error = ensure_open();
     if (!error.ok()) return error;
     const json::ParseResult parsed = json::parse(request_body);
-    const char* kind = word ? "DOCX" : "PDF";
+    const char* kind = format == chat::TranscriptFormat::Docx ? "DOCX"
+                       : format == chat::TranscriptFormat::Markdown ? "Markdown"
+                                                                    : "PDF";
     if (!parsed.error.ok() || !parsed.value.is_object()) {
         return invalid(std::string("chat ") + kind + " export body must be one JSON object");
     }
@@ -793,15 +806,18 @@ Error ChatService::export_rendered(long long thread_id,
     error = store_.load_session(thread_id, session, options);
     if (!error.ok()) return safe_store_error(error, "load the chat thread");
     current_revision = session.revision;
-    if (word) {
+    if (format == chat::TranscriptFormat::Docx) {
         docx::WriteOptions write_options;
         error = chat::transcript_docx(session.messages, session.name, scope, write_options, bytes);
         filename = chat::default_transcript_docx_path(scope);
-    } else {
+    } else if (format == chat::TranscriptFormat::Pdf) {
         pdf::WriteOptions write_options;
         write_options.font_path = defaults_.pdf_font;
         error = chat::transcript_pdf(session.messages, session.name, scope, write_options, bytes);
         filename = chat::default_transcript_pdf_path(scope);
+    } else {
+        error = chat::transcript_markdown(session.messages, session.name, scope, bytes);
+        filename = chat::default_transcript_path(scope, chat::TranscriptFormat::Markdown);
     }
     if (!error.ok()) {
         filename.clear();
@@ -848,25 +864,11 @@ Error ChatService::export_json(long long thread_id,
     error = store_.load_session(thread_id, session, options);
     if (!error.ok()) return safe_store_error(error, "load the chat thread");
     current_revision = session.revision;
-    if (session.messages.empty()) {
-        return invalid("chat export needs at least one message");
-    }
-    if (last) {
-        const provider::Message* kept = nullptr;
-        for (auto it = session.messages.rbegin(); it != session.messages.rend(); ++it) {
-            if (it->role == "thinking") continue;
-            kept = &*it;
-            break;
-        }
-        if (kept == nullptr || kept->content.empty()) {
-            return invalid("the last chat message is empty");
-        }
-        provider::Message message = *kept;
-        session.messages.clear();
-        session.messages.push_back(std::move(message));
-        session.compaction_events.clear();
-    }
-    json_text = chat::session_to_json(session);
+    error = chat::transcript_json(std::move(session),
+                                  last ? chat::TranscriptScope::LastMessage
+                                       : chat::TranscriptScope::Thread,
+                                  json_text);
+    if (!error.ok()) return error;
     filename = last ? "last.json" : "chat.json";
     return ok_error();
 }

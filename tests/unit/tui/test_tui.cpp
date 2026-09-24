@@ -12,6 +12,7 @@
 #include "editor/terminal_input.hpp"
 #include "editor/detail/wrap.hpp"
 #include "tui/input_handlers.hpp"
+#include "tui/file_jobs.hpp"
 #include "tui/prompt_recall.hpp"
 #include "tui/picker_input.hpp"
 #include "tui/provider_actions.hpp"
@@ -30,6 +31,8 @@
 #include "ui/scrollbar.hpp"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -394,6 +397,24 @@ void test_tui_reasoning_picker_input() {
     check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && rejected && !confirmed,
           "TUI unlisted reasoning confirmation treats Esc as cancellation");
 
+    bool overwrite = false;
+    bool overwrite_cancelled = false;
+    callbacks.on_export_overwrite_accepted = [&]() { overwrite = true; };
+    callbacks.on_export_overwrite_rejected = [&]() { overwrite_cancelled = true; };
+    callbacks.on_export_overwrite_retry = [&](const std::string& message) { status = message; };
+    mode = ainiux::tui::TuiMode::ExportOverwriteConfirm;
+    check(ainiux::tui::handle_tui_picker_input('1', state, callbacks) && overwrite,
+          "TUI export overwrite accepts numeric Yes");
+    overwrite = false;
+    check(ainiux::tui::handle_tui_picker_input('x', state, callbacks) &&
+              status.find("(1) [Y]es") != std::string::npos && !overwrite,
+          "TUI export overwrite keeps ambiguous input pending");
+    check(ainiux::tui::handle_tui_picker_input('2', state, callbacks) && overwrite_cancelled,
+          "TUI export overwrite accepts numeric No");
+    overwrite_cancelled = false;
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && overwrite_cancelled,
+          "TUI export overwrite treats Esc as cancellation");
+
     bool project_reset = false;
     bool project_declined = false;
     callbacks.on_agent_new_accepted = [&]() { project_reset = true; };
@@ -623,6 +644,153 @@ void test_chat_slash_command_tab_completion_matches_assist_commands() {
               index_code_result.match_count == 1 &&
               index_code.text.str() == "/index-code",
           "agent tab completion exposes /index-code");
+
+    completer.reset();
+    completer.set_agent_mode(false);
+    ainiux::editor::EditorState export_format =
+        ainiux::editor::EditorState::from_text("/export-last c");
+    export_format.mode = ainiux::editor::EditorMode::Chat;
+    export_format.cursor = export_format.text.size();
+    const auto export_format_result = completer.complete(export_format);
+    check(export_format_result.handled && export_format_result.match_count == 1 &&
+              export_format.text.str() == "/export-last csv ",
+          "chat tab completion offers scope-appropriate export formats");
+
+    std::filesystem::create_directories("build/tui-export-completion");
+    std::ofstream("build/tui-export-completion/report.md") << "test";
+    completer.reset();
+    ainiux::editor::EditorState export_path = ainiux::editor::EditorState::from_text(
+        "/export md build/tui-export-completion/rep");
+    export_path.mode = ainiux::editor::EditorMode::Chat;
+    export_path.cursor = export_path.text.size();
+    const auto export_path_result = completer.complete(export_path);
+    check(export_path_result.handled && export_path_result.kind ==
+              ainiux::editor::CompletionKind::Path &&
+              export_path.text.str() == "/export md build/tui-export-completion/report.md",
+          "chat path completion starts after an export format");
+
+    completer.reset();
+    ainiux::editor::EditorState legacy = ainiux::editor::EditorState::from_text("/sav");
+    legacy.mode = ainiux::editor::EditorMode::Chat;
+    legacy.cursor = legacy.text.size();
+    const auto legacy_result = completer.complete(legacy);
+    check(legacy_result.match_count == 0,
+          "chat completion no longer exposes the legacy /save command");
+}
+
+void test_tui_chat_export_commands_and_targets() {
+    using ainiux::chat::TranscriptFormat;
+    using ainiux::chat::TranscriptScope;
+    using ainiux::tui::ChatFileAction;
+    auto parsed = ainiux::tui::parse_chat_file_command("/export");
+    check(parsed.action == ChatFileAction::Export && parsed.format == TranscriptFormat::Json &&
+              parsed.scope == TranscriptScope::Thread && parsed.path.empty(),
+          "bare TUI /export selects whole-thread JSON and its default path");
+    parsed = ainiux::tui::parse_chat_file_command("/export MD reports/chat export.md");
+    check(parsed.action == ChatFileAction::Export && parsed.format == TranscriptFormat::Markdown &&
+              parsed.path == "reports/chat export.md",
+          "TUI /export normalizes formats and preserves paths containing spaces");
+    parsed = ainiux::tui::parse_chat_file_command("/export-last csv last table.csv");
+    check(parsed.action == ChatFileAction::Export && parsed.format == TranscriptFormat::Csv &&
+              parsed.scope == TranscriptScope::LastMessage && parsed.path == "last table.csv",
+          "TUI /export-last accepts its table-only CSV format");
+    check(ainiux::tui::parse_chat_file_command("/export xlsx").action ==
+              ChatFileAction::Invalid &&
+              ainiux::tui::parse_chat_file_command("/export-last").action ==
+                  ChatFileAction::Invalid,
+          "TUI export grammar rejects whole-thread XLSX and a missing last-message format");
+    parsed = ainiux::tui::parse_chat_file_command("/import saved chats/chat.json");
+    check(parsed.action == ChatFileAction::Import && parsed.path == "saved chats/chat.json",
+          "TUI /import accepts one exact path without a format argument");
+    check(ainiux::tui::parse_chat_file_command("/save old.json").action ==
+              ChatFileAction::None &&
+              ainiux::tui::parse_chat_file_command("/chat-to-pdf").action ==
+                  ChatFileAction::None,
+          "legacy TUI file commands are no longer parsed");
+
+    ainiux::chat::Session session;
+    session.read_only = true;
+    session.messages.push_back({"assistant", "exportable"});
+    ainiux::tui::PendingChatExport request;
+    const std::string target = "build/tui-export-target.md";
+    std::filesystem::remove(target);
+    ainiux::Error error = ainiux::tui::prepare_chat_export(
+        target, TranscriptFormat::Markdown, TranscriptScope::Thread, session, request);
+    check(error.ok() && !request.target_fingerprint.exists && request.snapshot.read_only,
+          "read-only threads can prepare an export to a new file");
+    std::ofstream(target) << "prior";
+    error = ainiux::tui::prepare_chat_export(
+        target, TranscriptFormat::Markdown, TranscriptScope::Thread, session, request);
+    check(error.ok() && request.target_fingerprint.exists,
+          "existing regular export targets retain a confirmation fingerprint");
+    const ainiux::editor::FileFingerprint confirmed = request.target_fingerprint;
+    std::ofstream(target, std::ios::app) << " changed";
+    ainiux::editor::FileFingerprint changed;
+    error = ainiux::editor::fingerprint_file(target, changed);
+    check(error.ok() && changed != confirmed,
+          "an export target mutation is detectable after overwrite confirmation");
+
+    ainiux::runtime::JobHandle job;
+    ainiux::runtime::EventQueue<ainiux::tui::TuiEvent> events;
+    ainiux::provider::RequestContext context;
+    ainiux::chat::SqliteStore store;
+    std::string sqlite_path;
+    bool sqlite_available = false;
+    std::string status;
+    ainiux::tui::TuiFileJobs jobs{
+        job, events, context, session, store, sqlite_path, sqlite_available,
+        []() { return std::string("unavailable"); }, status};
+    jobs.start_chat_export(std::move(request));
+    job.join();
+    ainiux::tui::TuiEvent event;
+    check(events.try_pop(event) && !event.error.ok(),
+          "TUI export refuses a target changed after overwrite confirmation");
+    std::ifstream preserved_input(target);
+    std::stringstream preserved_buffer;
+    preserved_buffer << preserved_input.rdbuf();
+    check(preserved_buffer.str() == "prior changed",
+          "target fingerprint failure preserves the externally changed file");
+
+    error = ainiux::tui::prepare_chat_export(
+        target, TranscriptFormat::Csv, TranscriptScope::LastMessage, session, request);
+    check(error.ok(), "existing CSV destination can reach conversion validation");
+    jobs.start_chat_export(std::move(request));
+    job.join();
+    check(events.try_pop(event) && !event.error.ok() &&
+              event.error.message.find("exactly one Markdown table") != std::string::npos,
+          "TUI reports last-message CSV conversion failure");
+    preserved_input.close();
+    preserved_input.open(target);
+    preserved_buffer.str("");
+    preserved_buffer.clear();
+    preserved_buffer << preserved_input.rdbuf();
+    check(preserved_buffer.str() == "prior changed",
+          "conversion failure preserves the prior export file");
+
+    error = ainiux::tui::prepare_chat_export(
+        target, TranscriptFormat::Markdown, TranscriptScope::Thread, session, request);
+    jobs.start_chat_export(std::move(request));
+    job.join();
+    check(error.ok() && events.try_pop(event) && event.error.ok(),
+          "confirmed TUI export atomically replaces an unchanged regular target");
+    preserved_input.close();
+    preserved_input.open(target);
+    preserved_buffer.str("");
+    preserved_buffer.clear();
+    preserved_buffer << preserved_input.rdbuf();
+    check(preserved_buffer.str().find("## Assistant") != std::string::npos,
+          "successful TUI Markdown export publishes the rendered transcript");
+#if !defined(_WIN32)
+    const std::string link = "build/tui-export-link.md";
+    std::filesystem::remove(link);
+    std::filesystem::create_symlink("tui-export-target.md", link);
+    error = ainiux::tui::prepare_chat_export(
+        link, TranscriptFormat::Markdown, TranscriptScope::Thread, session, request);
+    check(!error.ok() && error.message.find("symlink") != std::string::npos,
+          "TUI export rejects an existing symlink destination");
+    std::filesystem::remove(link);
+#endif
+    std::filesystem::remove(target);
 }
 
 void test_configured_assist_slash_command_detection() {
@@ -2712,6 +2880,7 @@ void run_all() {
     test_tui_sqlite_unavailable_status();
     test_chat_assist_turn_prompt_uses_configured_command_text();
     test_chat_slash_command_tab_completion_matches_assist_commands();
+    test_tui_chat_export_commands_and_targets();
     test_chat_assist_command_completions_include_configured_commands();
     test_chat_assist_request_text_strips_content_tags();
     test_configured_assist_slash_command_detection();

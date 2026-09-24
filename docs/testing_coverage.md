@@ -102,7 +102,7 @@ largest counts are lower bounds):
 | tui | 1 | **>500** (truncated at ~500) | frame diffing, layout, themes + WCAG 4.5:1 contrast, agent chrome/status/activity, thinking display, pickers, history scroll, slash commands |
 | cli | 1 | ~200 | option matrix, provider shortcuts, validation functions, removed-option rejection |
 | config | 1 | ~250 | TOML-alike parser edge cases, layering, themes/editor-commands/benchmarks/models config, schema validation, reasoning selector |
-| chat | 1 | ~120 | JSON save/load, SQLite store round-trip, media store (images/Markdown, aging, expiry), migrations, app-state |
+| chat | 1 | ~120 | JSON export/import, Markdown/PDF/DOCX/XLSX/CSV transcript export, SQLite store round-trip, media store (images/Markdown, aging, expiry), migrations, app-state |
 | benchmark | 1 | ~90 | dataset validation (133 builtin cases), scorers, judge grading, CLI |
 | highlight | 1 | ~90 | language detection over `tests/highlight/` corpus, token roles, incremental cache |
 | markdown | 1 | ~70 | HTML conversion, plaintext, table pretty-printing, output formats |

@@ -74,7 +74,7 @@ IMAGES_CONFIG_HEADER := $(GENERATED_DIR)/embedded_images_config.hpp
 VIDEOS_CONFIG_HEADER := $(GENERATED_DIR)/embedded_videos_config.hpp
 WEB_INDEX := src/web/index.html
 WEB_STYLESHEET := src/web/css/app-v26.css
-WEB_JAVASCRIPT := src/web/js/app-v34.js
+WEB_JAVASCRIPT := src/web/js/app-v35.js
 WEB_SELECTOR_JAVASCRIPT := src/web/js/selector-v3.js
 WEB_HIGHLIGHT_JAVASCRIPT := src/web/js/highlight-v5.js
 WEB_SYNTAX_JAVASCRIPT := src/web/js/syntax-v4.js
@@ -238,7 +238,7 @@ $(WEB_ASSET_HEADER): $(WEB_INDEX) $(WEB_STYLESHEET) $(WEB_JAVASCRIPT) $(WEB_HIGH
 	@{ \
 		printf '%s\n' '#pragma once' '#include <string_view>' 'namespace ainiux::server::web {' \
 			'inline constexpr std::string_view kStylesheetPath = "/ui/assets/app-v26.css";' \
-			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v34.js";' \
+			'inline constexpr std::string_view kJavascriptPath = "/ui/assets/app-v35.js";' \
 			'inline constexpr std::string_view kSelectorJavascriptPath = "/ui/assets/selector-v3.js";' \
 			'inline constexpr std::string_view kHighlightJavascriptPath = "/ui/assets/highlight-v5.js";' \
 			'inline constexpr std::string_view kSyntaxJavascriptPath = "/ui/assets/syntax-v4.js";' \

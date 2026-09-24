@@ -21,6 +21,44 @@
 
 namespace ainiux::tui {
 
+Error prepare_chat_export(const std::string& path,
+                          chat::TranscriptFormat format,
+                          chat::TranscriptScope scope,
+                          const chat::Session& session,
+                          PendingChatExport& request) {
+    request = {};
+    request.path = expand_user_path(path.empty() ? chat::default_transcript_path(scope, format)
+                                                 : path);
+    request.format = format;
+    request.scope = scope;
+    request.snapshot = session;
+
+    std::error_code filesystem_error;
+    const std::filesystem::file_status target_status =
+        std::filesystem::symlink_status(std::filesystem::u8path(request.path), filesystem_error);
+    if (filesystem_error && filesystem_error != std::errc::no_such_file_or_directory) {
+        return {ErrorCode::FileWrite,
+                "could not inspect export destination " + request.path + ": " +
+                    filesystem_error.message()};
+    }
+    if (!filesystem_error && std::filesystem::exists(target_status)) {
+        bool linked = false;
+        Error error = platform::path_is_link_or_reparse(request.path, linked);
+        if (!error.ok()) return error;
+        if (linked) {
+            return {ErrorCode::FileWrite,
+                    "refusing to export through a symlink or reparse point: " + request.path};
+        }
+        if (!std::filesystem::is_regular_file(target_status)) {
+            return {ErrorCode::FileWrite,
+                    "export destination is not a regular file: " + request.path};
+        }
+    }
+    Error error = editor::fingerprint_file(request.path, request.target_fingerprint);
+    if (!error.ok()) return error;
+    return ok_error();
+}
+
 bool TuiFileJobs::busy(bool quiet) const {
     if (!file_job.joinable()) {
         return false;
@@ -430,69 +468,76 @@ void TuiFileJobs::start_fetch(const std::string& url) {
     status = "Fetching " + url + "...";
 }
 
-void TuiFileJobs::start_chat_document(const std::string& path, bool last_message_only, bool docx) {
+void TuiFileJobs::start_chat_export(PendingChatExport request) {
     if (busy()) {
         return;
     }
-    const chat::TranscriptScope scope = last_message_only ? chat::TranscriptScope::LastMessage
-                                                          : chat::TranscriptScope::Thread;
-    std::string output_path = path;
-    if (output_path.empty()) {
-        output_path = docx ? chat::default_transcript_docx_path(scope)
-                           : chat::default_transcript_pdf_path(scope);
-    }
-    output_path = expand_user_path(output_path);
-    chat::Session snapshot = session;
     const std::string font_path = context.options.pdf_font;
+    const std::string output_path = request.path;
     runtime::EventQueue<TuiEvent>& event_queue = events;
-    file_job.start([output_path, scope, snapshot = std::move(snapshot), font_path, docx,
+    file_job.start([request = std::move(request), font_path,
                     &event_queue](runtime::CancellationToken token) mutable {
         TuiEvent event;
-        event.type = docx ? TuiEventType::ChatDocxDone : TuiEventType::ChatPdfDone;
-        event.text = output_path;
-        const char* label = docx ? "DOCX" : "PDF";
+        event.type = TuiEventType::ChatExportDone;
+        event.text = request.path;
+        event.inserted_text = chat::transcript_format_name(request.format);
         if (token.cancelled()) {
-            event.error = {ErrorCode::Cancelled, std::string("chat ") + label + " export cancelled"};
-            event_queue.push(std::move(event));
-            return;
-        }
-        std::error_code exists_error;
-        if (std::filesystem::exists(std::filesystem::u8path(output_path), exists_error) &&
-            !exists_error) {
-            event.error = {ErrorCode::FileWrite,
-                           "refusing to overwrite existing file: " + output_path +
-                               "; pass a different path"};
+            event.error = {ErrorCode::Cancelled, "chat export cancelled"};
             event_queue.push(std::move(event));
             return;
         }
         std::string rendered;
-        if (docx) {
+        if (request.format == chat::TranscriptFormat::Json) {
+            event.error = chat::transcript_json(std::move(request.snapshot), request.scope,
+                                                rendered);
+        } else if (request.format == chat::TranscriptFormat::Docx) {
             docx::WriteOptions write_options;
             write_options.cancellation = token;
-            event.error = chat::transcript_docx(snapshot.messages, snapshot.name, scope,
+            event.error = chat::transcript_docx(request.snapshot.messages, request.snapshot.name,
+                                                request.scope,
                                                 write_options, rendered);
-        } else {
+        } else if (request.format == chat::TranscriptFormat::Pdf) {
             pdf::WriteOptions write_options;
             write_options.font_path = font_path;
             write_options.cancellation = token;
-            event.error = chat::transcript_pdf(snapshot.messages, snapshot.name, scope,
+            event.error = chat::transcript_pdf(request.snapshot.messages, request.snapshot.name,
+                                               request.scope,
                                                write_options, rendered);
+        } else if (request.format == chat::TranscriptFormat::Markdown) {
+            event.error = chat::transcript_markdown(request.snapshot.messages,
+                                                    request.snapshot.name, request.scope, rendered);
+        } else if (request.format == chat::TranscriptFormat::Xlsx) {
+            event.error = chat::transcript_xlsx(request.snapshot.messages, request.snapshot.name,
+                                                request.scope, token, rendered);
+        } else {
+            event.error = chat::transcript_csv(request.snapshot.messages, request.snapshot.name,
+                                               request.scope, token, rendered);
+        }
+        if (event.error.ok() && token.cancelled()) {
+            event.error = {ErrorCode::Cancelled, "chat export cancelled"};
         }
         if (event.error.ok()) {
-            event.error = platform::atomic_write_shared_create(output_path, rendered, true);
+            editor::FileFingerprint current;
+            event.error = editor::fingerprint_file(request.path, current);
+            if (event.error.ok() && current != request.target_fingerprint) {
+                event.error = {ErrorCode::FileWrite,
+                               "export destination changed after confirmation; retry the command: " +
+                                   request.path};
+            }
+            if (event.error.ok()) {
+                const bool replace = request.target_fingerprint.exists;
+                if (request.format == chat::TranscriptFormat::Json) {
+                    event.error = replace ? platform::atomic_write_private(request.path, rendered, true)
+                                          : platform::atomic_write_private_create(request.path, rendered, true);
+                } else {
+                    event.error = replace ? platform::atomic_write_shared(request.path, rendered, true)
+                                          : platform::atomic_write_shared_create(request.path, rendered, true);
+                }
+            }
         }
         event_queue.push(std::move(event));
     });
-    status = std::string(last_message_only ? "Writing last message to " : "Writing chat to ") +
-             output_path + "...";
-}
-
-void TuiFileJobs::start_chat_pdf(const std::string& path, bool last_message_only) {
-    start_chat_document(path, last_message_only, false);
-}
-
-void TuiFileJobs::start_chat_docx(const std::string& path, bool last_message_only) {
-    start_chat_document(path, last_message_only, true);
+    status = "Exporting chat to " + output_path + "...";
 }
 
 void TuiFileJobs::start_search(const std::string& query) {

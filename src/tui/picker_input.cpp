@@ -339,6 +339,20 @@ bool handle_tui_picker_input(unsigned char ch,
                 return true;
         }
     }
+    if (state.mode == TuiMode::ExportOverwriteConfirm) {
+        if (ch == 17) {
+            state.quit = true;
+            return true;
+        }
+        if (ch == '1' || ch == 'y' || ch == 'Y') {
+            callbacks.on_export_overwrite_accepted();
+        } else if (ch == '2' || ch == 'n' || ch == 'N' || ch == 27) {
+            callbacks.on_export_overwrite_rejected();
+        } else {
+            callbacks.on_export_overwrite_retry("Choose (1) [Y]es or (2) [N]o; Esc cancels");
+        }
+        return true;
+    }
     if (state.mode == TuiMode::ReasoningConfirm) {
         if (ch == 17) {
             state.quit = true;

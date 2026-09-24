@@ -1112,6 +1112,60 @@ void test_chat_transcript_pdf() {
                                         last_docx);
     check(err.ok() && last_docx.compare(0, 4, "PK\x03\x04") == 0 && last_docx != docx,
           "last-message DOCX export is a different package from the whole thread");
+
+    using ainiux::chat::TranscriptFormat;
+    using ainiux::chat::TranscriptScope;
+    TranscriptFormat format = TranscriptFormat::Pdf;
+    check(ainiux::chat::parse_transcript_format("MD", TranscriptScope::Thread, format).ok() &&
+              format == TranscriptFormat::Markdown &&
+              std::string(ainiux::chat::default_transcript_path(TranscriptScope::Thread, format)) ==
+                  "chat.md" &&
+              std::string(ainiux::chat::default_transcript_path(
+                              TranscriptScope::LastMessage, TranscriptFormat::Csv)) == "last.csv",
+          "transcript formats normalize case and provide scope-specific default filenames");
+    check(!ainiux::chat::parse_transcript_format(
+               "xlsx", TranscriptScope::Thread, format).ok(),
+          "whole-thread spreadsheet export is rejected");
+    ainiux::chat::Session json_session;
+    json_session.messages = {{"assistant", "answer <think>retained trace</think>"},
+                             {"thinking", "retained thinking row"}};
+    std::string json_export;
+    err = ainiux::chat::transcript_json(json_session, TranscriptScope::Thread, json_export);
+    check(err.ok() && json_export.find("retained trace") != std::string::npos &&
+              json_export.find("retained thinking row") != std::string::npos,
+          "JSON transcript export preserves stored thinking content");
+    err = ainiux::chat::transcript_json(json_session, TranscriptScope::LastMessage, json_export);
+    check(err.ok() && json_export.find("retained trace") != std::string::npos &&
+              json_export.find("retained thinking row") == std::string::npos,
+          "last JSON export selects the latest non-thinking stored message");
+
+    std::vector<ainiux::provider::Message> table_messages = {
+        {"assistant", "## First\n\n| Name | Note |\n|---|---|\n| Alpha | a,b |\n\n"
+                      "## Second\n\n| Value |\n|---|\n| 2 |"}};
+    std::string xlsx;
+    err = ainiux::chat::transcript_xlsx(table_messages, "Tables",
+                                        TranscriptScope::LastMessage, {}, xlsx);
+    check(err.ok() && xlsx.compare(0, 4, "PK\x03\x04") == 0,
+          "last-message XLSX export packages every Markdown table");
+
+    table_messages[0].content =
+        "| Name | Note | Quote |\n|---|---|---|\n| Alpha | a,b | say \"hi\" |";
+    std::string csv;
+    err = ainiux::chat::transcript_csv(table_messages, "Table",
+                                       TranscriptScope::LastMessage, {}, csv);
+    check(err.ok() && csv == "Name,Note,Quote\r\nAlpha,\"a,b\",\"say \"\"hi\"\"\"\r\n",
+          "last-message CSV export uses RFC 4180 quoting and CRLF records");
+    table_messages[0].content = "No table here";
+    err = ainiux::chat::transcript_csv(table_messages, "Table",
+                                       TranscriptScope::LastMessage, {}, csv);
+    check(!err.ok() && err.message.find("found none") != std::string::npos,
+          "CSV export explains when the last message has no table");
+    table_messages[0].content =
+        "| A | X |\n|---|---|\n| 1 | x |\n\n| B | Y |\n|---|---|\n| 2 | y |";
+    err = ainiux::chat::transcript_csv(table_messages, "Table",
+                                       TranscriptScope::LastMessage, {}, csv);
+    check(!err.ok() && err.message.find("found 2") != std::string::npos,
+          "CSV export explains when the last message has multiple tables");
 }
 
 void test_chat_sqlite_thread_search() {

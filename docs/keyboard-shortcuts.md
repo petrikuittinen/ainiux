@@ -33,7 +33,7 @@ for terminal-native selection. Clipboard shortcuts use `CF_UNICODETEXT` directly
 | `Ctrl+Y` | Redo |
 | `Backspace` | Delete before cursor (with a selection: cut to clipboard) |
 | `Delete` | Delete at cursor (with a selection: cut to clipboard) |
-| `Tab` | Slash-command completion (start of first line) or path completion after `/insert`, `/attach`, `/save`, `/load` |
+| `Tab` | Slash-command/format completion (start of first line) or path completion after `/insert`, `/attach`, `/import`, or an `/export` format |
 
 Copy and selection-delete (Backspace/Delete on a range) publish to native desktop helpers and OSC 52 when available. With no input selection, `Ctrl+C` copies the last user/assistant message from the stored transcript, preserving its original newlines and excluding soft-wrap padding, labels, and scrollbar glyphs. This is the reliable way to copy history from full-screen terminal clients whose mouse selection copies painted screen rows. With an empty internal clipboard, `Ctrl+V` reads external text asynchronously; SSH prefers a terminal OSC 52 query. Bracketed terminal paste (middle-click or Shift+Insert in many terminals) remains the fallback and is also undoable with `Ctrl+Z` / `Ctrl+U`. There is no dedicated cut key; delete the selection with Backspace or Delete, then paste with `Ctrl+V`.
 
@@ -107,7 +107,7 @@ Use `/pop` to remove the last user or assistant message.
 
 ### Slash commands (type in input, `Enter` to run if single-line)
 
-`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/save`, `/load`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/chat-to-pdf`, `/last-to-pdf`, `/chat-to-docx`, `/last-to-docx`, `/search`, `/theme`, `/scrollbar`, `/thinking`. In chat, `/clear` wipes the thread. In agent, `/clear` only hides the visible transcript; `/compact all` resets model context.
+`/help`, `/quit`, `/exit`, `/clear`, `/edit`, `/list`, `/new`, `/provider`, `/models`, `/model`, `/system`, `/setting`, `/clone`, `/export`, `/export-last`, `/import`, `/remove`, `/remove-empty`, `/pop`, `/response`, `/insert`, `/attach`, `/fetch`, `/search`, `/theme`, `/scrollbar`, `/thinking`. In chat, `/clear` wipes the thread. In agent, `/clear` only hides the visible transcript; `/compact all` resets model context.
 
 ---
 

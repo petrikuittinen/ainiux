@@ -243,7 +243,7 @@ function handleChatSlashCommand(text) {
 }
 
 function chatExportAvailable() {
-  return supports("chat_pdf") || supports("chat_docx") || supports("chat_json");
+  return supports("chat_pdf") || supports("chat_docx") || supports("chat_md") || supports("chat_json");
 }
 
 function chatExportRoute(kind) {
@@ -261,6 +261,14 @@ function chatExportRoute(kind) {
       accept: "application/json",
       extension: "json",
       fallback: "Could not export the chat JSON",
+    };
+  }
+  if (kind === "md") {
+    return {
+      path: "md",
+      accept: "text/markdown",
+      extension: "md",
+      fallback: "Could not export the chat Markdown",
     };
   }
   return {
@@ -329,6 +337,7 @@ function openChatExport(thread, scope) {
   byId("export-json").hidden = !supports("chat_json");
   byId("export-pdf").hidden = !supports("chat_pdf");
   byId("export-docx").hidden = !supports("chat_docx");
+  byId("export-md").hidden = !supports("chat_md");
   openDialog(byId("export-dialog"));
 }
 
@@ -4747,7 +4756,7 @@ function bindEvents() {
     if (text || state.chatInputs.length) void sendChatMessage(text);
   });
   byId("chat-attach-button").addEventListener("click", () => byId("chat-attach-files").click());
-  for (const kind of ["json", "pdf", "docx"]) {
+  for (const kind of ["json", "pdf", "docx", "md"]) {
     byId(`export-${kind}`).addEventListener("click", async () => {
       const target = state.chatExport;
       if (!target) return;

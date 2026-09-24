@@ -5,11 +5,27 @@
 
 #include "chat/session.hpp"
 #include "chat/sqlite_store.hpp"
+#include "chat/transcript.hpp"
+#include "editor/file_session.hpp"
 #include "provider/provider.hpp"
 #include "runtime/runtime.hpp"
 #include "tui/events.hpp"
 
 namespace ainiux::tui {
+
+struct PendingChatExport {
+    std::string path;
+    chat::TranscriptFormat format = chat::TranscriptFormat::Json;
+    chat::TranscriptScope scope = chat::TranscriptScope::Thread;
+    chat::Session snapshot;
+    editor::FileFingerprint target_fingerprint;
+};
+
+Error prepare_chat_export(const std::string& path,
+                          chat::TranscriptFormat format,
+                          chat::TranscriptScope scope,
+                          const chat::Session& session,
+                          PendingChatExport& request);
 
 struct TuiFileJobs {
     runtime::JobHandle& file_job;
@@ -33,9 +49,7 @@ struct TuiFileJobs {
     void start_insert(const std::string& source);
     void start_attach(const std::string& path);
     void start_fetch(const std::string& url);
-    void start_chat_pdf(const std::string& path, bool last_message_only);
-    void start_chat_docx(const std::string& path, bool last_message_only);
-    void start_chat_document(const std::string& path, bool last_message_only, bool docx);
+    void start_chat_export(PendingChatExport request);
     void start_search(const std::string& query);
     void start_shell(const std::string& command, bool to_draft = false);
 };

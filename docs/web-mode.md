@@ -57,7 +57,8 @@ provides:
   the page with the next message (HTML and Office become Markdown, CSV and JSON
   stay text, images only when the model accepts them, and a failure leaves other
   queued files in place), and `/chat-to-pdf` /
-  `/last-to-pdf` plus `/chat-to-docx` / `/last-to-docx` downloads;
+  `/last-to-pdf` plus `/chat-to-docx` / `/last-to-docx` downloads (kept as
+  WebUI slash-command compatibility);
 - safe client-side Markdown rendering for Chat and Agent prose, including
   semantic headings, responsive GFM tables, clickable HTTP(S) links, and the
   full TUI set of highlighted fenced-code languages;
@@ -137,7 +138,7 @@ prompt supplies the stored title. A search field above the thread list matches
 that title or user and assistant message text, including chats older than the
 first page. Clearing the field restores the newest threads. Thread rows show the locally formatted
 modified date and message count rather than internal concurrency values.
-**Import**, beside **New**, reads a chat JSON file in the same shape as TUI `/load` and creates a new thread. Each row has one **Export** control under its metadata. It opens a dialog for JSON, PDF, or DOCX of the whole thread, the same files as `/save`, `/chat-to-pdf`, and `/chat-to-docx`. Each writable row also has a small **Delete** control beside Export. Read-only rows keep Export and hide Delete.
+**Import**, beside **New**, reads a chat JSON file in the same shape as TUI `/import` and creates a new thread. Each row has one **Export** control under its metadata. It opens a dialog for JSON, PDF, DOCX, or Markdown of the whole thread. Each writable row also has a small **Delete** control beside Export. Read-only rows keep Export and hide Delete.
 Empty threads delete immediately; threads with user or assistant content ask
 for confirmation first in an in-page dialog (never `alert`/`confirm`/`prompt`).
 Read-only threads cannot be deleted.
@@ -149,7 +150,7 @@ none has been chosen yet. A thread left without
 user or assistant content is revision-safely abandoned when another thread is
 selected or created; reconnection reloads the active thread instead of creating
 another one and keeps that thread while sweeping other empties.
-The latest completed assistant reply has one **Export** button beside Edit and Delete. It offers JSON, PDF, or DOCX for that message only, the same as `/last-to-pdf` and `/last-to-docx`. PDF and DOCX omit thinking traces. JSON keeps the stored message, including thinking text. Finished fenced code blocks have Copy and Save; Save downloads `example.py` for Python and the matching extension for other languages. Finished Markdown tables have CSV, built in the browser, and XLSX, converted on the server.
+The latest completed assistant reply has one **Export** button beside Edit and Delete. It offers JSON, PDF, DOCX, or Markdown for that message only. Markdown, PDF, and DOCX omit thinking traces. JSON keeps the stored message, including thinking text. Finished fenced code blocks have Copy and Save; Save downloads `example.py` for Python and the matching extension for other languages. Finished Markdown tables have CSV, built in the browser, and XLSX, converted on the server.
 
 Completed assistant responses on a writable thread can be edited in place
 (Save or Cancel). User and assistant messages can be deleted after an in-page

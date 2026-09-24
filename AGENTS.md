@@ -71,20 +71,22 @@ compiled `openai_images`, `replicate_predictions`, `fal_queue`, and
 
 DOCX input/output is local canonical-Markdown conversion, not lossless package
 editing. It does not preserve images, recurring headers/footers, notes, comments,
-macros, themes, or arbitrary Word layout. `/chat-to-docx` and `/last-to-docx`
+macros, themes, or arbitrary Word layout. TUI `/export` and `/export-last`
 write that normalized transcript, and the WebUI downloads the same package.
 Images stay placeholders.
 
 XLSX input/output is local canonical-Markdown conversion of worksheet cell values
 to GitHub-flavored tables, not lossless workbook editing. It does not preserve
 drawings, charts, comments, pivots, macros, encryption, themes, or Excel layout.
-Legacy `.xls` is rejected. Transcript-to-XLSX commands are unimplemented.
+Legacy `.xls` is rejected. TUI `/export-last xlsx` converts every Markdown
+table in the latest non-thinking message into a worksheet.
 
 CSV and JSON are local UTF-8 text inputs (`.csv`, `.json`), not converted to
 Markdown on `--input`, `--attach`, TUI/REPL `/attach`, or WebUI chat upload.
 Fetched CSV becomes a GitHub-flavored Markdown table (RFC 4180 commas); fetched
 JSON is pretty-printed into a fenced `json` code block. `.jsonl`, `.tsv`, and
-CSV/JSON writers are unimplemented.
+`.jsonl` and `.tsv` writers are unimplemented. TUI `/export-last csv` writes
+the sole Markdown table in the latest non-thinking message as RFC 4180 CSV.
 
 Do not pretend these exist: REPL/TUI image-generation jobs, batch or streaming
 image output, multi-turn image editing, `/loop`, sub-agents, a native Anthropic
@@ -223,7 +225,7 @@ agent loops, approval decisions, or filesystem mutation logic in a UI.
 
 ### Persistence and local data
 
-- TUI chat uses `~/.ainiux/ainiux.db`; explicit JSON save/load remains import/export.
+- TUI chat uses `~/.ainiux/ainiux.db`; explicit JSON export/import remains available.
 - Agent sessions, settings, logs, history, and index data use project-local
   `.ainiux-pr/`, never the user chat database.
 - Use restrictive permissions and atomic replacement for sensitive or durable

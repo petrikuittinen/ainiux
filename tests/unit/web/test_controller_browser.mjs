@@ -29,6 +29,9 @@ test("web controller selectors, per-thread saves, workspace settings and history
     message_count: id === 1 ? 2 : 0 }));
   let nextThreadId = 3, createdProviders = [], failNextThread = false;
   let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [], chatExports = [];
+  let capabilityOperations = ["models", "chat", "chat_threads", "chat_pdf", "chat_docx",
+    "chat_md", "chat_json", "chat_xlsx", "chat_inputs", "sessions", "dired", "files",
+    "editor_assist"];
   let csrfHeadersSeen = 0, csrfFetches = 0, rejectedCsrfHeaders = 0;
   let workspace = { provider: "openrouter", model: "workspace-model", revision: "1",
     settings_fields: fields, settings: { temperature: "0.5", reasoning: "low", stream: "on" } };
@@ -43,7 +46,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v34.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v26.css"]) {
+  for (const name of ["app-v35.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v26.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -72,7 +75,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
         }
         return;
       }
-      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: ["models", "chat", "chat_threads", "chat_pdf", "chat_docx", "chat_json", "chat_xlsx", "chat_inputs", "sessions", "dired", "files", "editor_assist"] });
+      if (path.endsWith("/capabilities")) return send({ providers: ["none", "deepseek", "openrouter", "openai"], operations: capabilityOperations });
       if (path.endsWith("/status")) return send({ status: "ready" });
       if (path.endsWith("/images/catalog")) return send({ models: [] });
       if (path.endsWith("/videos/catalog")) return send({ models: [] });
@@ -140,16 +143,16 @@ test("web controller selectors, per-thread saves, workspace settings and history
         res.setHeader("Content-Disposition", "attachment; filename=\"table.xlsx\"");
         return res.end("PK\u0003\u0004xlsx");
       }
-      const exportMatch = path.match(/\/chat\/threads\/(\d+)\/(pdf|docx|json)$/);
+      const exportMatch = path.match(/\/chat\/threads\/(\d+)\/(pdf|docx|md|json)$/);
       if (exportMatch && req.method === "POST") {
         const kind = exportMatch[2];
         const scope = body.scope === "last" ? "last" : "thread";
         chatExports.push({ kind, scope, thread: Number(exportMatch[1]) });
         res.setHeader("Content-Type", kind === "docx"
           ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : kind === "json" ? "application/json" : "application/pdf");
+          : kind === "json" ? "application/json" : kind === "md" ? "text/markdown" : "application/pdf");
         res.setHeader("Content-Disposition", `attachment; filename="${scope === "last" ? "last" : "chat"}.${kind}"`);
-        return res.end(kind === "docx" ? "PK\u0003\u0004docx" : kind === "json" ? "{\"messages\":[]}" : "%PDF-1.4");
+        return res.end(kind === "docx" ? "PK\u0003\u0004docx" : kind === "json" ? "{\"messages\":[]}" : kind === "md" ? "# Chat" : "%PDF-1.4");
       }
       const messageMatch = path.match(/\/chat\/threads\/(\d+)\/messages$/);
       if (messageMatch && req.method === "POST") {
@@ -406,6 +409,14 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
     await command("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/ui/` }, sid);
     await wait('document.querySelectorAll("#thread-list .list-button").length === 3 && document.querySelector("#chat-provider").value === "openrouter"');
+    await evaluate(`{
+      globalThis.__ainiuxDownloadNames = [];
+      const originalClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () {
+        if (this.download) globalThis.__ainiuxDownloadNames.push(this.download);
+        return originalClick.call(this);
+      };
+    }`);
     assert.ok(csrfHeadersSeen > 0, "browser mutations carry the bootstrapped CSRF token");
     assert.equal(await evaluate('Object.keys(localStorage).some((key) => key.toLowerCase().includes("csrf"))'), false,
       "the CSRF token remains in memory instead of persistent browser storage");
@@ -462,7 +473,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.equal(await evaluate('[...document.querySelectorAll("#chat-messages .markdown-block-actions button")].map((node) => node.textContent).join(",")'),
       "Copy,Save,CSV,XLSX", "code blocks and tables offer copy, save, and table export");
     await clickLabeled("#chat-messages .message.assistant .message-actions button", "Export");
-    await wait('document.querySelector("#export-dialog").open === true && !document.querySelector("#export-json").hidden && !document.querySelector("#export-pdf").hidden && !document.querySelector("#export-docx").hidden');
+    await wait('document.querySelector("#export-dialog").open === true && !document.querySelector("#export-json").hidden && !document.querySelector("#export-pdf").hidden && !document.querySelector("#export-docx").hidden && !document.querySelector("#export-md").hidden');
     await click("#export-pdf");
     await waitExports(3);
     await wait('document.querySelector("#export-dialog").open === false');
@@ -493,6 +504,22 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.equal(chatExports[5].kind, "docx");
     assert.equal(chatExports[5].scope, "thread");
     assert.equal(chatExports[5].thread, 1);
+    await clickLabeled("#chat-messages .message.assistant .message-actions button", "Export");
+    await wait('document.querySelector("#export-dialog").open === true');
+    await click("#export-md");
+    await waitExports(7);
+    await wait('document.querySelector("#export-dialog").open === false');
+    await clickLabeled("#thread-list .thread-item:first-child .thread-export", "Export");
+    await wait('document.querySelector("#export-dialog").open === true');
+    await click("#export-md");
+    await waitExports(8);
+    await wait('document.querySelector("#export-dialog").open === false');
+    assert.equal(chatExports[6].kind, "md");
+    assert.equal(chatExports[6].scope, "last");
+    assert.equal(chatExports[7].kind, "md");
+    assert.equal(chatExports[7].scope, "thread");
+    assert.deepEqual(await evaluate('globalThis.__ainiuxDownloadNames.slice(-2)'),
+      ["last.md", "chat.md"], "Markdown exports use scope-specific download filenames");
     assert.equal(await evaluate('document.querySelector("#agent-context").hidden && document.querySelector("#agent-context").textContent === ""'), true,
       "context indicator stays hidden before an Agent session exists");
     assert.deepEqual(createdProviders, ["openrouter"]);
@@ -1053,6 +1080,15 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await wait('document.querySelector("#connection-badge").getAttribute("aria-label") === "Connected"');
     assert.equal(await evaluate('document.body.textContent.includes("Reconnected to the Ainiux control server")'), false,
       "browser-only notices clear on reload");
+    capabilityOperations = capabilityOperations.filter((operation) => operation !== "chat_md");
+    await command("Page.reload", { ignoreCache: true }, sid);
+    await wait('document.querySelectorAll("#thread-list .thread-export").length > 0');
+    await click("#thread-list .thread-item:first-child .thread-export");
+    await wait('document.querySelector("#export-dialog").open === true');
+    assert.equal(await evaluate('document.querySelector("#export-md").hidden'), true,
+      "the Markdown export button is hidden when chat_md is absent");
+    assert.equal(await evaluate('!document.querySelector("#export-pdf").hidden && !document.querySelector("#export-docx").hidden && !document.querySelector("#export-json").hidden'), true,
+      "other transcript export formats remain available without chat_md");
     assert.deepEqual(errors, []);
   } finally {
     browser.kill();

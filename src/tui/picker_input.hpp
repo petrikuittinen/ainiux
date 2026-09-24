@@ -29,6 +29,9 @@ struct TuiPickerCallbacks {
     std::function<void()> on_thread_delete_accepted;
     std::function<void()> on_thread_delete_rejected;
     std::function<void(const std::string&)> on_thread_delete_retry;
+    std::function<void()> on_export_overwrite_accepted;
+    std::function<void()> on_export_overwrite_rejected;
+    std::function<void(const std::string&)> on_export_overwrite_retry;
     std::function<void()> on_model_confirm_accepted;
     std::function<void()> on_model_confirm_rejected;
     std::function<void(const std::string&)> on_model_confirm_retry;
