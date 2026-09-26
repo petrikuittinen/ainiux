@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v26.css">
-  <script type="module" src="/ui/assets/app-v35.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v27.css">
+  <script type="module" src="/ui/assets/app-v37.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -52,7 +52,7 @@
                 <h2 id="conversation-heading">Select a thread</h2>
                 <span id="thread-meta" class="muted"></span>
                 <span id="chat-metrics" class="metrics-strip" aria-live="polite"></span>
-                <div class="model-identity conversation-routing" aria-label="Chat model settings"><a id="chat-provider-link" href="#settings-panel">Provider: —</a><a id="chat-model-link" href="#settings-panel">Model: —</a></div>
+                <div class="model-identity conversation-routing" aria-label="Chat model settings"><a id="chat-provider-link" href="#settings-panel" aria-haspopup="dialog">Provider: —</a><a id="chat-model-link" href="#settings-panel" aria-haspopup="dialog">Model: —</a></div>
               </div>
               <div class="button-row chat-actions" aria-label="Chat actions">
                 <button id="chat-regenerate-button" class="tool-button" type="button" disabled aria-keyshortcuts="Control+R" title="Regenerate · Ctrl+R">Regenerate</button>
@@ -105,7 +105,7 @@
             <label>Model <input id="agent-model" list="agent-model-list" maxlength="512" autocomplete="off"><datalist id="agent-model-list"></datalist><small id="agent-model-status" class="field-hint" aria-live="polite"></small></label>
           </div>
           <div class="agent-toolbar">
-            <div class="model-identity" aria-label="Agent model settings"><a id="agent-provider-link" href="#settings-panel">Provider: —</a><a id="agent-model-link" href="#settings-panel">Model: —</a><span id="agent-context" class="agent-context" role="status" aria-live="polite" hidden></span></div>
+            <div class="model-identity" aria-label="Agent model settings"><a id="agent-provider-link" href="#settings-panel" aria-haspopup="dialog">Provider: —</a><a id="agent-model-link" href="#settings-panel" aria-haspopup="dialog">Model: —</a><span id="agent-context" class="agent-context" role="status" aria-live="polite" hidden></span></div>
             <select id="agent-reasoning" hidden aria-hidden="true"><option value="">Auto</option></select>
             <div class="agent-controls" aria-label="Agent controls">
               <button id="agent-cycle-reasoning-button" class="tool-button" type="button" aria-keyshortcuts="Alt+T" title="Change reasoning · Alt+T">Reasoning: auto</button>
@@ -176,7 +176,7 @@
       </section>
 
       <section id="workspace-panel" class="panel" aria-label="Workspace" hidden>
-        <div class="workspace-toolbar"><div id="workspace-summary" class="summary-strip" aria-live="polite"></div><div class="button-row"><button id="workspace-review-button" class="ghost" type="button">Review</button><button id="refresh-directory-button" type="button">Refresh</button></div></div>
+        <div class="workspace-toolbar"><div class="model-identity" aria-label="Workspace editor model settings"><a id="workspace-provider-link" href="#settings-panel" aria-haspopup="dialog">Provider: —</a><a id="workspace-model-link" href="#settings-panel" aria-haspopup="dialog">Model: —</a></div><div id="workspace-summary" class="summary-strip" aria-live="polite"></div><div class="button-row"><button id="workspace-review-button" class="ghost" type="button">Review</button><button id="refresh-directory-button" type="button">Refresh</button></div></div>
         <div id="workspace-notice" class="inline-notice-area" role="status" aria-live="polite" hidden></div>
         <div class="workspace-layout">
           <section class="dired-panel" aria-labelledby="dired-heading">
@@ -184,7 +184,7 @@
             <div id="directory-list" class="file-list empty-state">Connect to browse the workspace.</div>
           </section>
           <section class="editor-panel" aria-labelledby="editor-heading">
-            <div class="pane-bar editor-pane-bar"><div><h2 id="editor-heading">Editor</h2><span id="editor-meta" class="muted">Open a text file.</span></div><div class="editor-toolbar"><div id="editor-indent-controls" class="editor-indent-controls" aria-label="File indentation"><label>Width <input id="editor-indent-width" type="number" min="1" max="32" value="4" inputmode="numeric" disabled></label><label>Indent <select id="editor-indent-style" disabled><option value="spaces">Spaces</option><option value="tab">Tabs</option></select></label><button id="editor-reformat-button" class="ghost" type="button" disabled>Reformat file</button></div><div class="button-row"><button id="edit-file-button" class="ghost" type="button" hidden>Edit</button><button id="undo-file-button" class="ghost" type="button" hidden disabled aria-keyshortcuts="Control+U Control+Z Meta+Z Alt+U Alt+Z" title="Undo · Ctrl+U / Ctrl+Z / Alt+U / Alt+Z">Undo</button><button id="redo-file-button" class="ghost" type="button" hidden disabled aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z Alt+Y" title="Redo · Ctrl+Y / Alt+Y">Redo</button><button id="editor-assist-button" class="ghost" type="button" disabled>AI assist</button><button id="save-file-button" type="button" disabled>Save</button></div></div></div>
+            <div class="pane-bar editor-pane-bar"><div><h2 id="editor-heading">Editor</h2><span id="editor-meta" class="muted">Open a text file.</span></div><div class="editor-toolbar"><div id="editor-indent-controls" class="editor-indent-controls" aria-label="File indentation"><label>Width <input id="editor-indent-width" type="number" min="1" max="32" value="4" inputmode="numeric" disabled></label><label>Indent <select id="editor-indent-style" disabled><option value="spaces">Spaces</option><option value="tab">Tabs</option></select></label><button id="editor-reformat-button" class="ghost" type="button" disabled>Reformat file</button></div><div class="button-row"><button id="edit-file-button" class="ghost" type="button" hidden>Edit</button><button id="undo-file-button" class="ghost" type="button" hidden disabled aria-keyshortcuts="Control+U Control+Z Meta+Z Alt+U Alt+Z" title="Undo · Ctrl+U / Ctrl+Z / Alt+U / Alt+Z">Undo</button><button id="redo-file-button" class="ghost" type="button" hidden disabled aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z Alt+Y" title="Redo · Ctrl+Y / Alt+Y">Redo</button><button id="insert-file-button" class="ghost" type="button" disabled title="Insert a workspace file at the cursor">Insert file</button><button id="editor-assist-button" class="ghost" type="button" disabled>AI assist</button><button id="save-file-button" type="button" disabled>Save</button></div></div></div>
             <pre id="file-highlight" class="file-highlight" hidden aria-label="Highlighted file content"><code></code></pre>
             <div id="file-edit-layer" class="file-edit-layer" hidden>
               <pre id="file-edit-highlight" class="file-highlight file-edit-highlight" aria-hidden="true"><code></code></pre>
@@ -236,6 +236,17 @@
 
   <dialog id="assist-dialog" aria-labelledby="assist-title">
     <form id="assist-form" class="dialog-card"><h2 id="assist-title">Editor AI assist</h2><p id="assist-error" class="error-text" role="alert"></p><label>Instruction <textarea id="assist-instruction" rows="5" maxlength="262144" required placeholder="Describe the edit…"></textarea></label><label class="checkbox-row"><input id="assist-selection" type="checkbox"> Limit to the current selection</label><div class="dialog-actions"><button class="ghost dialog-cancel" type="button">Cancel</button><button type="submit">Request proposal</button></div></form>
+  </dialog>
+
+  <dialog id="insert-file-dialog" aria-labelledby="insert-file-title">
+    <form id="insert-file-form" class="dialog-card">
+      <h2 id="insert-file-title">Insert workspace file</h2>
+      <p>Insert a bounded workspace file at the current cursor. PDF and Office documents are converted to Markdown.</p>
+      <p id="insert-file-error" class="error-text" role="alert"></p>
+      <label>Workspace filepath <input id="insert-file-path" maxlength="8192" required autocomplete="off" spellcheck="false" placeholder="path/to/file.txt"></label>
+      <p id="insert-file-status" class="field-hint" role="status"></p>
+      <div class="dialog-actions"><button id="insert-file-cancel" class="ghost" type="button">Cancel</button><button id="insert-file-submit" type="submit">Insert</button></div>
+    </form>
   </dialog>
 
   <dialog id="conflict-dialog" aria-labelledby="conflict-title">

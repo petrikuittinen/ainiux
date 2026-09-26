@@ -85,9 +85,10 @@ provides:
   the sibling `.md`; explicit workspace create/save to `.pptx` writes a normalized
   package, while dedicated browser Office downloads remain deferred), detected
   per-file indentation controls, Tab/Shift+Tab indent and outdent, adaptive
-  selection/file reformatting, and bounded undo/redo. Use `Ctrl+U` or `Ctrl+Z` to
-  undo and `Ctrl+Y` to redo; `Alt+U`/`Alt+Z` and `Alt+Y` are browser-safe
-  fallbacks. AI proposals modify only the browser draft until Save is selected;
+  selection/file reformatting, insertion of a bounded workspace filepath at the
+  current cursor, and bounded undo/redo. Use `Ctrl+U` or `Ctrl+Z` to undo and
+  `Ctrl+Y` to redo; `Alt+U`/`Alt+Z` and `Alt+Y` are browser-safe fallbacks. AI
+  proposals modify only the browser draft until Save is selected;
 - safe status and capability data already exposed by the control API.
 
 Workspace Office files may be up to 20 MiB while the converted Markdown editor
@@ -170,13 +171,15 @@ without repeating context usage.
 
 ## Model selection and remembered settings
 
-Chat and Agent show compact provider/model names that link to the relevant
-section of Settings. Choosing a provider immediately starts its `/models`
-lookup and continues into the returned model choices, matching the terminal
-flow; `none` is not presented as a usable provider, and a sole returned model
-is selected automatically. Manual model entry is available through the
-explicit **Enter model manually** fallback, never as an empty primary action.
-There are no catalog counts or extra picker buttons in either conversation toolbar.
+Chat, Agent, and the Workspace editor show compact provider/model names that
+open the same selectors as the terminal modes. Choosing a provider immediately
+starts its `/models` lookup and continues into the returned model choices;
+choosing the model name opens that provider's model selector directly. `none`
+is not presented as a usable provider, and a sole returned model is selected
+automatically. Manual model entry is available through the explicit **Enter
+model manually** fallback, never as an empty primary action. The full Settings
+cards remain available for advanced request settings. There are no catalog
+counts or extra picker buttons in the mode toolbars.
 Reasoning stays directly adjustable; Agent also retains Act/Plan and permissions.
 
 **Alt+P** opens the provider picker and **Alt+M** opens the model picker for the
@@ -336,6 +339,13 @@ kept in sync across the textarea, live syntax overlay, and read-only viewer.
 Reformatting remains synchronous only within the 1 MiB editable-file boundary;
 lines beyond the 64 KiB analysis bound, and structurally uncertain content that
 follows them, are preserved.
+
+In edit mode, **Insert file** accepts a path relative to the fixed workspace and
+inserts its bounded contents at the captured cursor as one undo step. The
+authenticated workspace read retains containment and file-size checks; PDF and
+Office sources use the same Markdown conversion as opening them. The insert is
+cancellable and is discarded if its target editor changes while loading. It is
+rejected when the resulting draft would exceed the 1 MiB remote editor limit.
 
 Markdown and bare absolute HTTP(S) links are underlined and open in a new tab
 with `noopener`, `noreferrer`, and no referrer. Relative links, URL credentials,

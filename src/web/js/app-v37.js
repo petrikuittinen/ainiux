@@ -23,7 +23,7 @@ const CSRF_HEADER = "X-Ainiux-CSRF-Token";
 const THEME_STORAGE_KEY = "ainiux.ui.theme.v1";
 const THINKING_STORAGE_KEY = "ainiux.chat.thinking.v1";
 const TERMINAL_STATES = new Set(["succeeded", "failed", "cancelled"]);
-const MAX_EDITOR_REFORMAT_BYTES = 1024 * 1024;
+const MAX_EDITOR_BYTES = 1024 * 1024;
 const MAX_CONVERSATION_NOTICES = 150;
 const SURFACE_NOTICE_IDS = new Map([
   ["jobs-panel", "jobs-notice"],
@@ -109,6 +109,7 @@ let workspaceModelPickerQueued = "";
 let chatRenderFrame = null;
 let pendingChatStream = null;
 let agentRenderFrame = null;
+let editorInsertController = null;
 
 class ApiError extends Error {
   constructor(status, code, message, details = {}) {
@@ -1160,18 +1161,24 @@ function syncPickerButtons() {
       ? source.selectedOptions[0]?.textContent || source.value || "Server default"
       : source.value.trim() || "Default model";
   }
-  for (const scope of ["chat", "agent"]) {
-    const configuration = scope === "chat" ? state.thread : state.session;
+  for (const scope of ["chat", "agent", "workspace"]) {
+    const configuration = scope === "chat" ? state.thread :
+      scope === "agent" ? state.session : state.workspaceSettings;
+    const control = modelControls().find((item) => item.providerId === `${scope}-provider`);
     for (const kind of ["provider", "model"]) {
       const link = byId(`${scope}-${kind}-link`);
+      const source = byId(kind === "provider" ? control.providerId : control.modelId);
       const fallback = state.startingNewChat && scope === "chat" ? "Starting new chat…" : "—";
       const value = configuration && typeof configuration[kind] === "string"
         ? configuration[kind] || (kind === "provider" ? "none" : "Default model") : fallback;
       const label = kind === "provider" ? "Provider" : "Model";
       link.textContent = `${label}: ${value}`;
-      link.setAttribute("aria-label", `Change ${kind} in Settings: ${value}`);
+      link.setAttribute("aria-label", `Choose ${kind}: ${value}`);
+      link.setAttribute("aria-disabled", String(source.disabled ||
+        (scope === "agent" && workspaceSavePending)));
+      link.setAttribute("aria-haspopup", "dialog");
       link.setAttribute("aria-keyshortcuts", kind === "provider" ? "Alt+P" : "Alt+M");
-      link.title = `${label}: ${value} · Change in Settings · Alt+${kind === "provider" ? "P" : "M"} opens selector`;
+      link.title = `${label}: ${value} · Choose ${kind} · Alt+${kind === "provider" ? "P" : "M"}`;
     }
   }
 }
@@ -1230,11 +1237,12 @@ function setupModelSettings() {
     section.append(targets, summary, fields, status);
     grid.insertBefore(section, appearance);
   }
-  for (const scope of ["chat", "agent"]) {
+  for (const scope of ["chat", "agent", "workspace"]) {
+    const control = modelControls().find((item) => item.providerId === `${scope}-provider`);
     for (const kind of ["provider", "model"]) {
       byId(`${scope}-${kind}-link`).addEventListener("click", (event) => {
         event.preventDefault();
-        showModelSettings(scope === "chat" ? "chat" : "workspace", kind);
+        openModelPicker(control, kind);
       });
     }
   }
@@ -3946,6 +3954,8 @@ function updateEditorHistoryButtons() {
   byId("redo-file-button").hidden = !editing;
   byId("undo-file-button").disabled = !editing || !history || !history.undo.length;
   byId("redo-file-button").disabled = !editing || !history || !history.redo.length;
+  byId("insert-file-button").disabled = !editing || !supports("files") ||
+    editorInsertController !== null;
   updateEditorIndentControls();
 }
 
@@ -4012,7 +4022,7 @@ function reformatEditorDraft() {
   if (!state.file || byId("file-editor").disabled) return;
   const language = languageForPath(state.file.path);
   if (language === "text") return;
-  if (new TextEncoder().encode(byId("file-editor").value).length > MAX_EDITOR_REFORMAT_BYTES) {
+  if (new TextEncoder().encode(byId("file-editor").value).length > MAX_EDITOR_BYTES) {
     surfaceNotice("workspace-panel", "This draft is too large to reformat safely (1 MiB limit).", "error");
     return;
   }
@@ -4020,6 +4030,79 @@ function reformatEditorDraft() {
     state.file.tabWidth, state.file.tabStyle);
   applyEditorTransformation(next);
   if (next.warning) surfaceNotice("workspace-panel", next.warning, "warning");
+}
+
+function setInsertFilePending(pending) {
+  byId("insert-file-path").disabled = pending;
+  byId("insert-file-submit").disabled = pending;
+  byId("insert-file-status").textContent = pending ? "Reading workspace file…" : "";
+  updateEditorHistoryButtons();
+}
+
+function openInsertFileDialog() {
+  if (byId("insert-file-button").disabled) return;
+  byId("insert-file-path").value = "";
+  byId("insert-file-error").textContent = "";
+  byId("insert-file-status").textContent = "";
+  openDialog(byId("insert-file-dialog"));
+  byId("insert-file-path").focus();
+}
+
+function cancelInsertWorkspaceFile() {
+  if (editorInsertController) editorInsertController.abort();
+  closeDialog(byId("insert-file-dialog"));
+}
+
+async function insertWorkspaceFile(source) {
+  const editor = byId("file-editor");
+  if (!state.file || editor.disabled || editorInsertController) return;
+  const target = state.file;
+  const revision = target.revision;
+  const before = editorSnapshot();
+  const position = before.selectionDirection === "backward"
+    ? before.selectionStart : before.selectionEnd;
+  const controller = new AbortController();
+  editorInsertController = controller;
+  setInsertFilePending(true);
+  try {
+    const response = await api(`${API_ROOT}/files?path=${wirePath(source)}`, {
+      signal: controller.signal,
+    });
+    if (state.file !== target || target.revision !== revision || editor.disabled ||
+        editor.value !== before.value) {
+      closeDialog(byId("insert-file-dialog"));
+      surfaceNotice("workspace-panel",
+        "Insertion discarded because the target editor changed while the file was loading.",
+        "error");
+      return;
+    }
+    const inserted = typeof response.content === "string" ? response.content : "";
+    const value = before.value.slice(0, position) + inserted + before.value.slice(position);
+    if (new TextEncoder().encode(value).length > MAX_EDITOR_BYTES) {
+      throw new ApiError(413, "insert_too_large",
+        "The inserted file would exceed the 1 MiB remote editing limit");
+    }
+    const cursor = position + inserted.length;
+    editorInsertController = null;
+    setInsertFilePending(false);
+    closeDialog(byId("insert-file-dialog"));
+    applyEditorTransformation({ value, selectionStart: cursor, selectionEnd: cursor,
+      selectionDirection: "none" });
+    const converted = response.converted_from ? " as Markdown" : "";
+    surfaceNotice("workspace-panel",
+      `Inserted ${response.path || source} at cursor${converted}`);
+    for (const warning of response.warnings || []) {
+      surfaceNotice("workspace-panel", warning, "warning");
+    }
+  } catch (error) {
+    if (!error || error.name !== "AbortError") {
+      byId("insert-file-error").textContent = errorMessage(error);
+      openDialog(byId("insert-file-dialog"));
+    }
+  } finally {
+    if (editorInsertController === controller) editorInsertController = null;
+    setInsertFilePending(false);
+  }
 }
 
 function clearEditor() {
@@ -4936,6 +5019,18 @@ function bindEvents() {
     if (state.file) state.file.tabStyle = byId("editor-indent-style").value === "tab" ? "tab" : "spaces";
   });
   byId("editor-reformat-button").addEventListener("click", reformatEditorDraft);
+  byId("insert-file-button").addEventListener("click", openInsertFileDialog);
+  byId("insert-file-cancel").addEventListener("click", cancelInsertWorkspaceFile);
+  byId("insert-file-dialog").addEventListener("cancel", () => {
+    if (editorInsertController) editorInsertController.abort();
+  });
+  byId("insert-file-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const source = byId("insert-file-path").value.trim();
+    if (!source) return;
+    byId("insert-file-error").textContent = "";
+    void insertWorkspaceFile(source);
+  });
   byId("save-file-button").addEventListener("click", () => void saveFile());
   byId("editor-assist-button").addEventListener("click", () => {
     byId("assist-error").textContent = "";

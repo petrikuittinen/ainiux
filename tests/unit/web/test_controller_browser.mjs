@@ -46,7 +46,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v35.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v26.css"]) {
+  for (const name of ["app-v37.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v27.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -284,7 +284,17 @@ test("web controller selectors, per-thread saves, workspace settings and history
         { type: "file", name: "sample.js", path: "sample.js", size: 27, revision: "r1" },
       ] });
       if (path.endsWith("/files")) {
-        const javascript = url.searchParams.get("path") === "sample.js";
+        const requestedPath = url.searchParams.get("path");
+        if (requestedPath === "insert.txt") {
+          return send({ path: "insert.txt", revision: "insert-r1",
+            content: " inserted ", editable: true });
+        }
+        if (requestedPath === "slow-insert.txt") {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          return send({ path: "slow-insert.txt", revision: "insert-r2",
+            content: "late", editable: true });
+        }
+        const javascript = requestedPath === "sample.js";
         return send(javascript
           ? { path: "sample.js", revision: "r1", content: "if (ready) {\n  call();\n}\n", editable: true }
           : { path: "notes.txt", revision: "r1", content: "hello", editable: true });
@@ -738,9 +748,17 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.equal(await evaluate('document.querySelector("#chat-provider-link").textContent'), "Provider: openrouter");
     assert.equal(await evaluate('getComputedStyle(document.querySelector("#chat-provider-link")).fontSize === getComputedStyle(document.body).fontSize'), true);
     await screenshot("chat-desktop");
+    await click("#chat-provider-link");
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent === "Choose provider"');
+    assert.equal(await evaluate('document.querySelector("#chat-panel").hidden'), false);
+    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "openrouter").click()');
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent.includes("openrouter") && document.querySelectorAll(".picker-option").length === 350');
+    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "model-2").click()');
+    await wait('!document.querySelector(".model-picker").open && document.querySelector("#chat-model-link").textContent === "Model: model-2" && document.querySelector("#chat-settings-save-status").textContent === "Saved"');
     await click("#chat-model-link");
-    assert.equal(await evaluate('document.activeElement === document.querySelector("#chat-model + button")'), true);
-    await click('[data-panel="chat-panel"]');
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent.includes("openrouter")');
+    assert.equal(await evaluate('document.querySelector("#chat-panel").hidden'), false);
+    await key("Escape");
     await evaluate('document.querySelector("#chat-input").focus()');
     await key("p", 1, "KeyP");
     await wait('document.querySelector(".model-picker").open');
@@ -858,25 +876,71 @@ test("web controller selectors, per-thread saves, workspace settings and history
     assert.ok(await evaluate('document.querySelector("#model-picker-title").textContent.includes("openrouter")'));
     await key("Escape");
     await click("#agent-provider-link");
-    assert.equal(await evaluate('document.activeElement === document.querySelector("#workspace-provider + button")'), true);
-    await key("p", 1, "KeyP");
-    await wait('document.querySelector(".model-picker").open');
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent === "Choose provider"');
+    assert.equal(await evaluate('document.querySelector("#agent-panel").hidden'), false);
+    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "openrouter").click()');
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent.includes("openrouter")');
+    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "model-3").click()');
+    await wait('!document.querySelector(".model-picker").open && document.querySelector("#agent-model-link").textContent === "Model: model-3" && document.querySelector("#workspace-settings-save-status").textContent === "Saved"');
+    assert.equal(workspace.model, "model-3");
+    await click("#agent-model-link");
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent.includes("openrouter")');
     await key("Escape");
-    await evaluate('const model = document.querySelector("#workspace-model"); model.value = "editor/agent-v2"; model.dispatchEvent(new Event("change"));');
-    await wait('document.querySelector("#workspace-settings-save-status").textContent === "Saved"');
-    assert.equal(workspace.model, "editor/agent-v2");
     await click('[data-panel="workspace-panel"]');
+    assert.equal(await evaluate('document.querySelector("#workspace-provider-link").textContent'), "Provider: openrouter");
+    assert.equal(await evaluate('document.querySelector("#workspace-model-link").textContent'), "Model: model-3");
+    await command("Emulation.setDeviceMetricsOverride", { width: 3840, height: 2160, deviceScaleFactor: 1, mobile: false }, sid);
+    assert.equal(await evaluate('document.querySelector("#workspace-provider-link").scrollWidth <= document.querySelector("#workspace-provider-link").clientWidth'), true,
+      "workspace provider remains fully visible at 4K width");
+    await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
+    await click("#workspace-provider-link");
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent === "Choose provider"');
+    assert.equal(await evaluate('document.querySelector("#workspace-panel").hidden'), false);
+    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "openrouter").click()');
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent.includes("openrouter")');
+    await evaluate('[...document.querySelectorAll(".picker-option")].find(node => node.textContent === "model-4").click()');
+    await wait('!document.querySelector(".model-picker").open && document.querySelector("#workspace-model-link").textContent === "Model: model-4" && document.querySelector("#workspace-settings-save-status").textContent === "Saved"');
+    assert.equal(workspace.model, "model-4");
+    await click("#workspace-model-link");
+    await wait('document.querySelector(".model-picker").open && document.querySelector("#model-picker-title").textContent.includes("openrouter")');
+    await key("Escape");
     await evaluate(`{ const editor = document.querySelector("#file-editor");
       editor.value = "old line\\n".repeat(200); editor.disabled = false;
       editor.setSelectionRange(editor.value.length, editor.value.length);
       editor.scrollTop = editor.scrollHeight; editor.scrollLeft = 40; editor.disabled = true; }`);
     await click(".file-main button");
     await wait('!document.querySelector("#editor-assist-button").disabled');
+    assert.equal(await evaluate('document.querySelector("#insert-file-button").disabled'), true,
+      "file insertion requires edit mode");
     await click("#edit-file-button");
     assert.deepEqual(await evaluate(`(() => { const editor = document.querySelector("#file-editor");
       return { start: editor.selectionStart, end: editor.selectionEnd,
         scrollTop: editor.scrollTop, scrollLeft: editor.scrollLeft }; })()`),
       { start: 0, end: 0, scrollTop: 0, scrollLeft: 0 });
+    assert.equal(await evaluate('document.querySelector("#insert-file-button").disabled'), false);
+    await command("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sid);
+    assert.equal(await evaluate(`(() => { const toolbar = document.querySelector(".editor-toolbar");
+      const buttons = [...toolbar.querySelectorAll("button")].filter(node => node.getClientRects().length);
+      return toolbar.scrollWidth <= toolbar.clientWidth && buttons.every(node => {
+        const rect = node.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth;
+      }); })()`), true, "workspace editor controls fit a mobile viewport");
+    await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
+    await evaluate('document.querySelector("#file-editor").setSelectionRange(2, 2)');
+    await click("#insert-file-button");
+    await wait('document.querySelector("#insert-file-dialog").open && document.activeElement === document.querySelector("#insert-file-path")');
+    await evaluate('{ const input = document.querySelector("#insert-file-path"); input.value = "insert.txt"; document.querySelector("#insert-file-form").requestSubmit(); }');
+    await wait('!document.querySelector("#insert-file-dialog").open && document.querySelector("#file-editor").value === "he inserted llo"');
+    assert.equal(await evaluate('document.querySelector("#file-editor").selectionStart'), 12);
+    await click("#undo-file-button");
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello",
+      "filepath insertion is one undo step");
+    await click("#insert-file-button");
+    await evaluate('{ const input = document.querySelector("#insert-file-path"); input.value = "slow-insert.txt"; document.querySelector("#insert-file-form").requestSubmit(); }');
+    await wait('document.querySelector("#insert-file-status").textContent.includes("Reading")');
+    await click("#insert-file-cancel");
+    await wait('!document.querySelector("#insert-file-dialog").open && !document.querySelector("#insert-file-button").disabled');
+    assert.equal(await evaluate('document.querySelector("#file-editor").value'), "hello",
+      "cancelled filepath insertion leaves the draft unchanged");
     await evaluate('document.querySelector("#file-editor").setSelectionRange(5, 5)');
     await command("Input.insertText", { text: "!" }, sid);
     await wait('document.querySelector("#file-editor").value === "hello!" && !document.querySelector("#undo-file-button").disabled');
@@ -973,7 +1037,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await click('[data-panel="settings-panel"]');
     await evaluate(`{ const input = document.querySelector("#workspace-model"); input.value = ${JSON.stringify(longModel)}; input.dispatchEvent(new Event("change")); }`);
     await wait(`document.querySelector("#agent-model").value === ${JSON.stringify(longModel)} && !document.querySelector("#workspace-model").disabled`);
-    await click('[data-panel="chat-panel"]'); await click("#chat-model-link");
+    await click('[data-panel="chat-panel"]'); await click('[data-panel="settings-panel"]');
     await evaluate(`{ const input = document.querySelector("#chat-model"); input.value = ${JSON.stringify(longModel)}; input.dispatchEvent(new Event("change")); }`);
     await wait(`document.querySelector("#chat-model-link").textContent === ${JSON.stringify(`Model: ${longModel}`)}`);
     // Wide and tablet layouts retain the same controls with long model names.

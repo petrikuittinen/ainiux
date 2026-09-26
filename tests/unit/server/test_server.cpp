@@ -161,8 +161,8 @@ void test_embedded_web_ui_assets_and_browser_security() {
 
     Response index = route_request(public_get("/ui/"), config, status);
     check(index.status == 200 && index.content_type == "text/html; charset=utf-8" &&
-              index.body.find("/ui/assets/app-v26.css") != std::string::npos &&
-              index.body.find("/ui/assets/app-v35.js") != std::string::npos &&
+              index.body.find("/ui/assets/app-v27.css") != std::string::npos &&
+              index.body.find("/ui/assets/app-v37.js") != std::string::npos &&
               index.body.find(">Logout</button>") != std::string::npos &&
               index.body.find("data-panel=\"image-panel\">Image") != std::string::npos &&
               index.body.find("data-panel=\"video-panel\">Video") != std::string::npos &&
@@ -172,6 +172,9 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("aria-keyshortcuts=\"Alt+P Alt+M Control+R Alt+T Alt+W Alt+S Escape\"") != std::string::npos &&
               index.body.find("id=\"chat-provider-link\" href=\"#settings-panel\"") != std::string::npos &&
               index.body.find("id=\"agent-model-link\" href=\"#settings-panel\"") != std::string::npos &&
+              index.body.find("id=\"workspace-model-link\" href=\"#settings-panel\"") != std::string::npos &&
+              index.body.find("id=\"insert-file-button\"") != std::string::npos &&
+              index.body.find("id=\"insert-file-dialog\"") != std::string::npos &&
               index.body.find("id=\"chat-regenerate-button\"") != std::string::npos &&
               index.body.find("id=\"chat-cycle-reasoning-button\"") != std::string::npos &&
               index.body.find("id=\"chat-thinking-button\"") != std::string::npos &&
@@ -233,7 +236,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               index.body.find("http://") == std::string::npos,
           "embedded WUI index is public boot content with versioned same-origin assets only");
 
-    Response stylesheet = route_request(public_get("/ui/assets/app-v26.css"), config, status);
+    Response stylesheet = route_request(public_get("/ui/assets/app-v27.css"), config, status);
     const std::string stylesheet_headers = serialize_response(stylesheet, true);
     check(stylesheet.status == 200 && stylesheet.content_type == "text/css; charset=utf-8" &&
               stylesheet.body.find("prefers-color-scheme: dark") != std::string::npos &&
@@ -280,7 +283,7 @@ void test_embedded_web_ui_assets_and_browser_security() {
               stylesheet_headers.find("Cache-Control: no-store") != std::string::npos,
           "embedded WUI CSS carries TUI-derived light/dark themes and responsive accessibility rules");
 
-    Response javascript = route_request(public_get("/ui/assets/app-v35.js"), config, status);
+    Response javascript = route_request(public_get("/ui/assets/app-v37.js"), config, status);
     const std::string javascript_headers = serialize_response(javascript, true);
     check(javascript.status == 200 && javascript.content_type == "text/javascript; charset=utf-8" &&
               javascript.body.find("localStorage") != std::string::npos &&

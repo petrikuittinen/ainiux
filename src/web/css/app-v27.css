@@ -447,6 +447,7 @@ kbd { padding: 0.04rem 0.2rem; border: 1px solid var(--border); border-radius: 0
 
 #workspace-panel.active { display: flex; flex-direction: column; }
 .workspace-toolbar { flex: 0 0 auto; min-height: 2.6rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.3rem 0.55rem; border-bottom: 1px solid var(--border); background: var(--panel); }
+.workspace-toolbar .model-identity a:first-child { max-width: none; }
 .summary-strip { display: flex; flex-wrap: wrap; gap: 0.45rem; color: var(--muted); font-size: 0.74rem; }
 .summary-chip { padding: 0.15rem 0.35rem; border: 1px solid var(--soft-border); }
 .workspace-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(16rem, 0.38fr) minmax(20rem, 0.62fr); }
