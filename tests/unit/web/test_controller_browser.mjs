@@ -29,6 +29,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     message_count: id === 1 ? 2 : 0 }));
   let nextThreadId = 3, createdProviders = [], failNextThread = false;
   let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [], chatExports = [];
+  const agentSettings = [];
   let capabilityOperations = ["models", "chat", "chat_threads", "chat_pdf", "chat_docx",
     "chat_md", "chat_json", "chat_xlsx", "chat_inputs", "sessions", "dired", "files",
     "editor_assist"];
@@ -234,7 +235,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
       }
       if (path.includes("/jobs/")) return send(jobs.get(path.split("/").at(-1)) || {});
       if (path.endsWith("/sessions/agent")) {
-        session = { id: "session-1", status: "ready", task_mode: "plan",
+        session = { id: "session-1", status: "ready", lane: "lead",
           permission_mode: "smart", turn_id: null, event_cursor: 0,
           context: { used_tokens: 500000, window_tokens: 1000000 },
           last_turn_metrics: { context_used_tokens: 500000,
@@ -271,6 +272,12 @@ test("web controller selectors, per-thread saves, workspace settings and history
           }
         }, 20);
         return send({ turn_id: turnId });
+      }
+      if (path.endsWith("/settings") && path.includes("/sessions/") && req.method === "POST") {
+        agentSettings.push(body);
+        if (body.lane) session.lane = body.lane;
+        if (body.permission_mode) session.permission_mode = body.permission_mode;
+        return send({ ...session, ...workspace, reasoning: workspace.settings.reasoning });
       }
       if (path.includes("/sessions/")) {
         if (delayNextSessionRefresh) {
@@ -414,7 +421,8 @@ test("web controller selectors, per-thread saves, workspace settings and history
       if (compact) {
         assert.ok(result.height < (mobile ? 180 : 110), `compact ${panel} toolbar: ${result.height}`);
       }
-      assert.deepEqual(result.selects, panel === "chat" ? [] : ["agent-task-mode", "agent-permission"]);
+      assert.deepEqual(result.selects, panel === "chat" ? [] :
+        ["agent-mode", "agent-handoff", "agent-permission"]);
     };
     await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false }, sid);
     await command("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/ui/` }, sid);
@@ -845,6 +853,9 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await refreshAgentContext({ used_tokens: 500000, window_tokens: 1000000 },
       'document.querySelector("#agent-context").textContent === "500k (50%)"');
     await checkToolbar("agent"); await screenshot("agent-desktop");
+    assert.equal(await evaluate('document.querySelector("#agent-mode").closest("label").childNodes[0].textContent.trim()'), "Mode");
+    assert.ok(await evaluate('document.querySelector("#agent-mode").getBoundingClientRect().width >= 80'),
+      "the Agent mode selector is wide enough for Lead");
     await evaluate('{ const input = document.querySelector("#agent-turn-input"); input.value = "line"; input.focus(); input.setSelectionRange(4, 4); }');
     await key("Enter", 8, "Enter");
     await key("Enter", 1, "Enter");
@@ -855,6 +866,45 @@ test("web controller selectors, per-thread saves, workspace settings and history
     await evaluate('document.querySelector("#agent-turn-input").dispatchEvent(new KeyboardEvent("keydown", {key:"Enter", bubbles:true, isComposing:true}))');
     assert.equal(agentTurns.length, 0,
       "modifier Enter keys and IME composition do not submit Agent instructions");
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/act"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "act"');
+    assert.deepEqual(agentSettings.at(-1), { lane: "act" });
+    assert.equal(agentTurns.length, 0, "/act changes mode without starting an agent turn");
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/lead"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "lead"');
+    assert.deepEqual(agentSettings.at(-1), { lane: "lead" });
+    assert.equal(agentTurns.length, 0, "/lead changes mode without starting an agent turn");
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/act"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "act"');
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/lead clean"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "lead"');
+    assert.deepEqual(agentSettings.at(-1), { lane: "lead", handoff: "clean" });
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/act"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "act"');
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/lead all"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "lead"');
+    assert.deepEqual(agentSettings.at(-1), { lane: "lead", handoff: "all" });
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/act"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "act"');
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/lead 9"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-mode").value === "lead"');
+    assert.deepEqual(agentSettings.at(-1), { lane: "lead", handoff: "9" });
+    assert.equal(agentTurns.length, 0,
+      "/lead clean, /lead all, and /lead N change mode without starting a turn");
+    await evaluate(`{ const input = document.querySelector("#agent-turn-input");
+      input.value = "/lead 101"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
+    await wait('document.querySelector("#agent-events").textContent.includes("Usage: /lead [clean|1..100|all]")');
+    assert.deepEqual(agentSettings.at(-1), { lane: "lead", handoff: "9" },
+      "an invalid /lead command does not change mode settings");
+    assert.equal(agentTurns.length, 0, "an invalid /lead command is not sent as an agent turn");
     await evaluate(`{ const input = document.querySelector("#agent-turn-input");
       input.value = "/theme blue"; document.querySelector("#agent-turn-form").requestSubmit(); }`);
     await wait('document.querySelector("#agent-events").textContent.includes("Usage: /theme light or /theme dark")');

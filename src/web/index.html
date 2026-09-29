@@ -83,9 +83,9 @@
       <section id="jobs-panel" class="panel" aria-label="Jobs" hidden>
         <div class="utility-layout">
           <form id="goal-job-form" class="control-pane stack">
-            <div class="pane-bar"><h2>Run or plan</h2></div>
+            <div class="pane-bar"><h2>Run agent</h2></div>
             <div id="jobs-notice" class="inline-notice-area" role="status" aria-live="polite" hidden></div>
-            <label>Operation <select id="goal-operation"><option value="run">Run</option><option value="plan">Plan</option></select></label>
+            <input id="goal-operation" type="hidden" value="run">
             <label>Goal <textarea id="goal-input" rows="8" maxlength="262144" required placeholder="Describe the outcome…"></textarea></label>
             <label>Provider <select id="goal-provider" class="provider-select"></select></label>
             <label>Model <input id="goal-model" list="goal-model-list" maxlength="512" autocomplete="off" placeholder="Server default"><datalist id="goal-model-list"></datalist><small id="goal-model-status" class="field-hint" aria-live="polite"></small></label>
@@ -93,7 +93,7 @@
           </form>
           <section class="content-pane job-center" aria-labelledby="job-center-heading">
             <div class="pane-bar"><h2 id="job-center-heading">Activity</h2><div class="button-row"><button id="refresh-jobs-button" class="ghost" type="button">Refresh</button><button id="clear-finished-button" class="ghost" type="button">Clear finished</button></div></div>
-            <div id="job-list" class="card-list empty-state" aria-live="polite">No run or plan jobs.</div>
+            <div id="job-list" class="card-list empty-state" aria-live="polite">No run jobs.</div>
           </section>
         </div>
       </section>
@@ -109,7 +109,8 @@
             <select id="agent-reasoning" hidden aria-hidden="true"><option value="">Auto</option></select>
             <div class="agent-controls" aria-label="Agent controls">
               <button id="agent-cycle-reasoning-button" class="tool-button" type="button" aria-keyshortcuts="Alt+T" title="Change reasoning · Alt+T">Reasoning: auto</button>
-              <label>Mode <select id="agent-task-mode"><option value="act">Act</option><option value="plan">Plan</option></select></label>
+              <label>Mode <select id="agent-mode"><option value="act">Act</option><option value="lead">Lead</option></select></label>
+              <label>Lead context <select id="agent-handoff"><option value="2">Last 2 prompts</option><option value="1">Last prompt</option><option value="clean">Clean</option><option value="all">All</option></select></label>
               <label>Permissions <select id="agent-permission"><option value="smart">Smart</option><option value="confirm">Confirm</option><option value="yolo">Yolo</option></select></label>
               <button id="cancel-turn-button" class="danger" type="button" hidden>Cancel <kbd>Esc</kbd></button>
             </div>

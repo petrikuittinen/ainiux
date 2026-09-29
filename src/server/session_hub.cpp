@@ -87,8 +87,8 @@ bool path_within(const std::filesystem::path& root,
     return true;
 }
 
-std::string task_mode_name(agent::AgentTaskMode mode) {
-    return mode == agent::AgentTaskMode::Plan ? "plan" : "act";
+std::string active_lane_name(agent::AgentLane mode) {
+    return agent::agent_lane_name(mode);
 }
 
 const char* progress_action_name(agent::AgentProgressAction action) {
@@ -116,16 +116,22 @@ const char* progress_kind_name(agent::AgentProgressKind kind) {
 InteractiveSession::InteractiveSession(std::string id,
                                        std::string workspace,
                                        provider::RequestContext context,
+                                       cli::Options act_defaults,
+                                       cli::Options lead_defaults,
                                        agent::PermissionMode permission_mode,
-                                       agent::AgentTaskMode task_mode,
+                                       agent::AgentLane lane,
                                        bool allow_yolo,
                                        std::size_t max_events)
     : id_(std::move(id)),
       workspace_(std::move(workspace)),
       created_at_(server_timestamp()),
       context_(std::move(context)),
+      act_context_(context_),
+      lead_context_(context_),
+      act_defaults_(std::move(act_defaults)),
+      lead_defaults_(std::move(lead_defaults)),
       permission_mode_(permission_mode),
-      task_mode_(task_mode),
+      active_lane_(lane),
       allow_yolo_(allow_yolo),
       updated_at_(created_at_),
       controller_(std::make_shared<agent::AgentController>()),
@@ -170,11 +176,13 @@ void InteractiveSession::start_preparation() {
         if (error.ok()) {
             std::lock_guard<std::mutex> lock(mutex_);
             context_ = context;
+            if (active_lane_ == agent::AgentLane::Act) act_context_ = context_;
+            else lead_context_ = context_;
         }
         if (error.ok()) {
             agent::SessionRuntimeOptions options =
                 agent::make_session_runtime_options(
-                    context, workspace_, task_mode_, true);
+                    context, workspace_, active_lane_, true);
             options.permission_mode = permission_mode_;
             options.allow_yolo = allow_yolo_;
             options.on_prepare_progress = [this](const agent::PreparationProgress& progress) {
@@ -186,7 +194,7 @@ void InteractiveSession::start_preparation() {
                                           runtime::CancellationToken cancellation) {
                 return gate->request(request, cancellation);
             };
-            options.restore_task_mode = false;
+            options.restore_lane = false;
             error = controller_->runtime()->prepare(context, token, {}, std::move(options));
             if (error.ok()) {
                 (void)controller_->runtime()->update_project_settings(context);
@@ -298,7 +306,7 @@ std::string InteractiveSession::snapshot_json() const {
                          ",\"updated_at\":" + json::quote(updated_at_) +
                          ",\"provider\":" + json::quote(context_.profile.name) +
                          ",\"model\":" + json::quote(context_.options.model) +
-                         ",\"task_mode\":" + json::quote(task_mode_name(task_mode_)) +
+                         ",\"lane\":" + json::quote(active_lane_name(active_lane_)) +
                          ",\"permission_mode\":" + json::quote(agent::permission_mode_name(permission_mode_));
     result += ",\"reasoning\":" +
               json::quote(config::reasoning_selection_value(context_.options.reasoning));
@@ -476,12 +484,15 @@ Error InteractiveSession::history(long long before, std::string& output) const {
     output = "{\"turn_id\":" + json::quote(active_turn_id_) + ",\"messages\":[";
     bool first = true;
     for (const auto& row : rows) {
+        if (row.role == "handoff" || row.role == "summary") continue;
         if (!first) output += ',';
         first = false;
         const long long created_at_ms = agent::normalize_timestamp_ms(row.created_at);
         if (row.role == "user") preceding_user_ms = created_at_ms;
         output += "{\"seq\":" + std::to_string(row.seq) +
             ",\"role\":" + json::quote(row.role) +
+            ",\"lane\":" + json::quote(row.lane) +
+            ",\"turn\":" + std::to_string(row.turn) +
             ",\"content\":" + json::quote(redact_secrets(row.content, {context_.api_key})) +
             ",\"created_at_ms\":" + std::to_string(created_at_ms);
         if (row.role == "assistant") {
@@ -525,6 +536,8 @@ Error InteractiveSession::model_settings(const std::string& body, std::string& o
         error = controller_->runtime()->update_project_settings(built.context);
         if (!error.ok()) return {error.code, "could not save workspace settings"};
         context_ = std::move(built.context);
+        if (active_lane_ == agent::AgentLane::Act) act_context_ = context_;
+        else lead_context_ = context_;
         output = public_model_configuration(context_.options);
     }
     publish("settings_changed", snapshot_json());
@@ -562,6 +575,8 @@ Error InteractiveSession::set_reasoning(const std::string& body) {
         error = controller_->runtime()->update_project_settings(next);
         if (!error.ok()) return {error.code, safe_error(error)};
         context_ = std::move(next);
+        if (active_lane_ == agent::AgentLane::Act) act_context_ = context_;
+        else lead_context_ = context_;
     }
     publish("reasoning_changed", snapshot_json());
     return ok_error();
@@ -577,10 +592,10 @@ Error InteractiveSession::set_settings(const std::string& body) {
         return model_settings(body, output);
     }
     Error error = reject_unknown(parsed.value,
-                                 {"provider", "model", "task_mode", "permission_mode"});
+                                 {"provider", "model", "lane", "handoff", "permission_mode"});
     if (!error.ok()) return error;
     const char* selected = nullptr;
-    for (const char* field : {"provider", "model", "task_mode", "permission_mode"}) {
+    for (const char* field : {"provider", "model", "lane", "permission_mode"}) {
         if (parsed.value.get(field) == nullptr) continue;
         if (selected != nullptr) {
             return {ErrorCode::BadArgs,
@@ -590,8 +605,10 @@ Error InteractiveSession::set_settings(const std::string& body) {
     }
     if (selected == nullptr) {
         return {ErrorCode::BadArgs,
-                "agent settings requests must include provider, model, task_mode, or permission_mode"};
+                "agent settings requests must include provider, model, lane, or permission_mode"};
     }
+    if (parsed.value.get("handoff") != nullptr && std::string(selected) != "lane")
+        return field_error("handoff", "is valid only when changing lane");
     std::string value;
     error = required_string(parsed.value, selected, value, 512U);
     if (!error.ok()) return error;
@@ -626,14 +643,62 @@ Error InteractiveSession::set_settings(const std::string& body) {
             error = controller_->runtime()->update_project_settings(next);
             if (!error.ok()) return {error.code, safe_error(error)};
             context_ = std::move(next);
-        } else if (std::string(selected) == "task_mode") {
-            agent::AgentTaskMode mode;
-            if (value == "act") mode = agent::AgentTaskMode::Act;
-            else if (value == "plan") mode = agent::AgentTaskMode::Plan;
-            else return field_error("task_mode", "must be act or plan");
-            error = controller_->runtime()->switch_task_mode(mode);
+        } else if (std::string(selected) == "lane") {
+            agent::AgentLane mode;
+            if (value == "act") mode = agent::AgentLane::Act;
+            else if (value == "lead") mode = agent::AgentLane::Lead;
+            else return field_error("lane", "must be act or lead");
+            if (active_lane_ == agent::AgentLane::Act) act_context_ = context_;
+            else lead_context_ = context_;
+            provider::RequestContext& target =
+                mode == agent::AgentLane::Act ? act_context_ : lead_context_;
+            cli::Options target_options = target.options;
+            bool restored_lane = false;
+            error = agent::restore_project_lane_settings(
+                workspace_, mode, target_options, restored_lane);
             if (!error.ok()) return {error.code, safe_error(error)};
-            task_mode_ = mode;
+            if (restored_lane) {
+                provider::ContextResult built = provider::build_context(target_options);
+                if (!built.error.ok()) return public_context_error(std::move(built.error));
+                built.context.routing_session_id = target.routing_session_id;
+                target = std::move(built.context);
+            } else {
+                target_options = mode == agent::AgentLane::Act
+                                     ? act_defaults_
+                                     : lead_defaults_;
+                provider::ContextResult built = provider::build_context(target_options);
+                if (!built.error.ok()) return public_context_error(std::move(built.error));
+                built.context.routing_session_id = target.routing_session_id;
+                target = std::move(built.context);
+            }
+            agent::LaneHandoff handoff;
+            handoff.recent_user_turns = context_.options.agent_lead_context_turns;
+            handoff.assistant_preview_chars =
+                context_.options.agent_lead_response_chars;
+            handoff.scope = mode == agent::AgentLane::Act
+                                ? agent::LaneHandoff::Scope::All
+                                : agent::LaneHandoff::Scope::Recent;
+            if (const json::Value* requested = parsed.value.get("handoff");
+                requested != nullptr && requested->is_string()) {
+                if (requested->string == "clean") handoff.scope = agent::LaneHandoff::Scope::Clean;
+                else if (requested->string == "all") handoff.scope = agent::LaneHandoff::Scope::All;
+                else {
+                    try {
+                        std::size_t used = 0;
+                        handoff.recent_user_turns = std::stoi(requested->string, &used);
+                        if (used != requested->string.size())
+                            return field_error("handoff", "must be clean, all, or 1..100");
+                    } catch (...) {
+                        return field_error("handoff", "must be clean, all, or 1..100");
+                    }
+                    if (handoff.recent_user_turns < 1 || handoff.recent_user_turns > 100)
+                        return field_error("handoff", "must be clean, all, or 1..100");
+                }
+            }
+            error = controller_->runtime()->switch_lane(mode, handoff, &target);
+            if (!error.ok()) return {error.code, safe_error(error)};
+            context_ = target;
+            active_lane_ = mode;
         } else {
             agent::PermissionMode mode;
             if (!agent::parse_permission_mode(value, mode))
@@ -645,6 +710,8 @@ Error InteractiveSession::set_settings(const std::string& body) {
             if (!error.ok()) return {error.code, safe_error(error)};
             permission_mode_ = mode;
         }
+        if (active_lane_ == agent::AgentLane::Act) act_context_ = context_;
+        else lead_context_ = context_;
     }
     publish("settings_changed", snapshot_json());
     return ok_error();
@@ -772,7 +839,7 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     if (!parsed.value.is_object()) return {{}, {ErrorCode::BadArgs, "session body must be a JSON object"}};
     Error error = reject_unknown(parsed.value,
                                  {"kind", "provider", "model", "api", "reasoning",
-                                  "permission_mode", "task_mode"});
+                                  "permission_mode", "lane"});
     if (!error.ok()) return {{}, error};
     std::string kind = "agent";
     std::string provider_name;
@@ -780,7 +847,7 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     std::string api;
     std::string reasoning;
     std::string permission_text;
-    std::string task_text = "act";
+    std::string lane_text = "act";
     error = optional_string(parsed.value, "kind", kind, 32U);
     if (!error.ok()) return {{}, error};
     error = optional_string(parsed.value, "provider", provider_name, 128U);
@@ -793,34 +860,54 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     if (!error.ok()) return {{}, error};
     error = optional_string(parsed.value, "permission_mode", permission_text, 32U);
     if (!error.ok()) return {{}, error};
-    error = optional_string(parsed.value, "task_mode", task_text, 32U);
+    error = optional_string(parsed.value, "lane", lane_text, 32U);
     if (!error.ok()) return {{}, error};
     if (ascii_lower(ascii_trim(kind)) != "agent")
         return {{}, {ErrorCode::UnsupportedFeature, "only kind 'agent' sessions are supported"}};
-    agent::AgentTaskMode task_mode = agent::AgentTaskMode::Act;
-    const std::string normalized_task = ascii_lower(ascii_trim(task_text));
-    if (normalized_task == "plan") task_mode = agent::AgentTaskMode::Plan;
-    else if (normalized_task != "act") return {{}, field_error("task_mode", "must be act or plan")};
+    agent::AgentLane lane = agent::AgentLane::Act;
+    const std::string normalized_lane = ascii_lower(ascii_trim(lane_text));
+    if (normalized_lane == "lead") lane = agent::AgentLane::Lead;
+    else if (normalized_lane != "act") return {{}, field_error("lane", "must be act or lead")};
     if (!provider_name.empty() && !known_provider(provider_name))
         return {{}, field_error("provider", "names an unknown configured provider profile")};
     if (!api.empty() && api != "chat" && api != "responses")
         return {{}, field_error("api", "must be chat or responses")};
 
+    cli::Options act_defaults = base_options_;
+    cli::Options lead_defaults = base_options_.agent_lead_options
+                                     ? *base_options_.agent_lead_options
+                                     : base_options_;
+    act_defaults.agent = true;
+    act_defaults.agent_run = false;
+    act_defaults.image = false;
+    lead_defaults.agent = true;
+    lead_defaults.agent_run = false;
+    lead_defaults.image = false;
     cli::Options options = base_options_;
     agent::PermissionMode permission_mode = agent::PermissionMode::Smart;
     bool restored = false;
     error = agent::restore_project_settings(workspace_, options, restored,
                                             &permission_mode);
     if (!error.ok()) return {{}, public_context_error(std::move(error))};
-    if (restored && !parsed.value.get("task_mode")) {
+    if (restored && !parsed.value.get("lane")) {
         agent::AgentSessionStore store;
         error = store.open(workspace_);
         agent::AgentProjectRecord project;
         if (error.ok()) error = store.open_project(project);
-        bool plan = false;
-        if (error.ok()) error = agent::saved_task_mode(project.settings_json, plan);
+        agent::AgentLane saved = agent::AgentLane::Act;
+        if (error.ok()) error = agent::saved_agent_lane(project.settings_json, saved);
         if (!error.ok()) return {{}, public_context_error(std::move(error))};
-        task_mode = plan ? agent::AgentTaskMode::Plan : agent::AgentTaskMode::Act;
+        lane = saved;
+    }
+    if (parsed.value.get("lane") != nullptr) {
+        cli::Options selected_options = lane == agent::AgentLane::Act
+                                            ? act_defaults
+                                            : lead_defaults;
+        bool lane_found = false;
+        error = agent::restore_project_lane_settings(
+            workspace_, lane, selected_options, lane_found);
+        if (!error.ok()) return {{}, public_context_error(std::move(error))};
+        options = std::move(selected_options);
     }
     if (!permission_text.empty()) {
         if (!agent::parse_permission_mode(ascii_lower(ascii_trim(permission_text)),
@@ -851,7 +938,6 @@ SessionCreateResult SessionHub::create(const std::string& body) {
     }
     options.agent = true;
     options.agent_run = false;
-    options.agent_plan = task_mode == agent::AgentTaskMode::Plan;
     options.image = false;
     provider::ContextResult built = provider::build_context(options);
     if (!built.error.ok()) return {{}, public_context_error(std::move(built.error))};
@@ -869,7 +955,8 @@ SessionCreateResult SessionHub::create(const std::string& body) {
             return {{}, {ErrorCode::RateLimit, "the interactive session limit is full"}};
         const std::string id = "session_" + std::to_string(next_session_id_++);
         session = std::shared_ptr<InteractiveSession>(new InteractiveSession(
-            id, workspace_, std::move(built.context), permission_mode, task_mode,
+            id, workspace_, std::move(built.context), std::move(act_defaults),
+            std::move(lead_defaults), permission_mode, lane,
             allow_yolo_,
             Limits::events_per_job));
         sessions_.emplace(id, session);

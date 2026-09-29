@@ -117,8 +117,22 @@ AgentSlashCommand parse_agent_slash_command(const std::string& text) {
         command.error = "Usage: /index-code";
         return command;
     }
-    if (text == "/plan") {
-        command.action = AgentSlashAction::Plan;
+    if (text == "/lead" || text.rfind("/lead ", 0) == 0) {
+        command.action = AgentSlashAction::Lead;
+        command.argument = text.size() <= 5 ? std::string()
+                                             : app::detail::trim_ascii(text.substr(5));
+        if (!command.argument.empty() && command.argument != "clean" &&
+            command.argument != "all") {
+            try {
+                std::size_t used = 0;
+                const int count = std::stoi(command.argument, &used);
+                if (used != command.argument.size() || count < 1 || count > 100)
+                    throw std::invalid_argument("range");
+            } catch (...) {
+                command.action = AgentSlashAction::Invalid;
+                command.error = "Usage: /lead [clean|1..100|all]";
+            }
+        }
         return command;
     }
     if (text == "/act") {
@@ -310,8 +324,8 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
                                     "/compact all (reset context; logs kept)\n"
                                     "/index-code (create/enable code index)\n"
                                     "/show-index (refresh compact index report)\n"
-                                    "/plan (planning task mode)\n"
-                                    "/act (full coding task mode)\n"
+                                    "/lead [clean|N|all] (switch to Lead; default N=2)\n"
+                                    "/act (return to Act mode)\n"
                                     "/goal [condition|clear|pause|resume]\n"
                                     "/permissions [confirm|smart|yolo]\n"
                                     "/list-mcp /enable-mcp /disable-mcp /remove-mcp NAME\n"
@@ -658,17 +672,18 @@ void handle_tui_command(const std::string& text, TuiCommandContext& ctx, TuiComm
         handlers.start_agent_index_code();
         return;
     }
-    if (agent_command.action == AgentSlashAction::Plan ||
+    if (agent_command.action == AgentSlashAction::Lead ||
         agent_command.action == AgentSlashAction::Act) {
         if (ctx.active_job != ActiveJob::None) {
             ctx.status =
-                "Cannot switch task mode while an agent job is running; wait or cancel it first";
+                "Cannot switch agent mode while an agent job is running; wait or cancel it first";
             return;
         }
-        handlers.switch_agent_task_mode(
-            agent_command.action == AgentSlashAction::Plan
-                ? agent::AgentTaskMode::Plan
-                : agent::AgentTaskMode::Act);
+        handlers.switch_agent_lane(
+            agent_command.action == AgentSlashAction::Lead
+                ? agent::AgentLane::Lead
+                : agent::AgentLane::Act,
+            agent_command.argument);
         return;
     }
     if (agent_command.action == AgentSlashAction::Permissions) {

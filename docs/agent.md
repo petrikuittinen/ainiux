@@ -1,17 +1,16 @@
 # Agent workflows
 
-Ainiux agent mode is separate from ordinary chat. It combines the configured model with workspace-contained tools, project sessions, Guard checks, permissions, task policies, and local logs. Start interactive mode with `-a`, one-shot Act with `-r`, or one-shot Plan with `plan`/`--plan`.
+Ainiux agent mode is separate from ordinary chat. It combines configured Act and Lead models with workspace-contained tools, project sessions, Guard checks, permissions, goals, and local logs. Start interactive mode with `-a` or one-shot Act with `-r`. Lead is intentionally interactive-only.
 
 ```sh
 ainiux lmstudio -m MODEL -a
 ainiux deepseek -m MODEL -r "add unit tests for the parser"
-ainiux plan "design a migration" --provider openai -m MODEL
 ```
 
 ## Project state
 
-The workspace remembers its provider, model, request settings, and interactive
-Act/Plan policy across restarts. The Web UI restores the saved transcript when
+The workspace remembers independent Act and Lead provider/model/request settings
+and the active mode across restarts. The Web UI restores the saved transcript when
 Agent opens, idle and ready for another instruction; restarting never resumes
 tool execution automatically. Editor AI assist shares the workspace model
 configuration, while ordinary chat threads retain their own settings. Native
@@ -28,17 +27,19 @@ The first interactive use may offer to build a code index. Declining leaves live
 
 `/setting` opens the same grouped settings widget as chat. Agent-only rows include `thinking_preview_max_chars` and `cmd-out`. `s` writes the project settings file; `q` discards the draft.
 
-## Act, Plan, and Goal
+## Act, Lead, and Goal
 
 The input chrome shows one of three session states:
 
-- **act** (default) — full coding policy. `/act` returns here from Plan.
-- **plan** — `/plan` switches to planning policy. Read and research stay available; writes are limited to planning documents.
+- **act** (default) — the normal implementation mode, typically using the less expensive model.
+- **lead** — `/lead` switches to an independently configured planning/problem-solving mode. It has the same tools and mutation authority as Act.
 - **goal** — `/goal CONDITION` overlays Act with a persistent completion condition. The chrome stays `goal` until `goal_met`, `/goal clear`, `/goal pause`, stall, or the turn cap.
 
-`goal_met` is advertised only in the **goal** state. Ordinary Act/Plan turns do not receive that tool, so a finished one-shot request is just a normal final answer.
+`goal_met` is advertised only in the **goal** state. Ordinary Act/Lead turns do not receive that tool, so a finished one-shot request is just a normal final answer.
 
-Plan keeps read and research tools but code-enforces writes to planning documents. One-shot Plan accepts `plan "goal"`, `--plan`, and `--plan-file`. It is not a promise that every model will produce a good plan; review the document before executing it.
+Act and Lead retain separate cached model conversations while sharing the workspace, tools, Guard, permissions, goals, and index. `/lead` keeps the two latest Act user turns by default and the first 200 Unicode characters of each corresponding final response; tool calls and tool results are omitted. `/lead clean` transfers nothing, `/lead N` selects 1–100 recent prompts with the same response limit, and `/lead all` retains all stored rows, including tool activity. `/act` returns Lead prompts and full final responses without tool traffic.
+
+Configure Lead with the same setting vocabulary under `[agent.lead]`; when omitted it clones Act. `agent.lead_context_turns` and `agent.lead_response_chars` configure the default bounded handoff. Project-local mode settings override these defaults after the first change.
 
 ## Native tools
 
@@ -47,7 +48,7 @@ The current native names are `index`, `ls`, `glob`, `grep`, `symbol`, `outline`,
 `edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on
 index, network, session, and mutation policy. When `models.conf` marks the current model
 `web_search=on` **and** the current adapter can emit that family's hosted tool,
-agent/run/plan attach the provider-hosted search tool and do
+agent/run attach the provider-hosted search tool and do
 not advertise the client Tavily/DuckDuckGo `web_search` function. Official
 Gemini OpenAI-compat Chat stays on client `web_search` because that adapter
 rejects hosted `google_search`. GPT-5, Grok 4, and DeepSeek V4 / Vision host
@@ -157,7 +158,7 @@ It produces Markdown and may write its local diagnostic review log unless disabl
 
 ## Interactive commands and display
 
-Agent mode shares input editing, cancellation, help, provider/model selectors, scrolling, and editor switching with chat. In the input box, Up on the first visual line and Down on the last visual line recall earlier submitted prompts (this TUI session only). Agent and chat keep separate recall lists. Agent-only commands include `/compact`, `/compact all`, `/clear`, `/cmd-out`, `/index-code`, `/show-index`, `/plan`, `/act`, `/goal`, and project permission controls shown by `/help`. `/chat`, `/editor`, `/agent`, `/mode`, and `/cycle` are explicit surface handoffs.
+Agent mode shares input editing, cancellation, help, provider/model selectors, scrolling, and editor switching with chat. In the input box, Up on the first visual line and Down on the last visual line recall earlier submitted prompts (this TUI session only). Agent and chat keep separate recall lists. Agent-only commands include `/compact`, `/compact all`, `/clear`, `/cmd-out`, `/index-code`, `/show-index`, `/lead [clean|N|all]`, `/act`, `/goal`, and project permission controls shown by `/help`. `/chat`, `/editor`, `/agent`, `/mode`, and `/cycle` are explicit surface handoffs.
 
 ### Background agent while in the editor
 
@@ -189,7 +190,7 @@ Related documentation: [documentation index](README.md), [keyboard shortcuts](ke
 
 ## MCP tools
 
-Agent, run, and plan modes can call tools from installed [MCP](mcp.md) servers. Ordinary chat and the editor do not load them.
+Interactive Agent and one-shot Run can call tools from installed [MCP](mcp.md) servers. Ordinary chat and the editor do not load them.
 
 ```sh
 ainiux --add-mcp catalog --mcp-url https://awesome-mcp.tools/mcp

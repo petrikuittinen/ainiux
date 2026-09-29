@@ -124,8 +124,8 @@ struct SessionIndexReportResult {
 
 struct SessionRuntimeOptions {
     std::string workspace = ".";
-    AgentTaskMode task_mode = AgentTaskMode::Act;
-    bool restore_task_mode = true;
+    AgentLane lane = AgentLane::Act;
+    bool restore_lane = true;
     bool allow_network = true;  // fetch_url / web_search in agent mode
     bool interactive = false;  // turn-cap can return needs_user_continue
     bool enable_session_db = true;
@@ -171,8 +171,15 @@ struct SessionRuntimeOptions {
 SessionRuntimeOptions make_session_runtime_options(
     const provider::RequestContext& context,
     std::string workspace,
-    AgentTaskMode task_mode,
+    AgentLane lane,
     bool interactive);
+
+struct LaneHandoff {
+    enum class Scope { Recent, Clean, All };
+    Scope scope = Scope::Recent;
+    int recent_user_turns = 2;
+    std::size_t assistant_preview_chars = 200;
+};
 
 class AgentSessionRuntime {
    public:
@@ -187,7 +194,7 @@ class AgentSessionRuntime {
     const std::string& workspace() const { return options_.workspace; }
     const std::string& session_db_path() const { return session_store_.path(); }
     ToolProtocol protocol() const { return state_.protocol; }
-    AgentTaskMode task_mode() const { return task_mode_; }
+    AgentLane lane() const { return active_lane_; }
     MutationPolicy mutation_policy() const { return tools_.mutation_policy(); }
     PermissionMode permission_mode() const { return permission_mode_; }
     const SessionGoal& goal() const { return goal_; }
@@ -249,9 +256,11 @@ class AgentSessionRuntime {
     // restoration the next time this project opens in interactive agent mode.
     Error update_project_settings(const provider::RequestContext& context);
 
-    // Switch the trusted task prompt and tool policy without resetting session
-    // history. Only valid while no turn/compaction operation is active.
-    Error switch_task_mode(AgentTaskMode mode);
+    // Switch the active lane while retaining each lane's own model context.
+    // Only valid while no turn/compaction operation is active.
+    Error switch_lane(AgentLane lane,
+                      LaneHandoff handoff = {},
+                      const provider::RequestContext* lane_context = nullptr);
     // Persist first, then publish to the live registry. On failure the active
     // mode is unchanged.
     Error switch_permission_mode(PermissionMode mode,
@@ -335,7 +344,7 @@ class AgentSessionRuntime {
     void publish_in_flight_generation_tokens(long long tokens);
     void clear_in_flight_generation_tokens();
     // Fixed per-request overhead always present after seed: system prompt,
-    // optional AGENTS.md, Act/Plan control, and native tool schemas.
+    // optional AGENTS.md, Act/Lead control, and native tool schemas.
     long long estimate_seed_overhead_tokens() const;
     // Compaction "before" size: live conversation when seeded; otherwise seed
     // overhead + full durable model-projection transcript (not the bounded
@@ -359,10 +368,11 @@ class AgentSessionRuntime {
                                     std::vector<AgentToolEventRecord>& events) const;
 
     SessionRuntimeOptions options_;
-    AgentTaskMode task_mode_ = AgentTaskMode::Act;
+    AgentLane active_lane_ = AgentLane::Act;
     PermissionMode permission_mode_ = PermissionMode::Smart;
     SessionGoal goal_;
     long long context_reset_after_seq_ = 0;
+    long long lane_context_after_seq_ = 0;
     std::atomic<long long> display_min_seq_{0};
     bool prepared_ = false;
     bool conversation_seeded_ = false;
@@ -379,6 +389,17 @@ class AgentSessionRuntime {
     AgentsMdBundle agents_md_;
     provider::ToolConversation conversation_;
     AgentLoopState state_;
+    struct LaneSnapshot {
+        provider::ToolConversation conversation;
+        AgentLoopState state;
+        bool seeded = false;
+        std::string pending_handoff;
+        long long imported_through_seq = 0;
+        long long context_after_seq = 0;
+    };
+    LaneSnapshot act_lane_;
+    LaneSnapshot lead_lane_;
+    std::string pending_handoff_;
     AgentLoopLimits limits_;
     std::vector<std::string> known_tools_;
     std::size_t session_turns_ = 0;

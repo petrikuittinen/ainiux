@@ -1,5 +1,6 @@
 #include "agent/project_settings.hpp"
 
+#include <algorithm>
 #include <filesystem>
 
 #include "agent/project_root.hpp"
@@ -9,24 +10,26 @@
 
 namespace ainiux::agent {
 
-Error saved_task_mode(const std::string& settings_json, bool& plan) {
-    plan = false;
+Error saved_agent_lane(const std::string& settings_json, AgentLane& lane) {
+    lane = AgentLane::Act;
     const auto parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
     if (!parsed.error.ok() || !parsed.value.is_object()) return {ErrorCode::Config, "invalid project settings"};
-    const auto* mode = parsed.value.get("task_mode");
+    const auto* mode = parsed.value.get("active_lane");
     if (!mode) return ok_error();
-    if (!mode->is_string() || (mode->string != "act" && mode->string != "plan"))
-        return {ErrorCode::Config, "saved task_mode must be act or plan"};
-    plan = mode->string == "plan";
+    if (!mode->is_string() || (mode->string != "act" && mode->string != "lead"))
+        return {ErrorCode::Config, "saved active_lane must be act or lead"};
+    lane = mode->string == "lead" ? AgentLane::Lead : AgentLane::Act;
     return ok_error();
 }
 
-Error settings_with_task_mode(const std::string& settings_json, bool plan, std::string& updated) {
+Error settings_with_agent_lane(const std::string& settings_json, AgentLane lane,
+                               std::string& updated) {
     auto parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
     if (!parsed.error.ok() || !parsed.value.is_object()) return {ErrorCode::Config, "invalid project settings"};
     json::Value mode;
-    mode.type = json::Value::Type::String; mode.string = plan ? "plan" : "act";
-    parsed.value.object["task_mode"] = std::move(mode);
+    mode.type = json::Value::Type::String;
+    mode.string = lane == AgentLane::Lead ? "lead" : "act";
+    parsed.value.object["active_lane"] = std::move(mode);
     updated = json::stringify(parsed.value);
     return ok_error();
 }
@@ -39,6 +42,75 @@ Error merge_project_model_settings(const std::string& settings_json,
     for (const auto& entry : next.value.object) stored.value.object[entry.first] = entry.second;
     updated = json::stringify(stored.value);
     return ok_error();
+}
+
+Error merge_project_lane_settings(const std::string& settings_json,
+                                  AgentLane lane,
+                                  const cli::Options& options,
+                                  std::string& updated) {
+    auto root = json::parse(settings_json.empty() ? "{}" : settings_json);
+    auto values = json::parse(chat::settings_json_from_options(options));
+    if (!root.error.ok() || !root.value.is_object() ||
+        !values.error.ok() || !values.value.is_object())
+        return {ErrorCode::Config, "invalid project mode settings"};
+    json::Value text;
+    text.type = json::Value::Type::String;
+    text.string = options.provider;
+    values.value.object["provider"] = text;
+    text.string = options.base_url;
+    values.value.object["base_url"] = text;
+    text.string = options.api;
+    values.value.object["api"] = text;
+    text.string = options.model;
+    values.value.object["model"] = text;
+    json::Value& lanes = root.value.object["lanes"];
+    if (!lanes.is_object()) {
+        lanes = {};
+        lanes.type = json::Value::Type::Object;
+    }
+    lanes.object[agent_lane_name(lane)] = std::move(values.value);
+    updated = json::stringify(root.value);
+    return ok_error();
+}
+
+Error apply_project_lane_settings(const std::string& settings_json,
+                                  AgentLane lane,
+                                  cli::Options& options,
+                                  bool& found) {
+    found = false;
+    auto root = json::parse(settings_json.empty() ? "{}" : settings_json);
+    if (!root.error.ok() || !root.value.is_object())
+        return {ErrorCode::Config, "invalid project mode settings"};
+    const json::Value* lanes = root.value.get("lanes");
+    if (lanes == nullptr || !lanes->is_object()) return ok_error();
+    const json::Value* values = lanes->get(agent_lane_name(lane));
+    if (values == nullptr || !values->is_object()) return ok_error();
+    Error error = chat::apply_settings_json(options, json::stringify(*values));
+    if (!error.ok()) return error;
+    auto copy_string = [&](const char* name, std::string& output) {
+        const json::Value* value = values->get(name);
+        if (value != nullptr && value->is_string()) output = value->string;
+    };
+    copy_string("provider", options.provider);
+    copy_string("base_url", options.base_url);
+    copy_string("api", options.api);
+    copy_string("model", options.model);
+    found = true;
+    return ok_error();
+}
+
+Error restore_project_lane_settings(const std::string& workspace,
+                                    AgentLane lane,
+                                    cli::Options& options,
+                                    bool& found) {
+    found = false;
+    AgentSessionStore store;
+    Error error = store.open(workspace);
+    if (!error.ok()) return error;
+    AgentProjectRecord project;
+    error = store.open_project(project);
+    if (!error.ok()) return error;
+    return apply_project_lane_settings(project.settings_json, lane, options, found);
 }
 
 Error save_project_model_settings(const std::string& workspace, const cli::Options& options) {
@@ -127,6 +199,72 @@ Error settings_json_with_context_reset_after_seq(const std::string& settings_jso
     return ok_error();
 }
 
+Error lane_imported_through_seq_from_settings_json(const std::string& settings_json,
+                                                   AgentLane lane,
+                                                   long long& seq) {
+    seq = 0;
+    const json::ParseResult parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object())
+        return {ErrorCode::Config, "agent project settings must be a JSON object"};
+    const std::string key = std::string(agent_lane_name(lane)) + "_imported_through_seq";
+    const json::Value* value = parsed.value.get(key);
+    if (value == nullptr) return ok_error();
+    if (value->type != json::Value::Type::Number || value->number < 0 ||
+        value->number > 1.0e15)
+        return {ErrorCode::Config, "agent mode handoff sequence is invalid"};
+    seq = static_cast<long long>(value->number);
+    return ok_error();
+}
+
+Error settings_json_with_lane_imported_through_seq(const std::string& settings_json,
+                                                   AgentLane lane,
+                                                   long long seq,
+                                                   std::string& updated) {
+    json::ParseResult parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object())
+        return {ErrorCode::Config, "agent project settings must be a JSON object"};
+    json::Value value;
+    value.type = json::Value::Type::Number;
+    value.number = static_cast<double>(std::max(0LL, seq));
+    parsed.value.object[std::string(agent_lane_name(lane)) + "_imported_through_seq"] =
+        std::move(value);
+    updated = json::stringify(parsed.value);
+    return ok_error();
+}
+
+Error lane_context_after_seq_from_settings_json(const std::string& settings_json,
+                                                AgentLane lane,
+                                                long long& seq) {
+    seq = 0;
+    const json::ParseResult parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object())
+        return {ErrorCode::Config, "agent project settings must be a JSON object"};
+    const std::string key = std::string(agent_lane_name(lane)) + "_context_after_seq";
+    const json::Value* value = parsed.value.get(key);
+    if (value == nullptr) return ok_error();
+    if (value->type != json::Value::Type::Number || value->number < 0 ||
+        value->number > 1.0e15)
+        return {ErrorCode::Config, "agent mode context sequence is invalid"};
+    seq = static_cast<long long>(value->number);
+    return ok_error();
+}
+
+Error settings_json_with_lane_context_after_seq(const std::string& settings_json,
+                                                AgentLane lane,
+                                                long long seq,
+                                                std::string& updated) {
+    json::ParseResult parsed = json::parse(settings_json.empty() ? "{}" : settings_json);
+    if (!parsed.error.ok() || !parsed.value.is_object())
+        return {ErrorCode::Config, "agent project settings must be a JSON object"};
+    json::Value value;
+    value.type = json::Value::Type::Number;
+    value.number = static_cast<double>(std::max(0LL, seq));
+    parsed.value.object[std::string(agent_lane_name(lane)) + "_context_after_seq"] =
+        std::move(value);
+    updated = json::stringify(parsed.value);
+    return ok_error();
+}
+
 Error restore_project_settings(const std::string& workspace,
                                cli::Options& options,
                                bool& restored,
@@ -153,7 +291,17 @@ Error restore_project_settings(const std::string& workspace,
     error = store.open_project(project);
     if (!error.ok()) return error;
 
-    error = chat::apply_settings_json(
+    AgentLane lane = AgentLane::Act;
+    error = saved_agent_lane(project.settings_json, lane);
+    if (!error.ok()) return error;
+    bool lane_found = false;
+    error = apply_project_lane_settings(project.settings_json, lane, options, lane_found);
+    if (!error.ok()) return error;
+    if (lane_found) {
+        options.agent_project_settings_restored = true;
+        restored = true;
+    }
+    if (!lane_found) error = chat::apply_settings_json(
         options, project.settings_json.empty() ? "{}" : project.settings_json);
     if (!error.ok()) {
         return {error.code,
@@ -168,7 +316,7 @@ Error restore_project_settings(const std::string& workspace,
                         error.message};
         }
     }
-    if (!project.provider.empty()) {
+    if (!lane_found && !project.provider.empty()) {
         options.provider = project.provider;
         options.base_url = project.base_url;
         options.chat_url.clear();

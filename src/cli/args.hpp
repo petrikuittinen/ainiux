@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -89,8 +90,6 @@ struct Options {
     bool agent_project_settings_restored = false;
     // One-shot headless agent goal: -r / --run / --run-file / ainiux run
     bool agent_run = false;
-    // One-shot agent task uses the planning prompt and planning-document policy.
-    bool agent_plan = false;
     bool agent_log_enabled = true;
     bool agent_log_cli_explicit = false;
     // Session-scoped strict A/B control. Never persisted to configuration.
@@ -251,6 +250,10 @@ struct Options {
     bool agent_show_command_output = false;
     // Hard cap on the full agent LLM HTTP body (including SSE framing). 0 = unlimited.
     long agent_max_response_bytes = 32L * 1024L * 1024L;  // 32 MiB
+    // Optional full request bundle from [agent.lead]. Null means clone Act.
+    std::shared_ptr<Options> agent_lead_options;
+    int agent_lead_context_turns = 2;
+    size_t agent_lead_response_chars = 200;
     long max_image_bytes = 20971520;
     long media_max_size_to_store_to_db = 65536;
     int media_expiration_days = 7;

@@ -45,15 +45,15 @@ struct SourceRange {
     bool redacted = false;
 };
 
-enum class MutationPolicy { Disabled, PlanningDocuments, Full };
+enum class MutationPolicy { Disabled, RestrictedDocuments, Full };
 enum class IndexAccessMode {
     Disabled,
     LazyHints,
     SnapshotAuthorization,
 };
 
-// Snapshot-backed workspace tools. Security review disables mutation, Plan
-// limits writes to approved planning Markdown, and Act enables full mutation.
+// Snapshot-backed workspace tools. Security review disables mutation, the
+// restricted-document policy limits writes, and agent lanes enable full mutation.
 struct HistoryBackupPolicy {
     bool enabled = true;
     std::size_t max_bytes = 1024U * 1024U;  // 1 MiB
@@ -197,7 +197,10 @@ class ReadToolRegistry {
         hosted_web_search_ = enabled;
         hosted_web_search_name_ = name.empty() ? "web_search" : std::move(name);
     }
-    // Optional MCP tools (agent/run/plan only). Not owned; caller keeps Manager alive.
+    void set_secrets(std::vector<std::string> secrets) {
+        secrets_ = std::move(secrets);
+    }
+    // Optional MCP tools (agent/run only). Not owned; caller keeps Manager alive.
     void set_mcp_bridge(mcp::ToolBridge* bridge) { mcp_bridge_ = bridge; }
     std::vector<ToolDescriptor> native_descriptors() const;
     std::vector<provider::FunctionDefinition> definitions() const;

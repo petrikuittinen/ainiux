@@ -177,7 +177,7 @@ const char* tool_schema(const std::string& name) {
     if (name == "ainiux_chat") {
         return R"({"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"api":{"type":"string","enum":["chat","responses"]},"messages":{"type":"array","items":{"type":"object","properties":{"role":{"type":"string"},"content":{"type":"string"}},"required":["role","content"],"additionalProperties":false}}},"required":["messages"],"additionalProperties":false})";
     }
-    if (name == "ainiux_run" || name == "ainiux_plan") {
+    if (name == "ainiux_run") {
         return R"({"type":"object","properties":{"provider":{"type":"string"},"model":{"type":"string"},"api":{"type":"string","enum":["chat","responses"]},"goal":{"type":"string"}},"required":["goal"],"additionalProperties":false})";
     }
     if (name == "ainiux_image") {
@@ -349,22 +349,21 @@ McpResponse McpAdapter::handle(const http::Request& request) {
 
     if (method == "server/discover") {
         return rpc_response(id_text,
-            "{\"resultType\":\"complete\",\"supportedVersions\":[\"2026-07-28\"],\"capabilities\":{\"tools\":{},\"extensions\":{\"io.modelcontextprotocol/tasks\":{}}},\"_meta\":{\"io.modelcontextprotocol/serverInfo\":{\"name\":\"ainiux\",\"version\":\"" + std::string(versionNumber) + "\"}},\"instructions\":\"Use Ainiux tools for bounded asynchronous chat, agent, plan, image, and job control operations.\",\"ttlMs\":3600000,\"cacheScope\":\"public\"}");
+            "{\"resultType\":\"complete\",\"supportedVersions\":[\"2026-07-28\"],\"capabilities\":{\"tools\":{},\"extensions\":{\"io.modelcontextprotocol/tasks\":{}}},\"_meta\":{\"io.modelcontextprotocol/serverInfo\":{\"name\":\"ainiux\",\"version\":\"" + std::string(versionNumber) + "\"}},\"instructions\":\"Use Ainiux tools for bounded asynchronous chat, agent, image, and job control operations.\",\"ttlMs\":3600000,\"cacheScope\":\"public\"}");
     }
     if (method == "tools/list") {
-        const std::string names[] = {"ainiux_chat", "ainiux_image", "ainiux_job_cancel", "ainiux_job_get", "ainiux_plan", "ainiux_run"};
+        const std::string names[] = {"ainiux_chat", "ainiux_image", "ainiux_job_cancel", "ainiux_job_get", "ainiux_run"};
         std::string tools = "[";
         for (const std::string& name : names) {
             if (tools.size() > 1U) tools += ',';
             const std::string title = name == "ainiux_chat" ? "Ainiux chat job" :
                                       name == "ainiux_image" ? "Ainiux image job" :
                                       name == "ainiux_job_cancel" ? "Cancel an Ainiux job" :
-                                      name == "ainiux_job_get" ? "Inspect an Ainiux job" :
-                                      name == "ainiux_plan" ? "Ainiux planning job" : "Ainiux agent job";
+                                      name == "ainiux_job_get" ? "Inspect an Ainiux job" : "Ainiux agent job";
             tools += "{\"name\":" + json::quote(name) + ",\"title\":" + json::quote(title) +
                      ",\"description\":" + json::quote("Submit or inspect a bounded Ainiux control job") +
                      ",\"inputSchema\":" + tool_schema(name);
-            if (name == "ainiux_run" || name == "ainiux_plan") tools += ",\"annotations\":{\"destructiveHint\":true}";
+            if (name == "ainiux_run") tools += ",\"annotations\":{\"destructiveHint\":true}";
             tools += '}';
         }
         tools += "]";
@@ -396,8 +395,7 @@ McpResponse McpAdapter::handle(const http::Request& request) {
             return rpc_response(id_text, text_result(snapshot, snapshot));
         }
         const std::string operation = tool == "ainiux_chat" ? "chat" :
-                                      tool == "ainiux_run" ? "run" :
-                                      tool == "ainiux_plan" ? "plan" : "image";
+                                      tool == "ainiux_run" ? "run" : "image";
         const ServiceSubmitResult submitted = impl_->jobs->submit(operation, json::stringify(arguments), "");
         const std::string submit_error = job_submission_message(submitted);
         if (!submit_error.empty()) return rpc_response(id_text, error_result(submit_error));

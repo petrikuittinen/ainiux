@@ -36,7 +36,7 @@ Error read_utf8_file(const fs::path& absolute, std::string& content) {
 std::string build_injection(const AgentsMdBundle& bundle) {
     if (bundle.documents.empty()) return {};
     std::ostringstream out;
-    out << "Project instructions from AGENTS.md follow. Apply them in Act and Plan "
+    out << "Project instructions from AGENTS.md follow. Apply them in Act and Lead "
            "unless they conflict with the trusted system prompt, the user's direct "
            "request, workspace containment, credential handling, or tool policy.\n";
     for (const AgentsMdDocument& document : bundle.documents) {

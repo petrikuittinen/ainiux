@@ -204,7 +204,7 @@ void test_external_file_access_requires_one_shot_approval() {
 
     int plan_asks = 0;
     agent::ReadToolRegistry plan = make_registry(
-        workspace, agent::MutationPolicy::PlanningDocuments, false,
+        workspace, agent::MutationPolicy::RestrictedDocuments, false,
         [&](const agent::GuardApprovalRequest&,
             runtime::CancellationToken) -> agent::GuardApprovalDecision {
             ++plan_asks;
@@ -216,7 +216,7 @@ void test_external_file_access_requires_one_shot_approval() {
         ",\"content\":\"no\\n\"}";
     check(!json_ok(plan.execute("write", plan_args)) && plan_asks == 0 &&
               !fs::exists(plan_target),
-          "Plan mode cannot approve or perform outside-project writes");
+          "Restricted document policy cannot approve or perform outside-project writes");
 
     agent::ReadToolRegistry user_denied = make_registry(
         workspace, agent::MutationPolicy::Full, false,
@@ -2112,7 +2112,7 @@ void test_plan_document_mutation_policy() {
     write_text(fs::path(workspace) / "PLANS.md", "old plan\n");
     write_text(fs::path(workspace) / "README.md", "readme\n");
     agent::ReadToolRegistry tools =
-        make_registry(workspace, agent::MutationPolicy::PlanningDocuments);
+        make_registry(workspace, agent::MutationPolicy::RestrictedDocuments);
 
     const std::string absolute_plans_args =
         std::string("{\"path\":") +
@@ -2123,77 +2123,77 @@ void test_plan_document_mutation_policy() {
     check(json_ok(absolute_plans_result) &&
               json_data_string(absolute_plans_result, "path") == "PLANS.md" &&
               read_text(fs::path(workspace) / "PLANS.md") == "absolute plan\n",
-          "Plan policy normalizes an absolute path contained by the project");
+          "Restricted document policy normalizes an absolute path contained by the project");
 
     const std::string outside_args =
         std::string("{\"path\":") +
         json::quote((fs::temp_directory_path() / "ainiux-outside-PLANS.md").string()) +
         ",\"content\":\"outside\\n\"}";
     check(!json_ok(tools.execute("write", outside_args)),
-          "Plan policy still denies absolute paths outside the project");
+          "Restricted document policy still denies absolute paths outside the project");
 
     check(json_ok(tools.execute(
               "write",
               R"JSON({"path":"PLAN.md","content":"new plan\n","mode":"create_new"})JSON")),
-          "Plan policy allows approved root plan creation");
+          "Restricted document policy allows approved root plan creation");
     check(json_ok(tools.execute(
               "write",
               R"JSON({"path":"docs/plans/existing/design.md","content":"design\n","mode":"create_new"})JSON")),
-          "Plan policy allows lowercase .md below existing docs/plans tree");
+          "Restricted document policy allows lowercase .md below existing docs/plans tree");
     check(!json_ok(tools.execute(
               "write",
               R"JSON({"path":"README.md","content":"changed\n"})JSON")) &&
               read_text(fs::path(workspace) / "README.md") == "readme\n",
-          "Plan policy denies arbitrary root Markdown");
+          "Restricted document policy denies arbitrary root Markdown");
     check(!json_ok(tools.execute(
               "write",
               R"JSON({"path":"src/plan.md","content":"changed\n"})JSON")),
-          "Plan policy denies Markdown outside docs/plans");
+          "Restricted document policy denies Markdown outside docs/plans");
     check(!json_ok(tools.execute(
               "write",
               R"JSON({"path":"docs/plans/existing/WRONG.MD","content":"changed\n"})JSON")),
-          "Plan policy enforces case-sensitive .md extension");
+          "Restricted document policy enforces case-sensitive .md extension");
     check(!json_ok(tools.execute(
               "write",
               R"JSON({"path":"docs/plans/missing/design.md","content":"changed\n","create_dirs":true})JSON")),
-          "Plan policy cannot create destination directories");
+          "Restricted document policy cannot create destination directories");
     check(!json_ok(tools.execute(
               "write",
               R"JSON({"path":"../PLAN.md","content":"changed\n"})JSON")),
-          "Plan policy denies traversal targets");
+          "Restricted document policy denies traversal targets");
     fs::create_directory_symlink(fs::path(workspace) / "docs" / "plans" / "existing",
                                  fs::path(workspace) / "docs" / "plans" / "linked", ec);
     check(!json_ok(tools.execute(
               "write",
               R"JSON({"path":"docs/plans/linked/design.md","content":"changed\n"})JSON")),
-          "Plan policy denies symlink path components");
+          "Restricted document policy denies symlink path components");
     check(!json_ok(tools.execute(
               "rm", R"JSON({"path":"PLANS.md"})JSON")),
-          "Plan policy hides and defensively denies remove");
+          "Restricted document policy hides and defensively denies remove");
     check(!json_ok(tools.execute(
               "apply_patch",
               R"JSON({"patch":"*** Begin Patch\n*** Delete File: PLANS.md\n*** End Patch\n"})JSON")),
-          "Plan policy denies patch delete operations");
+          "Restricted document policy denies patch delete operations");
     check(!json_ok(tools.execute(
               "run", R"JSON({"command":"touch PLAN.md"})JSON")),
-          "Plan run_command denies non-vetted commands");
+          "restricted run_command denies non-vetted commands");
     check(json_ok(tools.execute(
               "run", R"JSON({"command":"stat -c %y PLANS.md"})JSON")),
-          "Plan run_command accepts the expanded vetted read-only set");
+          "restricted run_command accepts the expanded vetted read-only set");
     check(json_ok(tools.execute(
               "run",
               std::string("{\"command\":") +
                   json::quote("cat " +
                               (fs::path(workspace) / "PLANS.md").string()) +
                   "}")),
-          "Plan run_command accepts a canonical absolute in-project read path");
+          "restricted run_command accepts a canonical absolute in-project read path");
     check(!json_ok(tools.execute(
               "run", R"JSON({"command":"tail -f PLANS.md"})JSON")) &&
               !json_ok(tools.execute(
                   "run", R"JSON({"command":"find . -exec touch owned ;"})JSON")) &&
               !json_ok(tools.execute(
                   "run", R"JSON({"command":"rg --pre cat plan ."})JSON")),
-          "Plan denies following, execution, and external-preprocessor forms");
+          "restricted policy denies following, execution, and external-preprocessor forms");
 
     const std::string mixed =
         "*** Begin Patch\n"
@@ -2211,7 +2211,7 @@ void test_plan_document_mutation_policy() {
     check(!json_ok(tools.execute("apply_patch", mixed_args)) &&
               read_text(fs::path(workspace) / "PLANS.md") == "absolute plan\n" &&
               read_text(fs::path(workspace) / "README.md") == "readme\n",
-          "Plan mixed patch is rejected before any allowed file changes");
+          "restricted mixed patch is rejected before any allowed file changes");
 
     bool saw_edit = false;
     bool saw_remove = false;
@@ -2224,7 +2224,7 @@ void test_plan_document_mutation_policy() {
         if (definition.name == "index_rebuild") saw_rebuild = true;
     }
     check(saw_edit && saw_remove && !saw_rebuild,
-          "Plan definitions expose edit/remove tools and omit removed index_rebuild");
+          "restricted definitions expose edit/remove tools and omit removed index_rebuild");
     fs::remove_all(workspace, ec);
 }
 

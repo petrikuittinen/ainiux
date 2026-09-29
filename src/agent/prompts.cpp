@@ -82,20 +82,20 @@ std::string TrustedPrompts::security_system_prompt() const {
     return master + "\n" + security;
 }
 
-const char* agent_task_mode_name(AgentTaskMode mode) {
-    return mode == AgentTaskMode::Plan ? "plan" : "act";
+const char* agent_lane_name(AgentLane mode) {
+    return mode == AgentLane::Lead ? "lead" : "act";
 }
 
 std::string TrustedPrompts::agent_system_prompt(ToolProtocol protocol) const {
     return join_prompt_parts(agent, protocol_block(protocol));
 }
 
-std::string agent_task_mode_control(AgentTaskMode mode,
-                                    const std::vector<std::string>& project_scripts) {
-    std::string text = std::string("[Ainiux active task mode]\n") +
-                       (mode == AgentTaskMode::Plan
-                            ? "Plan. Follow the Plan policy in the trusted agent prompt."
-                            : "Act. Follow the Act policy in the trusted agent prompt.");
+std::string agent_lane_control(AgentLane mode,
+                               const std::vector<std::string>& project_scripts) {
+    std::string text = std::string("[Ainiux active agent mode]\n") +
+                       (mode == AgentLane::Lead
+                            ? "Lead. Plan the work, resolve difficult issues, and use the full agent tool set when needed."
+                            : "Act. Execute the requested work using the full agent tool set.");
     text += "\nReusable scripts are only scripts/ainiux/NAME. Ignore any other script "
             "directory mentioned in earlier turns.";
     const std::string catalog = project_script_catalog_text(project_scripts);
@@ -138,7 +138,7 @@ Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts
 
 void seed_agent_conversation(provider::ToolConversation& conversation,
                              const TrustedPrompts& prompts,
-                             AgentTaskMode mode,
+                             AgentLane mode,
                              ToolProtocol protocol,
                              const std::string& user_goal,
                              const std::string& agents_md_injection,
@@ -150,7 +150,7 @@ void seed_agent_conversation(provider::ToolConversation& conversation,
     if (!agents_md_injection.empty())
         conversation.messages.push_back({"user", agents_md_injection});
     conversation.messages.push_back(
-        {"user", agent_task_mode_control(mode, project_scripts)});
+        {"user", agent_lane_control(mode, project_scripts)});
     if (!user_goal.empty()) conversation.messages.push_back({"user", user_goal});
 }
 

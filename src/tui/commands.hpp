@@ -28,7 +28,7 @@ enum class AgentSlashAction {
     CompactAll,
     IndexCode,
     ShowIndex,
-    Plan,
+    Lead,
     Act,
     Permissions,
     GoalStatus,
@@ -76,7 +76,7 @@ struct TuiCommandHandlers {
     std::function<void()> clear_agent_visible_history;
     std::function<void()> start_agent_index_code;
     std::function<void()> start_agent_show_index;
-    std::function<void(agent::AgentTaskMode)> switch_agent_task_mode;
+    std::function<void(agent::AgentLane, const std::string&)> switch_agent_lane;
     std::function<void(const std::string&)> switch_agent_permission_mode;
     std::function<void()> open_agent_permission_picker;
     std::function<void()> show_agent_goal_status;

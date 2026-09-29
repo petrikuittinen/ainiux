@@ -1,10 +1,10 @@
 ---
 name: ainiux-cli
 description: >
-  Invoke the Ainiux CLI from a shell for one-shot chat, agent run/plan,
+  Invoke the Ainiux CLI from a shell for one-shot chat and agent run,
   image generation, document conversion, fetch, and search. Use when another
   agent should call `ainiux` via bash instead of a TUI. Triggers: ainiux,
-  ainiux run, ainiux plan, ainiux image, script-friendly OpenAI-compatible CLI.
+  ainiux run, ainiux image, script-friendly OpenAI-compatible CLI.
 ---
 
 # Call Ainiux from a shell
@@ -28,7 +28,6 @@ Do **not** start interactive surfaces from a foreign agent:
 | --- | --- | --- |
 | `-p` / default chat | One-shot model reply | Yes |
 | `run` / `-r` | One-shot Act agent (workspace tools) | Yes |
-| `plan` / `--plan` | One-shot Plan agent | Yes |
 | `image` / `--image` | One-shot image file | Yes |
 | `--input` / `--fetch-url` / `--search` without `-p` | Convert / fetch / search | Yes |
 | `--list-models` | Print provider models | Yes |
@@ -37,7 +36,7 @@ Do **not** start interactive surfaces from a foreign agent:
 | `-e` / `--editor`, `-d` / `--dired` | Full-screen editor | No |
 | `-a` / `--agent` | Interactive agent TUI | No |
 
-Headless Guard **Ask is denied**. `run` / `plan` will not pause for `y`/`n`.
+Headless Guard **Ask is denied**. `run` will not pause for `y`/`n`.
 Do not expect a TTY approval dialog.
 
 ## I/O contract
@@ -54,7 +53,7 @@ must wait for a complete reply (scripts, command substitution).
 
 Working directory is the workspace. Agent modes write project state under
 `.ainiux-pr/` in that tree. The user chat library `~/.ainiux/ainiux.db` is
-separate and is not used by `run` / `plan`.
+separate and is not used by `run`.
 
 ## Credentials
 
@@ -68,7 +67,7 @@ and **not** `AINIUX_API_KEY`.
 
 ## Pick a mode
 
-1. **Need workspace tools** (read/edit/run in the current directory) → `ainiux run` (Act) or `ainiux plan` (planning documents only).
+1. **Need workspace tools** (read/edit/run in the current directory) → `ainiux run`. Lead is interactive-only and is not available to subprocess callers.
 2. **Need one image file** → `ainiux image`.
 3. **Need HTML/Markdown/text conversion, URL fetch, or search without a model** → `--input` / `--fetch-url` / `--search` and no `-p`.
 4. **Otherwise** → one-shot chat with `-p` or `--prompt-file`.
@@ -90,11 +89,10 @@ ainiux openai -m MODEL --prompt-file prompt.txt --format json --no-stream
 `--format ndjson` / `jsonl` prints events. `--output-format md|html|plaintext|pdf|docx|xlsx`
 renders assistant Markdown (PDF and DOCX are binary); that is not the same as `--format`.
 
-Act / Plan (final answer on stdout; metrics on stderr unless `--quiet`):
+Agent Run (final answer on stdout; metrics on stderr unless `--quiet`):
 
 ```sh
 ainiux lmstudio -m MODEL -r "add focused tests for the parser"
-ainiux plan "design the retry policy" --provider openai -m MODEL
 ```
 
 Image (stdout is the saved path unless `--output stdout`):
@@ -162,9 +160,8 @@ agent `fetch` use the same bounded conversion. Private/loopback fetch needs
 `--allow-private-url-fetch`. Raise `--max-fetch-bytes` for documents larger
 than the 10 MiB default.
 
-`run` / `plan` may mutate the current workspace. They do not get a y/n prompt
-in this headless path; destructive Guard Ask is denied. Prefer `plan` when the
-caller only wants a document. Do not point `run` at a directory you do not
+`run` may mutate the current workspace. It does not get a y/n prompt
+in this headless path; destructive Guard Ask is denied. Do not point `run` at a directory you do not
 intend to change.
 
 ## Windows
@@ -175,8 +172,8 @@ modern conhost, not mintty. Details: [Native Windows](../windows.md).
 ## Further reading
 
 - [CLI and scripting](../cli.md) — flags, context policy, image catalog
-- [Agent workflows](../agent.md) — Act/Plan, Guard, `.ainiux-pr/`
+- [Agent workflows](../agent.md) — Act/Lead, Guard, `.ainiux-pr/`
 - [MCP servers](../mcp.md) — `--add-mcp` / `--list-mcp` (management is
-  CLI-only; tools load on the next `run` / `plan` / `-a`)
+  CLI-only; tools load on the next `run` / `-a`)
 - [Security](../security.md) — keys, fetch, agent boundaries
 - [Documentation index](../README.md)

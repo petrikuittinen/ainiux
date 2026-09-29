@@ -381,7 +381,7 @@ signal handlers. CLI adapters retain their existing output behavior while HTTP,
 MCP, and later browser adapters translate the same operation results.
 
 The extracted operations cover ordinary chat plus one-shot image and video generation.
-Agent run/plan use the existing headless `run_agent_goal` boundary and the
+Agent run uses the existing headless `run_agent_goal` boundary and the
 server's fixed canonical workspace.
 
 Internal operation event enums are not public protocol values. The server wire
@@ -432,7 +432,6 @@ Submit a JSON object to one of these routes:
 POST /ainiux/v1/jobs/chat   {provider?, model?, api?, reasoning?, search_query?, thread_id?, messages:[{role,content,input_ids?}], input_ids?:[]}
 POST /ainiux/v1/jobs/models {provider?, api?}
 POST /ainiux/v1/jobs/run    {provider?, model?, api?, goal}
-POST /ainiux/v1/jobs/plan   {provider?, model?, api?, goal}
 GET  /ainiux/v1/images/catalog
 POST /ainiux/v1/images/inputs  (raw image/png or image/jpeg)
 DELETE /ainiux/v1/images/inputs/:input_id
@@ -496,7 +495,7 @@ and streams `video/mp4` with `Content-Length` and attachment disposition. It
 does not expose arbitrary workspace paths and is unavailable to MCP-only
 credentials.
 
-Successful chat, run, and plan results include an additive `metrics` object.
+Successful chat and run results include an additive `metrics` object.
 Interactive agent completion/failure events include the same object, and the
 latest value is retained as `last_turn_metrics` in the session snapshot:
 
@@ -525,13 +524,13 @@ can display live turn time without polling faster than its own UI clock.
 
 Submission normally returns `202`; `Idempotency-Key` reuse with identical input
 returns the retained job with `200`, while changed input returns the typed
-`idempotency_conflict` response. Run and plan reserve the single workspace agent
-lane at submission and return `agent_lane_busy` (409) instead of waiting.
+`idempotency_conflict` response. Run reserves the single workspace agent
+lane at submission and returns `agent_lane_busy` (409) instead of waiting.
 
 The events route uses `text/event-stream`. Each `data:` value is the full event
 DTO above. Reconnect with `Last-Event-ID`; ordered retained events are replayed.
 Chat and editor-assist jobs emit `delta` events while model text arrives. The
-server enables provider streaming for browser-created chat, run, plan,
+server enables provider streaming for browser-created chat, run,
 editor-assist, and interactive-agent work by default.
 An evicted cursor returns `replay_expired` (410), requiring a fresh job snapshot.
 Event count and bytes are bounded per job, terminal jobs are bounded by
@@ -571,7 +570,7 @@ extending the request timeout.
 
 ## Concurrency ownership
 
-Provider model-list, chat, and image operations share a bounded global pool. Run, plan, and
+Provider model-list, chat, and image operations share a bounded global pool. Run and
 interactive-agent mutations share one workspace lane; a conflict returns 409
 instead of queueing behind another agent. The owning session loop alone mutates
 agent, approval, dired, editor, or chat session state. Cancellation belongs to
@@ -598,7 +597,7 @@ persist in the existing workspace project row, do not start tools, and require
 an idle agent. Stale revisions return `409`. If multiple API sessions exist,
 close the extra sessions before using the singleton workspace configuration.
 Editor-assist jobs default to this configuration, not the selected chat thread.
-Chat, run, plan, and editor-assist job bodies also accept a partial `settings`
+Chat, run, and editor-assist job bodies also accept a partial `settings`
 object with the same validation.
 
 `GET /ainiux/v1/chat/threads/:thread_id/settings` returns the existing thread
@@ -627,8 +626,8 @@ DELETE /ainiux/v1/sessions/:session_id
 ```
 
 Session creation accepts `kind` (`agent`), `provider`, `model`, `api`, `reasoning`,
-`permission_mode` (`confirm`, `smart`, or `yolo`), and `task_mode`
-(`act` or `plan`). Preparation is asynchronous and returns `202` with an
+`permission_mode` (`confirm`, `smart`, or `yolo`), and `lane`
+(`act` or `lead`). Preparation is asynchronous and returns `202` with an
 opaque session ID. A turn body is `{"text":"..."}` and returns `202`
 with a server-generated turn ID. Only one turn may be active per session; a
 concurrent turn returns `409`.
@@ -638,13 +637,14 @@ An idle session's reasoning selector can be changed with
 `reasoning` value and catalog-derived `reasoning_options`.
 
 The settings route accepts either the revision-checked model-settings object
-above or exactly one of `provider`, `model`, `task_mode`, or
+above or exactly one of `provider`, `model`, `lane`, or
 `permission_mode` per request and only while the session is idle. It returns
 the updated snapshot and emits `settings_changed`. Provider changes use that
 profile's configured API default; the browser does not choose Chat Completions
 or Responses itself.
 
-History returns chronological `messages` (`seq`, `role`, `content`, and
+Switching to Lead may also include `handoff` (`clean`, `all`, or `1`–`100`).
+History returns chronological `messages` (`seq`, `role`, `lane`, `turn`, `content`, and
 `created_at_ms`). Assistant rows also include `task_elapsed_ms`, derived from
 the latest preceding user row even when that prompt falls before the current
 page. It also returns a `before` cursor for older pages and the active `turn_id`
@@ -654,7 +654,7 @@ rows and 4 MiB of content. Oversized individual rows fail without modifying the
 transcript. Request-only summaries and rows before an explicit context reset
 are excluded. During a turn, history ends before that turn's live events.
 Snapshots include `event_cursor` for joining durable history to SSE without
-replaying completed turns. Restart restores interactive Act/Plan policy and
+replaying completed turns. Restart restores the active Act/Lead mode and
 history but does not execute pending work.
 
 Session SSE events use the same bounded ordered replay contract as jobs and
@@ -685,7 +685,7 @@ legacy initialize/session/GET-SSE transport.
 
 Supported RPCs are `server/discover`, `tools/list`, `tools/call`, `tasks/get`,
 `tasks/update`, and `tasks/cancel`. The deterministic tools are
-`ainiux_chat`, `ainiux_run`, `ainiux_plan`, `ainiux_image`,
+`ainiux_chat`, `ainiux_run`, `ainiux_image`,
 `ainiux_job_get`, and `ainiux_job_cancel`. Job execution reuses the control
 API's bounded `JobService`; no provider credentials or filesystem paths are
 exposed.

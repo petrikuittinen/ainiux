@@ -557,14 +557,14 @@ Error enforce_inspection_policy(std::vector<std::string>& args) {
                 " (allowed: pwd, ls, rg, grep, find, git status/diff/…)"};
 }
 
-Error enforce_plan_read_only_policy(std::vector<std::string>& args,
-                                    bool allow_absolute_paths) {
+Error enforce_restricted_read_only_policy(std::vector<std::string>& args,
+                                          bool allow_absolute_paths) {
     Error error = enforce_common_safety(args, allow_absolute_paths);
     if (!error.ok()) return error;
     const ReadOnlyCommandAssessment assessment = assess_read_only_command(args);
     if (!assessment.vetted)
         return {ErrorCode::BadArgs,
-                "command is not a vetted read-only Plan invocation" +
+                "command is not a vetted restricted read-only invocation" +
                     (assessment.reason.empty() ? std::string()
                                                : ": " + assessment.reason)};
     return ok_error();
@@ -856,8 +856,8 @@ Error parse_command(const std::string& command,
                                     cancellation, unused_decision, allow_absolute_paths,
                                     unrestricted);
     }
-    if (policy == CommandPolicy::PlanReadOnly)
-        return enforce_plan_read_only_policy(arguments, allow_absolute_paths);
+    if (policy == CommandPolicy::RestrictedReadOnly)
+        return enforce_restricted_read_only_policy(arguments, allow_absolute_paths);
     return enforce_inspection_policy(arguments);
 }
 
@@ -1012,9 +1012,9 @@ Error run_argv(std::vector<std::string> arguments,
         else
             output.guard_decision =
                 error.code == ErrorCode::Cancelled ? "cancelled" : "deny";
-    } else if (policy == CommandPolicy::PlanReadOnly) {
-        error = enforce_plan_read_only_policy(output.arguments,
-                                              options.allow_external_paths);
+    } else if (policy == CommandPolicy::RestrictedReadOnly) {
+        error = enforce_restricted_read_only_policy(output.arguments,
+                                                    options.allow_external_paths);
     } else {
         error = enforce_inspection_policy(output.arguments);
     }

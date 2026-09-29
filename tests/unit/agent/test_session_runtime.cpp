@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "agent/compact.hpp"
+#include "agent/project_settings.hpp"
 #include "agent/session_runtime.hpp"
 #include "agent/session_store.hpp"
 #include "app/app.hpp"
@@ -75,9 +76,9 @@ void test_runtime_options_share_cli_projection() {
 
     const agent::SessionRuntimeOptions options =
         agent::make_session_runtime_options(
-            context, "/workspace", agent::AgentTaskMode::Plan, true);
+            context, "/workspace", agent::AgentLane::Lead, true);
     check(options.workspace == "/workspace" &&
-              options.task_mode == agent::AgentTaskMode::Plan &&
+              options.lane == agent::AgentLane::Lead &&
               options.interactive && options.allow_network &&
               options.enable_session_db,
           "shared runtime options preserve caller-owned session identity");
@@ -113,7 +114,7 @@ void test_prepare_opens_session_db_and_tools() {
     agent::AgentSessionRuntime runtime;
     agent::SessionRuntimeOptions options;
     options.workspace = workspace;
-    options.task_mode = agent::AgentTaskMode::Act;
+    options.lane = agent::AgentLane::Act;
     options.interactive = true;
     options.enable_session_db = true;
     options.enable_agent_log = false;
@@ -531,8 +532,8 @@ void test_agent_token_usage_aggregation_is_bounded() {
           "empty stream samples produce no rate");
 }
 
-void test_task_mode_switch_is_session_scoped_and_failure_safe() {
-    const std::string workspace = temp_workspace("task-mode");
+void test_active_lane_switch_is_session_scoped_and_failure_safe() {
+    const std::string workspace = temp_workspace("lane-switch");
     agent::AgentSessionRuntime runtime;
     agent::SessionRuntimeOptions options;
     options.workspace = workspace;
@@ -540,28 +541,28 @@ void test_task_mode_switch_is_session_scoped_and_failure_safe() {
     options.enable_agent_log = false;
     provider::RequestContext context = offline_context(workspace);
     Error error = runtime.prepare(context, {}, {}, options);
-    check(error.ok() && runtime.task_mode() == agent::AgentTaskMode::Act &&
+    check(error.ok() && runtime.lane() == agent::AgentLane::Act &&
               runtime.mutation_policy() == agent::MutationPolicy::Full,
           "agent runtime defaults to Act with full mutation policy");
 
-    error = runtime.switch_task_mode(agent::AgentTaskMode::Plan);
-    check(error.ok() && runtime.task_mode() == agent::AgentTaskMode::Plan &&
-              runtime.mutation_policy() == agent::MutationPolicy::PlanningDocuments,
-          "Act to Plan replaces the tool policy");
-    check(runtime.switch_task_mode(agent::AgentTaskMode::Plan).ok(),
-          "repeated Plan switch is idempotent");
+    error = runtime.switch_lane(agent::AgentLane::Lead);
+    check(error.ok() && runtime.lane() == agent::AgentLane::Lead &&
+              runtime.mutation_policy() == agent::MutationPolicy::Full,
+          "Act to Lead retains full mutation authority");
+    check(runtime.switch_lane(agent::AgentLane::Lead).ok(),
+          "repeated Lead switch is idempotent");
 
     std::error_code ec;
     fs::create_symlink("src/hello.cpp", fs::path(workspace) / "AGENTS.md", ec);
-    error = runtime.switch_task_mode(agent::AgentTaskMode::Act);
-    check(!error.ok() && runtime.task_mode() == agent::AgentTaskMode::Plan &&
-              runtime.mutation_policy() == agent::MutationPolicy::PlanningDocuments,
-          "AGENTS reload failure leaves the prior task mode and policy intact");
-    fs::remove(fs::path(workspace) / "AGENTS.md", ec);
-    error = runtime.switch_task_mode(agent::AgentTaskMode::Act);
-    check(error.ok() && runtime.task_mode() == agent::AgentTaskMode::Act &&
+    error = runtime.switch_lane(agent::AgentLane::Act);
+    check(!error.ok() && runtime.lane() == agent::AgentLane::Lead &&
               runtime.mutation_policy() == agent::MutationPolicy::Full,
-          "Plan to Act succeeds after AGENTS reload is valid");
+          "AGENTS reload failure leaves the prior lane and policy intact");
+    fs::remove(fs::path(workspace) / "AGENTS.md", ec);
+    error = runtime.switch_lane(agent::AgentLane::Act);
+    check(error.ok() && runtime.lane() == agent::AgentLane::Act &&
+              runtime.mutation_policy() == agent::MutationPolicy::Full,
+          "Lead to Act succeeds after AGENTS reload is valid");
 
     runtime.reset();
     fs::remove_all(workspace, ec);
@@ -598,7 +599,7 @@ void test_prepare_loads_existing_display_history() {
     agent::AgentSessionRuntime runtime;
     agent::SessionRuntimeOptions options;
     options.workspace = workspace;
-    options.task_mode = agent::AgentTaskMode::Act;
+    options.lane = agent::AgentLane::Act;
     options.interactive = true;
     options.enable_session_db = true;
     options.enable_agent_log = false;
@@ -637,6 +638,143 @@ void test_prepare_loads_existing_display_history() {
     fs::remove_all(workspace, ec);
 }
 
+void test_lane_handoffs_are_bounded_and_exclude_tools() {
+    const std::string workspace = temp_workspace("lane-handoff");
+    std::string long_unicode_response;
+    for (int i = 0; i < 240; ++i) long_unicode_response += "é";
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "open lane handoff fixture");
+        check(store.append_message("user", "first request").ok(), "seed first Act request");
+        check(store.append_message("assistant", long_unicode_response).ok(),
+              "seed long Act response");
+        check(store.append_message("tool", "SECRET TOOL PAYLOAD", "read").ok(),
+              "seed excluded tool row");
+        check(store.append_message("user", "second request").ok(), "seed second Act request");
+        check(store.append_message("assistant", "short response").ok(),
+              "seed second Act response");
+    }
+    provider::RequestContext context = offline_context(workspace);
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_agent_log = false;
+    agent::AgentSessionRuntime runtime;
+    check(runtime.prepare(context, {}, {}, options).ok(), "prepare lane handoff runtime");
+    check(runtime.switch_lane(agent::AgentLane::Lead).ok(),
+          "default switch to Lead creates a handoff");
+    {
+        agent::AgentSessionStore store;
+        std::vector<agent::AgentMessageRecord> rows;
+        check(store.open(workspace).ok() && store.load_messages(rows).ok(),
+              "load durable Lead handoff");
+        const auto found = std::find_if(rows.rbegin(), rows.rend(), [](const auto& row) {
+            return row.role == "handoff" && row.lane == "lead";
+        });
+        check(found != rows.rend() &&
+                  found->content.find("first request") != std::string::npos &&
+                  found->content.find("second request") != std::string::npos &&
+                  found->content.find(long_unicode_response.substr(0, 400)) !=
+                      std::string::npos &&
+                  found->content.find(long_unicode_response.substr(0, 402)) ==
+                      std::string::npos &&
+                  found->content.find("SECRET TOOL PAYLOAD") == std::string::npos,
+              "Lead handoff keeps two user turns, truncates responses by Unicode character, and drops tools");
+        store.set_active_lane("lead");
+        check(store.append_message("user", "lead question").ok() &&
+                  store.append_message("assistant", "complete lead answer").ok(),
+              "seed Lead exchange for Act return");
+    }
+    check(runtime.switch_lane(agent::AgentLane::Act).ok(),
+          "return to Act creates a full Lead handoff");
+    {
+        agent::AgentSessionStore store;
+        std::vector<agent::AgentMessageRecord> rows;
+        check(store.open(workspace).ok() && store.load_messages(rows).ok(),
+              "load durable Act handoff");
+        const auto found = std::find_if(rows.rbegin(), rows.rend(), [](const auto& row) {
+            return row.role == "handoff" && row.lane == "act";
+        });
+        check(found != rows.rend() &&
+                  found->content.find("lead question") != std::string::npos &&
+                  found->content.find("complete lead answer") != std::string::npos,
+              "Act return receives Lead prompts and full final responses");
+    }
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "reopen handoff fixture for all scope");
+        store.set_active_lane("act");
+        check(store.append_message("user", "third request").ok() &&
+                  store.append_message("tool", "ALL TOOL PAYLOAD", "read").ok() &&
+                  store.append_message("assistant", "third response").ok(),
+              "seed new Act tool activity for all-scope handoff");
+    }
+    agent::LaneHandoff all;
+    all.scope = agent::LaneHandoff::Scope::All;
+    check(runtime.switch_lane(agent::AgentLane::Lead, all).ok(),
+          "all-scope Lead switch succeeds");
+    {
+        agent::AgentSessionStore store;
+        std::vector<agent::AgentMessageRecord> rows;
+        check(store.open(workspace).ok() && store.load_messages(rows).ok(),
+              "load all-scope Lead handoff");
+        const auto found = std::find_if(rows.rbegin(), rows.rend(), [](const auto& row) {
+            return row.role == "handoff" && row.lane == "lead";
+        });
+        check(found != rows.rend() &&
+                  found->content.find("third request") != std::string::npos &&
+                  found->content.find("ALL TOOL PAYLOAD") != std::string::npos &&
+                  found->content.find("third response") != std::string::npos,
+              "Lead all handoff retains new user, tool, and assistant rows");
+    }
+    check(runtime.switch_lane(agent::AgentLane::Act).ok(),
+          "return to Act before clean Lead switch");
+    agent::LaneHandoff clean;
+    clean.scope = agent::LaneHandoff::Scope::Clean;
+    check(runtime.switch_lane(agent::AgentLane::Lead, clean).ok(),
+          "clean Lead switch succeeds");
+    {
+        agent::AgentSessionStore store;
+        agent::AgentProjectRecord project;
+        long long cut = 0;
+        check(store.open(workspace).ok() && store.open_project(project).ok() &&
+                  agent::lane_context_after_seq_from_settings_json(
+                      project.settings_json, agent::AgentLane::Lead, cut).ok() &&
+                  cut > 0,
+              "clean Lead switch persists a durable lane context boundary");
+    }
+    std::size_t act_handoffs_before_reset = 0;
+    {
+        agent::AgentSessionStore store;
+        std::vector<agent::AgentMessageRecord> rows;
+        check(store.open(workspace).ok() && store.load_messages(rows).ok(),
+              "load handoffs before full context reset");
+        act_handoffs_before_reset = static_cast<std::size_t>(std::count_if(
+            rows.begin(), rows.end(), [](const auto& row) {
+                return row.role == "handoff" && row.lane == "act";
+            }));
+    }
+    check(runtime.reset_model_context().ok(), "reset both lane contexts");
+    check(runtime.switch_lane(agent::AgentLane::Act).ok(),
+          "switch after full context reset succeeds");
+    {
+        agent::AgentSessionStore store;
+        std::vector<agent::AgentMessageRecord> rows;
+        check(store.open(workspace).ok() && store.load_messages(rows).ok(),
+              "load handoffs after full context reset");
+        const std::size_t act_handoffs_after_reset =
+            static_cast<std::size_t>(std::count_if(
+                rows.begin(), rows.end(), [](const auto& row) {
+                    return row.role == "handoff" && row.lane == "act";
+                }));
+        check(act_handoffs_after_reset == act_handoffs_before_reset,
+              "lane switch cannot resurrect history removed by compact all");
+    }
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
     const std::string workspace = temp_workspace("manual-compact");
     {
@@ -653,6 +791,16 @@ void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
                       .ok(),
                   "compact seed message");
         }
+        store.set_active_lane("lead");
+        check(store.append_message("handoff", std::string(100000, 'z')).ok(),
+              "compact fixture includes a large inactive-lane checkpoint");
+        store.set_active_lane("act");
+        check(agent::settings_with_agent_lane(project.settings_json,
+                                               agent::AgentLane::Act,
+                                               project.settings_json)
+                      .ok() &&
+                  store.update_project_meta(project).ok(),
+              "compact fixture restores Act as the durable active lane");
     }
 
     agent::AgentSessionRuntime runtime;
@@ -678,6 +826,8 @@ void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
                         CompactionStrategy::Fast);
     check(compacted.error.ok() && compacted.compacted && !compacted.no_op,
           "manual compact runs below automatic threshold");
+    check(compacted.tokens_before < 10000,
+          "active-lane compaction excludes the inactive lane transcript");
     check(summary_calls == 0 &&
               compacted.applied_strategy == CompactionStrategy::Fast,
           "fast compaction never calls the model seam");
@@ -695,7 +845,7 @@ void test_manual_compaction_preserves_transcript_and_noops_until_new_history() {
         agent::AgentSessionStore stored;
         check(stored.open(workspace).ok(), "inspect durable compact checkpoint");
         std::vector<agent::AgentMessageRecord> rows;
-        check(stored.load_messages(rows).ok() && rows.size() == 16 &&
+        check(stored.load_messages(rows).ok() && rows.size() == 17 &&
                   rows.back().role == "summary" &&
                   rows.back().content.find("stored message 0") != std::string::npos,
               "checkpoint remains durable and carries the protected initial head");
@@ -1083,7 +1233,7 @@ void test_prepare_idle_chrome_matches_next_request_not_full_history() {
     agent::AgentSessionRuntime runtime;
     agent::SessionRuntimeOptions options;
     options.workspace = workspace;
-    options.task_mode = agent::AgentTaskMode::Act;
+    options.lane = agent::AgentLane::Act;
     options.interactive = true;
     options.enable_session_db = true;
     options.enable_agent_log = false;
@@ -1346,7 +1496,8 @@ void run_all() {
     test_index_report_refreshes_and_stays_display_only();
     test_optional_index_modes_create_refresh_and_fallback();
     test_agent_token_usage_aggregation_is_bounded();
-    test_task_mode_switch_is_session_scoped_and_failure_safe();
+    test_active_lane_switch_is_session_scoped_and_failure_safe();
+    test_lane_handoffs_are_bounded_and_exclude_tools();
     test_prepare_loads_existing_display_history();
     test_manual_compaction_preserves_transcript_and_noops_until_new_history();
     test_summary_compaction_is_transactional_and_uses_active_api_context();

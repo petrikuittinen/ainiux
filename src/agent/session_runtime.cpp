@@ -31,11 +31,11 @@ namespace ainiux::agent {
 SessionRuntimeOptions make_session_runtime_options(
     const provider::RequestContext& context,
     std::string workspace,
-    AgentTaskMode task_mode,
+    AgentLane lane,
     bool interactive) {
     SessionRuntimeOptions options;
     options.workspace = std::move(workspace);
-    options.task_mode = task_mode;
+    options.lane = lane;
     options.allow_network = true;
     options.interactive = interactive;
     options.enable_session_db = true;
@@ -129,6 +129,25 @@ std::string format_index_completion_intro(long long elapsed_ms) {
         << (static_cast<double>(std::max(0LL, elapsed_ms)) / 1000.0)
         << " seconds. Here is the summary:";
     return out.str();
+}
+
+std::string utf8_prefix(const std::string& text, std::size_t characters) {
+    if (characters == 0) return {};
+    std::size_t offset = 0;
+    std::size_t count = 0;
+    while (offset < text.size() && count < characters) {
+        const unsigned char byte = static_cast<unsigned char>(text[offset]);
+        std::size_t width = 1;
+        if ((byte & 0xE0U) == 0xC0U) width = 2;
+        else if ((byte & 0xF0U) == 0xE0U) width = 3;
+        else if ((byte & 0xF8U) == 0xF0U) width = 4;
+        if (offset + width > text.size()) break;
+        offset += width;
+        ++count;
+    }
+    std::string out = text.substr(0, offset);
+    if (offset < text.size()) out += "…";
+    return out;
 }
 
 Error default_compaction_summary_call(
@@ -335,7 +354,8 @@ Error AgentSessionRuntime::update_project_settings(
     project.api = context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
     project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
     project.base_url = context.base_url;
-    error = merge_project_model_settings(project.settings_json, context.options, project.settings_json);
+    error = merge_project_lane_settings(project.settings_json, active_lane_,
+                                        context.options, project.settings_json);
     if (!error.ok()) return error;
     error = settings_json_with_permission_mode(
         project.settings_json, permission_mode_,
@@ -359,11 +379,11 @@ long long AgentSessionRuntime::estimate_seed_overhead_tokens() const {
         total += estimate_tokens_from_text(agents_md_.injection_text);
         total += 4;
     }
-    // Act/Plan mode control (user-role)
+    // Active agent-lane control (user-role).
     {
         std::vector<std::string> script_names;
         (void)list_project_scripts(options_.workspace, script_names);
-        const std::string mode_control = agent_task_mode_control(task_mode_, script_names);
+        const std::string mode_control = agent_lane_control(active_lane_, script_names);
         total += estimate_tokens_from_text("user");
         total += estimate_tokens_from_text(mode_control);
         total += 4;
@@ -436,27 +456,53 @@ void AgentSessionRuntime::append_context_load_notices(
 
 void AgentSessionRuntime::apply_context_reset_filter(
     std::vector<AgentMessageRecord>& messages) const {
-    messages = messages_after_seq(messages, context_reset_after_seq_);
+    messages.erase(std::remove_if(messages.begin(), messages.end(),
+                                  [&](const AgentMessageRecord& row) {
+                                      const long long lane_cut =
+                                          row.lane == agent_lane_name(active_lane_)
+                                              ? lane_context_after_seq_
+                                              : (row.lane == "lead"
+                                                     ? lead_lane_.context_after_seq
+                                                     : act_lane_.context_after_seq);
+                                      return row.seq <= context_reset_after_seq_ ||
+                                             row.seq <= lane_cut;
+                                  }),
+                   messages.end());
 }
 
 void AgentSessionRuntime::apply_context_reset_filter(
     std::vector<AgentMessageRecord>& messages,
     std::vector<AgentToolEventRecord>& events) const {
-    messages = messages_after_seq(messages, context_reset_after_seq_);
-    events = tool_events_after_seq(events, context_reset_after_seq_);
+    apply_context_reset_filter(messages);
+    events.erase(std::remove_if(events.begin(), events.end(),
+                                [&](const AgentToolEventRecord& row) {
+                                    const long long lane_cut =
+                                        row.lane == agent_lane_name(active_lane_)
+                                            ? lane_context_after_seq_
+                                            : (row.lane == "lead"
+                                                   ? lead_lane_.context_after_seq
+                                                   : act_lane_.context_after_seq);
+                                    return row.seq <= context_reset_after_seq_ ||
+                                           row.seq <= lane_cut;
+                                }),
+                 events.end());
 }
 
 Error AgentSessionRuntime::write_session_settings(AgentProjectRecord& project) const {
-    Error error = options_.interactive ? settings_with_task_mode(project.settings_json,
-        task_mode_ == AgentTaskMode::Plan, project.settings_json) : ok_error();
+    Error error = options_.interactive ? settings_with_agent_lane(project.settings_json,
+        active_lane_, project.settings_json) : ok_error();
     if (!error.ok()) return error;
     error = settings_json_with_permission_mode(
         project.settings_json, permission_mode_, project.settings_json);
     if (!error.ok()) return error;
     error = settings_json_with_goal(project.settings_json, goal_, project.settings_json);
     if (!error.ok()) return error;
-    return settings_json_with_context_reset_after_seq(
+    error = settings_json_with_context_reset_after_seq(
         project.settings_json, context_reset_after_seq_, project.settings_json);
+    if (!error.ok()) return error;
+    return settings_json_with_lane_context_after_seq(
+        project.settings_json, active_lane_, lane_context_after_seq_,
+        project.settings_json);
 }
 
 Error AgentSessionRuntime::reset_model_context() {
@@ -480,6 +526,7 @@ Error AgentSessionRuntime::reset_model_context() {
         if (found) cut = last.seq;
     }
     context_reset_after_seq_ = cut;
+    lane_context_after_seq_ = 0;
     display_min_seq_.store(0, std::memory_order_relaxed);
 
     const bool had_goal = goal_.status != GoalStatus::Cleared && !goal_.condition.empty();
@@ -503,6 +550,11 @@ Error AgentSessionRuntime::reset_model_context() {
 
     conversation_ = provider::ToolConversation{};
     conversation_seeded_ = false;
+    // `/compact all` is a session-wide reset. Drop the inactive cached lane too
+    // so switching lanes cannot resurrect context hidden by the durable cut.
+    act_lane_ = LaneSnapshot{};
+    lead_lane_ = LaneSnapshot{};
+    pending_handoff_.clear();
     const long long baseline = estimate_seed_overhead_tokens();
     cached_request_tokens_.store(baseline, std::memory_order_relaxed);
     if (baseline > 0)
@@ -562,7 +614,7 @@ void AgentSessionRuntime::rebuild_compacted_conversation(
     const CompactionPartition& partition, const std::string& checkpoint) {
     std::vector<std::string> script_names;
     (void)list_project_scripts(options_.workspace, script_names);
-    seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, "",
+    seed_agent_conversation(conversation_, prompts_, active_lane_, state_.protocol, "",
                             agents_md_.injection_text, script_names);
     conversation_.messages.push_back(
         {"user", compaction_checkpoint_wrapper(checkpoint)});
@@ -614,6 +666,17 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
     result.error =
         session_store_.load_session(1, project, stored, tool_events);
     if (!result.error.ok()) return result;
+    const std::string lane_name = agent_lane_name(active_lane_);
+    stored.erase(std::remove_if(stored.begin(), stored.end(),
+                                [&](const AgentMessageRecord& row) {
+                                    return row.lane != lane_name;
+                                }),
+                 stored.end());
+    tool_events.erase(std::remove_if(tool_events.begin(), tool_events.end(),
+                                     [&](const AgentToolEventRecord& row) {
+                                         return row.lane != lane_name;
+                                     }),
+                      tool_events.end());
     apply_context_reset_filter(stored, tool_events);
 
     const long long window = context.options.context_tokens > 0
@@ -1037,7 +1100,7 @@ SessionProjectReplaceResult AgentSessionRuntime::replace_project(
 
     SessionRuntimeOptions new_options = old_options;
     new_options.workspace = target.root;
-    new_options.task_mode = AgentTaskMode::Act;
+    new_options.lane = AgentLane::Act;
     new_options.permission_mode = PermissionMode::Smart;
     if (indexing_enabled.has_value())
         new_options.index_mode =
@@ -1172,6 +1235,9 @@ void AgentSessionRuntime::reset() {
     agents_md_ = AgentsMdBundle{};
     conversation_ = provider::ToolConversation{};
     state_ = AgentLoopState{};
+    act_lane_ = LaneSnapshot{};
+    lead_lane_ = LaneSnapshot{};
+    pending_handoff_.clear();
     limits_ = AgentLoopLimits{};
     known_tools_.clear();
     secrets_.clear();
@@ -1182,10 +1248,11 @@ void AgentSessionRuntime::reset() {
     conversation_seeded_ = false;
     prepared_ = false;
     options_ = SessionRuntimeOptions{};
-    task_mode_ = AgentTaskMode::Act;
+    active_lane_ = AgentLane::Act;
     permission_mode_ = PermissionMode::Smart;
     goal_ = SessionGoal{};
     context_reset_after_seq_ = 0;
+    lane_context_after_seq_ = 0;
     display_min_seq_.store(0, std::memory_order_relaxed);
     cached_request_tokens_.store(0, std::memory_order_relaxed);
     last_nonzero_request_tokens_.store(0, std::memory_order_relaxed);
@@ -1201,7 +1268,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     const auto preparation_started = std::chrono::steady_clock::now();
     reset();
     options_ = std::move(options);
-    task_mode_ = options_.task_mode;
+    active_lane_ = options_.lane;
     permission_mode_ = options_.interactive ? options_.permission_mode
                                             : PermissionMode::Smart;
     if (options_.workspace.empty()) options_.workspace = ".";
@@ -1212,6 +1279,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         options_.workspace = absolute;
     }
     secrets_ = request_secrets(context);
+    session_store_.set_active_lane(agent_lane_name(active_lane_));
 
     // Capture cancellation/interrupted by value. index_options_ lives inside tools for
     // the whole session; a [&] lambda here used to dangle after prepare() returned and
@@ -1320,9 +1388,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     phase_started = std::chrono::steady_clock::now();
     publish_preparation(PreparationPhase::ToolSetup, false, phase_started);
     ToolRegistryOptions tool_options;
-    tool_options.mutation_policy = task_mode_ == AgentTaskMode::Plan
-                                       ? MutationPolicy::PlanningDocuments
-                                       : MutationPolicy::Full;
+    tool_options.mutation_policy = MutationPolicy::Full;
     tool_options.allow_network = options_.allow_network;
     tool_options.hosted_web_search = provider::hosted_web_search_enabled(context);
     tool_options.hosted_web_search_name = provider::hosted_web_search_display_name(context);
@@ -1390,7 +1456,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
         return error;
     }
 
-    // Load enabled MCP servers and advertise their tools (agent/run/plan only).
+    // Load enabled MCP servers and advertise their tools (agent/run only).
     mcp_manager_ = std::make_shared<mcp::Manager>();
     mcp::ConnectOptions mcp_opts;
     mcp_opts.connect_timeout_seconds = context.options.connect_timeout_seconds > 0
@@ -1470,15 +1536,16 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             }
             options_.permission_mode = permission_mode_;
             tools_.set_permission_mode(permission_mode_);
-            if (options_.restore_task_mode && json::parse(project.settings_json).value.get("task_mode")) {
-                bool plan = false;
-                error = saved_task_mode(project.settings_json, plan);
+            if (options_.restore_lane && json::parse(project.settings_json).value.get("active_lane")) {
+                AgentLane saved_lane = AgentLane::Act;
+                error = saved_agent_lane(project.settings_json, saved_lane);
                 if (!error.ok()) { reset(); return error; }
-                task_mode_ = plan ? AgentTaskMode::Plan : AgentTaskMode::Act;
-                options_.task_mode = task_mode_;
-                tools_.set_mutation_policy(plan ? MutationPolicy::PlanningDocuments : MutationPolicy::Full);
+                active_lane_ = saved_lane;
+                options_.lane = active_lane_;
+                tools_.set_mutation_policy(MutationPolicy::Full);
                 known_tools_ = known_tool_names(tools_);
             }
+            session_store_.set_active_lane(agent_lane_name(active_lane_));
             error = goal_from_settings_json(project.settings_json, goal_);
             if (!error.ok()) {
                 reset();
@@ -1490,6 +1557,25 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                 reset();
                 return error;
             }
+            error = lane_imported_through_seq_from_settings_json(
+                project.settings_json, AgentLane::Act,
+                act_lane_.imported_through_seq);
+            if (!error.ok()) { reset(); return error; }
+            error = lane_imported_through_seq_from_settings_json(
+                project.settings_json, AgentLane::Lead,
+                lead_lane_.imported_through_seq);
+            if (!error.ok()) { reset(); return error; }
+            error = lane_context_after_seq_from_settings_json(
+                project.settings_json, AgentLane::Act,
+                act_lane_.context_after_seq);
+            if (!error.ok()) { reset(); return error; }
+            error = lane_context_after_seq_from_settings_json(
+                project.settings_json, AgentLane::Lead,
+                lead_lane_.context_after_seq);
+            if (!error.ok()) { reset(); return error; }
+            lane_context_after_seq_ = active_lane_ == AgentLane::Act
+                                          ? act_lane_.context_after_seq
+                                          : lead_lane_.context_after_seq;
         }
     }
     publish_preparation(PreparationPhase::SessionDatabase, true, phase_started);
@@ -1541,15 +1627,36 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     {
         long long baseline = estimate_seed_overhead_tokens();
         // Interactive reopen injects a bounded prior-session block, not the full
-        // transcript. Headless --run/--plan starts with a fresh model conversation.
+        // transcript. Headless --run starts with a fresh model conversation.
         if (options_.interactive && session_store_.is_open()) {
             std::vector<AgentMessageRecord> rows;
             if (session_store_.load_messages(rows).ok()) {
                 apply_context_reset_filter(rows);
+                const std::string lane_name = agent_lane_name(active_lane_);
+                rows.erase(std::remove_if(rows.begin(), rows.end(),
+                                          [&](const AgentMessageRecord& row) {
+                                              return row.lane != lane_name;
+                                          }),
+                           rows.end());
+                std::vector<std::string> persisted_handoffs;
+                for (const AgentMessageRecord& row : rows) {
+                    if (row.role == "handoff")
+                        persisted_handoffs.push_back(row.content);
+                }
+                rows.erase(std::remove_if(rows.begin(), rows.end(),
+                                          [](const AgentMessageRecord& row) {
+                                              return row.role == "handoff";
+                                          }),
+                           rows.end());
                 const std::string prior = build_prior_session_context(rows);
                 if (!prior.empty()) {
                     baseline += estimate_tokens_from_text("user");
                     baseline += estimate_tokens_from_text(prior);
+                    baseline += 4;
+                }
+                for (const std::string& persisted_handoff : persisted_handoffs) {
+                    baseline += estimate_tokens_from_text("user");
+                    baseline += estimate_tokens_from_text(persisted_handoff);
                     baseline += 4;
                 }
             }
@@ -1572,7 +1679,9 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
     std::vector<AgentMessageRecord> rows;
     Error error = session_store_.load_messages(rows);
     if (!error.ok()) return error;
-    apply_context_reset_filter(rows);
+    // Lane-clean boundaries affect only model context. The durable transcript
+    // remains visible; `/compact all` retains its historical display cut.
+    rows = messages_after_seq(rows, context_reset_after_seq_);
     const long long hidden_through =
         display_min_seq_.load(std::memory_order_relaxed);
     out.reserve(rows.size());
@@ -1582,7 +1691,7 @@ Error AgentSessionRuntime::load_display_messages(std::vector<provider::Message>&
         // Summary rows contain the internal model checkpoint, potentially with
         // large structured tool results. The completion status reports the
         // compaction to the user; replaying this payload would flood the TUI.
-        if (row.role == "summary") continue;
+        if (row.role == "summary" || row.role == "handoff") continue;
         provider::Message message;
         if (row.role == "user" || row.role == "assistant" || row.role == "system" ||
             row.role == "tool" || row.role == "notice" || row.role == "thinking" ||
@@ -1765,18 +1874,56 @@ SessionIndexReportResult AgentSessionRuntime::index_code(
     return result;
 }
 
-Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
+Error AgentSessionRuntime::switch_lane(
+    AgentLane mode,
+    LaneHandoff handoff,
+    const provider::RequestContext* lane_context) {
     if (!prepared_)
         return {ErrorCode::Internal, "agent session runtime is not prepared"};
-    if (mode == task_mode_) return ok_error();
+    if (mode == active_lane_ && handoff.scope != LaneHandoff::Scope::Clean)
+        return ok_error();
     bool expected = false;
     if (!operation_active_.compare_exchange_strong(expected, true))
         return {ErrorCode::BadArgs,
-                "cannot switch agent task mode while an agent operation is active"};
+                "cannot switch agent mode while an agent operation is active"};
     struct Release {
         std::atomic<bool>& active;
         ~Release() { active.store(false); }
     } release{operation_active_};
+
+    if (mode == active_lane_) {
+        long long cut = 0;
+        if (session_store_.is_open()) {
+            AgentMessageRecord last;
+            bool found = false;
+            Error error = session_store_.peek_last_message(last, found);
+            if (!error.ok()) return error;
+            if (found) cut = last.seq;
+            AgentProjectRecord project;
+            error = session_store_.open_project(project);
+            if (!error.ok()) return error;
+            error = settings_json_with_lane_context_after_seq(
+                project.settings_json, mode, cut, project.settings_json);
+            if (!error.ok()) return error;
+            error = session_store_.update_project_meta(project);
+            if (!error.ok()) return error;
+            error = session_store_.append_message(
+                "notice", std::string(agent_lane_name(mode)) +
+                              " context cleared; durable transcript retained");
+            if (!error.ok()) return error;
+        }
+        lane_context_after_seq_ = cut;
+        const ToolProtocol protocol = state_.protocol;
+        const std::size_t turns = state_.turn;
+        conversation_ = provider::ToolConversation{};
+        state_ = AgentLoopState{};
+        state_.protocol = protocol;
+        state_.turn = turns;
+        conversation_seeded_ = false;
+        pending_handoff_.clear();
+        publish_request_token_estimate();
+        return ok_error();
+    }
 
     AgentsMdBundle refreshed;
     Error error = load_root_agents_md(options_.workspace, kDefaultAgentsMdMaxBytes, refreshed);
@@ -1784,19 +1931,127 @@ Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
     if (conversation_seeded_ &&
         (conversation_.messages.empty() || conversation_.messages.front().role != "system"))
         return {ErrorCode::Internal, "agent conversation has no trusted system prompt"};
+    LaneSnapshot& source = active_lane_ == AgentLane::Act ? act_lane_ : lead_lane_;
+    LaneSnapshot& target = mode == AgentLane::Act ? act_lane_ : lead_lane_;
+
+    std::string handoff_text;
+    const long long prior_imported_seq =
+        handoff.scope == LaneHandoff::Scope::Clean ? 0 : target.imported_through_seq;
+    long long newest_source_seq = prior_imported_seq;
+    long long target_context_cut =
+        handoff.scope == LaneHandoff::Scope::Clean ? 0 : target.context_after_seq;
     if (session_store_.is_open()) {
+        std::vector<AgentMessageRecord> rows;
+        error = session_store_.load_messages(rows);
+        if (!error.ok()) return error;
+        if (handoff.scope == LaneHandoff::Scope::Clean) {
+            for (const AgentMessageRecord& row : rows)
+                target_context_cut = std::max(target_context_cut, row.seq);
+        }
+        // Handoffs must respect both `/compact all` and per-lane clean
+        // boundaries. Otherwise switching lanes could resurrect context the
+        // user explicitly removed from future model requests.
+        apply_context_reset_filter(rows);
+        const std::string source_name = agent_lane_name(active_lane_);
+        std::vector<const AgentMessageRecord*> transferable;
+        for (const AgentMessageRecord& row : rows) {
+            if (row.lane != source_name || row.seq <= prior_imported_seq)
+                continue;
+            newest_source_seq = std::max(newest_source_seq, row.seq);
+            if (row.role == "user" || row.role == "assistant" ||
+                (mode == AgentLane::Lead &&
+                 handoff.scope == LaneHandoff::Scope::All &&
+                 row.role != "handoff" && row.role != "summary"))
+                transferable.push_back(&row);
+        }
+        if (handoff.scope != LaneHandoff::Scope::Clean && !transferable.empty()) {
+            std::size_t begin = 0;
+            if (mode == AgentLane::Lead && handoff.scope == LaneHandoff::Scope::Recent) {
+                int users = 0;
+                begin = transferable.size();
+                while (begin > 0) {
+                    --begin;
+                    if (transferable[begin]->role == "user" &&
+                        ++users >= std::max(1, handoff.recent_user_turns))
+                        break;
+                }
+            }
+            handoff_text = "[Ainiux mode handoff from " + source_name + "]";
+            for (std::size_t index = begin; index < transferable.size(); ++index) {
+                const AgentMessageRecord& row = *transferable[index];
+                std::string content = row.content;
+                if (mode == AgentLane::Lead &&
+                    handoff.scope == LaneHandoff::Scope::Recent &&
+                    row.role == "assistant") {
+                    content = utf8_prefix(content, handoff.assistant_preview_chars);
+                }
+                handoff_text += "\n\n";
+                if (row.role == "user") handoff_text += "User:\n";
+                else if (row.role == "assistant") handoff_text += "Assistant:\n";
+                else if (row.role == "tool") handoff_text += "Tool:\n";
+                else handoff_text += row.role + ":\n";
+                handoff_text += content;
+            }
+        }
         AgentProjectRecord project;
         error = session_store_.open_project(project);
         if (!error.ok()) return error;
-        error = settings_with_task_mode(project.settings_json, mode == AgentTaskMode::Plan,
-                                        project.settings_json);
+        if (lane_context != nullptr) {
+            project.provider = lane_context->profile.name;
+            project.model = lane_context->options.model;
+            project.api = lane_context->api_kind == provider::ApiKind::Responses
+                              ? "responses"
+                              : "chat";
+            project.base_url = lane_context->base_url;
+            const ToolProtocol target_protocol =
+                target.seeded
+                    ? target.state.protocol
+                    : default_tool_protocol(
+                          provider::capabilities_for(*lane_context).tool_calls);
+            project.protocol = target_protocol == ToolProtocol::Xml ? "xml" : "native";
+            error = merge_project_lane_settings(
+                project.settings_json, mode, lane_context->options,
+                project.settings_json);
+            if (!error.ok()) return error;
+        }
+        error = settings_with_agent_lane(project.settings_json, mode,
+                                         project.settings_json);
+        if (!error.ok()) return error;
+        error = settings_json_with_lane_imported_through_seq(
+            project.settings_json, mode, newest_source_seq,
+            project.settings_json);
+        if (!error.ok()) return error;
+        error = settings_json_with_lane_context_after_seq(
+            project.settings_json, mode, target_context_cut,
+            project.settings_json);
         if (!error.ok()) return error;
         error = session_store_.update_project_meta(project);
         if (!error.ok()) return error;
+        if (!handoff_text.empty()) {
+            error = session_store_.append_message(
+                "handoff", handoff_text, {}, true, {}, agent_lane_name(mode));
+            if (!error.ok()) return error;
+        }
+    }
+
+    source.conversation = std::move(conversation_);
+    source.state = state_;
+    source.seeded = conversation_seeded_;
+    source.pending_handoff = std::move(pending_handoff_);
+    source.context_after_seq = lane_context_after_seq_;
+    if (handoff.scope == LaneHandoff::Scope::Clean) target = LaneSnapshot{};
+    target.imported_through_seq = newest_source_seq;
+    target.context_after_seq = target_context_cut;
+    conversation_ = std::move(target.conversation);
+    state_ = target.state;
+    conversation_seeded_ = target.seeded;
+    pending_handoff_ = std::move(target.pending_handoff);
+    lane_context_after_seq_ = target.context_after_seq;
+    if (!conversation_seeded_ && lane_context != nullptr) {
+        state_.protocol = default_tool_protocol(
+            provider::capabilities_for(*lane_context).tool_calls);
     }
     if (conversation_seeded_) {
-        // Preserve the serialized prefix. Refreshed project instructions and
-        // mode controls are appended for later rounds.
         if (refreshed.injection_text != agents_md_.injection_text) {
             const std::string refreshed_context =
                 refreshed.injection_text.empty()
@@ -1808,14 +2063,17 @@ Error AgentSessionRuntime::switch_task_mode(AgentTaskMode mode) {
         std::vector<std::string> script_names;
         (void)list_project_scripts(options_.workspace, script_names);
         append_conversation_text(conversation_, "user",
-                                 agent_task_mode_control(mode, script_names));
+                                 agent_lane_control(mode, script_names));
+        if (!handoff_text.empty())
+            append_conversation_text(conversation_, "user", handoff_text);
+    } else if (!handoff_text.empty() && !session_store_.is_open()) {
+        pending_handoff_ = handoff_text;
     }
     agents_md_ = std::move(refreshed);
-    task_mode_ = mode;
-    options_.task_mode = mode;
-    tools_.set_mutation_policy(mode == AgentTaskMode::Plan
-                                   ? MutationPolicy::PlanningDocuments
-                                   : MutationPolicy::Full);
+    active_lane_ = mode;
+    options_.lane = mode;
+    tools_.set_mutation_policy(MutationPolicy::Full);
+    session_store_.set_active_lane(agent_lane_name(active_lane_));
     known_tools_ = known_tool_names(tools_);
     publish_request_token_estimate();
     return ok_error();
@@ -1857,7 +2115,8 @@ Error AgentSessionRuntime::switch_permission_mode(
         project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
         project.base_url = context.base_url;
         project.workspace = options_.workspace;
-        error = merge_project_model_settings(project.settings_json, context.options, project.settings_json);
+        error = merge_project_lane_settings(project.settings_json, active_lane_,
+                                            context.options, project.settings_json);
         if (!error.ok()) { permission_mode_ = previous; return error; }
         error = settings_json_with_permission_mode(
             project.settings_json, mode,
@@ -2074,6 +2333,10 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         std::atomic<bool>& active;
         ~ReleaseOperation() { active.store(false); }
     } release_operation{operation_active_};
+    // Provider/model changes can also change credentials. Keep transcript and
+    // tool-output redaction aligned with the active lane before doing any work.
+    secrets_ = request_secrets(context);
+    tools_.set_secrets(secrets_);
     // Always drop image payloads when leaving this turn (success, error, cancel).
     struct StripTurnImages {
         provider::ToolConversation& conversation;
@@ -2197,6 +2460,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         publish_request_token_estimate();
     };
     reset_agent_loop_for_user_turn(state_);
+    session_store_.set_active_turn(static_cast<long long>(state_.turn + 1));
     result.turn_started_ms = now_unix_ms();
     // Prefer the per-turn callback (TUI streaming); fall back to prepare-time options.
     auto progress = [&](const std::string& line) {
@@ -2261,8 +2525,9 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
             project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
             project.base_url = context.base_url;
-            Error settings_error = merge_project_model_settings(
-                project.settings_json, context.options, project.settings_json);
+            Error settings_error = merge_project_lane_settings(
+                project.settings_json, active_lane_, context.options,
+                project.settings_json);
             if (!settings_error.ok()) { result.error = settings_error; return result; }
             settings_error = settings_json_with_permission_mode(
                 project.settings_json, permission_mode_,
@@ -2289,28 +2554,49 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             }
         }
         // Seed system (+ optional AGENTS.md). Interactive agent sessions resume
-        // the project transcript as model context. Headless --run/--plan always
+        // the project transcript as model context. Headless --run always
         // start with a fresh model conversation, while still using the durable
         // project DB for logging/display and the persistent code index.
         std::vector<AgentMessageRecord> prior;
-        if (options_.interactive && session_store_.is_open())
+        std::vector<std::string> persisted_handoffs;
+        if (options_.interactive && session_store_.is_open()) {
             (void)session_store_.load_messages(prior);
-        apply_context_reset_filter(prior);
+            apply_context_reset_filter(prior);
+            const std::string lane_name = agent_lane_name(active_lane_);
+            for (const AgentMessageRecord& row : prior) {
+                if (row.lane == lane_name && row.role == "handoff")
+                    persisted_handoffs.push_back(row.content);
+            }
+            prior.erase(std::remove_if(prior.begin(), prior.end(),
+                                       [&](const AgentMessageRecord& row) {
+                                           return row.lane != lane_name ||
+                                                  row.role == "handoff";
+                                       }),
+                        prior.end());
+        }
         const std::string prior_context = build_prior_session_context(prior);
         std::vector<std::string> script_names;
         (void)list_project_scripts(options_.workspace, script_names);
         if (prior_context.empty()) {
-            seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, text,
+            seed_agent_conversation(conversation_, prompts_, active_lane_, state_.protocol, text,
                                     agents_md_.injection_text, script_names);
         } else {
-            seed_agent_conversation(conversation_, prompts_, task_mode_, state_.protocol, "",
+            seed_agent_conversation(conversation_, prompts_, active_lane_, state_.protocol, "",
                                     agents_md_.injection_text, script_names);
             conversation_.messages.push_back({"user", prior_context});
-            conversation_.messages.push_back({"user", text});
             if (!context.options.quiet)
                 std::cerr << "Injected prior agent transcript (" << prior.size()
                           << " stored messages) into model context.\n";
         }
+        for (const std::string& persisted_handoff : persisted_handoffs)
+            conversation_.messages.push_back({"user", persisted_handoff});
+        if (!pending_handoff_.empty()) {
+            conversation_.messages.push_back({"user", pending_handoff_});
+            pending_handoff_.clear();
+        }
+        if (conversation_.messages.empty() ||
+            conversation_.messages.back().content != text)
+            conversation_.messages.push_back({"user", text});
         attach_images_to_last_user_message(conversation_, model_images);
         conversation_seeded_ = true;
         if (goal_is_active(goal_)) inject_active_goal_control(false);
@@ -2328,7 +2614,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                       << "Using " << context.profile.name << "/" << context.options.model
                       << " with protocol "
                       << (state_.protocol == ToolProtocol::Xml ? "xml" : "native")
-                      << " (" << agent_task_mode_name(task_mode_) << " tools).\n";
+                      << " (" << agent_lane_name(active_lane_) << " tools).\n";
             if (!payload.images.empty()) {
                 std::cerr << "Attached " << payload.images.size()
                           << " image(s) for this turn only (not stored).\n";

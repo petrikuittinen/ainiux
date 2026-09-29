@@ -38,7 +38,7 @@ bool needs_value(const std::string& opt) {
         "--save-chat", "--load-chat", "--dataset", "--grade-input", "--category", "--case",
         "--runs", "--warmup", "--limit", "--mode", "--concurrency", "--duration",
         "--summary-format",
-        "-r", "--run", "--run-file", "--plan", "--plan-file",
+        "-r", "--run", "--run-file",
         "--size", "--ar", "--quality", "--resolution", "--seed",
         "--negative-prompt", "--audio", "--video-setting"};
     for (const char* item : with_values) {
@@ -315,8 +315,8 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if ((arg == "run" && verb_after_globals())) {
             opts.agent_run = true;
         } else if ((arg == "plan" && verb_after_globals())) {
-            opts.agent_run = true;
-            opts.agent_plan = true;
+            return {opts, {ErrorCode::BadArgs,
+                           "the one-shot plan command was retired; use interactive agent /lead"}};
         } else if ((arg == "image" && verb_after_globals()) || arg == "--image") {
             opts.image = true;
         } else if ((arg == "video" && verb_after_globals()) || arg == "--video") {
@@ -501,14 +501,6 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
                 opts.prompt = value;
             } else if (opt == "--run-file") {
                 opts.agent_run = true;
-                opts.prompt_file = value;
-            } else if (opt == "--plan") {
-                opts.agent_run = true;
-                opts.agent_plan = true;
-                opts.prompt = value;
-            } else if (opt == "--plan-file") {
-                opts.agent_run = true;
-                opts.agent_plan = true;
                 opts.prompt_file = value;
             } else if (opt == "-s" || opt == "--system") {
                 opts.system = value;
@@ -897,17 +889,6 @@ ParseResult parse_args(int argc, char** argv, const Options& base_options) {
         } else if (!arg.empty() && arg[0] == '-') {
             return {opts, {ErrorCode::BadArgs, "unknown option: " + arg}};
         } else {
-            if (opts.agent_plan && argc > 1 && std::string(argv[1]) == "plan" &&
-                opts.prompt.empty() && opts.prompt_file.empty()) {
-                opts.prompt = arg;
-                continue;
-            }
-            if (opts.agent_plan && argc > 1 && std::string(argv[1]) == "plan") {
-                return {opts,
-                        {ErrorCode::BadArgs,
-                         "ainiux plan accepts one positional goal; select providers with "
-                         "--provider or another named option"}};
-            }
             if (!opts.positional_url.empty()) {
                 return {opts, {ErrorCode::BadArgs, "unexpected extra positional argument: " + arg}};
             }
@@ -967,7 +948,7 @@ Error validate_disable_indexing_arguments(const Options& options) {
                 "--disable-indexing cannot be combined with --security-review"};
     if (!options.agent && !options.agent_run)
         return {ErrorCode::BadArgs,
-                "--disable-indexing requires --agent, --run, or --plan"};
+                "--disable-indexing requires --agent or --run"};
     return ok_error();
 }
 
@@ -1050,29 +1031,12 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
     }
     if (options.prompt.empty() && options.prompt_file.empty()) {
         return {ErrorCode::BadArgs,
-                "one-shot agent requires a goal via --run/--run-file or --plan/--plan-file"};
+                "one-shot agent requires a goal via --run/--run-file"};
     }
     if (!options.prompt.empty() && !options.prompt_file.empty()) {
         return {ErrorCode::BadArgs,
                 "one-shot agent accepts exactly one goal source, not both text and a file"};
     }
-    bool saw_act_entry = false;
-    bool saw_plan_entry = false;
-    for (int i = 1; i < argc; ++i) {
-        const std::string argument = argv[i];
-        const std::size_t equals = argument.find('=');
-        const std::string option =
-            equals == std::string::npos ? argument : argument.substr(0, equals);
-        if ((i == 1 && option == "run") || option == "-r" || option == "--run" ||
-            option == "--run-file")
-            saw_act_entry = true;
-        if ((i == 1 && option == "plan") || option == "--plan" ||
-            option == "--plan-file")
-            saw_plan_entry = true;
-    }
-    if (saw_act_entry && saw_plan_entry)
-        return {ErrorCode::BadArgs,
-                "Act run and Plan entry forms cannot be combined; choose one task mode"};
     if (!options.system.empty() || !options.system_file.empty()) {
         return {ErrorCode::BadArgs,
                 "one-shot agent uses the trusted master/agent system prompt; omit -s/--system-file"};
@@ -1084,10 +1048,6 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
         const std::string option = equals == std::string::npos ? argument : argument.substr(0, equals);
         if (!option.empty() && option.front() != '-') {
             if (option == "run" && i == 1) continue;
-            if (option == "plan" && i == 1) continue;
-            if (options.agent_plan && argc > 1 && std::string(argv[1]) == "plan" &&
-                option == options.prompt)
-                continue;
             if (positional_seen) {
                 return {ErrorCode::BadArgs,
                         "unexpected extra positional argument in --run mode: " + option};
@@ -1118,7 +1078,7 @@ Error validate_agent_run_arguments(int argc, char** argv, const Options& options
             option == "--reasoning" || option == "--connect-timeout" || option == "--timeout" ||
             option == "--proxy" || option == "--trusted-prompt-dir" ||
             option == "--max-source-code-file-size" || option == "-r" || option == "--run" ||
-            option == "--run-file" || option == "--plan" || option == "--plan-file";
+            option == "--run-file";
         if (takes_value) {
             if (equals == std::string::npos) ++i;
             continue;
@@ -1241,7 +1201,7 @@ Error validate_image_mode_arguments(const Options& options) {
         return {ErrorCode::BadArgs, "image mode cannot be combined with --chat"};
     }
     if (options.agent || options.agent_run) {
-        return {ErrorCode::BadArgs, "image mode cannot be combined with --agent, --run, or --plan"};
+        return {ErrorCode::BadArgs, "image mode cannot be combined with --agent or --run"};
     }
     if (options.benchmark || options.grade) {
         return {ErrorCode::BadArgs, "image mode cannot be combined with --benchmark or --grade"};
@@ -1385,9 +1345,6 @@ Usage:
   ainiux [BASE_URL|PROFILE] -m MODEL -r, --run "goal"
   ainiux run [BASE_URL|PROFILE] -m MODEL -r "goal"
   ainiux [BASE_URL|PROFILE] -m MODEL --run-file PATH
-  ainiux plan "goal" --provider PROFILE -m MODEL
-  ainiux [BASE_URL|PROFILE] -m MODEL --plan "goal"
-  ainiux [BASE_URL|PROFILE] -m MODEL --plan-file PATH
   ainiux image -p TEXT [--size 1k|2k|4k|WIDTHxHEIGHT] [--ar W:H] [--quality low|medium|high|auto]
               [--format png|jpeg|webp|auto] [--attach IMAGE]... [--output PATH]
   ainiux image --provider replicate -m MODEL -p TEXT [--size 1k|2k|4k] [--ar W:H] [--attach IMAGE]...
@@ -1434,7 +1391,7 @@ Examples:
   ainiux lmstudio -p "Describe this" --input photo.png
   ainiux -a lmstudio -m MODEL
   ainiux lmstudio -m MODEL -r "add unit tests to compute.py"
-  ainiux plan "design server mode" --provider openai -m MODEL
+  ainiux agent --provider openai -m MODEL   # then use /lead when needed
   ainiux benchmark --category reasoning --limit 2 --provider lmstudio -m MODEL
   ainiux --benchmark --dataset eval.jsonl --mode quality --output results/
   ainiux --grade --category reasoning --output results/ --provider openai -m JUDGE_MODEL
@@ -1492,8 +1449,6 @@ Options:
   -r, --run TEXT                One-shot headless agent goal with read+write tools
                                 (also: ainiux run ...).
       --run-file PATH           One-shot agent goal from a file; use '-' for stdin.
-      --plan TEXT               One-shot Plan agent goal; writes only planning documents.
-      --plan-file PATH          One-shot Plan goal from a file; use '-' for stdin.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).
       --image                   Generate one image (OpenAI, Replicate, fal, or
@@ -1533,7 +1488,7 @@ Options:
       --index-code              Create or incrementally refresh .ainiux-pr/index.sqlite.
       --print-index             Print the stored project code index as Markdown.
       --clear-index             Remove the project code index database.
-      --disable-indexing        Run Agent/Run/Plan without probing or touching the code index.
+      --disable-indexing        Run Agent/Run without probing or touching the code index.
       --security-review         Review every eligible indexed workspace file and print Markdown.
       --security-review-log     Enable the local per-run JSONL diagnostic log (default).
       --no-security-review-log  Disable the local per-run JSONL diagnostic log.

@@ -163,7 +163,9 @@ def check_language_reformat(binary, tmpdir):
 
 
 def check_detected_indentation(binary, tmpdir):
-    source = os.path.abspath("tests/highlight/javascript_file.js")
+    source = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "highlight", "javascript_file.js")
+    )
     path = os.path.join(tmpdir, "detected-indentation.js")
     with open(source, "r", encoding="utf-8") as source_handle:
         with open(path, "w", encoding="utf-8") as target_handle:

@@ -838,11 +838,20 @@ void test_config_reads_models_template() {
           "GPT OSS family rule covers both 20B and 120B through arbitrary prefixes");
     const ainiux::ModelCapability* gpt6_astra = ainiux::config::resolve_model_capability(
         options.model_catalog, "openai", "responses", "openai/GPT-6-ASTRA");
+    const ainiux::ModelCapability* gpt61_astra = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "responses", "gpt-6.1-astra");
     const ainiux::ModelCapability* gpt6_sol = ainiux::config::resolve_model_capability(
         options.model_catalog, "openai", "chat", "gpt-6-sol");
+    const ainiux::ModelCapability* gpt61_sol = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "chat", "gpt-6.1-sol");
+    const ainiux::ModelCapability* gpt62_sol = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openai", "chat", "gpt-6.2-sol");
     const ainiux::ModelCapability* gpt6_luna = ainiux::config::resolve_model_capability(
         options.model_catalog, "openrouter", "chat", "openai/gpt-6-luna");
+    const ainiux::ModelCapability* gpt61_luna = ainiux::config::resolve_model_capability(
+        options.model_catalog, "openrouter", "chat", "openai/gpt-6.1-luna");
     check(gpt6_astra != nullptr && gpt6_astra->id == "openai-gpt-6-astra" &&
+              gpt61_astra != nullptr && gpt61_astra->id == "openai-gpt-6-astra" &&
               gpt6_astra->context_window_tokens == 1000000 &&
               gpt6_astra->max_output_tokens == 128000 &&
               gpt6_astra->reasoning_options.size() == 5 &&
@@ -850,7 +859,10 @@ void test_config_reads_models_template() {
                   ainiux::ReasoningSelection::named("low"),
           "GPT-6 Astra has its non-disableable effort ladder and token limits");
     check(gpt6_sol != nullptr && gpt6_sol->id == "openai-gpt-6-sol-luna" &&
+              gpt61_sol != nullptr && gpt61_sol->id == "openai-gpt-6-sol-luna" &&
+              gpt62_sol != nullptr && gpt62_sol->id == "openai-gpt-6-sol-luna" &&
               gpt6_luna != nullptr && gpt6_luna->id == "openai-gpt-6-sol-luna" &&
+              gpt61_luna != nullptr && gpt61_luna->id == "openai-gpt-6-sol-luna" &&
               gpt6_sol->context_window_tokens == 1000000 &&
               gpt6_sol->max_output_tokens == 128000 &&
               gpt6_sol->reasoning_options.size() == 6 &&
@@ -1248,7 +1260,7 @@ void test_user_api_setting_is_explicit() {
 void test_config_reads_common_template() {
     ainiux::config::ParseResult parsed = ainiux::config::read_file("config/ainiux.conf");
     check(parsed.error.ok(), "common config file parses");
-    check(parsed.document.entries.size() == 76, "common config has every expected setting");
+    check(parsed.document.entries.size() == 78, "common config has every expected setting");
     ainiux::cli::Options highlight_options;
     ainiux::Error apply_error = ainiux::config::apply_document(parsed.document, highlight_options);
     check(apply_error.ok() && highlight_options.tui_highlight,
@@ -2024,6 +2036,30 @@ void test_image_catalog_layering_and_validation() {
           "defaults_json must be a JSON object");
 }
 
+void test_agent_lead_request_bundle() {
+    const auto parsed = ainiux::config::parse(
+        "[agent]\nlead_context_turns = 3\nlead_response_chars = 321\n"
+        "[agent.lead]\nprovider = deepseek\nmodel = lead-model\napi = responses\n"
+        "[agent.lead.generation]\ntemperature = 0.2\nreasoning = high\n",
+        "lead.conf");
+    ainiux::cli::Options options;
+    const Error error = ainiux::config::apply_document(parsed.document, options);
+    check(error.ok() && options.agent_lead_options != nullptr,
+          "[agent.lead] accepts a mirrored request bundle");
+    if (options.agent_lead_options) {
+        check(options.agent_lead_options->provider == "deepseek" &&
+                  options.agent_lead_options->model == "lead-model" &&
+                  options.agent_lead_options->api == "responses" &&
+                  options.agent_lead_options->has_temperature &&
+                  options.agent_lead_options->temperature == 0.2 &&
+                  options.agent_lead_options->reasoning.value == "high",
+              "Lead provider and generation settings stay independent from Act");
+    }
+    check(options.agent_lead_context_turns == 3 &&
+              options.agent_lead_response_chars == 321,
+          "Lead handoff defaults are configurable");
+}
+
 void run_all() {
     test_config_applies_user_settings();
     test_config_applies_model_catalog();
@@ -2048,6 +2084,7 @@ void run_all() {
     test_config_user_path_resolution();
     test_themes_config();
     test_editor_commands_config();
+    test_agent_lead_request_bundle();
 }
 
 }  // namespace ainiux::test::config

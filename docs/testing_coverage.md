@@ -129,7 +129,7 @@ Coverage strengths visible in the evidence:
   UTF-8 splits — all exercised without a network.
 - **Security-sensitive logic is unit-tested**: command Guard allow/deny/trap matrix (option
   classifier traps like `date --set`, `find -exec`, `rg --pre`, `tail --follow`, `diff
-  --output=`), path containment (escape/absolute/tilde/symlink/protected), Plan read-only policy,
+  --output=`), path containment (escape/absolute/tilde/symlink/protected), restricted read-only policy,
   redaction, SSRF/private-URL rejection, read-only registries.
 - **Adversarial/Unicode/malformed-input cases are consistently present** (invalid UTF-8 rendering,
   huge inputs, cancellation, corrupt DBs/files).

@@ -52,8 +52,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
 
     agent::SessionRuntimeOptions options = agent::make_session_runtime_options(
         context, std::move(workspace),
-        context.options.agent_plan ? agent::AgentTaskMode::Plan
-                                   : agent::AgentTaskMode::Act,
+        agent::AgentLane::Act,
         false);
     IndexProgressPrinter index_progress(
         !context.options.quiet &&

@@ -13,7 +13,14 @@ WINDOWS_NATIVE=0
 if [ "${OS:-}" = "Windows_NT" ]; then
     WINDOWS_NATIVE=1
 fi
+PTY_WORKSPACE=""
+if [ "$WINDOWS_NATIVE" -eq 0 ]; then
+    PTY_WORKSPACE=$(mktemp -d "${TMPDIR:-/tmp}/ainiux-integration-pty.XXXXXX")
+fi
 
+# These are generated integration homes, not user state. Reset them so repeated
+# comprehensive runs start from the same chat/config state.
+rm -rf "$EMPTY_CONFIG_HOME" "$TEST_HOME"
 mkdir -p "$EMPTY_CONFIG_HOME" "$TEST_HOME"
 # Prior interrupted runs can leave nested project-state fixtures under build/.
 # Clear only this script's named workspaces before editor project discovery.
@@ -29,7 +36,7 @@ SERVER_PID=$!
 python3 "$ROOT/tests/mock_server/openai_mock.py" --api responses --port "$RESPONSES_PORT" \
     --model "$MODEL" >"$RESPONSES_SERVER_LOG" 2>&1 &
 RESPONSES_SERVER_PID=$!
-trap 'kill "$SERVER_PID" "$RESPONSES_SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" "$RESPONSES_SERVER_PID" >/dev/null 2>&1 || true' EXIT INT TERM
+trap 'kill "$SERVER_PID" "$RESPONSES_SERVER_PID" >/dev/null 2>&1 || true; wait "$SERVER_PID" "$RESPONSES_SERVER_PID" >/dev/null 2>&1 || true; if [ -n "$PTY_WORKSPACE" ]; then rm -rf "$PTY_WORKSPACE"; fi' EXIT INT TERM
 
 i=0
 while [ "$i" -lt 50 ]; do
@@ -623,11 +630,15 @@ repl_fetch_reply=$(printf '/fetch %s/page\nsummarize-url\n/quit\n' "$BASE" | \
 test "$repl_fetch_reply" = "url-context-ok"
 
 if [ "$WINDOWS_NATIVE" -eq 0 ]; then
-    python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
-    python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL"
-    python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/ainiux"
-    python3 "$ROOT/tests/integration/tui_startup_selection_driver.py" \
-        "$ROOT/ainiux" "$BASE" "$MODEL"
+    (cd "$PTY_WORKSPACE" &&
+        python3 "$ROOT/tests/integration/editor_continue_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL")
+    (cd "$PTY_WORKSPACE" &&
+        python3 "$ROOT/tests/integration/editor_buffers_driver.py" "$ROOT/ainiux" "$BASE" "$MODEL")
+    (cd "$PTY_WORKSPACE" &&
+        python3 "$ROOT/tests/integration/editor_locking_driver.py" "$ROOT/ainiux")
+    (cd "$PTY_WORKSPACE" &&
+        python3 "$ROOT/tests/integration/tui_startup_selection_driver.py" \
+            "$ROOT/ainiux" "$BASE" "$MODEL")
 fi
 
 image_extract_err="$ROOT/build/image-extract.err"
@@ -1002,8 +1013,9 @@ fi
 
 if [ "$WINDOWS_NATIVE" -eq 0 ]; then
     TUI_FILE="$ROOT/build/tui-insert-chat.json"
-    python3 "$ROOT/tests/integration/tui_insert_driver.py" \
-        "$ROOT/ainiux" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE"
+    (cd "$PTY_WORKSPACE" &&
+        python3 "$ROOT/tests/integration/tui_insert_driver.py" \
+            "$ROOT/ainiux" "$BASE" "$MODEL" "$insert_file" "$local_png" "$BASE/page" "$TUI_FILE")
     grep 'Inserted Context Marker' "$TUI_FILE" >/dev/null
     grep 'insert-ok' "$TUI_FILE" >/dev/null
     grep 'image-input-ok' "$TUI_FILE" >/dev/null

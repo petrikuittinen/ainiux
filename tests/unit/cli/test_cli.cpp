@@ -806,42 +806,24 @@ void test_cli_agent_mode_parse() {
     const char* plan_sub[] = {"ainiux", "plan", "design the server", "--provider",
                               "openrouter", "-m", "model"};
     parsed = ainiux::cli::parse_args(7, const_cast<char**>(plan_sub));
-    check(parsed.error.ok() && parsed.options.agent_run && parsed.options.agent_plan &&
-              parsed.options.prompt == "design the server" &&
-              parsed.options.provider == "openrouter" &&
-              ainiux::cli::validate_agent_run_arguments(7, const_cast<char**>(plan_sub),
-                                                       parsed.options)
-                  .ok(),
-          "ainiux plan consumes its quoted goal and named provider options");
+    check(!parsed.error.ok() && parsed.error.message.find("retired") != std::string::npos,
+          "ainiux plan reports that one-shot Plan was retired");
 
     const char* plan_flag[] = {"ainiux", "openrouter", "--plan", "design the server",
                                "-m", "model"};
     parsed = ainiux::cli::parse_args(6, const_cast<char**>(plan_flag));
-    check(parsed.error.ok() && parsed.options.agent_run && parsed.options.agent_plan &&
-              parsed.options.prompt == "design the server" &&
-              parsed.options.positional_url == "openrouter" &&
-              ainiux::cli::validate_agent_run_arguments(6, const_cast<char**>(plan_flag),
-                                                       parsed.options)
-                  .ok(),
-          "--plan accepts a positional provider");
+    check(!parsed.error.ok(), "--plan is no longer accepted");
 
     const char* plan_file[] = {"ainiux", "--plan-file", "goal.txt", "--provider",
                                "openai", "-m", "model"};
     parsed = ainiux::cli::parse_args(7, const_cast<char**>(plan_file));
-    check(parsed.error.ok() && parsed.options.agent_run && parsed.options.agent_plan &&
-              parsed.options.prompt_file == "goal.txt" &&
-              ainiux::cli::validate_agent_run_arguments(7, const_cast<char**>(plan_file),
-                                                       parsed.options)
-                  .ok(),
-          "--plan-file selects one-shot Plan mode");
+    check(!parsed.error.ok(), "--plan-file is no longer accepted");
 
-    const char* mixed_task_modes[] = {"ainiux", "--run", "act goal", "--plan", "plan goal"};
-    parsed = ainiux::cli::parse_args(5, const_cast<char**>(mixed_task_modes));
-    check(parsed.error.ok() &&
-              !ainiux::cli::validate_agent_run_arguments(
-                   5, const_cast<char**>(mixed_task_modes), parsed.options)
-                   .ok(),
-          "one-shot Act and Plan entry forms cannot be combined");
+    const char* run_with_retired_plan[] = {
+        "ainiux", "--run", "act goal", "--plan", "plan goal"};
+    parsed = ainiux::cli::parse_args(
+        5, const_cast<char**>(run_with_retired_plan));
+    check(!parsed.error.ok(), "retired Plan flags cannot be combined with Run");
 
     const char* run_no_index[] = {
         "ainiux", "--run", "goal", "--disable-indexing"};
@@ -860,11 +842,7 @@ void test_cli_agent_mode_parse() {
         "ainiux", "--plan", "goal", "--disable-indexing"};
     parsed =
         ainiux::cli::parse_args(4, const_cast<char**>(plan_no_index));
-    check(parsed.error.ok() && parsed.options.agent_plan &&
-              parsed.options.disable_indexing &&
-              ainiux::cli::validate_disable_indexing_arguments(parsed.options)
-                  .ok(),
-          "one-shot Plan accepts indexing disable");
+    check(!parsed.error.ok(), "retired Plan flags reject indexing options too");
 
     for (const std::vector<const char*>& rejected : {
              std::vector<const char*>{"ainiux", "--index-code",

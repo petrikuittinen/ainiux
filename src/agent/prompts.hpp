@@ -8,8 +8,8 @@
 
 namespace ainiux::agent {
 
-enum class AgentTaskMode { Act, Plan };
-const char* agent_task_mode_name(AgentTaskMode mode);
+enum class AgentLane { Act, Lead };
+const char* agent_lane_name(AgentLane mode);
 
 // Trusted prompts are never loaded from the reviewed/agent workspace.
 // agent_prompt.md is the stable agent foundation (base + protocol).
@@ -30,17 +30,17 @@ struct TrustedPrompts {
 // Static protocol appendices (trusted code, not workspace files).
 const char* native_protocol_appendix();
 const char* xml_protocol_appendix();
-std::string agent_task_mode_control(
-    AgentTaskMode mode,
+std::string agent_lane_control(
+    AgentLane mode,
     const std::vector<std::string>& project_scripts = {});
 
 Error load_trusted_prompts(const std::string& override_directory, TrustedPrompts& prompts);
 
 // Build the initial conversation with a stable system prompt, optional framed
-// AGENTS.md project instructions, the initial mode control, and the first goal.
+// AGENTS.md project instructions, the initial lane control, and the first goal.
 void seed_agent_conversation(provider::ToolConversation& conversation,
                              const TrustedPrompts& prompts,
-                             AgentTaskMode mode,
+                             AgentLane mode,
                              ToolProtocol protocol,
                              const std::string& user_goal,
                              const std::string& agents_md_injection = {},

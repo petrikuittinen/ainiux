@@ -56,12 +56,12 @@ struct ProcessResult {
 };
 
 // InspectionOnly: security-review's historical narrow snapshot allowlist.
-// PlanReadOnly: expanded, conservatively classified read-only argv forms.
+// RestrictedReadOnly: expanded, conservatively classified read-only argv forms.
 // Agent: default-allow any basename found on a fixed PATH, shell-free execve,
 // structural argument safety, and a hard denylist / Guard for dangerous forms.
 enum class CommandPolicy {
     InspectionOnly,
-    PlanReadOnly,
+    RestrictedReadOnly,
     Agent,
 };
 

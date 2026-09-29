@@ -399,7 +399,7 @@ On success:
   prior summary).
 - Update `project.summary_text`.
 - Rebuild live `conversation_`:
-  - reseeds prompts for **active** Act/Plan mode only;
+  - reseeds prompts for **active** Act/Lead mode only;
   - one user message: `compaction_checkpoint_wrapper(checkpoint)`
     (explicit “reference only / re-read files” preamble);
   - then head and tail as plain user/assistant, or tools as
@@ -459,7 +459,7 @@ Assume **W = 8_000**, same defaults:
 | Surface | What is counted |
 | --- | --- |
 | Live chrome / post-seed metrics | Live `conversation_.messages` (+ continuation JSON items) + native tool schemas via `publish_request_token_estimate` |
-| Idle chrome after `prepare` (not yet seeded) | Next-request seed only: system prompt (`agent_prompt.md` + protocol appendix), optional `AGENTS.md`, Act/Plan mode control, interactive `build_prior_session_context` block, native tool schemas. **Does not** sum the full durable SQLite transcript. |
+| Idle chrome after `prepare` (not yet seeded) | Next-request seed only: system prompt (`agent_prompt.md` + protocol appendix), optional `AGENTS.md`, Act/Lead mode control, interactive `build_prior_session_context` block, native tool schemas. **Does not** sum the full durable SQLite transcript. |
 | Compaction `tokens_before` | Live estimate when conversation is seeded; otherwise seed overhead + full durable model-projection transcript (`estimate_compact_tokens_before`). Intentionally **not** the smaller idle reopen seed, so reduction checks stay meaningful. |
 | Timeline / partition | Logical items: role + content + tool_name (+4) |
 | Transcript helper | `estimate_transcript_tokens` over stored messages with model-projection roles (compaction math / unseeded compact baseline; not idle chrome) |
@@ -484,10 +484,10 @@ timelines ignore rows at or before that cut. The full sqlite transcript remains.
 | Messages scanned from end | last **80** |
 | Per-message content | **1500** chars (truncated with `...`) |
 | Total body | **24_000** chars default `max_chars` |
-| Roles included | model-projection only (`user` / `assistant` / `tool` / `summary`); skips `notice`, `thinking`, `index` |
+| Roles included | model-projection only (`user` / `assistant` / `tool` / `summary` / lane `handoff`); skips `notice`, `thinking`, `index` |
 
 Interactive agent reopen injects this block as one user message. Headless
-`run` / `plan` do not. Not part of the three-strategy compact path.
+`run` does not. Not part of the three-strategy compact path.
 
 ---
 

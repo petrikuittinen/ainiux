@@ -92,6 +92,8 @@ AgentSessionStore::AgentSessionStore(AgentSessionStore&& other) noexcept {
     db_ = other.db_;
     path_ = std::move(other.path_);
     workspace_ = std::move(other.workspace_);
+    active_lane_ = std::move(other.active_lane_);
+    active_turn_ = other.active_turn_;
     other.db_ = nullptr;
 }
 
@@ -101,6 +103,8 @@ AgentSessionStore& AgentSessionStore::operator=(AgentSessionStore&& other) noexc
         db_ = other.db_;
         path_ = std::move(other.path_);
         workspace_ = std::move(other.workspace_);
+        active_lane_ = std::move(other.active_lane_);
+        active_turn_ = other.active_turn_;
         other.db_ = nullptr;
     }
     return *this;
@@ -139,6 +143,34 @@ Error AgentSessionStore::open(const std::string& workspace) {
         return error;
     }
     sqlite3_busy_timeout(db_, 1000);
+
+    // Compatibility is checked before any PRAGMA or schema write so an older
+    // project database is left untouched when this release refuses it.
+    int incompatible_schema = 0;
+    {
+        Statement check;
+        if (check.prepare(db_, path_,
+                          "SELECT MAX(version) FROM schema_migrations").ok() &&
+            check.step() == SQLITE_ROW) {
+            const int applied = static_cast<int>(check.column_int64(0));
+            if (applied > 0 && applied != kAgentSessionSchemaVersion)
+                incompatible_schema = applied;
+        }
+    }
+    if (incompatible_schema != 0) {
+        const std::string rejected_path = path_;
+        sqlite3_close(db_);
+        db_ = nullptr;
+        path_.clear();
+        workspace_.clear();
+        return {ErrorCode::UnsupportedFeature,
+                "agent session database schema " +
+                    std::to_string(incompatible_schema) +
+                    " is incompatible with the Act/Lead schema " +
+                    std::to_string(kAgentSessionSchemaVersion) +
+                    "; move or remove " + rejected_path +
+                    " to start a new project session (the existing database was not changed)"};
+    }
 
     char* message = nullptr;
     auto exec = [&](const char* sql) -> Error {
@@ -201,21 +233,15 @@ Error AgentSessionStore::ensure_schema() {
     }
 
     if (applied > 0 && applied != kAgentSessionSchemaVersion) {
-        // Hard reset: schema is not migrated across agent reworks.
-        error = exec(
-            "DROP TABLE IF EXISTS tool_events;"
-            "DROP TABLE IF EXISTS messages;"
-            "DROP TABLE IF EXISTS approvals;"
-            "DROP TABLE IF EXISTS script_trust;"
-            "DROP TABLE IF EXISTS sessions;"
-            "DROP TABLE IF EXISTS project;"
-            "DELETE FROM schema_migrations;");
-        if (!error.ok()) return error;
-        applied = 0;
+        return {ErrorCode::UnsupportedFeature,
+                "agent session database schema " + std::to_string(applied) +
+                    " is incompatible with the Act/Lead schema " +
+                    std::to_string(kAgentSessionSchemaVersion) + "; move or remove " + path_ +
+                    " to start a new project session (the existing database was not changed)"};
     }
 
     if (applied == kAgentSessionSchemaVersion) {
-        // Soft extensions preserve existing v2 project transcripts.
+        // Soft extensions may be added without changing the current schema version.
         error = ensure_approvals_table();
         if (!error.ok()) return error;
         error = ensure_script_trust_table();
@@ -245,6 +271,8 @@ Error AgentSessionStore::ensure_schema() {
         "  seq INTEGER NOT NULL UNIQUE,"
         "  created_at INTEGER NOT NULL,"
         "  role TEXT NOT NULL,"
+        "  lane TEXT NOT NULL CHECK (lane IN ('act','lead')),"
+        "  turn INTEGER NOT NULL DEFAULT 0,"
         "  content TEXT NOT NULL,"
         "  tool_name TEXT,"
         "  tool_ok INTEGER NOT NULL DEFAULT 1,"
@@ -255,6 +283,7 @@ Error AgentSessionStore::ensure_schema() {
         "  seq INTEGER NOT NULL UNIQUE,"
         "  created_at INTEGER NOT NULL,"
         "  turn INTEGER NOT NULL,"
+        "  lane TEXT NOT NULL CHECK (lane IN ('act','lead')),"
         "  call_id TEXT,"
         "  tool_name TEXT NOT NULL,"
         "  arguments TEXT NOT NULL,"
@@ -509,15 +538,16 @@ Error AgentSessionStore::append_message(const std::string& role,
                                         const std::string& content,
                                         const std::string& tool_name,
                                         bool tool_ok,
-                                        const std::string& args_preview) {
+                                        const std::string& args_preview,
+                                        const std::string& lane) {
     long long seq = 0;
     Error error = next_seq(seq);
     if (!error.ok()) return error;
     Statement statement;
     error = statement.prepare(
         db_, path_,
-        "INSERT INTO messages(seq, created_at, role, content, tool_name, tool_ok, args_preview) "
-        "VALUES(?,?,?,?,?,?,?)");
+        "INSERT INTO messages(seq, created_at, role, lane, turn, content, tool_name, tool_ok, args_preview) "
+        "VALUES(?,?,?,?,?,?,?,?,?)");
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 1, seq);
     if (!error.ok()) return error;
@@ -525,13 +555,17 @@ Error AgentSessionStore::append_message(const std::string& role,
     if (!error.ok()) return error;
     error = statement.bind_text(db_, path_, 3, role);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 4, content);
+    error = statement.bind_text(db_, path_, 4, lane.empty() ? active_lane_ : lane);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 5, tool_name);
+    error = statement.bind_int64(db_, path_, 5, active_turn_);
     if (!error.ok()) return error;
-    error = statement.bind_int(db_, path_, 6, tool_ok ? 1 : 0);
+    error = statement.bind_text(db_, path_, 6, content);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 7, args_preview);
+    error = statement.bind_text(db_, path_, 7, tool_name);
+    if (!error.ok()) return error;
+    error = statement.bind_int(db_, path_, 8, tool_ok ? 1 : 0);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 9, args_preview);
     if (!error.ok()) return error;
     if (statement.step() != SQLITE_DONE) return sqlite_error(db_, "could not append message", path_);
     return touch();
@@ -550,15 +584,16 @@ Error AgentSessionStore::append_tool_event(long long /*session_id*/,
                                            const std::string& tool_name,
                                            const std::string& arguments,
                                            const std::string& result,
-                                           bool ok) {
+                                           bool ok,
+                                           const std::string& lane) {
     long long seq = 0;
     Error error = next_seq(seq);
     if (!error.ok()) return error;
     Statement statement;
     error = statement.prepare(
         db_, path_,
-        "INSERT INTO tool_events(seq, created_at, turn, call_id, tool_name, arguments, result, ok) "
-        "VALUES(?,?,?,?,?,?,?,?)");
+        "INSERT INTO tool_events(seq, created_at, turn, lane, call_id, tool_name, arguments, result, ok) "
+        "VALUES(?,?,?,?,?,?,?,?,?)");
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 1, seq);
     if (!error.ok()) return error;
@@ -566,15 +601,17 @@ Error AgentSessionStore::append_tool_event(long long /*session_id*/,
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 3, turn);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 4, call_id);
+    error = statement.bind_text(db_, path_, 4, lane.empty() ? active_lane_ : lane);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 5, tool_name);
+    error = statement.bind_text(db_, path_, 5, call_id);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 6, arguments);
+    error = statement.bind_text(db_, path_, 6, tool_name);
     if (!error.ok()) return error;
-    error = statement.bind_text(db_, path_, 7, result);
+    error = statement.bind_text(db_, path_, 7, arguments);
     if (!error.ok()) return error;
-    error = statement.bind_int(db_, path_, 8, ok ? 1 : 0);
+    error = statement.bind_text(db_, path_, 8, result);
+    if (!error.ok()) return error;
+    error = statement.bind_int(db_, path_, 9, ok ? 1 : 0);
     if (!error.ok()) return error;
     if (statement.step() != SQLITE_DONE)
         return sqlite_error(db_, "could not append tool event", path_);
@@ -589,7 +626,7 @@ Error AgentSessionStore::peek_last_message(AgentMessageRecord& message,
     Statement statement;
     Error error = statement.prepare(
         db_, path_,
-        "SELECT id, seq, created_at, role, content, tool_name, tool_ok, args_preview "
+        "SELECT id, seq, created_at, role, lane, turn, content, tool_name, tool_ok, args_preview "
         "FROM messages ORDER BY seq DESC LIMIT 1");
     if (!error.ok()) return error;
     if (statement.step() != SQLITE_ROW) return ok_error();
@@ -597,10 +634,12 @@ Error AgentSessionStore::peek_last_message(AgentMessageRecord& message,
     message.seq = statement.column_int64(1);
     message.created_at = statement.column_int64(2);
     message.role = statement.column_text(3);
-    message.content = statement.column_text(4);
-    message.tool_name = statement.column_text(5);
-    message.tool_ok = statement.column_int(6) != 0;
-    message.args_preview = statement.column_text(7);
+    message.lane = statement.column_text(4);
+    message.turn = statement.column_int64(5);
+    message.content = statement.column_text(6);
+    message.tool_name = statement.column_text(7);
+    message.tool_ok = statement.column_int(8) != 0;
+    message.args_preview = statement.column_text(9);
     found = true;
     return ok_error();
 }
@@ -608,7 +647,7 @@ Error AgentSessionStore::peek_last_message(AgentMessageRecord& message,
 Error AgentSessionStore::load_messages(std::vector<AgentMessageRecord>& messages, int limit) const {
     messages.clear();
     std::string sql =
-        "SELECT id, seq, created_at, role, content, tool_name, tool_ok, args_preview "
+        "SELECT id, seq, created_at, role, lane, turn, content, tool_name, tool_ok, args_preview "
         "FROM messages ORDER BY seq ASC";
     if (limit > 0) sql += " LIMIT " + std::to_string(limit);
     Statement statement;
@@ -620,10 +659,12 @@ Error AgentSessionStore::load_messages(std::vector<AgentMessageRecord>& messages
         row.seq = statement.column_int64(1);
         row.created_at = statement.column_int64(2);
         row.role = statement.column_text(3);
-        row.content = statement.column_text(4);
-        row.tool_name = statement.column_text(5);
-        row.tool_ok = statement.column_int(6) != 0;
-        row.args_preview = statement.column_text(7);
+        row.lane = statement.column_text(4);
+        row.turn = statement.column_int64(5);
+        row.content = statement.column_text(6);
+        row.tool_name = statement.column_text(7);
+        row.tool_ok = statement.column_int(8) != 0;
+        row.args_preview = statement.column_text(9);
         messages.push_back(std::move(row));
     }
     return ok_error();
@@ -634,10 +675,11 @@ Error AgentSessionStore::load_message_page(std::vector<AgentMessageRecord>& mess
     messages.clear();
     Statement statement;
     Error error = statement.prepare(db_, path_,
-        "SELECT id, seq, created_at, role, "
+        "SELECT id, seq, created_at, role, lane, turn, "
         "CASE WHEN length(CAST(content AS BLOB))<=4194304 THEN content ELSE NULL END, "
         "tool_name, tool_ok, '', length(CAST(content AS BLOB)) "
-        "FROM messages WHERE (?1=0 OR seq<?1) AND seq>?3 AND role!='summary' ORDER BY seq DESC LIMIT ?2;");
+        "FROM messages WHERE (?1=0 OR seq<?1) AND seq>?3 "
+        "AND role NOT IN ('summary','handoff') ORDER BY seq DESC LIMIT ?2;");
     if (!error.ok()) return error;
     error = statement.bind_int64(db_, path_, 1, before);
     if (!error.ok()) return error;
@@ -648,15 +690,16 @@ Error AgentSessionStore::load_message_page(std::vector<AgentMessageRecord>& mess
     std::size_t bytes = 0;
     int rc;
     while ((rc = statement.step()) == SQLITE_ROW) {
-        if (statement.column_int64(8) > 4194304) {
+        if (statement.column_int64(10) > 4194304) {
             if (!messages.empty()) break;
             return {ErrorCode::UnsupportedFeature, "agent history row exceeds the 4 MiB browser page limit"};
         }
         AgentMessageRecord row;
         row.id = statement.column_int64(0); row.seq = statement.column_int64(1);
         row.created_at = statement.column_int64(2); row.role = statement.column_text(3);
-        row.content = statement.column_text(4); row.tool_name = statement.column_text(5);
-        row.tool_ok = statement.column_int(6) != 0; row.args_preview = statement.column_text(7);
+        row.lane = statement.column_text(4); row.turn = statement.column_int64(5);
+        row.content = statement.column_text(6); row.tool_name = statement.column_text(7);
+        row.tool_ok = statement.column_int(8) != 0; row.args_preview = statement.column_text(9);
         if (!messages.empty() && bytes + row.content.size() > 4U * 1024U * 1024U) break;
         bytes += row.content.size(); messages.push_back(std::move(row));
     }
@@ -802,7 +845,7 @@ Error AgentSessionStore::load_session(long long /*session_id*/,
     Statement tools;
     error = tools.prepare(
         db_, path_,
-        "SELECT id, seq, created_at, turn, call_id, tool_name, arguments, result, ok "
+        "SELECT id, seq, created_at, turn, lane, call_id, tool_name, arguments, result, ok "
         "FROM tool_events ORDER BY seq ASC");
     if (!error.ok()) return error;
     while (tools.step() == SQLITE_ROW) {
@@ -811,11 +854,12 @@ Error AgentSessionStore::load_session(long long /*session_id*/,
         row.seq = tools.column_int64(1);
         row.created_at = tools.column_int64(2);
         row.turn = tools.column_int64(3);
-        row.call_id = tools.column_text(4);
-        row.tool_name = tools.column_text(5);
-        row.arguments = tools.column_text(6);
-        row.result = tools.column_text(7);
-        row.ok = tools.column_int(8) != 0;
+        row.lane = tools.column_text(4);
+        row.call_id = tools.column_text(5);
+        row.tool_name = tools.column_text(6);
+        row.arguments = tools.column_text(7);
+        row.result = tools.column_text(8);
+        row.ok = tools.column_int(9) != 0;
         tool_events.push_back(std::move(row));
     }
     return ok_error();

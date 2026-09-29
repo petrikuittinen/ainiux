@@ -5,15 +5,15 @@ Current advertised names from `ReadToolRegistry::definitions()` in
 `read_file`, `run_command`, `list_dir`, `search_text`, and `str_replace` are
 **unknown_tool**.
 
-Act and Plan still send the same definition list. Plan denies `mkdir`, `mv`,
-and `rm` at execute time. Index tools (`index`, `outline`, `symbol`) are omitted
+Act and Lead send the same logical definition list and have the same execution authority.
+Index tools (`index`, `outline`, `symbol`) are omitted
 when no completed code index is present.
 
 Token estimates use Ainiux `estimate_tokens_from_text` (`ceil(bytes/4)` plus 8
 wrapper tokens per tool). See the previous revision of this file for the
 methodology.
 
-## Advertised set (Act/Plan, index on, network on)
+## Advertised set (Act/Lead, index on, network on)
 
 | Tool | Required | Role |
 | --- | --- | --- |
@@ -27,13 +27,13 @@ methodology.
 | `run` | `command` | Shell-free argv exec. Smart auto-allows classified in-project `mkdir`/`rmdir`/`rm`/`mv`; asks for non-empty `rm -r`. |
 | `fetch` | `url` | HTTP(S) → Markdown/text. Network sessions only. |
 | `web_search` | `term` | At most 3 search hits. Network sessions only. |
-| `goal_met` | `evidence` | Complete an active `/goal`. Advertised only while a session goal is Active (chrome shows `goal`). Hidden in Act/Plan. |
+| `goal_met` | `evidence` | Complete an active `/goal`. Advertised only while a session goal is Active (chrome shows `goal`). Hidden in ordinary Act/Lead turns. |
 | `attach` | `path` | Queue one local PNG/JPEG/GIF for this turn. |
 | `edit` | `path`, `ops` | Preferred in-file edit. |
 | `write` | `path`, `content` | Create/overwrite a file. |
-| `mkdir` | `path` | Act-only directory create. |
-| `mv` | `source`, `destination` | Act-only rename; dest must not exist. |
-| `rm` | `path` | Act-only **regular file** delete. Directories: `run rmdir` or `run rm -r`. |
+| `mkdir` | `path` | Directory create. |
+| `mv` | `source`, `destination` | Rename; destination must not exist. |
+| `rm` | `path` | **Regular file** delete. Directories: `run rmdir` or `run rm -r`. |
 | `apply_patch` | — | Codex/OpenAI multi-file patch. |
 
 ## Removed (not advertised, not executable)

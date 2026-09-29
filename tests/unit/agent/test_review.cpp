@@ -154,32 +154,32 @@ void test_read_tools_and_policy() {
     check(!result_ok(result) && result.find("changed after the snapshot") != std::string::npos,
           "security-review read rejects stale indexed fingerprints");
 
-    tools.set_mutation_policy(ainiux::agent::MutationPolicy::PlanningDocuments);
-    const std::vector<ainiux::provider::FunctionDefinition> plan_definitions =
+    tools.set_mutation_policy(ainiux::agent::MutationPolicy::RestrictedDocuments);
+    const std::vector<ainiux::provider::FunctionDefinition> restricted_definitions =
         tools.definitions();
-    const std::string plan_remove =
+    const std::string restricted_remove =
         tools.execute("rm", R"({"path":"src/extra.hpp"})");
-    check(!result_ok(plan_remove) &&
-              plan_remove.find("policy_denied") != std::string::npos,
-          "stable Plan superset does not elevate Act-only remove");
+    check(!result_ok(restricted_remove) &&
+              restricted_remove.find("policy_denied") != std::string::npos,
+          "stable restricted superset does not elevate remove");
     tools.set_mutation_policy(ainiux::agent::MutationPolicy::Full);
     const std::vector<ainiux::provider::FunctionDefinition> act_definitions =
         tools.definitions();
-    bool definitions_equal = act_definitions.size() == plan_definitions.size();
+    bool definitions_equal = act_definitions.size() == restricted_definitions.size();
     for (std::size_t i = 0; definitions_equal && i < act_definitions.size(); ++i) {
         definitions_equal =
-            act_definitions[i].name == plan_definitions[i].name &&
-            act_definitions[i].description == plan_definitions[i].description &&
-            act_definitions[i].parameters_json == plan_definitions[i].parameters_json;
+            act_definitions[i].name == restricted_definitions[i].name &&
+            act_definitions[i].description == restricted_definitions[i].description &&
+            act_definitions[i].parameters_json == restricted_definitions[i].parameters_json;
     }
     check(definitions_equal,
-          "Act and Plan expose byte-identical native tool definitions in stable order");
+          "agent and restricted policies expose byte-identical native tool definitions in stable order");
     const auto run_definition =
-        std::find_if(plan_definitions.begin(), plan_definitions.end(),
+        std::find_if(restricted_definitions.begin(), restricted_definitions.end(),
                      [](const ainiux::provider::FunctionDefinition& definition) {
                          return definition.name == "run";
                      });
-    check(run_definition != plan_definitions.end() &&
+    check(run_definition != restricted_definitions.end() &&
               run_definition->parameters_json.find("\"maximum\":120000") !=
                   std::string::npos,
           "agent run_command schema has a stable 120-second maximum");
@@ -273,10 +273,9 @@ void test_prompts_and_report() {
                   std::string::npos &&
               prompts.agent.find("JSON strings") != std::string::npos &&
               prompts.agent.find("regex:true") != std::string::npos &&
-              prompts.agent.find("Plan:") != std::string::npos &&
+              prompts.agent.find("Lead:") != std::string::npos &&
               prompts.agent.find(
-                  "Make decisions that are good in the long term without expanding "
-                  "the requested scope") !=
+                  "Lead has the same workspace tools, Guard checks, permission mode") !=
                   std::string::npos &&
               prompts.agent.find("workspace- Ask") == std::string::npos &&
               prompts.agent.find("directoroes") == std::string::npos &&
@@ -298,7 +297,7 @@ void test_prompts_and_report() {
         prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Xml);
     check(agent_native.find("AGENTS.md project instructions") != std::string::npos &&
               agent_native.find("Act:") != std::string::npos &&
-              agent_native.find("Plan:") != std::string::npos &&
+              agent_native.find("Lead:") != std::string::npos &&
               agent_native.find("4.5:1") != std::string::npos &&
               agent_native.find("Active channel: native tools") != std::string::npos &&
               agent_native.find("submit_security_review") == std::string::npos &&
@@ -316,33 +315,33 @@ void test_prompts_and_report() {
           "agent XML prompt anchors the one-block contract with read_many");
     ainiux::provider::ToolConversation seeded;
     ainiux::agent::seed_agent_conversation(seeded, prompts,
-                                           ainiux::agent::AgentTaskMode::Act,
+                                           ainiux::agent::AgentLane::Act,
                                            ainiux::agent::ToolProtocol::Native,
                                            "List the project overview.");
     check(seeded.messages.size() == 3 && seeded.messages[0].role == "system" &&
               seeded.messages[0].content == agent_native && seeded.messages[1].role == "user" &&
               seeded.messages[1].content ==
-                  ainiux::agent::agent_task_mode_control(
-                      ainiux::agent::AgentTaskMode::Act) &&
+                  ainiux::agent::agent_lane_control(
+                      ainiux::agent::AgentLane::Act) &&
               seeded.messages[2].role == "user" &&
               seeded.messages[2].content == "List the project overview.",
-          "seed_agent_conversation inserts initial mode control before the goal");
+          "seed_agent_conversation inserts initial lane control before the goal");
     const std::vector<ainiux::provider::Message> stable_prefix = seeded.messages;
     ainiux::agent::append_conversation_text(
         seeded, "user",
-        ainiux::agent::agent_task_mode_control(ainiux::agent::AgentTaskMode::Plan));
+        ainiux::agent::agent_lane_control(ainiux::agent::AgentLane::Lead));
     ainiux::agent::append_conversation_text(
         seeded, "user",
-        ainiux::agent::agent_task_mode_control(ainiux::agent::AgentTaskMode::Act));
+        ainiux::agent::agent_lane_control(ainiux::agent::AgentLane::Act));
     bool prefix_unchanged = seeded.messages.size() == stable_prefix.size();
     for (std::size_t i = 0; prefix_unchanged && i < stable_prefix.size(); ++i)
         prefix_unchanged = seeded.messages[i].role == stable_prefix[i].role &&
                            seeded.messages[i].content == stable_prefix[i].content;
     check(prefix_unchanged &&
               seeded.continuation_items_json.size() == 2 &&
-              seeded.continuation_items_json[0].find("Plan.") != std::string::npos &&
+              seeded.continuation_items_json[0].find("Lead.") != std::string::npos &&
               seeded.continuation_items_json[1].find("Act.") != std::string::npos,
-          "Act to Plan to Act preserves the earlier request items and appends controls");
+          "Act to Lead to Act preserves the earlier request items and appends controls");
     const fs::path prompt_directory = temporary_workspace();
     write_file(prompt_directory / "master_prompt.md", "master");
     write_file(prompt_directory / "security_prompt.md", "security");

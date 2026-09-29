@@ -614,9 +614,10 @@ void test_auth_and_routes() {
               capability_response.body.find("\"mcp\":true") != std::string::npos &&
               capability_response.body.find("\"web_ui\":true") != std::string::npos &&
               capability_response.body.find("chat_md") != std::string::npos &&
+              capability_response.body.find("\"plan\"") == std::string::npos &&
               capability_response.body.find("controller") == std::string::npos &&
               capability_response.body.find("csrf-token") == std::string::npos,
-          "capabilities advertise MCP and the WUI without exposing a secret");
+          "capabilities advertise MCP and the WUI without retired Plan or a secret");
 
     Response csrf_response = route_request(
         parsed_request(request_text("/ainiux/v1/csrf")), config, status);
@@ -1092,7 +1093,7 @@ void test_job_registry_idempotency_lane_and_cancellation() {
                                           JobClass::Agent, blocked);
     SubmitResult changed = registry.submit("run", "{\"goal\":\"two\"}", "same-key",
                                            JobClass::Agent, blocked);
-    SubmitResult lane = registry.submit("plan", "{\"goal\":\"plan\"}", "",
+    SubmitResult lane = registry.submit("run", "{\"goal\":\"another run\"}", "",
                                         JobClass::Agent, blocked);
     check(first.status == SubmitStatus::Created && replay.status == SubmitStatus::Existing &&
               replay.job == first.job,
@@ -1101,7 +1102,7 @@ void test_job_registry_idempotency_lane_and_cancellation() {
           "an idempotency key reused with different input is a typed conflict");
     check(lane.status == SubmitStatus::AgentConflict &&
               lane.conflicting_job_id == first.job->id,
-          "run and plan share one non-queued workspace agent lane");
+          "agent runs share one non-queued workspace lane");
     std::shared_ptr<Job> cancelled;
     check(registry.cancel(first.job->id, cancelled) && registry.cancel(first.job->id, cancelled),
           "job cancellation is idempotent");
@@ -1329,6 +1330,7 @@ void test_mcp_stateless_adapter_and_tasks() {
     Response list = route_request(mcp_request("tools/list", mcp_meta()), auth, status);
     check(list.status == 200 && list.body.find("ainiux_chat") != std::string::npos &&
               list.body.find("ainiux_job_cancel") != std::string::npos &&
+              list.body.find("ainiux_plan") == std::string::npos &&
               list.body.find("\"ttlMs\":300000") != std::string::npos,
           "MCP tools/list returns a deterministic cacheable tool catalog");
 
@@ -1406,7 +1408,7 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     const std::string create_body =
         "{\"kind\":\"agent\",\"provider\":\"none\",\"model\":\"deepseek-flash\","
         "\"reasoning\":\"high\","
-        "\"permission_mode\":\"confirm\",\"task_mode\":\"act\"}";
+        "\"permission_mode\":\"confirm\",\"lane\":\"act\"}";
     Response created = route_request(session_request("POST", "/ainiux/v1/sessions/agent", create_body),
                                      auth, status);
     const json::ParseResult created_json = json::parse(created.body);
@@ -1455,13 +1457,14 @@ void test_interactive_sessions_are_bounded_and_replayable() {
         "{\"reasoning\":\"\"}"), auth, status);
     check(invalid_reasoning.status == 400,
           "interactive session reasoning rejects an empty selection");
-    Response task_mode = route_request(session_request(
+    Response lane = route_request(session_request(
         "POST", "/ainiux/v1/sessions/" + id + "/settings",
-        "{\"task_mode\":\"plan\"}"), auth, status);
-    check(task_mode.status == 200 &&
-              task_mode.body.find("\"task_mode\":\"plan\"") != std::string::npos &&
+        "{\"lane\":\"lead\"}"), auth, status);
+    check(lane.status == 200 &&
+              lane.body.find("\"lane\":\"lead\"") != std::string::npos &&
               session->events().replay_after(0).events.back().type == "settings_changed",
-          "idle workspace agents accept a single inline setting change");
+          "idle workspace agents accept a single inline setting change: status=" +
+              std::to_string(lane.status) + " body=" + lane.body);
     Response model_setting = route_request(session_request(
         "POST", "/ainiux/v1/sessions/" + id + "/settings",
         "{\"model\":\"local-model\"}"), auth, status);
@@ -1488,7 +1491,7 @@ void test_interactive_sessions_are_bounded_and_replayable() {
     }
     Response mixed_settings = route_request(session_request(
         "POST", "/ainiux/v1/sessions/" + id + "/settings",
-        "{\"model\":\"one\",\"task_mode\":\"act\"}"), auth, status);
+        "{\"model\":\"one\",\"lane\":\"act\"}"), auth, status);
     check(mixed_settings.status == 400,
           "agent setting requests reject ambiguous multi-setting updates");
 
@@ -1505,7 +1508,7 @@ void test_interactive_sessions_are_bounded_and_replayable() {
         check(conflict.status == 409, "a session rejects a concurrent turn instead of racing controllers");
         Response busy_setting = route_request(session_request(
             "POST", "/ainiux/v1/sessions/" + id + "/settings",
-            "{\"task_mode\":\"act\"}"), auth, status);
+            "{\"lane\":\"act\"}"), auth, status);
         check(busy_setting.status == 409,
               "agent settings cannot change during an active turn");
         Response cancelled = route_request(session_request(
@@ -1928,8 +1931,9 @@ void test_model_settings_persistence_and_resume() {
         agent::AgentSessionStore store;
         agent::AgentProjectRecord project;
         check(store.open(directory.u8string()).ok() && store.open_project(project).ok(), "open saved workspace");
-        check(agent::settings_with_task_mode(project.settings_json, true, project.settings_json).ok() &&
-              store.update_project_meta(project).ok(), "save Plan mode in the existing project row");
+        check(agent::settings_with_agent_lane(project.settings_json, agent::AgentLane::Lead,
+                                              project.settings_json).ok() &&
+              store.update_project_meta(project).ok(), "save Lead lane in the existing project row");
         for (int i = 0; i < 130; ++i) check(store.append_message("user", "history " + std::to_string(i)).ok(), "seed saved history");
         check(store.append_message("summary", "private checkpoint").ok(), "seed request-only summary");
         std::vector<agent::AgentMessageRecord> page, older;
@@ -1949,10 +1953,10 @@ void test_model_settings_persistence_and_resume() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
             const std::string snapshot = created.session->snapshot_json();
             check(snapshot.find("\"model\":\"remembered\"") != std::string::npos &&
-                  snapshot.find("\"task_mode\":\"plan\"") != std::string::npos &&
+                  snapshot.find("\"lane\":\"lead\"") != std::string::npos &&
                   snapshot.find("\"temperature\":\"0.4\"") != std::string::npos &&
                   snapshot.find("\"turn_id\":null") != std::string::npos,
-                  "restart restores configuration and Plan mode, idle without executing work");
+                  "restart restores configuration and Lead lane, idle without executing work");
             std::string history;
             check(created.session->history(0, history).ok() && history.find("history 129") != std::string::npos &&
                   history.find("private checkpoint") == std::string::npos,
@@ -2019,18 +2023,20 @@ void test_model_settings_persistence_and_resume() {
         agent::AgentSessionRuntime runtime;
         agent::SessionRuntimeOptions runtime_options;
         runtime_options.workspace = directory.u8string(); runtime_options.interactive = true;
+        runtime_options.lane = agent::AgentLane::Lead;
+        runtime_options.restore_lane = false;
         runtime_options.enable_agent_log = false;
         const Error preparation = built.error.ok() ? runtime.prepare(built.context, {}, {}, runtime_options) : built.error;
-        check(preparation.ok() && runtime.task_mode() == agent::AgentTaskMode::Plan,
-              "native agent restores the same saved Plan mode: " + preparation.message);
-        const Error switched = runtime.switch_task_mode(agent::AgentTaskMode::Act);
-        check(switched.ok(), "native agent can save a new task mode: " + switched.message);
+        check(preparation.ok() && runtime.lane() == agent::AgentLane::Lead,
+              "native agent starts in the selected Lead lane: " + preparation.message);
+        const Error switched = runtime.switch_lane(agent::AgentLane::Act);
+        check(switched.ok(), "native agent can save a new active lane: " + switched.message);
         runtime.reset();
     }
     {
         std::string merged;
-        check(agent::merge_project_model_settings("{\"future_field\":\"retain\",\"task_mode\":\"plan\"}", options, merged).ok() &&
-              merged.find("retain") != std::string::npos && merged.find("plan") != std::string::npos,
+        check(agent::merge_project_model_settings("{\"future_field\":\"retain\",\"lane\":\"lead\"}", options, merged).ok() &&
+              merged.find("retain") != std::string::npos && merged.find("lead") != std::string::npos,
               "workspace request edits preserve agent-only and future settings");
         agent::AgentSessionStore store;
         std::vector<agent::AgentMessageRecord> page;
@@ -2678,12 +2684,22 @@ void test_server_cli_contract() {
 
     cli::Options base;
     base.provider = "none";
-    SessionHub remote_sessions(base, ".", 1, false);
+    const std::filesystem::path yolo_workspace =
+        std::filesystem::temp_directory_path() /
+        "ainiux-server-yolo-policy-test";
+    std::error_code yolo_cleanup_error;
+    std::filesystem::remove_all(yolo_workspace, yolo_cleanup_error);
+    yolo_cleanup_error.clear();
+    std::filesystem::create_directories(yolo_workspace, yolo_cleanup_error);
+    check(!yolo_cleanup_error,
+          "remote Yolo policy test creates an isolated workspace");
+    SessionHub remote_sessions(base, yolo_workspace.u8string(), 1, false);
     const SessionCreateResult denied_yolo = remote_sessions.create(
         "{\"kind\":\"agent\",\"provider\":\"none\",\"permission_mode\":\"yolo\"}");
     check(!denied_yolo.error.ok() && denied_yolo.error.code == ErrorCode::UnsupportedFeature,
           "remote session policy denies an explicit Yolo request without startup opt-in");
     remote_sessions.shutdown();
+    std::filesystem::remove_all(yolo_workspace, yolo_cleanup_error);
 }
 
 void test_managed_server_secret_and_web_urls() {

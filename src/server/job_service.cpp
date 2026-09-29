@@ -340,8 +340,7 @@ Error JobService::validate_common(const json::Value& root,
     }
     options.image = operation == "image";
     options.video = operation == "video";
-    options.agent_run = operation == "run" || operation == "plan";
-    options.agent_plan = operation == "plan";
+    options.agent_run = operation == "run";
     if (operation != "video") {
         if (const auto* settings = root.get("settings")) {
             error = apply_public_model_settings(*settings, options);
@@ -467,12 +466,10 @@ JobOutcome JobService::run_models_job(cli::Options options,
 
 JobOutcome JobService::run_agent_job(cli::Options options,
                                      std::string goal,
-                                     bool plan,
                                      runtime::CancellationToken cancellation,
                                      JobEvents events) const {
     options.prompt = goal;
     options.agent_run = true;
-    options.agent_plan = plan;
     provider::ContextResult built = provider::build_context(options);
     if (!built.error.ok()) return {public_operation_error(built.error, {options.key}), {}};
     Error model_error = app::choose_default_model(built.context);
@@ -742,16 +739,15 @@ ServiceSubmitResult JobService::submit(const std::string& operation,
                                  JobClass::Provider, std::move(work)), ok_error()};
     }
 
-    if (operation == "run" || operation == "plan") {
+    if (operation == "run") {
         error = reject_unknown(parsed.value, {"provider", "model", "api", "goal", "settings"});
         if (!error.ok()) return {{}, error};
         std::string goal;
         error = required_string(parsed.value, "goal", goal);
         if (!error.ok()) return {{}, error};
-        const bool plan = operation == "plan";
-        JobWork work = [this, options, goal = std::move(goal), plan](
+        JobWork work = [this, options, goal = std::move(goal)](
                            runtime::CancellationToken token, JobEvents events) mutable {
-            return run_agent_job(options, std::move(goal), plan, token, std::move(events));
+            return run_agent_job(options, std::move(goal), token, std::move(events));
         };
         return {registry_.submit(operation, canonical, idempotency_key,
                                  JobClass::Agent, std::move(work)), ok_error()};

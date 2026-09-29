@@ -62,11 +62,11 @@ provides:
 - safe client-side Markdown rendering for Chat and Agent prose, including
   semantic headings, responsive GFM tables, clickable HTTP(S) links, and the
   full TUI set of highlighted fenced-code languages;
-- provider model suggestions for chat, run/plan, thread creation, and the
+- provider model suggestions for chat, run, thread creation, and the
   workspace agent, with manual model entry retained as a fallback;
-- focused run/plan job progress, replay/reconnect, and cancellation;
+- focused run job progress, replay/reconnect, and cancellation;
 - one human-facing workspace Agent with inline provider and model, compact
-  estimated context usage beside the model name, reasoning, Act/Plan, and
+  estimated context usage beside the model name, reasoning, Act/Lead, and
   Confirm/Smart/Yolo controls, live response/reasoning/tool activity,
   correlated turn cancellation, and Guard review/allow/deny;
 - a dedicated Image tab whose provider/model/size/aspect/quality/format controls
@@ -180,16 +180,16 @@ automatically. Manual model entry is available through the explicit **Enter
 model manually** fallback, never as an empty primary action. The full Settings
 cards remain available for advanced request settings. There are no catalog
 counts or extra picker buttons in the mode toolbars.
-Reasoning stays directly adjustable; Agent also retains Act/Plan and permissions.
+Reasoning stays directly adjustable; Agent also retains Act/Lead and permissions.
 
 **Alt+P** opens the provider picker and **Alt+M** opens the model picker for the
-current Chat, Agent, workspace editor, or run/plan job, including from the message
+current Chat, Agent, workspace editor, or run job, including from the message
 composer. In Settings the shortcuts use the focused section, or the last active
 chat/workspace scope; they also work in the new-thread dialog. Other open dialogs,
 text composition, and AltGr combinations are left alone. Visible controls remain
 available if a browser or operating system reserves a shortcut.
 
-Provider and model buttons in Settings, new threads, and run/plan jobs open the
+Provider and model buttons in Settings, new threads, and run jobs open the
 same picker. Use Up/Down, PageUp/PageDown, or Home/End to move;
 Enter selects and Esc cancels. Press `.` or **Sort A–Z** to toggle alphabetical
 and original provider order without changing the highlighted model. Press `/`,
@@ -223,7 +223,7 @@ and stale writes are rejected. Chat model controls are locked during generation.
 Agent and editor assist share the workspace configuration, independent of the
 selected chat thread. Changes are saved in the existing project database, even
 before opening Agent, and are locked while an agent turn runs. Opening Agent
-after a restart restores its provider, model, request settings, Act/Plan policy,
+after a restart restores its provider, model, request settings, active Act/Lead mode,
 and saved transcript, ready for the next instruction. It does not automatically
 execute or replay interrupted work. **Load older history** pages backward through
 the transcript; request-only compaction summaries are excluded, and explicit
@@ -298,7 +298,9 @@ and Esc interruption.
 The default theme follows `prefers-color-scheme`. The explicit System, Dark,
 and Light selector lives in Settings and is stored for the browser origin.
 Chat and Agent also accept `/theme light`, `/theme dark`, and `/theme auto`
-locally without sending those commands to a model. The palettes use the same
+locally without sending those commands to a model. The Agent composer also accepts
+`/act` and `/lead [clean|N|all]` to switch modes without starting a model turn.
+The palettes use the same
 color codes as the built-in Ainiux TUI themes, including dark
 `#0B0F14`/`#E6EDF3` and light
 `#FFFFFF`/`#000000` foundations.
@@ -317,7 +319,7 @@ colors; fenced source excerpts in activity rows reuse the same highlighter.
 Workspace dired colors directories and executables distinctly, and the file
 viewer and live editor detect the native TUI language from its path. Editor
 highlighting follows each draft change and stays aligned while scrolling.
-Run/plan job output and unstructured activity remain safely literal.
+Run job output and unstructured activity remain safely literal.
 
 When a file opens, the browser inspects its first 20 physical lines and fills
 the editor's **Width** (1–32) and **Indent** (Spaces/Tabs) controls, falling back

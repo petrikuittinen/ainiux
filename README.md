@@ -17,7 +17,7 @@ The name began with the author’s child Aini and echoes the Chinese phrase 爱�
 - **Fully Featured Text and Code Editor.** It has multiple buffers, split panes, grapheme-aware navigation, syntax highlighting, file locking, local layout tools, configurable AI commands, and a full-screen **dired** directory browser (`ainiux -d`, `F4`, or `Ctrl+X d`).
 - **Interactive work stays responsive.** HTTP, streaming, conversion, benchmarks, and agent work run as cancellable jobs.
 - **The WebUI is a major mode.** Start it with `ainiux -w`, `ainiux --webui`, or `ainiux webserver`. It provides chat, Agent/Guard, image and video generation, dired, and live workspace editing from a browser.
-- **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, built-in guard against destructive commands, Act/Plan policies, and logged tool activity.
+- **Agent tools are separate from chat.** `-c` is ordinary conversation. `-a` opens the project-local agent with explicit permissions, a built-in guard against destructive commands, independent Act/Lead model modes, and logged tool activity.
 - **The implementation stays small and portable.** Ainiux uses C++17, a Makefile, libcurl, SQLite, zlib, optional OpenSSL for control-server TLS, native POSIX/Win32 platform backends, and ANSI/VT rendering. Its CLI and terminal modes do not require Electron, a browser, or ncurses, and the embedded WebUI is dependency-free vanilla JavaScript. And it won't eat all of your RAM.
 
 ## Platform support
@@ -185,15 +185,14 @@ Writable file buffers hold an advisory `FILE.LOCK` session and check for externa
 
 ### Local agent
 
-Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act mode can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval (including while you are reviewing in the editor after a mid-turn hop). Script Asks also offer **Review**, which opens that file in dired; `q` returns to the dialog. Plan mode retains research tools but code-enforces writes to planning documents only. During a long interactive turn, `Ctrl+G` or `F4` opens the editor/dired so you can review dirty files and history-tinted change lines without cancelling tools or finishing the project session.
+Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act and Lead can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval (including while you are reviewing in the editor after a mid-turn hop). Script Asks also offer **Review**, which opens that file in dired; `q` returns to the dialog. During a long interactive turn, `Ctrl+G` or `F4` opens the editor/dired so you can review dirty files and history-tinted change lines without cancelling tools or finishing the project session.
 
 ```sh
 ainiux lmstudio -m MODEL -r "add focused tests for the parser"
-ainiux plan "design local server mode" --provider openai -m MODEL
 ainiux lmstudio -m MODEL --security-review
 ```
 
-Interactive `/plan` and `/act` switch the task policy for the current session. `/goal CONDITION` sets a persistent completion condition and auto-continues until the model calls `goal_met` with evidence, stalls, reaches the turn cap, or is interrupted. `/compact fast|smart|summary` reduces model-visible context while preserving the full transcript on disk. `/compact all` resets model context to the system prompt, `AGENTS.md`, and tool definitions (logs stay in `.ainiux-pr`). Automatic compaction uses **75% of every known context window** unless explicitly configured otherwise.
+Interactive `/lead [clean|N|all]` and `/act` switch between separately cached model modes. The default Lead handoff keeps two recent Act prompts and 200 Unicode characters of each final response, without tool calls. `/goal CONDITION` sets a persistent completion condition and auto-continues until the model calls `goal_met` with evidence, stalls, reaches the turn cap, or is interrupted. `/compact fast|smart|summary` reduces model-visible context while preserving the full transcript on disk. `/compact all` resets model context to the system prompt, `AGENTS.md`, and tool definitions (logs stay in `.ainiux-pr`). Automatic compaction uses **75% of every known context window** unless explicitly configured otherwise.
 
 The optional code index is an optimized in-house C++ definitions index, not a compiler-grade parser or ground truth. It stores files, definitions, and static declaration importance, while lexical relevance stays primary. Agents must verify indexed locations against current source before editing.
 
@@ -215,7 +214,7 @@ session. Removed long names and aliases are not silently accepted. See the
 
 ### MCP tools (agent only)
 
-Install servers into `~/.ainiux/mcp/registry.json` (CLI; no model key required), then use them from `-a` / `--run` / `--plan`:
+Install servers into `~/.ainiux/mcp/registry.json` (CLI; no model key required), then use them from `-a` / `--run`:
 
 ```sh
 ainiux --add-mcp catalog --mcp-url https://awesome-mcp.tools/mcp
@@ -236,7 +235,7 @@ ainiux deepseek -m deepseek-v4-flash -r "Describe the attached image." \
 ```
 
 
-One-shot modes print compact tool activity to `stderr` and reserve `stdout` for the final answer. Plan and Act are enforcement policies, not merely prompt labels: Plan mutations are restricted to recognized planning Markdown paths. The security-review path remains read-only even though the broader agent engine supports mutations.
+One-shot Run prints compact tool activity to `stderr` and reserves `stdout` for the final answer. Lead has no one-shot entry point. The security-review path remains read-only even though both interactive agent modes support mutations.
 
 ### Benchmarks and grading
 
@@ -336,7 +335,7 @@ The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). D
 ## WebUI and control API
 
 The control server exposes authenticated discovery and asynchronous one-shot
-chat, run, plan, image, and video jobs, plus a stateless MCP 2026-07-28 endpoint for
+chat, run, image, and video jobs, plus a stateless MCP 2026-07-28 endpoint for
 MCP-only clients. It also exposes bounded interactive agent sessions with
 replayable events, cancellation, remote Guard approvals, workspace review,
 revision-safe dired/file mutations and editor assist, and revision-safe access

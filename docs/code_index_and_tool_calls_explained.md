@@ -112,7 +112,7 @@ In-memory `Symbol` / `IndexedSymbol` types in `index.hpp` match this payload.
 
 | Mode | Index behavior |
 | --- | --- |
-| **Agent / Run / Plan, indexing on** (`IndexAccessMode::LazyHints`) | Short-lived read-only SQLite queries per tool; mutation overlay merges recent writes until a refresh generation completes. |
+| **Agent / Run, indexing on** (`IndexAccessMode::LazyHints`) | Short-lived read-only SQLite queries per tool; mutation overlay merges recent writes until a refresh generation completes. |
 | **Agent with `--disable-indexing` / create_without_index** | Index-only tools are **hidden** (or return `indexing_disabled`). `glob` uses live discovery; `grep` prefers `rg` then live built-in scan. Project reads use the live filesystem. |
 | **Security review** (`MutationPolicy::Disabled`, snapshot authorization) | Eager completed snapshot; many path tools are **authorization-bound** to indexed files. Mutations off. `grep` still prefers `rg` but post-filters to indexed paths. |
 | **Lazy query failure for `glob` / `grep` only** | Falls back to `index::discover_source_files()` for the eligible set (same rules as indexing, no SQLite). `grep` may still use `rg` against that live set. |
@@ -229,7 +229,7 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 | --- | --- |
 | **Params** | `path` (required), `start_line` (def 1), `end_line` (def 0 = EOF), `max_bytes` (def 65536, max 262144) |
 | **Security-review** | `read_source` → path must be an eligible **indexed** file |
-| **Agent Act/Plan** | `read_workspace_source` → any safe project regular file; **need not be indexed** |
+| **Agent Act/Lead** | `read_workspace_source` → any safe project regular file; **need not be indexed** |
 | **External** | Outside project with Guard approval |
 | **Returns** | `{ path, line_start, line_end, content (line-numbered), file_hash, range_hash, bytes }` |
 
@@ -237,7 +237,7 @@ Batch form: pass `items` (1–100 of the same shape as a single `read`) instead 
 
 #### Mutations that **update** the index when present
 
-These operate on the live filesystem in Act/Plan. If indexing is enabled they rescan/enqueue touched paths into the overlay and persistent refresh:
+These operate on the live filesystem in Act/Lead. If indexing is enabled they rescan/enqueue touched paths into the overlay and persistent refresh:
 
 - `write`, `edit` (non-symbol ops), `apply_patch`, `mkdir`, `mv`, `rm`
 - After non-read-only `run`, a full-tree freshness pass may be queued
@@ -306,7 +306,7 @@ These operate on the live filesystem in Act/Plan. If indexing is enabled they re
 | `--index-code` | Create or incrementally refresh `.ainiux-pr/index.sqlite` |
 | `--print-index` | Markdown dump of the stored snapshot |
 | `--clear-index` | Remove index DB + WAL/SHM sidecars only |
-| `--disable-indexing` | Agent/Run/Plan without probing or mutating the index |
+| `--disable-indexing` | Agent/Run without probing or mutating the index |
 | `--security-review` | Refreshes index, then uses snapshot as authorization boundary for reads |
 
 Multi-file discovery/scanning uses `floor(online_cores × 0.80)` workers (bounded by work; single-file scan is inline). Unchanged size/mtime pairs are not reopened. Snapshot replace is transactional so cancellation keeps the previous completed database.

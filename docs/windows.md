@@ -58,7 +58,7 @@ packager rejects an accidental dependency on `msys-2.0.dll`.
 Portable Windows artifacts should be published only after the manual UCRT64 CI
 workflow and native parity checklist pass. That checklist includes streaming and
 conversion; REPL; chat; editor/dired; benchmark and grade; SQLite; indexing;
-security review; one-shot and interactive Act/Plan agents; cancellation;
+security review; one-shot and interactive Act/Lead agents; cancellation;
 PowerShell; and clipboard behavior.
 
 The comprehensive shell integration retains CLI, REPL, provider, benchmark,

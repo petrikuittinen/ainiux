@@ -652,7 +652,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"csrf\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"plan\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_md\",\"chat_json\",\"chat_xlsx\",\"chat_inputs\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"csrf\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_md\",\"chat_json\",\"chat_xlsx\",\"chat_inputs\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
@@ -1445,7 +1445,7 @@ Response route_request(const http::Request& request,
     }
     if (status.jobs == nullptr) return error_response(503, "jobs_unavailable", "job service is unavailable");
     std::string suffix = request.path.substr(jobs_prefix.size());
-    if (suffix == "models" || suffix == "chat" || suffix == "run" || suffix == "plan" || suffix == "image" || suffix == "video" ||
+    if (suffix == "models" || suffix == "chat" || suffix == "run" || suffix == "image" || suffix == "video" ||
         suffix == "editor-assist") {
         if (request.method != "POST") {
             response = error_response(405, "method_not_allowed", "job submission accepts POST only");

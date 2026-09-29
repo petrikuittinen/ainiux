@@ -24,7 +24,7 @@ filesystem containment, and error handling are shared foundations for:
 - one-shot CLI chat, conversion, fetch, and search;
 - REPL, full-screen chat, editor, and dired;
 - benchmarks and judge grading;
-- local Act/Plan/Goal agent workflows;
+- local Act/Lead/Goal agent workflows;
 - CLI and browser image and video generation;
 - the authenticated control API, MCP adapter, and embedded browser controller.
 
@@ -39,8 +39,8 @@ The main product surfaces are shipped. The current foundation includes
 Chat Completions and Responses, provider/model catalogs, cancellable streaming,
 conversion and common legacy charset support, safe explicit fetch/search, SQLite
 and JSON chat persistence, the terminal chat/editor/dired shell, benchmarks,
-grading, security review, one-shot and interactive agents, Guard and Act/Plan/Goal
-policies, the definitions-only code index, installed MCP clients, and CLI image
+grading, security review, one-shot and interactive agents, Guard and Act/Lead/Goal
+lanes, the definitions-only code index, installed MCP clients, and CLI image
 generation.
 
 The v1.30 control-server milestone is complete: `/ainiux/v1/` jobs and replay,

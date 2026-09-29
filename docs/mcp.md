@@ -6,7 +6,6 @@ Ainiux can use tools from [Model Context Protocol](https://modelcontextprotocol.
 | --- | --- |
 | Interactive agent | `-a` / `--agent` / `ainiux agent` |
 | One-shot Act | `-r` / `--run` / `ainiux run` |
-| One-shot Plan | `plan` / `--plan` / `--plan-file` |
 
 **Not loaded in:** ordinary `--chat`, standalone `--editor`, REPL, or `--security-review`.
 
@@ -175,7 +174,7 @@ Connect does **not** pin the agent prepare-job cancellation token onto the live 
 - **HTTP** private/loopback addresses are blocked unless `--mcp-allow-private` (per server) or global `--allow-private-url-fetch`.
 - Prefer `${ENV}` in headers/env over pasting secrets into `registry.json`.
 - Redact known secrets in logs; treat MCP tool **results as untrusted data** (like web fetch).
-- Plan mode can still call remote MCP tools that mutate external state; MCP is not sandboxed per Act/Plan policy.
+- Act and Lead expose the same qualified MCP tools. Remote MCP side effects are not sandboxed by switching modes.
 
 See also [Security](security.md).
 
@@ -211,7 +210,7 @@ Clients connect to `http://127.0.0.1:8766/mcp` using the MCP-only bearer
 token. Ainiux implements stateless MCP `2026-07-28` Streamable HTTP with
 `server/discover`, `tools/list`, `tools/call`, `tasks/get`, `tasks/update`,
 and `tasks/cancel`. The available tools are `ainiux_chat`, `ainiux_run`,
-`ainiux_plan`, `ainiux_image`, `ainiux_job_get`, and `ainiux_job_cancel`.
+`ainiux_image`, `ainiux_job_get`, and `ainiux_job_cancel`.
 
 Long-running calls use the MCP Tasks extension when the client advertises
 `io.modelcontextprotocol/tasks`; the returned opaque task handle is polled

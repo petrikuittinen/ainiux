@@ -73,7 +73,6 @@ class JobService {
                               runtime::CancellationToken cancellation) const;
     JobOutcome run_agent_job(cli::Options options,
                              std::string goal,
-                             bool plan,
                              runtime::CancellationToken cancellation,
                              JobEvents events) const;
     JobOutcome run_image_job(cli::Options options,

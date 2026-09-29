@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <sqlite3.h>
 
 #include "agent/goal.hpp"
 #include "agent/project_settings.hpp"
@@ -281,6 +282,81 @@ void test_permission_settings_json() {
           "permission mode settings JSON round trip");
 }
 
+void test_lane_settings_are_independent() {
+    cli::Options act;
+    act.provider = "openai";
+    act.base_url = "https://act.example/v1";
+    act.api = "responses";
+    act.model = "act-model";
+    act.has_temperature = true;
+    act.temperature = 0.25;
+    cli::Options lead = act;
+    lead.provider = "openrouter";
+    lead.base_url = "https://lead.example/api/v1";
+    lead.api = "chat";
+    lead.model = "lead-model";
+    lead.temperature = 0.75;
+
+    std::string encoded = "{}";
+    Error error = agent::merge_project_lane_settings(
+        encoded, agent::AgentLane::Act, act, encoded);
+    check(error.ok(), "encode Act lane settings: " + error.message);
+    error = agent::merge_project_lane_settings(
+        encoded, agent::AgentLane::Lead, lead, encoded);
+    check(error.ok(), "encode Lead lane settings: " + error.message);
+    error = agent::settings_with_agent_lane(
+        encoded, agent::AgentLane::Lead, encoded);
+    check(error.ok(), "encode active Lead lane: " + error.message);
+
+    agent::AgentLane active = agent::AgentLane::Act;
+    check(agent::saved_agent_lane(encoded, active).ok() &&
+              active == agent::AgentLane::Lead,
+          "active lane settings round trip");
+    cli::Options restored_act;
+    cli::Options restored_lead;
+    bool found_act = false;
+    bool found_lead = false;
+    check(agent::apply_project_lane_settings(
+              encoded, agent::AgentLane::Act, restored_act, found_act).ok() &&
+              agent::apply_project_lane_settings(
+                  encoded, agent::AgentLane::Lead, restored_lead, found_lead).ok() &&
+              found_act && found_lead,
+          "both lane bundles restore independently");
+    check(restored_act.provider == "openai" &&
+              restored_act.base_url == "https://act.example/v1" &&
+              restored_act.api == "responses" &&
+              restored_act.model == "act-model" &&
+              restored_act.has_temperature && restored_act.temperature == 0.25,
+          "Act restores its full request target and generation settings");
+    check(restored_lead.provider == "openrouter" &&
+              restored_lead.base_url == "https://lead.example/api/v1" &&
+              restored_lead.api == "chat" &&
+              restored_lead.model == "lead-model" &&
+              restored_lead.has_temperature && restored_lead.temperature == 0.75,
+          "Lead restores its distinct request target and generation settings");
+
+    const std::string workspace = temp_workspace("lane-settings");
+    agent::AgentSessionStore store;
+    agent::AgentProjectRecord project;
+    project.workspace = workspace;
+    check(store.open(workspace).ok() && store.open_project(project).ok(),
+          "open lane settings restore fixture");
+    project.settings_json = encoded;
+    check(store.update_project_meta(project).ok(),
+          "persist independent lane settings fixture");
+    store.close();
+    cli::Options restored_active;
+    bool restored = false;
+    check(agent::restore_project_settings(
+              workspace, restored_active, restored).ok() && restored &&
+              restored_active.agent_project_settings_restored &&
+              restored_active.provider == "openrouter" &&
+              restored_active.model == "lead-model",
+          "project restore selects the persisted active Lead bundle");
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_goal_settings_json_and_control() {
     agent::SessionGoal goal;
     Error error = agent::goal_from_settings_json("{}", goal);
@@ -339,6 +415,43 @@ void test_context_reset_after_seq_settings_json() {
     check(error.ok() && seq == 42, "reset seq settings JSON round trip");
 }
 
+void test_incompatible_schema_is_rejected_without_mutation() {
+    const std::string workspace = temp_workspace("schema-reject");
+    const std::string database = agent::AgentSessionStore::database_path(workspace);
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "create current agent schema fixture");
+    }
+    sqlite3* db = nullptr;
+    check(sqlite3_open(database.c_str(), &db) == SQLITE_OK,
+          "open agent schema fixture directly");
+    if (db != nullptr) {
+        check(sqlite3_exec(db, "UPDATE schema_migrations SET version=2", nullptr,
+                           nullptr, nullptr) == SQLITE_OK,
+              "mark fixture as legacy schema v2");
+        sqlite3_close(db);
+    }
+    agent::AgentSessionStore rejected;
+    const Error error = rejected.open(workspace);
+    check(error.code == ErrorCode::UnsupportedFeature &&
+              error.message.find("was not changed") != std::string::npos,
+          "legacy agent schema is rejected with non-destructive guidance");
+    db = nullptr;
+    int version = 0;
+    if (sqlite3_open(database.c_str(), &db) == SQLITE_OK && db != nullptr) {
+        sqlite3_stmt* statement = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT MAX(version) FROM schema_migrations", -1,
+                              &statement, nullptr) == SQLITE_OK &&
+            sqlite3_step(statement) == SQLITE_ROW)
+            version = sqlite3_column_int(statement, 0);
+        sqlite3_finalize(statement);
+        sqlite3_close(db);
+    }
+    check(version == 2, "rejected schema remains byte-logically unchanged");
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 }  // namespace
 
 void run_all() {
@@ -347,8 +460,10 @@ void run_all() {
     test_record_and_load_approvals();
     test_peek_last_message();
     test_permission_settings_json();
+    test_lane_settings_are_independent();
     test_goal_settings_json_and_control();
     test_context_reset_after_seq_settings_json();
+    test_incompatible_schema_is_rejected_without_mutation();
 }
 
 }  // namespace ainiux::test::agent_session_store

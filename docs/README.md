@@ -14,8 +14,8 @@ This index separates current usage guides from design records, roadmaps, and poi
 | [Editor help](editor_help.md) | Complete editor operation and embedded help content |
 | [Dired mode](dired-mode.md) | Full-screen directory browser: keys, listing, dirty markers, CLI `-d` / `--dired` |
 | [Keyboard shortcuts](keyboard-shortcuts.md) | Current chat, editor, agent, and dired bindings |
-| [Agent workflows](agent.md) | Act/Plan, permissions, Guard, goals, compaction, indexing, and security review |
-| [MCP servers](mcp.md) | Install/list MCP servers; agent/run/plan tools (`mcp__server__tool`); mock and CLI |
+| [Agent workflows](agent.md) | Act/Lead, permissions, Guard, goals, compaction, indexing, and security review |
+| [MCP servers](mcp.md) | Install/list MCP servers; agent/run tools (`mcp__server__tool`); mock and CLI |
 | [Configuration](configuration.md) | Layering, credentials, themes, models, image catalog, benchmark prompts, and editor commands |
 | [Benchmarks and grading](benchmarks.md) | Built-in corpus, JSONL runs, judge grading, and limitations |
 | [API compatibility](api-compatibility.md) | Provider and protocol compatibility details |

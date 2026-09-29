@@ -2435,10 +2435,21 @@ ParseResult read_file(const std::string& path, size_t max_bytes) {
 
 Error apply_document(const Document& document, cli::Options& options, bool user_layer) {
     cli::Options candidate = options;
+    Document lead_document;
+    constexpr const char* kLeadPrefix = "agent.lead.";
+    for (const auto& item : document.entries) {
+        if (item.first.rfind(kLeadPrefix, 0) != 0) continue;
+        Entry copy = item.second;
+        copy.section.clear();
+        copy.key = item.first.substr(std::char_traits<char>::length(kLeadPrefix));
+        lead_document.entries.emplace(copy.key, std::move(copy));
+    }
     for (const auto& item : document.entries) {
         const std::string& name = item.first;
         const Entry& entry = item.second;
         Error err = ok_error();
+
+        if (name.rfind(kLeadPrefix, 0) == 0) continue;
 
         if (name == "config_version") {
             err = require_type(entry, Value::Type::Integer);
@@ -2623,6 +2634,17 @@ Error apply_document(const Document& document, cli::Options& options, bool user_
                 err = schema_error(entry, "expected a non-negative byte size in the platform long range");
             }
             if (err.ok()) candidate.agent_max_response_bytes = static_cast<long>(value);
+        } else if (name == "agent.lead_context_turns") {
+            err = nonnegative_int(entry, candidate.agent_lead_context_turns);
+            if (err.ok() && (candidate.agent_lead_context_turns < 1 ||
+                             candidate.agent_lead_context_turns > 100))
+                err = schema_error(entry, "expected an integer from 1 through 100");
+        } else if (name == "agent.lead_response_chars") {
+            int value = 0;
+            err = nonnegative_int(entry, value);
+            if (err.ok() && (value < 1 || value > 100000))
+                err = schema_error(entry, "expected an integer from 1 through 100000");
+            if (err.ok()) candidate.agent_lead_response_chars = static_cast<size_t>(value);
         } else if (name == "input.image_capability") {
             err = enum_string(entry,
                               cli::option_values::image_capability_strings(),
@@ -2891,6 +2913,16 @@ Error apply_document(const Document& document, cli::Options& options, bool user_
     Error command_err = apply_configured_assist_commands(document, candidate);
     if (!command_err.ok()) {
         return command_err;
+    }
+    if (!lead_document.entries.empty()) {
+        cli::Options lead = candidate.agent_lead_options
+                                ? *candidate.agent_lead_options
+                                : candidate;
+        lead.agent_lead_options.reset();
+        Error lead_error = apply_document(lead_document, lead, user_layer);
+        if (!lead_error.ok()) return lead_error;
+        candidate.agent_lead_options =
+            std::make_shared<cli::Options>(std::move(lead));
     }
     options = std::move(candidate);
     return ok_error();

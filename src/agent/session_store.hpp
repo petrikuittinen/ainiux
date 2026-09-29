@@ -14,7 +14,7 @@ namespace ainiux::agent {
 // Project-local agent UI/session database at .ainiux-pr/agent.sqlite (never
 // ~/.ainiux/ainiux.db). One durable transcript thread per project.
 
-inline constexpr int kAgentSessionSchemaVersion = 2;
+inline constexpr int kAgentSessionSchemaVersion = 3;
 
 struct AgentProjectRecord {
     long long id = 1;
@@ -38,7 +38,9 @@ struct AgentMessageRecord {
     long long seq = 0;
     long long created_at = 0;
     // "index" is a durable display-only Markdown totals table.
-    std::string role;  // user | assistant | tool | notice | thinking | summary | index
+    std::string role;  // user | assistant | tool | notice | thinking | summary | index | handoff
+    std::string lane = "act";  // act | lead
+    long long turn = 0;
     std::string content;
     std::string tool_name;
     bool tool_ok = true;
@@ -92,7 +94,8 @@ class AgentSessionStore {
                          const std::string& content,
                          const std::string& tool_name = {},
                          bool tool_ok = true,
-                         const std::string& args_preview = {});
+                         const std::string& args_preview = {},
+                         const std::string& lane = {});
 
     // Legacy overload used by older runtime (session_id ignored; singleton).
     Error append_message(long long /*session_id*/,
@@ -106,7 +109,13 @@ class AgentSessionStore {
                             const std::string& tool_name,
                             const std::string& arguments,
                             const std::string& result,
-                            bool ok);
+                            bool ok,
+                            const std::string& lane = {});
+
+    void set_active_lane(const std::string& lane) {
+        active_lane_ = lane == "lead" ? "lead" : "act";
+    }
+    void set_active_turn(long long turn) { active_turn_ = turn < 0 ? 0 : turn; }
 
     Error load_messages(std::vector<AgentMessageRecord>& messages, int limit = 0) const;
     Error load_message_page(std::vector<AgentMessageRecord>& messages, long long before,
@@ -162,6 +171,8 @@ class AgentSessionStore {
     sqlite3* db_ = nullptr;
     std::string path_;
     std::string workspace_;
+    std::string active_lane_ = "act";
+    long long active_turn_ = 0;
 };
 
 // Kept for unit tests that still reference tool_events table shape.
@@ -171,6 +182,7 @@ struct AgentToolEventRecord {
     long long seq = 0;
     long long created_at = 0;
     long long turn = 0;
+    std::string lane = "act";
     std::string call_id;
     std::string tool_name;
     std::string arguments;

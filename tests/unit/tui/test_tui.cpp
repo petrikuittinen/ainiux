@@ -2636,15 +2636,20 @@ void test_agent_project_slash_command_parsing() {
                   ainiux::tui::AgentSlashAction::Invalid &&
               invalid_index_code.error == "Usage: /index-code",
           "agent /index-code rejects arguments");
-    check(ainiux::tui::parse_agent_slash_command("/plan").action ==
-              ainiux::tui::AgentSlashAction::Plan,
-          "agent /plan parses as a task-mode switch");
+    check(ainiux::tui::parse_agent_slash_command("/lead").action ==
+              ainiux::tui::AgentSlashAction::Lead,
+          "agent /lead parses as a lane switch");
+    check(ainiux::tui::parse_agent_slash_command("/lead 9").argument == "9",
+          "agent /lead N retains its handoff count");
+    check(ainiux::tui::parse_agent_slash_command("/lead clean").argument == "clean" &&
+              ainiux::tui::parse_agent_slash_command("/lead all").argument == "all",
+          "agent /lead parses clean and all handoffs");
     check(ainiux::tui::parse_agent_slash_command("/act").action ==
               ainiux::tui::AgentSlashAction::Act,
-          "agent /act parses as a task-mode switch");
-    check(ainiux::tui::parse_agent_slash_command("/plan later").action ==
-              ainiux::tui::AgentSlashAction::None,
-          "agent task-mode commands require an exact match");
+          "agent /act parses as a lane switch");
+    check(ainiux::tui::parse_agent_slash_command("/lead later").action ==
+              ainiux::tui::AgentSlashAction::Invalid,
+          "agent lane commands reject invalid handoff values");
     const auto permissions =
         ainiux::tui::parse_agent_slash_command("/permissions yolo");
     check(permissions.action == ainiux::tui::AgentSlashAction::Permissions &&

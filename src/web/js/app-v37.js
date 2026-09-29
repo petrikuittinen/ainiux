@@ -243,6 +243,22 @@ function handleChatSlashCommand(text) {
   return true;
 }
 
+function parseAgentModeCommand(text) {
+  if (!/^\/(?:act|lead)(?:\s|$)/i.test(text)) return null;
+  if (/^\/act\s*$/i.test(text)) return { mode: "act" };
+  if (/^\/act(?:\s|$)/i.test(text)) return { error: "Usage: /act" };
+  const match = text.match(/^\/lead(?:\s+(clean|all|\d+))?\s*$/i);
+  if (!match) return { error: "Usage: /lead [clean|1..100|all]" };
+  const handoff = (match[1] || "").toLowerCase();
+  if (/^\d+$/.test(handoff)) {
+    const count = Number(handoff);
+    if (!Number.isSafeInteger(count) || count < 1 || count > 100) {
+      return { error: "Usage: /lead [clean|1..100|all]" };
+    }
+  }
+  return { mode: "lead", handoff };
+}
+
 function chatExportAvailable() {
   return supports("chat_pdf") || supports("chat_docx") || supports("chat_md") || supports("chat_json");
 }
@@ -1814,7 +1830,7 @@ function applyCapabilities() {
   byId("refresh-directory-button").disabled = !supports("dired");
   byId("create-file-button").disabled = !supports("files");
   byId("create-directory-button").disabled = !supports("workspace_mutations");
-  for (const control of byId("goal-job-form").elements) control.disabled = !supports("run") && !supports("plan");
+  for (const control of byId("goal-job-form").elements) control.disabled = !supports("run");
   for (const control of byId("image-job-form").elements) control.disabled = !supports("image");
   for (const control of byId("video-job-form").elements) control.disabled = !supports("video");
   renderImageOptions();
@@ -2227,9 +2243,9 @@ function downloadGeneratedVideo() {
 function renderJobs() {
   const list = byId("job-list");
   const jobs = [...state.jobs.values()]
-    .filter((job) => job.operation === "run" || job.operation === "plan").reverse();
+    .filter((job) => job.operation === "run").reverse();
   if (jobs.length === 0) {
-    setEmpty(list, "No run or plan jobs.");
+    setEmpty(list, "No run jobs.");
     return;
   }
   clear(list);
@@ -3456,7 +3472,7 @@ function renderAgent() {
     byId("agent-cycle-reasoning-button").textContent = "Reasoning: auto";
     byId("agent-cycle-reasoning-button").disabled = true;
     for (const id of ["agent-provider", "agent-model", "agent-reasoning",
-      "agent-task-mode", "agent-permission"]) byId(id).disabled = true;
+      "agent-mode", "agent-handoff", "agent-permission"]) byId(id).disabled = true;
     syncPickerButtons();
     stopAgentClock();
     return;
@@ -3486,7 +3502,7 @@ function renderAgent() {
   reasoning.value = session.reasoning || "auto";
   byId("agent-cycle-reasoning-button").textContent =
     `Reasoning: ${session.reasoning || "auto"}`;
-  byId("agent-task-mode").value = session.task_mode || "act";
+  byId("agent-mode").value = session.lane || "act";
   byId("agent-permission").value = session.permission_mode || "smart";
   const logs = state.agentLogs.get(session.id) || [];
   const history = state.agentHistory.get(session.id);
@@ -3518,7 +3534,7 @@ function renderAgent() {
   byId("agent-turn-submit").disabled = !ready;
   byId("cancel-turn-button").hidden = !session.turn_id;
   for (const id of ["agent-provider", "agent-model", "agent-reasoning",
-    "agent-task-mode", "agent-permission"]) {
+    "agent-mode", "agent-handoff", "agent-permission"]) {
     byId(id).disabled = !ready || state.agentSettingsPending;
   }
   byId("agent-cycle-reasoning-button").disabled = !ready || state.agentSettingsPending;
@@ -3797,7 +3813,7 @@ async function setAgentReasoning(value, label = value) {
   }
 }
 
-async function setAgentSetting(field, value) {
+async function setAgentSetting(field, value, extra = {}) {
   if (!state.session || state.session.turn_id || state.agentSettingsPending || !value) return;
   const sessionId = state.session.id;
   state.agentSettingsPending = true;
@@ -3806,7 +3822,7 @@ async function setAgentSetting(field, value) {
     const response = await api(
       `${API_ROOT}/sessions/${encodeURIComponent(sessionId)}/settings`, {
         method: "POST",
-        body: { [field]: value },
+        body: { [field]: value, ...extra },
       });
     const index = state.sessions.findIndex((item) => item.id === sessionId);
     if (index >= 0) state.sessions[index] = response;
@@ -4637,7 +4653,7 @@ function bindEvents() {
   byId("refresh-jobs-button").addEventListener("click", () => void refreshKnownJobs());
   byId("clear-finished-button").addEventListener("click", () => {
     for (const [id, job] of state.jobs) {
-      if ((job.operation === "run" || job.operation === "plan") &&
+      if (job.operation === "run" &&
           TERMINAL_STATES.has(job.state)) state.jobs.delete(id);
     }
     renderJobs();
@@ -4901,13 +4917,25 @@ function bindEvents() {
       event.target.options[event.target.selectedIndex]?.textContent || event.target.value));
   byId("agent-cycle-reasoning-button").addEventListener("click", () =>
     void cycleAgentReasoning());
-  byId("agent-task-mode").addEventListener("change", (event) =>
-    void setAgentSetting("task_mode", event.target.value));
+  byId("agent-mode").addEventListener("change", (event) =>
+    void setAgentSetting("lane", event.target.value,
+      event.target.value === "lead" ? { handoff: byId("agent-handoff").value } : {}));
   byId("agent-permission").addEventListener("change", (event) =>
     void setAgentSetting("permission_mode", event.target.value));
   byId("agent-turn-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = byId("agent-turn-input").value.trim();
+    const modeCommand = parseAgentModeCommand(text);
+    if (modeCommand) {
+      byId("agent-turn-input").value = "";
+      if (modeCommand.error) {
+        agentNotice(modeCommand.error, "error");
+        return;
+      }
+      const extra = modeCommand.handoff ? { handoff: modeCommand.handoff } : {};
+      await setAgentSetting("lane", modeCommand.mode, extra);
+      return;
+    }
     if (handleChatSlashCommand(text)) {
       byId("agent-turn-input").value = "";
       return;

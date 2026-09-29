@@ -5,7 +5,7 @@
 
 namespace ainiux::agent {
 
-// A conservative, complete-argv assessment used by Plan command policy and by
+// A conservative, complete-argv assessment used by restricted command policy and by
 // Smart-mode approval. `path_operands` contains every filename/directory input
 // recognized by the accepted invocation, including auxiliary input files.
 // Unknown commands, options, or invocation shapes are not vetted.

@@ -746,3 +746,26 @@ opaque expiring input ids and returns only local artifact metadata; a separate
 authenticated route streams completed MP4 files after filename and workspace
 containment checks. The WebUI uses a native HTML5 player and Blob download URL.
 No runtime dependency or JavaScript framework is added.
+
+## Act and Lead model modes
+
+Interactive Agent uses two cached model-visible modes. Act and Lead share the
+workspace, native/MCP tool inventory, Guard, permission mode, goals, and code
+index, but retain independent provider/model/request settings and conversation
+state. Lead is a planning and difficult-problem role, not a reduced-authority
+policy; both modes have the same mutation authority. This keeps the trusted
+system prompt and logical tool head stable instead of invalidating provider
+caches when the user asks for higher-level reasoning.
+
+`/lead` transfers two recent Act user turns by default, excludes tool traffic,
+and truncates each final response to 200 Unicode characters. `clean`, `1`–`100`,
+and `all` select another handoff. `/act` transfers Lead prompts and full final
+responses, still without tool traffic. Handoff boundaries, mode/turn ownership,
+active mode, and complete per-mode request settings are project-local durable
+state. Schema v2 agent databases are rejected with recovery guidance and are
+never migrated, archived, or deleted automatically.
+
+Lead has no one-shot CLI or jobs endpoint. The former `plan`, `--plan`,
+`--plan-file`, `/plan`, `/ainiux/v1/jobs/plan`, and MCP planning job are retired.
+Provider-native web search remains preferred where supported; the client search
+tool remains the fallback for local or unsupported adapters.

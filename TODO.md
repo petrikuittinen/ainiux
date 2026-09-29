@@ -3,7 +3,7 @@
 ## Native Windows parity release gate
 
 - Run the manually triggered UCRT64 build/unit/fault/mock/SQLite/ConPTY/sanitizer/package workflow and retain the packaged artifact/checksum.
-- Complete native hands-on acceptance in Windows Terminal and modern conhost for every implemented mode, provider streaming, cancellation, Act/Plan permissions, editor locks/dired, indexing, security review, SQLite, PowerShell, and clipboard save/restore.
+- Complete native hands-on acceptance in Windows Terminal and modern conhost for every implemented mode, provider streaming, cancellation, Act/Lead permissions, editor locks/dired, indexing, security review, SQLite, PowerShell, and clipboard save/restore.
 - Keep the Windows ZIP unpublished until that parity pass is recorded. Windows ARM64, MSVC/CMake, MSI/installers, old Windows, and mintty full-screen operation remain out of scope.
 
 ## Smarter local agent and code index (v1.1)

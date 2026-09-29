@@ -1592,12 +1592,12 @@ Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
     if (mutation_policy_ == MutationPolicy::Full) return ok_error();
     if (deleting)
         return {ErrorCode::UnsupportedFeature,
-                "Plan mode cannot delete planning documents"};
+                "Restricted document policy cannot delete planning documents"};
     if (create_dirs)
         return {ErrorCode::UnsupportedFeature,
-                "Plan mode cannot create directories"};
+                "Restricted document policy cannot create directories"};
     if (relative_path.empty() || !safe_relative_path(relative_path))
-        return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "modify in Plan mode")};
+        return {ErrorCode::BadArgs, unsafe_path_message(relative_path, "modify in Restricted document policy")};
     const std::string path = fs::u8path(relative_path).generic_u8string();
     const bool root_allowed =
         path == "PLANS.md" || path == "PLAN.md" || path == "TODO.md" || path == "AGENTS.md";
@@ -1606,7 +1606,7 @@ Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
         path.size() >= 3 && path.compare(path.size() - 3, 3, ".md") == 0;
     if (!root_allowed && !plans_markdown)
         return {ErrorCode::UnsupportedFeature,
-                "Plan mode may write only root PLANS.md, PLAN.md, TODO.md, AGENTS.md, "
+                "Restricted document policy may write only root PLANS.md, PLAN.md, TODO.md, AGENTS.md, "
                 "or case-sensitive *.md files below docs/plans/"};
 
     fs::path absolute;
@@ -1616,12 +1616,12 @@ Error ReadToolRegistry::validate_mutation_path(const std::string& relative_path,
     const fs::path parent = absolute.parent_path();
     if (!fs::is_directory(parent, ec) || ec)
         return {ErrorCode::FileWrite,
-                "Plan mode requires the destination parent directory to already exist: " +
+                "Restricted document policy requires the destination parent directory to already exist: " +
                     parent.u8string()};
     const fs::file_status parent_status = fs::symlink_status(parent, ec);
     if (ec || fs::is_symlink(parent_status))
         return {ErrorCode::FileWrite,
-                "Plan mode refuses symlink destination parents: " + path};
+                "Restricted document policy refuses symlink destination parents: " + path};
     return ok_error();
 }
 
@@ -3428,7 +3428,7 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
                "Long-running servers use background=true (not nohup). "
                "No unquoted pipes/redirects/chaining. Prefer mkdir/mv/rm/ls over equivalents. "
                "Delete directories with rmdir (empty) or rm -r (non-empty asks in Smart). "
-               "Act uses Guard; Plan allows vetted read-only forms."
+               "Agent modes use Guard; restricted sessions allow vetted read-only forms."
              : "Run one read-only inspection command without a shell "
                "(pwd/ls/rg/grep/find/git allowlist).",
          schema("\"command\":{\"type\":\"string\"},\"cwd\":{\"type\":\"string\"},"
@@ -3454,12 +3454,12 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
                 "\"site\":{\"type\":\"string\"}",
                 "\"term\"")}, allow_network_ && !hosted_web_search_);
-    // Advertised only while /goal is Active. Always listing it in Act/Plan
+    // Advertised only while /goal is Active. Always listing it in Act/Lead
     // made small models treat goal_met as a generic "task done" signal.
     add(NativeToolHandler::GoalMet, ToolSafetyCategory::Session,
         {"goal_met",
          "Call only when the active session /goal is verifiably satisfied. "
-         "Requires non-empty evidence. Not available in Act or Plan.",
+         "Requires non-empty evidence. Available only while /goal is active.",
          schema("\"evidence\":{\"type\":\"string\"}", "\"evidence\"")},
         agent_session && goal_hooks_.has_active_goal &&
             goal_hooks_.has_active_goal());
@@ -3494,19 +3494,19 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
                 "\"path\",\"content\"")}, allow_mutations());
     add(NativeToolHandler::MakeDirectory, ToolSafetyCategory::Mutation,
         {"mkdir",
-         "Act-only mkdir; parents=true creates missing parents. Plan: policy_denied.",
+         "Agent mkdir; parents=true creates missing parents. Restricted sessions deny it.",
          schema(path + ",\"parents\":{\"type\":\"boolean\"}", "\"path\"")},
         allow_mutations());
     add(NativeToolHandler::Move, ToolSafetyCategory::Mutation,
         {"mv",
-         "Act-only rename; destination must not exist. Plan: policy_denied.",
+         "Agent rename; destination must not exist. Restricted sessions deny it.",
          schema("\"source\":{\"type\":\"string\"},"
                 "\"destination\":{\"type\":\"string\"}",
                 "\"source\",\"destination\"")}, allow_mutations());
     add(NativeToolHandler::Remove, ToolSafetyCategory::Mutation,
         {"rm",
-         "Act-only delete one regular file. Use exact name from ls. Directories: run "
-         "rmdir (empty) or run rm -r (non-empty asks in Smart). Plan: policy_denied.",
+         "Agent delete of one regular file. Use exact name from ls. Directories: run "
+         "rmdir (empty) or run rm -r (non-empty asks in Smart). Restricted sessions deny it.",
          schema(path + ",\"confirm\":{\"type\":\"boolean\"},"
                        "\"expected_file_hash\":{\"type\":\"string\"}",
                 "\"path\"")}, allow_mutations());
@@ -5077,7 +5077,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         std::string guard_rule_id;
         const CommandPolicy policy =
             full ? CommandPolicy::Agent
-                 : (agent_session ? CommandPolicy::PlanReadOnly
+                 : (agent_session ? CommandPolicy::RestrictedReadOnly
                                   : CommandPolicy::InspectionOnly);
         // Defer Ask so path validation runs before the interactive prompt.
         const GuardAskHandling preview_ask =
@@ -5221,7 +5221,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         if (!full && agent_session && uses_external)
             return tool_error_result(
                 "policy_denied",
-                "Plan run_command paths and cwd must remain inside the project");
+                "restricted run_command paths and cwd must remain inside the project");
         const ReadOnlyCommandAssessment read_only =
             assess_read_only_command(parsed_arguments);
         bool read_only_uses_external = false;
@@ -5283,7 +5283,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         options.cwd = cwd;
         options.allow_external_cwd = uses_external || unrestricted_yolo;
         options.allow_external_paths = agent_session || unrestricted_yolo;
-        // Act/Plan: resolve ./script.sh and bare project scripts under cwd/root.
+        // Act/Lead: resolve ./script.sh and bare project scripts under cwd/root.
         options.allow_workspace_executables = full;
         options.unrestricted = unrestricted_yolo;
         options.timeout_ms = static_cast<long>(timeout);
@@ -5311,7 +5311,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const bool git_file_listing = command_name == "git" && parsed_arguments.size() > 9 &&
                                       parsed_arguments[9] == "ls-files";
         // Only security-review treats the index snapshot as an output
-        // authorization list. Agent Act/Plan commands operate on the validated
+        // authorization list. Interactive agent commands operate on the validated
         // live project filesystem, so filtering their stdout would incorrectly
         // hide safe generated, ignored, or otherwise unindexed project paths
         // (and cannot reliably parse formatted output such as `ls -l`).
@@ -5478,7 +5478,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 if (mutation_policy_ != MutationPolicy::Full)
                     return tool_error_result(
                         "policy_denied",
-                        "Plan mode cannot edit files outside the project");
+                        "Restricted document policy cannot edit files outside the project");
                 for (const json::Value& raw_op : ops_value->array) {
                     const json::Value op = normalize_edit_op_shape(raw_op);
                     if (infer_edit_op_type(op) == "replace_symbol")
@@ -5679,7 +5679,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             resolve_native_path(snapshot_.workspace, path, false, target, external);
         if (error.ok() && external && mutation_policy_ != MutationPolicy::Full)
             error = {ErrorCode::UnsupportedFeature,
-                     "Plan mode cannot create directories outside the project"};
+                     "Restricted document policy cannot create directories outside the project"};
         if (error.ok() && !external) {
             std::error_code ec;
             const fs::path root = fs::canonical(snapshot_.workspace, ec);

@@ -207,13 +207,13 @@ print(1)")CMD",
           "security-review remains a strict allowlist: " + error.message);
 
     error = agent::parse_command("stat -c %y tic_tac_toe.py", args,
-                                 agent::CommandPolicy::PlanReadOnly, rule);
-    check(error.ok(), "Plan accepts expanded vetted read-only commands: " + error.message);
-    error = agent::parse_command("make test", args, agent::CommandPolicy::PlanReadOnly, rule);
-    check(!error.ok(), "Plan denies non-vetted build commands");
+                                 agent::CommandPolicy::RestrictedReadOnly, rule);
+    check(error.ok(), "restricted policy accepts expanded vetted read-only commands: " + error.message);
+    error = agent::parse_command("make test", args, agent::CommandPolicy::RestrictedReadOnly, rule);
+    check(!error.ok(), "restricted policy denies non-vetted build commands");
     error = agent::parse_command("tail -f tic_tac_toe.py", args,
-                                 agent::CommandPolicy::PlanReadOnly, rule);
-    check(!error.ok(), "Plan denies mutating/following display-command forms");
+                                 agent::CommandPolicy::RestrictedReadOnly, rule);
+    check(!error.ok(), "restricted policy denies mutating/following display-command forms");
 }
 
 void test_read_only_command_classifier() {

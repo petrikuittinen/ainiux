@@ -42,8 +42,10 @@ class InteractiveSession {
     InteractiveSession(std::string id,
                        std::string workspace,
                        provider::RequestContext context,
+                       cli::Options act_defaults,
+                       cli::Options lead_defaults,
                        agent::PermissionMode permission_mode,
-                       agent::AgentTaskMode task_mode,
+                       agent::AgentLane lane,
                        bool allow_yolo,
                        std::size_t max_events);
 
@@ -59,8 +61,12 @@ class InteractiveSession {
     const std::string created_at_;
     mutable std::mutex mutex_;
     provider::RequestContext context_;
+    provider::RequestContext act_context_;
+    provider::RequestContext lead_context_;
+    cli::Options act_defaults_;
+    cli::Options lead_defaults_;
     agent::PermissionMode permission_mode_;
-    agent::AgentTaskMode task_mode_;
+    agent::AgentLane active_lane_;
     bool allow_yolo_;
     std::string status_ = "preparing";
     std::string updated_at_;

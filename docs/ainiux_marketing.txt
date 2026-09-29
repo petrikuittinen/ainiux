@@ -27,7 +27,7 @@ Chat, edit, convert, benchmark, and run explicit project agents from the termina
 
 YouTube
 
-This walkthrough introduces Ainiux, an open-source C++17 terminal client. It demonstrates one-shot prompts, the saved-thread chat interface, offline and AI-assisted editing, provider selection, project-local Act/Plan agents, and benchmark results. Ainiux supports multiple built-in OpenAI-compatible profiles, but individual model features and wider POSIX compatibility are not guaranteed.
+This walkthrough introduces Ainiux, an open-source C++17 terminal client. It demonstrates one-shot prompts, the saved-thread chat interface, offline and AI-assisted editing, provider selection, project-local Act/Lead agents, and benchmark results. Ainiux supports multiple built-in OpenAI-compatible profiles, but individual model features and wider POSIX compatibility are not guaranteed.
 
 TikTok / short video
 

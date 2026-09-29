@@ -54,7 +54,7 @@ void test_load_and_seed_injection() {
     prompts.security = "SECURITY";
     prompts.agent = "AGENT";
     provider::ToolConversation conversation;
-    agent::seed_agent_conversation(conversation, prompts, agent::AgentTaskMode::Act,
+    agent::seed_agent_conversation(conversation, prompts, agent::AgentLane::Act,
                                    agent::ToolProtocol::Native, "Do the task",
                                    bundle.injection_text);
     check(conversation.messages.size() == 4, "system + agents.md + mode + goal");

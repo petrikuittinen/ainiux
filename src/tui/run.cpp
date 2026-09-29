@@ -29,6 +29,7 @@
 #include "agent/agent_controller.hpp"
 #include "agent/approval.hpp"
 #include "agent/project_root.hpp"
+#include "agent/project_settings.hpp"
 #include "agent/session_runtime.hpp"
 #include "agent/tool_display.hpp"
 #include "chat/settings.hpp"
@@ -82,6 +83,8 @@ app::TuiRunResult run(provider::RequestContext context,
                       chat::Session session,
                       app::InteractiveSession* interactive) {
     const provider::RequestContext cli_context = context;
+    provider::RequestContext act_context = context;
+    provider::RequestContext lead_context = context;
     std::string* shared_routing_session_id = nullptr;
     if (interactive != nullptr) {
         shared_routing_session_id =
@@ -229,7 +232,7 @@ app::TuiRunResult run(provider::RequestContext context,
                        : std::string("."));
         agent::SessionRuntimeOptions options =
             agent::make_session_runtime_options(
-                context, target_workspace, agent::AgentTaskMode::Act, true);
+                context, target_workspace, agent::AgentLane::Act, true);
         // Prefer controller event queue so callbacks remain valid across
         // temporary editor hops (local `events` is destroyed with the TUI).
         // Capture weak_ptr only: SessionRuntimeOptions is stored on the runtime
@@ -405,13 +408,13 @@ app::TuiRunResult run(provider::RequestContext context,
             agent_runtime && agent_runtime->prepared()
                 ? agent_runtime->workspace()
                 : initial_agent_workspace;
-        // Active /goal overrides the task-mode tag (act/plan) until the goal
+        // Active /goal overrides the agent-mode tag until the goal
         // completes, is cleared/paused, or otherwise becomes inactive.
         if (agent_runtime && agent_runtime->prepared() &&
             agent::goal_is_active(agent_runtime->goal())) {
             chrome.mode_label = "goal";
         } else if (agent_runtime && agent_runtime->prepared()) {
-            chrome.mode_label = agent::agent_task_mode_name(agent_runtime->task_mode());
+            chrome.mode_label = agent::agent_lane_name(agent_runtime->lane());
         } else {
             chrome.mode_label = "act";
         }
@@ -800,7 +803,7 @@ app::TuiRunResult run(provider::RequestContext context,
                 "Select project permission mode.\n\n"
                 "Confirm asks for writes and external access.\n"
                 "Smart allows project/system-temp native access and asks elsewhere.\n"
-                "Yolo allows validated actions; hard safety and Plan denials remain.");
+                "Yolo allows validated actions; hard safety denials remain.");
         }
         if (mode == TuiMode::AgentContinueConfirm) {
             return std::string("The agent reached its 50-round safety cap.\n\n"
@@ -2179,26 +2182,79 @@ app::TuiRunResult run(provider::RequestContext context,
     };
     command_handlers.start_agent_index_code = start_agent_index_code;
     command_handlers.start_agent_show_index = start_agent_show_index;
-    command_handlers.switch_agent_task_mode = [&](agent::AgentTaskMode mode) {
+    command_handlers.switch_agent_lane = [&](agent::AgentLane mode,
+                                             const std::string& handoff_argument) {
         if (!agent_runtime || !agent_runtime->prepared()) {
             status = "Agent session runtime is not ready";
             return;
         }
         if (file_job.joinable()) {
             status =
-                "Cannot switch task mode while an agent file job is running; wait or cancel it first";
+                "Cannot switch agent mode while an agent file job is running; wait or cancel it first";
             return;
         }
-        const agent::AgentTaskMode before = agent_runtime->task_mode();
-        const Error error = agent_runtime->switch_task_mode(mode);
+        const agent::AgentLane before = agent_runtime->lane();
+        if (before == agent::AgentLane::Act) act_context = context;
+        else lead_context = context;
+        const Error persist_error = agent_runtime->update_project_settings(context);
+        if (!persist_error.ok()) {
+            status = persist_error.message;
+            return;
+        }
+        provider::RequestContext& target_context =
+            mode == agent::AgentLane::Act ? act_context : lead_context;
+        cli::Options target_options = target_context.options;
+        bool restored_lane = false;
+        Error restore_error = agent::restore_project_lane_settings(
+            agent_runtime->workspace(), mode, target_options, restored_lane);
+        if (!restore_error.ok()) {
+            status = restore_error.message;
+            return;
+        }
+        if (restored_lane) {
+            provider::ContextResult built = provider::build_context(target_options);
+            if (!built.error.ok()) {
+                status = built.error.message;
+                return;
+            }
+            built.context.routing_session_id = target_context.routing_session_id;
+            target_context = std::move(built.context);
+        } else if (mode == agent::AgentLane::Lead &&
+                   context.options.agent_lead_options) {
+            target_options = *context.options.agent_lead_options;
+            target_options.agent = true;
+            target_options.agent_run = false;
+            target_options.image = false;
+            provider::ContextResult built = provider::build_context(target_options);
+            if (!built.error.ok()) {
+                status = built.error.message;
+                return;
+            }
+            built.context.routing_session_id = target_context.routing_session_id;
+            target_context = std::move(built.context);
+        }
+        agent::LaneHandoff handoff;
+        handoff.recent_user_turns = context.options.agent_lead_context_turns;
+        handoff.assistant_preview_chars =
+            context.options.agent_lead_response_chars;
+        if (handoff_argument == "clean") {
+            handoff.scope = agent::LaneHandoff::Scope::Clean;
+        } else if (handoff_argument == "all" || mode == agent::AgentLane::Act) {
+            handoff.scope = agent::LaneHandoff::Scope::All;
+        } else if (!handoff_argument.empty()) {
+            handoff.recent_user_turns = std::stoi(handoff_argument);
+        }
+        const Error error = agent_runtime->switch_lane(mode, handoff,
+                                                       &target_context);
         if (!error.ok()) {
             status = error.message;
             return;
         }
+        context = target_context;
         status = before == mode
-                     ? std::string("Already in ") + agent::agent_task_mode_name(mode) + " mode"
-                     : std::string("Switched agent task mode to ") +
-                           agent::agent_task_mode_name(mode);
+                     ? std::string("Already in ") + agent::agent_lane_name(mode) + " mode"
+                     : std::string("Switched agent mode to ") +
+                           agent::agent_lane_name(mode);
     };
     command_handlers.switch_agent_permission_mode =
         [&](const std::string& requested) {
@@ -2875,7 +2931,8 @@ app::TuiRunResult run(provider::RequestContext context,
                 handle_command(text);
                 return;
             }
-            if (context.options.agent && (text == "/plan" || text == "/act")) {
+            if (context.options.agent &&
+                (text == "/lead" || text.rfind("/lead ", 0) == 0 || text == "/act")) {
                 input = new_input_editor();
                 handle_command(text);
                 return;
