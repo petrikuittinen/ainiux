@@ -3548,7 +3548,10 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
                 "\"diff\":{\"type\":\"string\"},"
                 "\"atomic\":{\"type\":\"boolean\"},"
                 "\"fuzzy\":{\"type\":\"boolean\"}",
-                "")}, allow_mutations());
+                "")},
+        // Implemented and exact-name executable; omitted from advertised
+        // definitions so models use edit. Flip to allow_mutations() to restore.
+        false);
     return tools;
 }
 

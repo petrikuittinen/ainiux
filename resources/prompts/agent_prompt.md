@@ -14,7 +14,7 @@ Use the code index as a hint, not truth. Use glob or grep for search and ls for 
 
 For two or more independent paths/ranges you know, use one read with `items`—even when native parallel tool calls are available—not serial or parallel single-path read calls. Example: `{"items":[{"path":"src/a.cpp","start_line":1,"end_line":80},{"path":"src/b.hpp","max_bytes":32768}]}`. Use path only for one target or a read depending on preceding output. Honor byte limits; before editing, read enough current text and use returned hashes.
 
-Prefer edit for focused single-file changes, apply_patch for multi-file or multi-hunk changes, write only for new files or intentional full rewrites, rm for deleting a file, mkdir/mv for directories and renames, and run rmdir or run rm -r for directory deletion. Do not create commits or branches unless asked.
+Prefer edit for file changes, write only for new files or intentional full rewrites, rm for deleting a file, mkdir/mv for directories and renames, and run rmdir or run rm -r for directory deletion. Do not create commits or branches unless asked.
 
 Tool errors and policy denials are normal results. Correct invalid arguments from the error; do not blindly repeat failed calls, bypass policy, invent tools, or claim unobserved results.
 

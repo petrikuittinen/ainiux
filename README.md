@@ -208,7 +208,7 @@ See [Agent workflows](docs/agent.md), [MCP servers](docs/mcp.md), [code-index in
 
 The native tool API is deliberately compact: `index`, `ls`, `glob`, `grep`,
 `symbol`, `outline`, `read`, `run`, `fetch`, `web_search`, `ask` (interactive only), `goal_met` (active `/goal` only), `attach`,
-`edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch` as applicable to the
+`edit`, `write`, `mkdir`, `mv`, and `rm` as applicable to the
 session. Removed long names and aliases are not silently accepted. See the
 [native tool inventory](docs/tool_calls.md) for availability and policy details.
 

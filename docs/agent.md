@@ -45,7 +45,8 @@ Configure Lead with the same setting vocabulary under `[agent.lead]`; when omitt
 
 The current native names are `index`, `ls`, `glob`, `grep`, `symbol`, `outline`,
 `read`, `run`, `fetch`, `web_search`, `ask` (interactive only), `goal_met` (active `/goal` only), `attach`,
-`edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on
+`edit`, `write`, `mkdir`, `mv`, and `rm`. `apply_patch` remains implemented
+for exact-name execute but is not advertised. Availability depends on
 index, network, session, and mutation policy. When `models.conf` marks the current model
 `web_search=on` **and** the current adapter can emit that family's hosted tool,
 agent/run attach the provider-hosted search tool and do

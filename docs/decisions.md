@@ -436,11 +436,12 @@ exceeding ~4k tokens for a full Act session. The registry was slimmed by:
    lifecycle remains CLI/mutation-driven).
 2. **Renaming for industry alignment:** the final advertised native set uses
    `index`, `ls`, `glob`, `grep`, `symbol`, `outline`, `read`, `run`, `fetch`,
-   `web_search`, `goal_met`, `attach`, `edit`, `write`, `mkdir`, `mv`, `rm`,
-   and `apply_patch`, subject to session policy.
+   `web_search`, `goal_met`, `attach`, `edit`, `write`, `mkdir`, `mv`, and
+   `rm`, subject to session policy. `apply_patch` remains implemented and
+   exact-name executable but is not advertised, so models use `edit`.
 3. **Compacting tool descriptions** while preserving wire schemas and critical
-   compatibility cues for `edit` (flat ops), `apply_patch` (Codex markers),
-   and `run` (shell-free argv).
+   compatibility cues for `edit` (flat ops) and `run` (shell-free argv).
+   Hidden `apply_patch` still keeps Codex markers on its unadvertised descriptor.
 4. **Removing execute-time aliases.** Old names are not advertised or accepted;
    compaction alone can still recognize them in transcripts created by older releases.
 

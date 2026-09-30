@@ -110,10 +110,14 @@ void test_apply_patch_tool() {
     write_text(fs::path(workspace) / "gone.txt", "bye\n");
     agent::ReadToolRegistry tools = make_registry(workspace, true);
 
-    bool has_patch = false;
+    bool advertised = false;
+    bool implemented = false;
     for (const provider::FunctionDefinition& definition : tools.definitions())
-        if (definition.name == "apply_patch") has_patch = true;
-    check(has_patch, "mutation registry exposes apply_patch");
+        if (definition.name == "apply_patch") advertised = true;
+    for (const agent::ToolDescriptor& descriptor : tools.native_descriptors())
+        if (descriptor.definition.name == "apply_patch") implemented = true;
+    check(!advertised && implemented,
+          "apply_patch stays implemented but is not advertised");
     check(!json_ok(make_registry(workspace, false)
                        .execute("apply_patch", R"JSON({"patch":"*** Begin Patch\n*** End Patch"})JSON")),
           "read-only denies apply_patch");

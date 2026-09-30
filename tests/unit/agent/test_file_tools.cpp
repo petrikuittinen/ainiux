@@ -470,7 +470,8 @@ void assert_schema_arrays_have_items(const json::Value& node, const std::string&
 }
 
 void check_native_descriptor_invariants(const agent::ReadToolRegistry& tools,
-                                        std::size_t expected_count = 0) {
+                                        std::size_t expected_descriptors = 0,
+                                        std::size_t expected_exposed = 0) {
     const std::vector<agent::ToolDescriptor> descriptors =
         tools.native_descriptors();
     const std::vector<provider::FunctionDefinition> definitions =
@@ -504,10 +505,13 @@ void check_native_descriptor_invariants(const agent::ReadToolRegistry& tools,
     }
     check(definitions.size() == exposed,
           "registry has no advertised native tool without a handler");
-    if (expected_count != 0) {
-        check(descriptors.size() == expected_count && exposed == expected_count &&
-                  handlers.size() == expected_count,
-              "maximal registry exposes every native handler exactly once");
+    if (expected_descriptors != 0) {
+        const std::size_t want_exposed =
+            expected_exposed == 0 ? expected_descriptors : expected_exposed;
+        check(descriptors.size() == expected_descriptors &&
+                  handlers.size() == expected_descriptors &&
+                  exposed == want_exposed,
+              "maximal registry keeps every native handler exactly once");
     }
 }
 
@@ -1762,6 +1766,7 @@ void test_removed_index_and_macro_tools_not_advertised() {
     bool saw_list_directory = false;
     bool saw_index_overview = false;
     bool saw_file_outline = false;
+    bool saw_apply_patch = false;
     std::size_t schema_chars = 0;
     for (const provider::FunctionDefinition& def : tools.definitions()) {
         schema_chars += def.name.size() + def.description.size() + def.parameters_json.size();
@@ -1782,10 +1787,7 @@ void test_removed_index_and_macro_tools_not_advertised() {
                       def.description.find("Flat ops") != std::string::npos,
                   "edit_file schema keeps flat-op compatibility cues");
         }
-        if (def.name == "apply_patch") {
-            check(def.description.find("*** Begin Patch") != std::string::npos,
-                  "apply_patch description keeps Codex markers");
-        }
+        if (def.name == "apply_patch") saw_apply_patch = true;
         if (def.name == "run") {
             check(def.description.find("without a real shell") != std::string::npos ||
                       def.description.find("without a shell") != std::string::npos,
@@ -1794,8 +1796,18 @@ void test_removed_index_and_macro_tools_not_advertised() {
     }
     check(!saw_removed && saw_grep && !saw_search_text && !saw_find &&
               saw_list_dir && !saw_list_directory && saw_index_overview &&
-              saw_file_outline,
+              saw_file_outline && !saw_apply_patch,
           "definitions drop removed tools, advertise canonical names only");
+    bool implemented_apply_patch = false;
+    for (const agent::ToolDescriptor& descriptor : tools.native_descriptors()) {
+        if (descriptor.definition.name == "apply_patch") {
+            implemented_apply_patch = true;
+            check(descriptor.definition.description.find("*** Begin Patch") !=
+                      std::string::npos,
+                  "hidden apply_patch descriptor keeps Codex markers");
+        }
+    }
+    check(implemented_apply_patch, "apply_patch remains implemented");
     // Full Act definitions without network should stay well under historical ~4k-token
     // footprint (rough char/4 proxy). Budget leaves headroom for small schema growth.
     check(schema_chars / 4 < 2800,
@@ -1914,7 +1926,7 @@ void test_git_and_network_tools_policy() {
                                               net_tools, net_options)
                   .ok(),
               "create network-enabled registry");
-        check_native_descriptor_invariants(net_tools, 19);
+        check_native_descriptor_invariants(net_tools, 19, 18);
 
         const std::string status =
             net_tools.execute("run", R"JSON({"command":"git status --short --branch"})JSON");

@@ -35,7 +35,11 @@ methodology.
 | `mkdir` | `path` | Directory create. |
 | `mv` | `source`, `destination` | Rename; destination must not exist. |
 | `rm` | `path` | **Regular file** delete. Directories: `run rmdir` or `run rm -r`. |
-| `apply_patch` | — | Codex/OpenAI multi-file patch. |
+
+`apply_patch` is implemented and still executes under the exact name in Act/Lead
+(policy-denied when mutations are off). It is not advertised in
+`definitions()`, so models are steered to `edit`. Exact-name calls from older
+transcripts or Codex-trained muscle memory still run.
 
 ## Removed (not advertised, not executable)
 
