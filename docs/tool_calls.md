@@ -30,7 +30,7 @@ methodology.
 | `ask` | `questions` | Pause an interactive Agent turn for 1–6 required single-choice questions. Hidden from headless and non-agent surfaces. |
 | `goal_met` | `evidence` | Complete an active `/goal`. Advertised only while a session goal is Active (chrome shows `goal`). Hidden in ordinary Act/Lead turns. |
 | `attach` | `path` | Queue one local PNG/JPEG/GIF for this turn. |
-| `edit` | `path`, `ops` | Preferred in-file edit. |
+| `edit` | `path`, `ops` | Preferred in-file edit. Line ops apply bottom-to-top on the original file, before `replace_text`. |
 | `write` | `path`, `content` | Create/overwrite a file. |
 | `mkdir` | `path` | Directory create. |
 | `mv` | `source`, `destination` | Rename; destination must not exist. |

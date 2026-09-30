@@ -278,6 +278,7 @@ void test_prompts_and_report() {
               prompts.agent.find("workspace- Ask") == std::string::npos &&
               prompts.agent.find("directoroes") == std::string::npos &&
               prompts.agent.find("edit") != std::string::npos &&
+              prompts.agent.find("before replace_text") != std::string::npos &&
               prompts.agent.find("apply_patch") == std::string::npos &&
               prompts.agent.find("tests") != std::string::npos &&
               prompts.agent.find("YAGNI, DRY and KISS") != std::string::npos &&

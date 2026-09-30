@@ -3042,6 +3042,7 @@ Error ReadToolRegistry::edit_workspace_file(const std::string& relative_path,
             item.type = LineEditOp::Type::ReplaceText;
             const json::Value* old_text = op.get("old_text");
             const json::Value* new_text = op.get("new_text");
+            if (new_text == nullptr) new_text = op.get("replacement");
             if (new_text == nullptr) new_text = op.get("text");
             if (old_text == nullptr || !old_text->is_string() || old_text->string.empty())
                 return {ErrorCode::BadArgs, "replace_text requires non-empty old_text"};
@@ -3497,7 +3498,9 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
          "replace_range, delete_range, replace_text"
          + std::string(indexing_enabled_ ? ", replace_symbol" : "") +
          ", create_file (alone). Omit expected_hash unless from a fresh read. "
-         "Line ops apply bottom-to-top.",
+         "Line ops (insert_at, replace_range, delete_range) apply bottom-to-top "
+         "on the original file, before replace_text. Number insert_at from the "
+         "file as read, not after other ops in the same call.",
          schema(path + ",\"expected_file_hash\":{\"type\":\"string\"},"
                        "\"create_dirs\":{\"type\":\"boolean\"},"
                        "\"ops\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":100,"

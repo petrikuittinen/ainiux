@@ -761,11 +761,19 @@ void test_str_replace_exact() {
     check(!json_ok(missing) && json_error_code(missing) == "not_found",
           "missing old_text fails");
 
+    const std::string aliased = tools.execute(
+        "edit",
+        R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"int main()","replacement":"int entry()"}]})JSON");
+    check(json_ok(aliased), "replace_text accepts replacement alias: " + aliased);
+    check(read_text(fs::path(workspace) / "src" / "hello.cpp").find("int entry()") !=
+              std::string::npos,
+          "replacement alias updated text");
+
     const std::string single = tools.execute(
         "edit",
-        R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"int main()","new_text":"int entry()"}]})JSON");
+        R"JSON({"path":"src/hello.cpp","ops":[{"type":"replace_text","old_text":"int entry()","new_text":"int start()"}]})JSON");
     check(json_ok(single), "single exact replace succeeds: " + single);
-    check(read_text(fs::path(workspace) / "src" / "hello.cpp").find("int entry()") !=
+    check(read_text(fs::path(workspace) / "src" / "hello.cpp").find("int start()") !=
               std::string::npos,
           "single replace updated text");
 
@@ -1784,7 +1792,8 @@ void test_removed_index_and_macro_tools_not_advertised() {
         if (def.name == "outline") saw_file_outline = true;
         if (def.name == "edit") {
             check(def.parameters_json.find("replace_range") != std::string::npos &&
-                      def.description.find("Flat ops") != std::string::npos,
+                      def.description.find("Flat ops") != std::string::npos &&
+                      def.description.find("before replace_text") != std::string::npos,
                   "edit_file schema keeps flat-op compatibility cues");
         }
         if (def.name == "apply_patch") saw_apply_patch = true;
