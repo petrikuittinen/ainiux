@@ -557,6 +557,8 @@ Error enforce_inspection_policy(std::vector<std::string>& args) {
                 " (allowed: pwd, ls, rg, grep, find, git status/diff/…)"};
 }
 
+Error harden_git_argv(std::vector<std::string>& args, std::string& subcommand);
+
 Error enforce_restricted_read_only_policy(std::vector<std::string>& args,
                                           bool allow_absolute_paths) {
     Error error = enforce_common_safety(args, allow_absolute_paths);
@@ -567,6 +569,10 @@ Error enforce_restricted_read_only_policy(std::vector<std::string>& args,
                 "command is not a vetted restricted read-only invocation" +
                     (assessment.reason.empty() ? std::string()
                                                : ": " + assessment.reason)};
+    if (!args.empty() && args[0] == "git") {
+        std::string ignored;
+        return harden_git_argv(args, ignored);
+    }
     return ok_error();
 }
 

@@ -211,6 +211,13 @@ print(1)")CMD",
     check(error.ok(), "restricted policy accepts expanded vetted read-only commands: " + error.message);
     error = agent::parse_command("make test", args, agent::CommandPolicy::RestrictedReadOnly, rule);
     check(!error.ok(), "restricted policy denies non-vetted build commands");
+    error = agent::parse_command("git diff --stat", args,
+                                 agent::CommandPolicy::RestrictedReadOnly, rule);
+    check(error.ok() && args.size() > 9 && args[9] == "diff",
+          "restricted policy accepts bounded git diff and injects pager hardening");
+    error = agent::parse_command("node --test", args, agent::CommandPolicy::RestrictedReadOnly,
+                                 rule);
+    check(!error.ok(), "restricted policy does not treat node --test as read-only");
     error = agent::parse_command("tail -f tic_tac_toe.py", args,
                                  agent::CommandPolicy::RestrictedReadOnly, rule);
     check(!error.ok(), "restricted policy denies mutating/following display-command forms");
@@ -261,6 +268,37 @@ void test_read_only_command_classifier() {
     check(!vetted({"command", "-p", "apache2"}) &&
               !vetted({"command", "-v", "/usr/bin/apache2"}),
           "classifier: command builtin remains narrowly vetted");
+    check(vetted({"git", "status"}) &&
+              vetted({"git", "status", "--short", "--branch"}) &&
+              vetted({"git", "diff"}) &&
+              vetted({"git", "diff", "--stat"}) &&
+              vetted({"git", "diff", "--cached", "--", "src/main.cpp"}) &&
+              vetted({"git", "ls-files"}) &&
+              vetted({"git", "rev-parse", "--is-inside-work-tree"}),
+          "classifier: bounded git inspection");
+    check(vetted({"git", "-c", "core.pager=cat", "-c", "pager.show=false",
+                  "-c", "pager.diff=false", "-c", "diff.external=", "diff"}),
+          "classifier: git diff after runner pager hardening");
+    check(!vetted({"git", "diff", "--output=owned"}) &&
+              !vetted({"git", "commit", "-am", "x"}) &&
+              !vetted({"git", "push"}),
+          "classifier: mutating git stays unvetted");
+
+    auto node_test = [](std::initializer_list<const char*> words) {
+        std::vector<std::string> args;
+        for (const char* word : words) args.emplace_back(word);
+        return agent::assess_node_test_command(args).vetted;
+    };
+    check(node_test({"node", "--test"}) &&
+              node_test({"node", "--test", "tetris/game.test.js"}) &&
+              node_test({"node", "--test", "--test-only", "src"}),
+          "classifier: node --test");
+    check(!node_test({"node", "script.js"}) &&
+              !node_test({"node", "-e", "console.log(1)"}) &&
+              !node_test({"node", "--test", "-e", "console.log(1)"}) &&
+              !node_test({"node", "--test", "--watch"}) &&
+              !node_test({"node", "--eval", "1"}),
+          "classifier: node eval/script/watch stay unvetted");
 
     check(!vetted({"ls", "--definitely-unknown"}), "classifier: unknown option fallback");
     check(!vetted({"date", "--set", "tomorrow"}), "classifier: date --set trap");
@@ -276,7 +314,7 @@ void test_read_only_command_classifier() {
           "classifier: output-file option trap");
     check(!vetted({"file", "--compile"}), "classifier: file compile trap");
     check(!vetted({"ping", "localhost"}) && !vetted({"top"}) &&
-              !vetted({"git", "status"}) && !vetted({"make", "test"}),
+              !vetted({"make", "test"}) && !vetted({"node", "--test"}),
           "classifier: intentionally non-vetted command families");
 
     auto fs_ok = [](std::initializer_list<const char*> words) {

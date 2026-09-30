@@ -5258,6 +5258,16 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result("policy_denied", policy_error.message);
             uses_external = uses_external || read_only_uses_external;
         }
+        const ReadOnlyCommandAssessment node_test =
+            assess_node_test_command(parsed_arguments);
+        if (node_test.vetted) {
+            bool node_test_uses_external = false;
+            policy_error = validate_vetted_read_only_paths(
+                snapshot_, node_test, cwd, node_test_uses_external);
+            if (!policy_error.ok())
+                return tool_error_result("policy_denied", policy_error.message);
+            uses_external = uses_external || node_test_uses_external;
+        }
         const WorkspaceFsCommandAssessment fs_cmd =
             assess_workspace_fs_command(parsed_arguments);
         const bool nonempty_tree =
@@ -5267,6 +5277,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const bool smart_read_only_exemption =
             permission_controls_ && permission_mode_ == PermissionMode::Smart &&
             read_only.vetted && !uses_external && guard_rule_id.empty();
+        const bool smart_test_exemption =
+            permission_controls_ && permission_mode_ == PermissionMode::Smart &&
+            node_test.vetted && !uses_external && guard_rule_id.empty();
         const bool smart_fs_exemption =
             permission_controls_ && permission_mode_ == PermissionMode::Smart &&
             fs_cmd.classified && !uses_external && !nonempty_tree &&
@@ -5281,7 +5294,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 "recursively delete a non-empty directory tree via run rm -r";
             ask.arguments = parsed_arguments;
             permission = request_guard_approval(ask, cancellation);
-        } else if (project_script || smart_read_only_exemption || smart_fs_exemption) {
+        } else if (project_script || smart_read_only_exemption || smart_fs_exemption ||
+                   smart_test_exemption) {
             permission = GuardApprovalDecision::Allow;
         } else {
             permission = request_permission(

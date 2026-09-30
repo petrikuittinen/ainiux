@@ -330,6 +330,14 @@ void test_permission_modes_and_native_path_tools() {
               "run", R"({"command":"ls -laFg src"})")) &&
               smart_asks.load() == 0,
           "smart mode does not prompt for a vetted project read");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"git diff"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for git diff");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"node --test src/hello.cpp"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for node --test");
     check(!json_ok(smart_prompting.execute(
               "run", R"({"command":"make test"})")) &&
               smart_asks.load() == 1,

@@ -69,7 +69,7 @@ executed. MCP tools remain separately qualified as `mcp__server__tool`. See the
 
 ## Permissions and Guard
 
-Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; when the Ask is a workspace script, **`r` Review** opens that file in dired read-only view. `q` leaves dired and returns to the same Guard dialog. Headless Ask decisions are denied.
+Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations (including bounded `git` inspection and `node --test`) and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; when the Ask is a workspace script, **`r` Review** opens that file in dired read-only view. `q` leaves dired and returns to the same Guard dialog. Headless Ask decisions are denied.
 
 ## Agent questions
 

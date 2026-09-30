@@ -18,6 +18,12 @@ struct ReadOnlyCommandAssessment {
 ReadOnlyCommandAssessment assess_read_only_command(
     const std::vector<std::string>& arguments);
 
+// Smart-mode auto-allow for `node --test` [paths]. Executes project tests, so it
+// is not part of RestrictedReadOnly. `node -e`, `--eval`, `--watch`, loaders,
+// inspect, and arbitrary `node script.js` stay unvetted (Smart still asks).
+ReadOnlyCommandAssessment assess_node_test_command(
+    const std::vector<std::string>& arguments);
+
 // Conservative argv classifier for in-project mkdir/rmdir/rm/mv. Used by Smart
 // so those run invocations do not prompt unless rm -r targets a non-empty tree.
 // Unknown flags or shapes are not classified (Smart still asks).

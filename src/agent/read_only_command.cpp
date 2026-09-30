@@ -423,6 +423,180 @@ ReadOnlyCommandAssessment assess_ip(const std::vector<std::string>& args) {
     return accept();
 }
 
+// Keep in sync with harden_git_argv in process.cpp. Agent parse injects these
+// pairs before the subcommand; RestrictedReadOnly classifies the raw argv.
+std::size_t git_subcommand_index(const std::vector<std::string>& args) {
+    static const char* kHardening[] = {
+        "-c", "core.pager=cat", "-c", "pager.show=false",
+        "-c", "pager.diff=false", "-c", "diff.external="};
+    constexpr std::size_t n = sizeof(kHardening) / sizeof(kHardening[0]);
+    if (args.size() >= 1 + n) {
+        bool match = true;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (args[1 + i] != kHardening[i]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return 1 + n;
+    }
+    return 1;
+}
+
+ReadOnlyCommandAssessment assess_git(const std::vector<std::string>& args) {
+    const std::size_t sub_index = git_subcommand_index(args);
+    if (sub_index >= args.size())
+        return reject("git requires an allowlisted read-only subcommand");
+    const std::string& subcommand = args[sub_index];
+    std::vector<std::string> paths;
+
+    if (subcommand == "status") {
+        bool after_double_dash = false;
+        for (std::size_t i = sub_index + 1; i < args.size(); ++i) {
+            const std::string& argument = args[i];
+            if (argument == "--") {
+                after_double_dash = true;
+                continue;
+            }
+            if (after_double_dash) {
+                paths.push_back(argument);
+                continue;
+            }
+            if (argument == "-s" || argument == "--short" ||
+                argument == "-b" || argument == "--branch" ||
+                argument == "--porcelain" || argument == "--porcelain=v1" ||
+                argument == "--porcelain=v2" ||
+                argument == "--untracked-files=no" || argument == "-uno" ||
+                argument == "--untracked-files=normal" || argument == "-unormal") {
+                continue;
+            }
+            return reject("git status option is not a vetted read-only form: " +
+                          argument);
+        }
+        return accept(std::move(paths));
+    }
+
+    if (subcommand == "diff") {
+        bool after_double_dash = false;
+        for (std::size_t i = sub_index + 1; i < args.size(); ++i) {
+            const std::string& argument = args[i];
+            if (argument == "--") {
+                after_double_dash = true;
+                continue;
+            }
+            if (after_double_dash) {
+                paths.push_back(argument);
+                continue;
+            }
+            if (argument.empty()) return reject("git diff rejected an empty argument");
+            if (argument.front() != '-') continue;
+            if (argument == "--cached" || argument == "--staged" || argument == "--stat" ||
+                argument == "--numstat" || argument == "--shortstat" ||
+                argument == "--name-only" || argument == "--name-status" ||
+                argument == "--raw" || argument == "--no-color" ||
+                argument == "--color=never" || argument == "--no-ext-diff" ||
+                argument == "--no-prefix" || argument == "--quiet" ||
+                argument == "-U" || argument.rfind("-U", 0) == 0 ||
+                argument == "--unified" || argument.rfind("--unified=", 0) == 0 ||
+                argument == "-w" || argument == "--ignore-all-space" ||
+                argument == "-b" || argument == "--ignore-space-change") {
+                continue;
+            }
+            if (argument == "-O" || argument.rfind("-O", 0) == 0 ||
+                argument == "--output" || argument.rfind("--output=", 0) == 0 ||
+                argument == "--ext-diff" || argument == "--textconv" ||
+                argument == "--no-index" || argument == "--binary") {
+                return reject("git diff option can write files or invoke external tooling: " +
+                              argument);
+            }
+            return reject("git diff option is not a vetted read-only form: " + argument);
+        }
+        return accept(std::move(paths));
+    }
+
+    if (subcommand == "ls-files") {
+        bool after_double_dash = false;
+        for (std::size_t i = sub_index + 1; i < args.size(); ++i) {
+            const std::string& argument = args[i];
+            if (argument == "--") {
+                after_double_dash = true;
+                continue;
+            }
+            if (after_double_dash) {
+                paths.push_back(argument);
+                continue;
+            }
+            if (argument == "-c" || argument == "--cached" ||
+                argument == "-o" || argument == "--others" ||
+                argument == "--exclude-standard") {
+                continue;
+            }
+            return reject("git ls-files option is not a vetted read-only form: " +
+                          argument);
+        }
+        return accept(std::move(paths));
+    }
+
+    if (subcommand == "rev-parse") {
+        static const StringSet exact_options = {
+            "--show-toplevel", "--show-prefix", "--is-inside-work-tree",
+            "--is-bare-repository", "--show-superproject-working-tree"};
+        if (args.size() == sub_index + 2 &&
+            exact_options.find(args[sub_index + 1]) != exact_options.end())
+            return accept();
+        if (args.size() == sub_index + 3 && args[sub_index + 1] == "--abbrev-ref" &&
+            args[sub_index + 2] == "HEAD")
+            return accept();
+        return reject("git rev-parse is limited to fixed workspace and HEAD queries");
+    }
+
+    return reject("git subcommand is not a vetted read-only form: " + subcommand);
+}
+
+ReadOnlyCommandAssessment assess_node_test(const std::vector<std::string>& args) {
+    static const StringSet flags = {
+        "--test", "--test-only", "--test-force-exit", "--no-warnings"};
+    static const StringSet values = {
+        "--test-name-pattern", "--test-skip-pattern", "--test-timeout",
+        "--test-concurrency", "--test-shard"};
+    static const StringSet rejected = {
+        "-e", "--eval", "-p", "--print", "-c", "--check", "-i", "--interactive",
+        "-r", "--require", "--import", "--loader", "--experimental-loader",
+        "--inspect", "--inspect-brk", "--inspect-port", "--watch", "--watch-path",
+        "--run", "--test-update-snapshots", "--test-reporter-destination"};
+    std::vector<std::string> paths;
+    bool seen_test = false;
+    bool operands = false;
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        const std::string& arg = args[i];
+        if (arg == "--") {
+            operands = true;
+            continue;
+        }
+        if (operands) {
+            paths.push_back(arg);
+            continue;
+        }
+        std::string rejected_value;
+        if (rejected.find(arg) != rejected.end() ||
+            exact_or_assignment(arg, rejected, &rejected_value))
+            return reject("node option is not a vetted test-runner form: " + arg);
+        std::string value;
+        if (take_value(args, i, values, {}, value)) continue;
+        if (flags.find(arg) != flags.end()) {
+            if (arg == "--test") seen_test = true;
+            continue;
+        }
+        if (!arg.empty() && arg[0] == '-')
+            return reject("unknown node option: " + arg);
+        if (!seen_test)
+            return reject("node requires --test before path operands");
+        paths.push_back(arg);
+    }
+    if (!seen_test) return reject("node is limited to --test");
+    return accept(std::move(paths));
+}
+
 }  // namespace
 
 ReadOnlyCommandAssessment assess_read_only_command(
@@ -529,7 +703,15 @@ ReadOnlyCommandAssessment assess_read_only_command(
                 return reject("unknown groups option");
         return accept();
     }
+    if (command == "git") return assess_git(args);
     return assess_passive(args);
+}
+
+ReadOnlyCommandAssessment assess_node_test_command(
+    const std::vector<std::string>& args) {
+    if (args.empty() || args[0] != "node")
+        return reject("not a node test-runner command");
+    return assess_node_test(args);
 }
 
 namespace {
