@@ -541,6 +541,15 @@ dialog::backdrop { background: rgb(0 0 0 / 62%); }
 .dialog-card h2, .dialog-card p { margin-bottom: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 0.45rem; }
 .dialog-actions.three { justify-content: space-between; }
+.questionnaire-card { max-width: 42rem; }
+.questionnaire-fieldset { display: grid; gap: .55rem; min-width: 0; margin: 0; padding: 0; border: 0; }
+.questionnaire-fieldset legend { margin-bottom: .65rem; font-weight: 650; line-height: 1.4; }
+.questionnaire-option { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .65rem; align-items: start; padding: .65rem; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.questionnaire-option:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.questionnaire-option input { margin-top: .2rem; }
+.questionnaire-option-copy { display: grid; gap: .15rem; }
+.questionnaire-comment { margin-top: .35rem; }
+.questionnaire-actions .dialog-spacer { flex: 1 1 auto; }
 .checkbox-row { display: flex; align-items: center; gap: 0.45rem; }
 .checkbox-row input { width: 1.1rem; min-height: 1.1rem; }
 .review-box { max-height: 45dvh; overflow: auto; padding: 0.6rem; border: 1px solid var(--border); background: var(--code); white-space: pre-wrap; }

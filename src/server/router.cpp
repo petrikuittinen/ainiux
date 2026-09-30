@@ -652,7 +652,7 @@ Response route_request(const http::Request& request,
         }
         providers += ']';
         response.body = "{\"api_version\":" + json::quote(wire::kApiVersion) +
-                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"csrf\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_md\",\"chat_json\",\"chat_xlsx\",\"chat_inputs\"]" +
+                        ",\"operations\":[\"health\",\"status\",\"capabilities\",\"csrf\",\"image_catalog\",\"image_inputs\",\"video_catalog\",\"video_inputs\",\"models\",\"chat\",\"run\",\"image\",\"video\",\"editor_assist\",\"sessions\",\"questionnaires\",\"review\",\"dired\",\"workspace_mutations\",\"files\",\"chat_threads\",\"chat_pdf\",\"chat_docx\",\"chat_md\",\"chat_json\",\"chat_xlsx\",\"chat_inputs\"]" +
                         ",\"authentication\":{\"scope\":\"full_control\",\"mcp_configured\":" +
                         std::string(auth.mcp_secret.empty() ? "false" : "true") + "}" +
                         ",\"adapters\":{\"mcp\":true,\"openai_v1\":false,\"web_ui\":true}" +
@@ -1432,6 +1432,28 @@ Response route_request(const http::Request& request,
             if (decision == nullptr || !decision->is_string())
                 return error_response(400, "invalid_request", "approval decision must be a string");
             const Error error = session->resolve_approval(approval_tail, decision->string);
+            if (!error.ok()) return session_error(error);
+            response.body = session->snapshot_json();
+            return response;
+        }
+        if (action.rfind("questionnaires/", 0) == 0) {
+            const std::string questionnaire_id = action.substr(15U);
+            if (questionnaire_id.empty() ||
+                questionnaire_id.find('/') != std::string::npos)
+                return session_not_found();
+            if (request.method != "POST") {
+                response = error_response(
+                    405, "method_not_allowed",
+                    "questionnaire resolution accepts POST only");
+                response.allow = "POST";
+                return response;
+            }
+            if (!json_content_type(request))
+                return error_response(
+                    415, "unsupported_media_type",
+                    "questionnaire resolution requires Content-Type: application/json");
+            const Error error =
+                session->resolve_questionnaire(questionnaire_id, request.body);
             if (!error.ok()) return session_error(error);
             response.body = session->snapshot_json();
             return response;

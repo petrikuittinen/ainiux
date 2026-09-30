@@ -8,6 +8,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
+test("questionnaire dialog is accessible and rendered without HTML injection", async () => {
+  const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
+  const script = await readFile(new URL("../../../src/web/js/app-v38.js", import.meta.url), "utf8");
+  for (const id of ["questionnaire-dialog", "questionnaire-content",
+    "questionnaire-previous", "questionnaire-next", "questionnaire-submit",
+    "questionnaire-decline"]) assert.match(index, new RegExp(`id="${id}"`));
+  assert.match(index, /<dialog id="questionnaire-dialog"[^>]*aria-labelledby=/);
+  const start = script.indexOf("function renderQuestionnaire");
+  const end = script.indexOf("function showQuestionnaire", start);
+  assert.ok(start >= 0 && end > start);
+  const renderer = script.slice(start, end);
+  assert.match(renderer, /textContent/);
+  assert.doesNotMatch(renderer, /innerHTML|insertAdjacentHTML|document\.write/);
+  assert.match(script, /questionnaire_required/);
+  assert.match(script, /questionnaire_resolved/);
+  assert.match(script, /questionnaire\.id === event\.data\?\.questionnaire_id/);
+  assert.match(script, /function handleQuestionnaireKeydown/);
+  assert.match(script, /ArrowUp/);
+  assert.match(script, /ArrowDown/);
+  assert.match(script, /ArrowLeft/);
+  assert.match(script, /ArrowRight/);
+  assert.match(script, /event\.target instanceof HTMLTextAreaElement/);
+});
+
 test("web controller selectors, per-thread saves, workspace settings and history", {
   skip: !process.env.AINIUX_TEST_BROWSER, timeout: 30000,
 }, async () => {
@@ -29,6 +53,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
     message_count: id === 1 ? 2 : 0 }));
   let nextThreadId = 3, createdProviders = [], failNextThread = false;
   let chatUploads = [], chatJobs = [], appendedMessages = [], agentTurns = [], chatExports = [];
+  const questionnaireResolutions = [];
   const agentSettings = [];
   let capabilityOperations = ["models", "chat", "chat_threads", "chat_pdf", "chat_docx",
     "chat_md", "chat_json", "chat_xlsx", "chat_inputs", "sessions", "dired", "files",
@@ -47,7 +72,7 @@ test("web controller selectors, per-thread saves, workspace settings and history
   const assets = new Map();
   const index = await readFile(new URL("../../../src/web/index.html", import.meta.url), "utf8");
   assets.set("/ui/", ["text/html", index]);
-  for (const name of ["app-v37.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v27.css"]) {
+  for (const name of ["app-v38.js", "selector-v3.js", "highlight-v5.js", "syntax-v4.js", "image-options-v1.js", "video-options-v3.js", "editor-history-v2.js", "editor-indentation-v1.js", "app-v28.css"]) {
     assets.set(`/ui/assets/${name}`, [name.endsWith("css") ? "text/css" : "text/javascript",
       await readFile(new URL(`../../../src/web/${name.endsWith("css") ? "css" : "js"}/${name}`, import.meta.url))]);
   }
@@ -279,6 +304,14 @@ test("web controller selectors, per-thread saves, workspace settings and history
         if (body.permission_mode) session.permission_mode = body.permission_mode;
         return send({ ...session, ...workspace, reasoning: workspace.settings.reasoning });
       }
+      if (/\/sessions\/[^/]+\/questionnaires\/[^/]+$/.test(path) && req.method === "POST") {
+        questionnaireResolutions.push(body);
+        session.questionnaire = null;
+        // The mock has no Agent worker to publish a later turn completion.
+        session.status = "ready";
+        session.turn_id = null;
+        return send({ ...session, ...workspace, reasoning: workspace.settings.reasoning });
+      }
       if (path.includes("/sessions/")) {
         if (delayNextSessionRefresh) {
           delayNextSessionRefresh = false;
@@ -370,8 +403,10 @@ test("web controller selectors, per-thread saves, workspace settings and history
     };
     const click = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
     const key = async (value, modifiers = 0, code) => {
+      const virtualKeyCodes = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39,
+        ArrowDown: 40, Enter: 13, Escape: 27 };
       await command("Input.dispatchKeyEvent", { type: "keyDown", key: value, text: value === "Enter" ? "\r" : undefined,
-        modifiers, code, windowsVirtualKeyCode: value === "Enter" ? 13 : value === "Escape" ? 27 : undefined }, sid);
+        modifiers, code, windowsVirtualKeyCode: virtualKeyCodes[value] }, sid);
       await command("Input.dispatchKeyEvent", { type: "keyUp", key: value, modifiers, code }, sid);
     };
     const screenshot = async (name) => {
@@ -830,6 +865,57 @@ test("web controller selectors, per-thread saves, workspace settings and history
       "the lower Agent metrics strip does not duplicate context usage");
     for (const value of ["In 1,200", "Out 300", "Cache 200", "Elapsed 2,450 ms",
       "TTFT 310 ms", "42.5 tok/s"]) assert.ok(agentMetrics.includes(value), agentMetrics);
+
+    const questionnaire = {
+      id: "questionnaire-browser-test",
+      questions: [
+        { id: "question-one", question: "Choose the board size", options: [
+          { id: "small", label: "Small", description: "Compact", other: false },
+          { id: "large", label: "Large", description: "Roomy", other: false },
+          { id: "other-one", label: "Other", description: "Custom", other: true },
+        ] },
+        { id: "question-two", question: "Choose the speed", options: [
+          { id: "slow", label: "Slow", description: "Relaxed", other: false },
+          { id: "fast", label: "Fast", description: "Quick", other: false },
+          { id: "other-two", label: "Other", description: "Custom", other: true },
+        ] },
+      ],
+    };
+    session.questionnaire = questionnaire;
+    session.status = "waiting_user";
+    session.turn_id = "questionnaire-turn";
+    for (const stream of sessionEventStreams) {
+      const event = { id: 5, type: "questionnaire_required",
+        turn_id: session.turn_id, data: questionnaire };
+      stream.write(`id: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+    }
+    await wait('document.querySelector("#questionnaire-dialog").open && document.querySelector("#questionnaire-progress").textContent === "1 of 2"');
+    await key("ArrowDown", 0, "ArrowDown");
+    assert.equal(await evaluate('document.querySelector("#questionnaire-content input:checked + span strong").textContent'), "Small");
+    await key("ArrowDown", 0, "ArrowDown");
+    assert.equal(await evaluate('document.querySelector("#questionnaire-content input:checked + span strong").textContent'), "Large");
+    await key("ArrowUp", 0, "ArrowUp");
+    assert.equal(await evaluate('document.querySelector("#questionnaire-content input:checked + span strong").textContent'), "Small");
+    await key("ArrowRight", 0, "ArrowRight");
+    assert.equal(await evaluate('document.querySelector("#questionnaire-progress").textContent'), "2 of 2");
+    await key("ArrowLeft", 0, "ArrowLeft");
+    assert.equal(await evaluate('document.querySelector("#questionnaire-progress").textContent'), "1 of 2");
+    await key("ArrowDown", 0, "ArrowDown");
+    await key("ArrowDown", 0, "ArrowDown");
+    await evaluate(`{ const input = document.querySelector("#questionnaire-content textarea");
+      input.value = "custom"; input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus(); input.setSelectionRange(6, 6); }`);
+    await key("ArrowLeft", 0, "ArrowLeft");
+    assert.deepEqual(await evaluate(`({
+      progress: document.querySelector("#questionnaire-progress").textContent,
+      option: document.querySelector("#questionnaire-content input:checked + span strong").textContent,
+      caret: document.querySelector("#questionnaire-content textarea").selectionStart,
+    })`), { progress: "1 of 2", option: "Other", caret: 5 },
+    "questionnaire arrows edit custom text instead of navigating while its textarea has focus");
+    await click("#questionnaire-decline");
+    await wait('document.querySelector("#questionnaire-dialog").open === false');
+    assert.deepEqual(questionnaireResolutions, [{ outcome: "declined" }],
+      "browser questionnaire decline resolves the active request once");
 
     const refreshAgentContext = async (context, condition) => {
       if (context === undefined) delete session.context;

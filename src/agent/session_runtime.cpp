@@ -1257,7 +1257,7 @@ void AgentSessionRuntime::reset() {
     cached_request_tokens_.store(0, std::memory_order_relaxed);
     last_nonzero_request_tokens_.store(0, std::memory_order_relaxed);
     in_flight_generation_tokens_.store(0, std::memory_order_relaxed);
-    guard_approval_wait_ms_.store(0, std::memory_order_relaxed);
+    interactive_wait_ms_.store(0, std::memory_order_relaxed);
     operation_active_.store(false, std::memory_order_relaxed);
 }
 
@@ -1415,7 +1415,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - approval_started)
                     .count();
-            guard_approval_wait_ms_.fetch_add(approval_ms, std::memory_order_relaxed);
+            interactive_wait_ms_.fetch_add(approval_ms, std::memory_order_relaxed);
             if (session_store_.is_open()) {
                 AgentApprovalRecord row;
                 row.tool_name = request.tool_name;
@@ -1443,6 +1443,22 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
             }
             return decision;
         };
+    }
+    if (options_.on_questionnaire) {
+        tool_options.on_questionnaire =
+            [this](const QuestionnaireRequest& request,
+                   runtime::CancellationToken cancellation) {
+                const auto started = std::chrono::steady_clock::now();
+                QuestionnaireResponse response =
+                    options_.on_questionnaire(request, cancellation);
+                const long long wait_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started)
+                        .count();
+                interactive_wait_ms_.fetch_add(wait_ms,
+                                               std::memory_order_relaxed);
+                return response;
+            };
     }
     if (indexing_enabled) {
         error = ReadToolRegistry::create_lazy(
@@ -2675,8 +2691,8 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             working_row_started = false;
         }
         const auto execution_started = std::chrono::steady_clock::now();
-        const long long approval_before =
-            guard_approval_wait_ms_.load(std::memory_order_relaxed);
+        const long long wait_before =
+            interactive_wait_ms_.load(std::memory_order_relaxed);
         // Surface the call immediately so interactive UIs are not stuck on a blank
         // "streaming..." placeholder while the tool (or the next model round) runs.
         {
@@ -2691,13 +2707,13 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                  active_round_id, turn_tool_index, running_line, 0});
         }
         std::string body = tools_.execute(name, arguments_json, token);
-        const long long approval_after =
-            guard_approval_wait_ms_.load(std::memory_order_relaxed);
+        const long long wait_after =
+            interactive_wait_ms_.load(std::memory_order_relaxed);
         const long long execution_ms = execution_only_elapsed_ms(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - execution_started)
                 .count(),
-            approval_before, approval_after);
+            wait_before, wait_after);
         const long long completed_ms = now_unix_ms();
         const std::string line =
             format_compact_tool_line(turn_tool_index, name, arguments_json, body,

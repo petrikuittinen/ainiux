@@ -68,7 +68,8 @@ provides:
 - one human-facing workspace Agent with inline provider and model, compact
   estimated context usage beside the model name, reasoning, Act/Lead, and
   Confirm/Smart/Yolo controls, live response/reasoning/tool activity,
-  correlated turn cancellation, and Guard review/allow/deny;
+  correlated turn cancellation, Guard review/allow/deny, and recoverable Agent
+  questionnaires;
 - a dedicated Image tab whose provider/model/size/aspect/quality/format controls
   come from the effective system and user `images.conf`, with dependent choices,
   validated custom dimensions, in-page preview, collision-safe server filename,
@@ -320,6 +321,16 @@ Workspace dired colors directories and executables distinctly, and the file
 viewer and live editor detect the native TUI language from its path. Editor
 highlighting follows each draft change and stays aligned while scrolling.
 Run job output and unstructured activity remain safely literal.
+
+When an interactive Agent calls `ask`, the browser opens an accessible dialog
+that shows one question at a time. Radio choices, optional comments, required
+Other text, Previous/Next, Submit, and Decline controls are constructed with DOM
+APIs and `textContent`. Esc declines only while connected. A disconnect or page
+reload does not answer the request; the pending questionnaire is restored from
+the next session snapshot, and focus returns to the prior control after a
+successful answer or decline. Up/Down cycles choices and Left/Right moves
+between questions; arrows retain their normal editing behavior while the
+comment/custom-answer textarea has focus.
 
 When a file opens, the browser inspects its first 20 physical lines and fills
 the editor's **Width** (1–32) and **Indent** (Spaces/Tabs) controls, falling back

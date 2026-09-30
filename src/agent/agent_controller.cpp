@@ -6,13 +6,16 @@ namespace ainiux::agent {
 
 AgentController::AgentController()
     : runtime_(std::make_shared<AgentSessionRuntime>()),
-      gate_(std::make_shared<ApprovalGate>()) {
+      gate_(std::make_shared<ApprovalGate>()),
+      questionnaire_gate_(std::make_shared<QuestionnaireGate>()) {
     arm_guard_notify();
+    arm_questionnaire_notify();
 }
 
 AgentController::~AgentController() {
     shutdown(true, "agent controller destroyed");
     clear_guard_notify();
+    clear_questionnaire_notify();
     AgentSurfaceEvent discarded;
     while (events_.try_pop(discarded)) {
     }
@@ -34,6 +37,11 @@ bool AgentController::job_joinable() const {
 bool AgentController::waiting_guard() const {
     return waiting_guard_.load(std::memory_order_acquire) ||
            (gate_ && gate_->has_pending());
+}
+
+bool AgentController::waiting_questionnaire() const {
+    return waiting_questionnaire_.load(std::memory_order_acquire) ||
+           (questionnaire_gate_ && questionnaire_gate_->has_pending());
 }
 
 std::string AgentController::status_label() const {
@@ -72,9 +80,65 @@ void AgentController::clear_guard_notify() {
     if (gate_) gate_->set_notify({});
 }
 
+void AgentController::arm_questionnaire_notify() {
+    if (!questionnaire_gate_) return;
+    std::weak_ptr<QuestionnaireGate> weak_gate = questionnaire_gate_;
+    questionnaire_gate_->set_notify(
+        [this, weak_gate](const QuestionnaireRequest& request) {
+            if (weak_gate.expired()) return;
+            waiting_questionnaire_.store(true, std::memory_order_release);
+            set_status_label("Agent waiting for your answer");
+            AgentSurfaceEvent event;
+            event.type = AgentSurfaceEvent::Type::QuestionnaireRequired;
+            event.questionnaire = request;
+            events_.push(std::move(event));
+        });
+}
+
+void AgentController::clear_questionnaire_notify() {
+    if (questionnaire_gate_) questionnaire_gate_->set_notify({});
+}
+
+Error AgentController::answer_questionnaire(
+    const std::string& questionnaire_id,
+    const std::vector<QuestionnaireAnswer>& answers) {
+    if (!questionnaire_gate_)
+        return {ErrorCode::Internal, "questionnaire gate is unavailable"};
+    Error error = questionnaire_gate_->answer(questionnaire_id, answers);
+    if (error.ok()) {
+        waiting_questionnaire_.store(false, std::memory_order_release);
+        set_status_label("Agent running");
+        // answer() releases the tool worker before returning. It may already
+        // have opened another questionnaire, so preserve the newer wait state.
+        if (questionnaire_gate_->has_pending()) {
+            waiting_questionnaire_.store(true, std::memory_order_release);
+            set_status_label("Agent waiting for your answer");
+        }
+    }
+    return error;
+}
+
+Error AgentController::decline_questionnaire(
+    const std::string& questionnaire_id) {
+    if (!questionnaire_gate_)
+        return {ErrorCode::Internal, "questionnaire gate is unavailable"};
+    Error error = questionnaire_gate_->decline(questionnaire_id);
+    if (error.ok()) {
+        waiting_questionnaire_.store(false, std::memory_order_release);
+        set_status_label("Agent running");
+        if (questionnaire_gate_->has_pending()) {
+            waiting_questionnaire_.store(true, std::memory_order_release);
+            set_status_label("Agent waiting for your answer");
+        }
+    }
+    return error;
+}
+
 void AgentController::cancel_turn() {
     if (gate_) gate_->cancel_pending();
+    if (questionnaire_gate_) questionnaire_gate_->cancel_pending();
     waiting_guard_.store(false, std::memory_order_release);
+    waiting_questionnaire_.store(false, std::memory_order_release);
     turn_job_.cancel();
 }
 
@@ -82,6 +146,7 @@ void AgentController::join_turn() {
     turn_job_.join();
     turn_running_.store(false, std::memory_order_release);
     waiting_guard_.store(false, std::memory_order_release);
+    waiting_questionnaire_.store(false, std::memory_order_release);
 }
 
 void AgentController::shutdown(bool finish_open_session, const std::string& reason) {
@@ -122,6 +187,7 @@ bool AgentController::start_turn(TurnWork work) {
             }
         }
         waiting_guard_.store(false, std::memory_order_release);
+        waiting_questionnaire_.store(false, std::memory_order_release);
         turn_running_.store(false, std::memory_order_release);
         if (event.type == AgentSurfaceEvent::Type::TurnDone) {
             set_status_label("Agent done");

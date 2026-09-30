@@ -305,6 +305,23 @@ bool try_prompt_recall(PromptRecall& recall,
     return true;
 }
 
+QuestionnaireMovementAction questionnaire_movement_action(
+    editor::MovementKey key, bool editing_text) {
+    if (editing_text) return QuestionnaireMovementAction::EditText;
+    switch (key) {
+        case editor::MovementKey::Up:
+            return QuestionnaireMovementAction::PreviousChoice;
+        case editor::MovementKey::Down:
+            return QuestionnaireMovementAction::NextChoice;
+        case editor::MovementKey::Left:
+            return QuestionnaireMovementAction::PreviousQuestion;
+        case editor::MovementKey::Right:
+            return QuestionnaireMovementAction::NextQuestion;
+        default:
+            return QuestionnaireMovementAction::None;
+    }
+}
+
 EscapeResult handle_escape(editor::EditorState& input,
                            const Layout& layout,
                            int& history_scroll,

@@ -196,6 +196,7 @@ app::TuiRunResult run(provider::RequestContext context,
     std::shared_ptr<agent::AgentController> agent_controller;
     std::shared_ptr<agent::AgentSessionRuntime> agent_runtime;
     std::shared_ptr<agent::ApprovalGate> agent_approval_gate;
+    std::shared_ptr<agent::QuestionnaireGate> agent_questionnaire_gate;
     if (context.options.agent) {
         if (interactive != nullptr) {
             agent_controller = agent::ensure_agent_controller(interactive->agent_controller);
@@ -204,8 +205,10 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         agent_runtime = agent_controller->runtime();
         agent_approval_gate = agent_controller->approval_gate();
+        agent_questionnaire_gate = agent_controller->questionnaire_gate();
         // Guard notify already posts to controller->events(); TUI drains them.
         agent_controller->arm_guard_notify();
+        agent_controller->arm_questionnaire_notify();
     }
     auto agent_ready_with_index_controls = [&]() {
         std::string value = agent_ready_status();
@@ -223,6 +226,12 @@ app::TuiRunResult run(provider::RequestContext context,
     }
     agent::GuardApprovalRequest pending_guard_request;
     bool have_pending_guard_request = false;
+    agent::QuestionnaireRequest pending_questionnaire;
+    bool have_pending_questionnaire = false;
+    std::size_t questionnaire_index = 0;
+    std::vector<std::size_t> questionnaire_choices;
+    std::vector<std::string> questionnaire_comments;
+    std::optional<editor::EditorState> questionnaire_draft;
     auto make_agent_runtime_options = [&](const std::string& workspace = std::string()) {
         const std::string target_workspace =
             !workspace.empty()
@@ -290,6 +299,15 @@ app::TuiRunResult run(provider::RequestContext context,
                 return gate->request(request, cancellation);
             };
         }
+        if (agent_questionnaire_gate) {
+            std::shared_ptr<agent::QuestionnaireGate> gate =
+                agent_questionnaire_gate;
+            options.on_questionnaire =
+                [gate](const agent::QuestionnaireRequest& request,
+                       runtime::CancellationToken cancellation) {
+                    return gate->request(request, cancellation);
+                };
+        }
         return options;
     };
 
@@ -355,6 +373,10 @@ app::TuiRunResult run(provider::RequestContext context,
                 event.guard_rule_id = std::move(src.guard_rule_id);
                 event.guard_message = std::move(src.guard_message);
                 event.guard_review_path = std::move(src.guard_review_path);
+                break;
+            case agent::AgentSurfaceEvent::Type::QuestionnaireRequired:
+                event.type = TuiEventType::QuestionnaireRequired;
+                event.questionnaire = std::move(src.questionnaire);
                 break;
         }
         return event;
@@ -526,7 +548,7 @@ app::TuiRunResult run(provider::RequestContext context,
     PendingTuiClipboardPaste pending_clipboard;
     auto clipboard_mode_editable = [](TuiMode value) {
         return value == TuiMode::Chat || value == TuiMode::SystemEdit ||
-               value == TuiMode::HistoryEdit;
+               value == TuiMode::HistoryEdit || value == TuiMode::Questionnaire;
     };
     auto cancel_pending_clipboard = [&]() {
         clipboard_runtime.cancel_read();
@@ -796,6 +818,30 @@ app::TuiRunResult run(provider::RequestContext context,
             }
             if (!context.options.agent)
                 text += "\nPress y to allow · n or Esc to deny";
+            return text;
+        }
+        if (mode == TuiMode::Questionnaire) {
+            if (!have_pending_questionnaire ||
+                questionnaire_index >= pending_questionnaire.questions.size())
+                return std::string("No questionnaire is pending");
+            const agent::QuestionnaireQuestion& question =
+                pending_questionnaire.questions[questionnaire_index];
+            std::string text = std::to_string(questionnaire_index + 1) + "/" +
+                               std::to_string(pending_questionnaire.questions.size()) +
+                               "  " + question.question + "\n\n";
+            const std::size_t selected =
+                questionnaire_index < questionnaire_choices.size()
+                    ? questionnaire_choices[questionnaire_index]
+                    : static_cast<std::size_t>(-1);
+            for (std::size_t i = 0; i < question.options.size(); ++i) {
+                const agent::QuestionnaireOption& option = question.options[i];
+                text += (i == selected ? "● " : "○ ") +
+                        std::to_string(i + 1) + ". " + option.label + "\n";
+                text += "   " + option.description + "\n";
+            }
+            text += "\nType an optional comment (required for Other). "
+                    "Tab/number selects · Enter next/submits · Esc declines.";
+            if (questionnaire_index > 0) text += " Ctrl+B previous.";
             return text;
         }
         if (mode == TuiMode::AgentPermissionSelect) {
@@ -1605,6 +1651,97 @@ app::TuiRunResult run(provider::RequestContext context,
         queued_regen_text_attachments.clear();
     };
 
+    auto save_questionnaire_comment = [&]() {
+        if (have_pending_questionnaire &&
+            questionnaire_index < questionnaire_comments.size())
+            questionnaire_comments[questionnaire_index] = input.text.str();
+    };
+    auto load_questionnaire_comment = [&]() {
+        input = new_input_editor();
+        if (questionnaire_index < questionnaire_comments.size() &&
+            !questionnaire_comments[questionnaire_index].empty())
+            (void)input.insert(questionnaire_comments[questionnaire_index]);
+    };
+    auto restore_questionnaire_draft = [&]() {
+        if (questionnaire_draft.has_value())
+            input = std::move(*questionnaire_draft);
+        else
+            input = new_input_editor();
+        questionnaire_draft.reset();
+    };
+    auto open_questionnaire = [&](agent::QuestionnaireRequest request) {
+        if (!questionnaire_draft.has_value()) questionnaire_draft = input;
+        pending_questionnaire = std::move(request);
+        have_pending_questionnaire = true;
+        questionnaire_index = 0;
+        questionnaire_choices.assign(pending_questionnaire.questions.size(),
+                                     static_cast<std::size_t>(-1));
+        questionnaire_comments.assign(pending_questionnaire.questions.size(), {});
+        load_questionnaire_comment();
+        mode = TuiMode::Questionnaire;
+        history_scroll = 0;
+        status = "Agent waiting for your answer";
+    };
+    auto decline_questionnaire = [&]() {
+        if (!have_pending_questionnaire || !agent_controller) return;
+        const Error error =
+            agent_controller->decline_questionnaire(pending_questionnaire.id);
+        if (!error.ok()) {
+            status = error.message;
+            return;
+        }
+        have_pending_questionnaire = false;
+        pending_questionnaire = {};
+        questionnaire_choices.clear();
+        questionnaire_comments.clear();
+        restore_questionnaire_draft();
+        mode = TuiMode::Chat;
+        status = "Questionnaire declined; agent continuing";
+    };
+    auto submit_questionnaire = [&]() -> bool {
+        if (!have_pending_questionnaire || !agent_controller) return false;
+        save_questionnaire_comment();
+        std::vector<agent::QuestionnaireAnswer> answers;
+        answers.reserve(pending_questionnaire.questions.size());
+        for (std::size_t i = 0; i < pending_questionnaire.questions.size(); ++i) {
+            const agent::QuestionnaireQuestion& question =
+                pending_questionnaire.questions[i];
+            const std::size_t selected = questionnaire_choices[i];
+            if (selected >= question.options.size()) {
+                questionnaire_index = i;
+                load_questionnaire_comment();
+                status = "Select one answer for every question";
+                return false;
+            }
+            if (question.options[selected].other &&
+                ascii_trim(questionnaire_comments[i]).empty()) {
+                questionnaire_index = i;
+                load_questionnaire_comment();
+                status = "Other requires a custom answer";
+                return false;
+            }
+            agent::QuestionnaireAnswer answer;
+            answer.question_id = question.id;
+            answer.option_id = question.options[selected].id;
+            answer.comment = questionnaire_comments[i];
+            answers.push_back(std::move(answer));
+        }
+        const Error error = agent_controller->answer_questionnaire(
+            pending_questionnaire.id, answers);
+        if (!error.ok()) {
+            status = error.message;
+            return false;
+        }
+        have_pending_questionnaire = false;
+        pending_questionnaire = {};
+        questionnaire_choices.clear();
+        questionnaire_comments.clear();
+        restore_questionnaire_draft();
+        mode = TuiMode::Chat;
+        status = "Answers submitted; agent continuing";
+        return true;
+    };
+
     auto start_queued_regeneration = [&](size_t erase_from) {
         const std::string prompt = queued_regeneration_prompt;
         const std::vector<provider::ImageInput> images = std::move(queued_regen_images);
@@ -1630,9 +1767,16 @@ app::TuiRunResult run(provider::RequestContext context,
         }
         clear_queued_regeneration();
         if (agent_approval_gate) agent_approval_gate->cancel_pending();
+        if (agent_questionnaire_gate) agent_questionnaire_gate->cancel_pending();
         if (mode == TuiMode::GuardApprovalConfirm) {
             mode = TuiMode::Chat;
             have_pending_guard_request = false;
+        }
+        if (mode == TuiMode::Questionnaire) {
+            have_pending_questionnaire = false;
+            pending_questionnaire = {};
+            restore_questionnaire_draft();
+            mode = TuiMode::Chat;
         }
         if (context.options.agent && agent_controller &&
             (agent_controller->turn_running() || agent_controller->job_joinable())) {
@@ -3156,9 +3300,11 @@ app::TuiRunResult run(provider::RequestContext context,
             const bool turn_inflight =
                 agent_controller &&
                 (agent_controller->turn_running() || agent_controller->job_joinable() ||
-                 agent_controller->waiting_guard());
+                 agent_controller->waiting_guard() ||
+                 agent_controller->waiting_questionnaire());
             if (turn_inflight) {
-                agent_activity_state = agent_controller->waiting_guard()
+                agent_activity_state = (agent_controller->waiting_guard() ||
+                                        agent_controller->waiting_questionnaire())
                                            ? AgentActivityState::Working
                                            : AgentActivityState::Thinking;
                 agent_task_active = true;
@@ -3169,9 +3315,11 @@ app::TuiRunResult run(provider::RequestContext context,
                 active_job = ActiveJob::Chat;
                 status = agent_controller->status_label();
                 if (status.empty()) {
-                    status = agent_controller->waiting_guard()
-                                 ? "Guard approval required"
-                                 : "Agent running";
+                    status = agent_controller->waiting_questionnaire()
+                                 ? "Agent waiting for your answer"
+                                 : agent_controller->waiting_guard()
+                                       ? "Guard approval required"
+                                       : "Agent running";
                 }
                 // Mid-turn reattach: history comes from the project DB + live
                 // structured progress. Do not invent a placeholder assistant row
@@ -3200,6 +3348,12 @@ app::TuiRunResult run(provider::RequestContext context,
                     history_scroll = 0;
                     status = "Guard approval required";
                 }
+            }
+            if (agent_questionnaire_gate &&
+                agent_questionnaire_gate->has_pending()) {
+                agent::QuestionnaireRequest pending;
+                if (agent_questionnaire_gate->try_get_pending(pending))
+                    open_questionnaire(std::move(pending));
             }
             agent_runtime->begin_background_index_freshness();
         } else {
@@ -4123,6 +4277,10 @@ app::TuiRunResult run(provider::RequestContext context,
                     history_scroll = 0;
                     status = "Guard approval required";
                     break;
+                case TuiEventType::QuestionnaireRequired:
+                    agent_activity_state = AgentActivityState::Working;
+                    open_questionnaire(std::move(event.questionnaire));
+                    break;
                 case TuiEventType::AgentPhase:
                     if (agent_task_active)
                         agent_activity_state =
@@ -4214,6 +4372,176 @@ app::TuiRunResult run(provider::RequestContext context,
                     continue;
                 }
                 const unsigned char ch = event.byte;
+                if (mode == TuiMode::Questionnaire) {
+                    if (!have_pending_questionnaire ||
+                        questionnaire_index >=
+                            pending_questionnaire.questions.size()) {
+                        status = "Questionnaire is no longer pending";
+                        continue;
+                    }
+                    const std::size_t option_count =
+                        pending_questionnaire.questions[questionnaire_index]
+                            .options.size();
+                    if (ch == 27) {
+                        unsigned char next = 0;
+                        if (!editor::read_terminal_byte(
+                                next,
+                                editor::terminal_escape_inter_byte_timeout_ms())) {
+                            decline_questionnaire();
+                            continue;
+                        }
+                        std::string sequence;
+                        if (next == '[' || next == 'O') {
+                            sequence.push_back(static_cast<char>(next));
+                            unsigned char body = 0;
+                            while (sequence.size() < 16 &&
+                                   editor::read_terminal_byte(
+                                       body,
+                                       editor::terminal_escape_inter_byte_timeout_ms())) {
+                                sequence.push_back(static_cast<char>(body));
+                                if ((body >= 'A' && body <= 'Z') || body == '~' ||
+                                    (body >= 'a' && body <= 'z'))
+                                    break;
+                            }
+                        }
+                        std::size_t& selected =
+                            questionnaire_choices[questionnaire_index];
+                        if (sequence == "[Z") {
+                            selected = selected >= option_count
+                                           ? option_count - 1
+                                           : (selected + option_count - 1) % option_count;
+                            status = "Choice selected";
+                            continue;
+                        }
+                        editor::MovementKeyEvent movement;
+                        if (editor::parse_movement_sequence(sequence, movement)) {
+                            const agent::QuestionnaireQuestion& question =
+                                pending_questionnaire.questions[questionnaire_index];
+                            const bool editing_text =
+                                !input.text.empty() ||
+                                (selected < question.options.size() &&
+                                 question.options[selected].other);
+                            switch (questionnaire_movement_action(
+                                movement.key, editing_text)) {
+                                case QuestionnaireMovementAction::PreviousChoice:
+                                    selected = selected >= option_count
+                                                   ? option_count - 1
+                                                   : (selected + option_count - 1) %
+                                                         option_count;
+                                    status = "Choice selected";
+                                    break;
+                                case QuestionnaireMovementAction::NextChoice:
+                                    selected = selected >= option_count
+                                                   ? 0
+                                                   : (selected + 1) % option_count;
+                                    status = "Choice selected";
+                                    break;
+                                case QuestionnaireMovementAction::PreviousQuestion:
+                                    if (questionnaire_index == 0) {
+                                        status = "Already at the first question";
+                                    } else {
+                                        save_questionnaire_comment();
+                                        --questionnaire_index;
+                                        load_questionnaire_comment();
+                                        history_scroll = 0;
+                                        status = "Previous question";
+                                    }
+                                    break;
+                                case QuestionnaireMovementAction::NextQuestion:
+                                    save_questionnaire_comment();
+                                    if (selected >= option_count) {
+                                        status = "Select an answer before continuing";
+                                    } else if (question.options[selected].other &&
+                                               ascii_trim(questionnaire_comments[
+                                                   questionnaire_index]).empty()) {
+                                        status = "Other requires a custom answer";
+                                    } else if (questionnaire_index + 1 >=
+                                               pending_questionnaire.questions.size()) {
+                                        status = "Already at the last question";
+                                    } else {
+                                        ++questionnaire_index;
+                                        load_questionnaire_comment();
+                                        history_scroll = 0;
+                                        status = "Next question";
+                                    }
+                                    break;
+                                case QuestionnaireMovementAction::EditText: {
+                                const detail::TuiSize screen = detail::terminal_size();
+                                input.apply_movement(
+                                    movement.key,
+                                    current_layout(screen.rows, screen.cols).input_rect,
+                                    movement.shift, movement.alt, movement.ctrl);
+                                    break;
+                                }
+                                case QuestionnaireMovementAction::None:
+                                    break;
+                            }
+                            continue;
+                        }
+                        status = "Press Esc alone to decline";
+                        continue;
+                    }
+                    if (ch >= '1' && ch <= '6' &&
+                        questionnaire_choices[questionnaire_index] >= option_count) {
+                        const std::size_t selected =
+                            static_cast<std::size_t>(ch - '1');
+                        if (selected < option_count) {
+                            questionnaire_choices[questionnaire_index] = selected;
+                            status = "Choice selected";
+                        } else {
+                            status = "That choice is not available";
+                        }
+                        continue;
+                    }
+                    if (ch == '\t') {
+                        std::size_t& selected =
+                            questionnaire_choices[questionnaire_index];
+                        selected = selected >= option_count ? 0
+                                                           : (selected + 1) % option_count;
+                        status = "Choice selected";
+                        continue;
+                    }
+                    if (ch == 2) {  // Ctrl+B: previous question.
+                        if (questionnaire_index == 0) {
+                            status = "Already at the first question";
+                        } else {
+                            save_questionnaire_comment();
+                            --questionnaire_index;
+                            load_questionnaire_comment();
+                            history_scroll = 0;
+                            status = "Previous question";
+                        }
+                        continue;
+                    }
+                    if (ch == '\r' || ch == '\n') {
+                        save_questionnaire_comment();
+                        const std::size_t selected =
+                            questionnaire_choices[questionnaire_index];
+                        if (selected >= option_count) {
+                            status = "Select an answer before continuing";
+                            continue;
+                        }
+                        const agent::QuestionnaireOption& option =
+                            pending_questionnaire.questions[questionnaire_index]
+                                .options[selected];
+                        if (option.other &&
+                            ascii_trim(questionnaire_comments[questionnaire_index])
+                                .empty()) {
+                            status = "Other requires a custom answer";
+                            continue;
+                        }
+                        if (questionnaire_index + 1 <
+                            pending_questionnaire.questions.size()) {
+                            ++questionnaire_index;
+                            load_questionnaire_comment();
+                            history_scroll = 0;
+                            status = "Next question";
+                        } else {
+                            (void)submit_questionnaire();
+                        }
+                        continue;
+                    }
+                }
                 if (ch == editor::editor_key_command_minibuffer()) {
                     // Alt+X is reserved for the standalone editor command minibuffer.
                     continue;

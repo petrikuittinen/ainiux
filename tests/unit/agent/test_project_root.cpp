@@ -596,7 +596,7 @@ void test_elapsed_seconds_format() {
     check(agent::format_elapsed_ms(0) == "0 ms", "zero ms");
     check(agent::format_elapsed_ms(-5) == "0 ms", "negative ms clamps");
     check(agent::execution_only_elapsed_ms(175, 20, 145) == 50,
-          "tool timing subtracts Guard approval wait");
+          "tool timing subtracts interactive user wait");
     check(agent::execution_only_elapsed_ms(10, 100, 130) == 0,
           "approval subtraction clamps execution time at zero");
     check(agent::format_task_complete(21340) == "Task complete in 21.34 seconds.",

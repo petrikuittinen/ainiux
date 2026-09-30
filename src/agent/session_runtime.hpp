@@ -163,6 +163,8 @@ struct SessionRuntimeOptions {
     std::function<void(const PreparationProgress&)> on_prepare_progress;
     // Interactive Guard Ask (blocks tool worker until resolved). Empty ⇒ headless Deny.
     GuardApprovalCallback on_guard_ask;
+    // Interactive questionnaire (blocks only the tool worker). Empty omits ask.
+    QuestionnaireCallback on_questionnaire;
 };
 
 // Common provider/config projection used by headless, terminal, and control
@@ -409,9 +411,9 @@ class AgentSessionRuntime {
     mutable std::atomic<long long> cached_request_tokens_{0};
     mutable std::atomic<long long> last_nonzero_request_tokens_{0};
     mutable std::atomic<long long> in_flight_generation_tokens_{0};
-    // Total steady-clock time spent waiting for interactive Guard decisions.
-    // The tool executor snapshots this counter to exclude approval waits.
-    std::atomic<long long> guard_approval_wait_ms_{0};
+    // Total steady-clock time spent waiting for interactive user gates. The
+    // tool executor snapshots this counter to exclude Guard/questionnaire waits.
+    std::atomic<long long> interactive_wait_ms_{0};
     std::atomic<bool> operation_active_{false};
     long long last_auto_compact_failure_ms_ = 0;
     long long last_auto_compact_failure_seq_ = 0;

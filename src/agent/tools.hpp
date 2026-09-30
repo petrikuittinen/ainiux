@@ -10,6 +10,7 @@
 
 #include "agent/approval.hpp"
 #include "agent/attachment_bag.hpp"
+#include "agent/questionnaire.hpp"
 #include "agent/index/index.hpp"
 #include "common.hpp"
 #include "fetch/fetch.hpp"
@@ -99,6 +100,8 @@ struct ToolRegistryOptions {
     search::Options search_options = search::default_options();
     // Interactive Guard Ask. Empty ⇒ headless Deny for Ask decisions.
     GuardApprovalCallback on_guard_ask;
+    // Interactive model-to-user questionnaire. Empty means `ask` is absent.
+    QuestionnaireCallback on_questionnaire;
     GoalToolHooks goal_hooks;
     VisionAttachHooks vision_hooks;
     PermissionMode permission_mode = PermissionMode::Smart;
@@ -131,6 +134,7 @@ enum class NativeToolHandler {
     Fetch,
     WebSearch,
     GoalMet,
+    Ask,
     Attach,
     Edit,
     Write,
@@ -327,6 +331,7 @@ class ReadToolRegistry {
     fetch::Options fetch_options_{};
     search::Options search_options_{};
     GuardApprovalCallback on_guard_ask_;
+    QuestionnaireCallback on_questionnaire_;
     GoalToolHooks goal_hooks_;
     VisionAttachHooks vision_hooks_;
     PermissionMode permission_mode_ = PermissionMode::Smart;

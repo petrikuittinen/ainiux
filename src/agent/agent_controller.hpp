@@ -30,6 +30,7 @@ struct AgentSurfaceEvent {
         TurnDone,
         TurnError,
         GuardApproval,
+        QuestionnaireRequired,
     };
 
     Type type = Type::Progress;
@@ -65,6 +66,7 @@ struct AgentSurfaceEvent {
     std::string guard_rule_id;
     std::string guard_message;
     std::string guard_review_path;
+    QuestionnaireRequest questionnaire;
 };
 
 // Owns the multi-turn agent workspace session and (optionally) an in-flight
@@ -80,12 +82,16 @@ class AgentController {
 
     std::shared_ptr<AgentSessionRuntime> runtime() const { return runtime_; }
     std::shared_ptr<ApprovalGate> approval_gate() const { return gate_; }
+    std::shared_ptr<QuestionnaireGate> questionnaire_gate() const {
+        return questionnaire_gate_;
+    }
     runtime::EventQueue<AgentSurfaceEvent>& events() { return events_; }
 
     bool prepared() const;
     bool turn_running() const;
     bool job_joinable() const;
     bool waiting_guard() const;
+    bool waiting_questionnaire() const;
 
     // Last published status line for non-agent surfaces (editor badge).
     std::string status_label() const;
@@ -96,6 +102,12 @@ class AgentController {
     // Install notify so Guard Ask pushes GuardApproval into events_.
     void arm_guard_notify();
     void clear_guard_notify();
+    void arm_questionnaire_notify();
+    void clear_questionnaire_notify();
+    Error answer_questionnaire(
+        const std::string& questionnaire_id,
+        const std::vector<QuestionnaireAnswer>& answers);
+    Error decline_questionnaire(const std::string& questionnaire_id);
 
     // Cancel the in-flight turn (if any) and join. Does not finish the DB session.
     void cancel_turn();
@@ -114,10 +126,12 @@ class AgentController {
    private:
     std::shared_ptr<AgentSessionRuntime> runtime_;
     std::shared_ptr<ApprovalGate> gate_;
+    std::shared_ptr<QuestionnaireGate> questionnaire_gate_;
     runtime::JobHandle turn_job_;
     runtime::EventQueue<AgentSurfaceEvent> events_;
     std::atomic<bool> turn_running_{false};
     std::atomic<bool> waiting_guard_{false};
+    std::atomic<bool> waiting_questionnaire_{false};
     mutable std::mutex status_mutex_;
     std::string status_label_;
     std::chrono::steady_clock::time_point turn_started_{};

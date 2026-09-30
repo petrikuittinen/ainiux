@@ -1224,6 +1224,7 @@ Error ReadToolRegistry::create(index::Options index_options,
     loaded.fetch_options_ = options.fetch_options;
     loaded.search_options_ = options.search_options;
     loaded.on_guard_ask_ = std::move(options.on_guard_ask);
+    loaded.on_questionnaire_ = std::move(options.on_questionnaire);
     loaded.goal_hooks_ = std::move(options.goal_hooks);
     loaded.vision_hooks_ = std::move(options.vision_hooks);
     loaded.permission_mode_ = options.permission_mode;
@@ -3364,7 +3365,7 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
         "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500},"
         "\"offset\":{\"type\":\"integer\",\"minimum\":0}";
     std::vector<ToolDescriptor> tools;
-    tools.reserve(18);
+    tools.reserve(19);
     auto add = [&](NativeToolHandler handler, ToolSafetyCategory safety,
                    provider::FunctionDefinition definition,
                    bool exposed = true) {
@@ -3454,6 +3455,25 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
                 "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":120000},"
                 "\"site\":{\"type\":\"string\"}",
                 "\"term\"")}, allow_network_ && !hosted_web_search_);
+    add(NativeToolHandler::Ask, ToolSafetyCategory::Session,
+        {"ask",
+         "Ask the user 1 through 6 required single-choice questions. Supply 2 through 5 "
+         "options per question; the host adds Other. Put the recommended option first. "
+         "Use only for unresolved choices that materially affect the result.",
+         schema(
+             "\"questions\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":6,"
+             "\"items\":{\"type\":\"object\",\"properties\":{"
+             "\"question\":{\"type\":\"string\",\"maxLength\":1024},"
+             "\"options\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":5,"
+             "\"items\":{\"type\":\"object\",\"properties\":{"
+             "\"label\":{\"type\":\"string\",\"maxLength\":128},"
+             "\"description\":{\"type\":\"string\",\"maxLength\":512}},"
+             "\"required\":[\"label\",\"description\"],"
+             "\"additionalProperties\":false}}},"
+             "\"required\":[\"question\",\"options\"],"
+             "\"additionalProperties\":false}}",
+             "\"questions\"")},
+        agent_session && static_cast<bool>(on_questionnaire_));
     // Advertised only while /goal is Active. Always listing it in Act/Lead
     // made small models treat goal_met as a generic "task done" signal.
     add(NativeToolHandler::GoalMet, ToolSafetyCategory::Session,
@@ -6218,6 +6238,129 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         }
         data.object["results"] = std::move(results);
         data.object["result_count"] = number_value(static_cast<double>(response.results.size()));
+        return envelope(true, std::move(data), "", "", {}, false);
+    }
+
+    if (is_handler(NativeToolHandler::Ask)) {
+        if (!on_questionnaire_)
+            return tool_error_result(
+                "unsupported",
+                "ask is available only in an interactive Agent session");
+        const json::Value* questions = args.get("questions");
+        if (questions == nullptr || !questions->is_array() ||
+            questions->array.empty() || questions->array.size() > 6)
+            return tool_error_result(
+                "invalid_arguments",
+                "questions must be an array containing 1 through 6 questions");
+
+        auto strip_recommended = [](std::string label) {
+            label = ascii_trim(std::move(label));
+            static const std::string suffix = " (recommended)";
+            const std::string lower = ascii_lower(label);
+            if (lower.size() >= suffix.size() &&
+                lower.compare(lower.size() - suffix.size(), suffix.size(), suffix) == 0)
+                label = ascii_trim(label.substr(0, label.size() - suffix.size()));
+            return label;
+        };
+        auto is_other_label = [](const std::string& label) {
+            const std::string lower = ascii_lower(ascii_trim(label));
+            if (lower == "other" || lower == "something else") return true;
+            return lower.size() > 5 && lower.compare(0, 5, "other") == 0 &&
+                   (lower[5] == ' ' || lower[5] == ':' || lower[5] == '-' ||
+                    lower[5] == '(');
+        };
+
+        QuestionnaireRequest request;
+        request.questions.reserve(questions->array.size());
+        for (std::size_t question_index = 0;
+             question_index < questions->array.size(); ++question_index) {
+            const json::Value& item = questions->array[question_index];
+            if (!item.is_object())
+                return tool_error_result(
+                    "invalid_arguments",
+                    "each questions item must be an object");
+            std::string question_text;
+            if (!get_string(item, "question", question_text, true,
+                            validation_error))
+                return tool_error_result("invalid_arguments", validation_error);
+            question_text = ascii_trim(std::move(question_text));
+            if (question_text.empty() || question_text.size() > 1024 ||
+                !html::is_valid_utf8(question_text))
+                return tool_error_result(
+                    "invalid_arguments",
+                    "each question must be non-empty valid UTF-8 of at most 1024 bytes");
+            const json::Value* options = item.get("options");
+            if (options == nullptr || !options->is_array() ||
+                options->array.size() < 2 || options->array.size() > 5)
+                return tool_error_result(
+                    "invalid_arguments",
+                    "each question must supply 2 through 5 options");
+
+            QuestionnaireQuestion question;
+            question.question = std::move(question_text);
+            for (const json::Value& option_value : options->array) {
+                if (!option_value.is_object())
+                    return tool_error_result(
+                        "invalid_arguments",
+                        "each option must be an object");
+                std::string label;
+                std::string description;
+                if (!get_string(option_value, "label", label, true,
+                                validation_error) ||
+                    !get_string(option_value, "description", description, true,
+                                validation_error))
+                    return tool_error_result("invalid_arguments", validation_error);
+                label = strip_recommended(std::move(label));
+                description = ascii_trim(std::move(description));
+                if (label.empty() || label.size() > 128 || description.empty() ||
+                    description.size() > 512 || !html::is_valid_utf8(label) ||
+                    !html::is_valid_utf8(description))
+                    return tool_error_result(
+                        "invalid_arguments",
+                        "option labels/descriptions must be non-empty valid UTF-8 and "
+                        "within 128/512 bytes");
+                if (is_other_label(label)) continue;
+                QuestionnaireOption option;
+                option.label = std::move(label);
+                option.description = std::move(description);
+                question.options.push_back(std::move(option));
+            }
+            if (question.options.empty())
+                return tool_error_result(
+                    "invalid_arguments",
+                    "normalization left a question without a normal option");
+            question.options.front().label += " (Recommended)";
+            QuestionnaireOption other;
+            other.label = "Other";
+            other.description = "Provide a custom answer.";
+            other.other = true;
+            question.options.push_back(std::move(other));
+            request.questions.push_back(std::move(question));
+        }
+
+        const QuestionnaireResponse response =
+            on_questionnaire_(request, cancellation);
+        if (response.outcome == QuestionnaireOutcome::Cancelled ||
+            cancellation.cancelled())
+            return tool_error_result("cancelled", "questionnaire was cancelled");
+        json::Value data = object_value();
+        if (response.outcome == QuestionnaireOutcome::Declined) {
+            data.object["outcome"] = string_value("declined");
+            data.object["guidance"] = string_value(
+                "The user declined the questionnaire; continue using best judgment.");
+            return envelope(true, std::move(data), "", "", {}, false);
+        }
+        data.object["outcome"] = string_value("answered");
+        json::Value answer_array = array_value();
+        for (const QuestionnaireAnswer& answer : response.answers) {
+            json::Value record = object_value();
+            record.object["question"] = string_value(answer.question);
+            record.object["selected_label"] =
+                string_value(answer.selected_label);
+            record.object["comment"] = string_value(answer.comment);
+            answer_array.array.push_back(std::move(record));
+        }
+        data.object["answers"] = std::move(answer_array);
         return envelope(true, std::move(data), "", "", {}, false);
     }
 

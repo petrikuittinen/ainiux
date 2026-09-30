@@ -8,6 +8,7 @@
 #include "ainiux/compaction_strategy.hpp"
 #include "chat/session.hpp"
 #include "agent/activity.hpp"
+#include "agent/questionnaire.hpp"
 #include "agent/index/index.hpp"
 #include "chat/sqlite_store.hpp"
 #include "common.hpp"
@@ -37,6 +38,7 @@ enum class TuiEventType {
     CreditBalanceDone,
     CompletionDone,
     GuardApproval,  // agent Guard Ask pending (worker blocked)
+    QuestionnaireRequired,
     AgentProjectNewDone,
     AgentCompactDone,
     AgentIndexReportDone,
@@ -64,6 +66,7 @@ enum class TuiMode {
     ThreadDeleteConfirm,
     ExportOverwriteConfirm,
     GuardApprovalConfirm,
+    Questionnaire,
     AgentPermissionSelect,
     AgentContinueConfirm,
     AgentNewConfirm,
@@ -124,6 +127,7 @@ struct TuiEvent {
     std::string guard_rule_id;
     std::string guard_message;
     std::string guard_review_path;
+    agent::QuestionnaireRequest questionnaire;
     std::string agent_workspace;
     std::vector<provider::Message> agent_history;
     bool agent_history_loaded = false;

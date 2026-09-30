@@ -40,6 +40,18 @@ bool apply_chat_history_scroll(const editor::MovementKeyEvent& movement,
                                const Layout& layout,
                                int& history_scroll);
 
+enum class QuestionnaireMovementAction {
+    None,
+    PreviousChoice,
+    NextChoice,
+    PreviousQuestion,
+    NextQuestion,
+    EditText,
+};
+
+QuestionnaireMovementAction questionnaire_movement_action(
+    editor::MovementKey key, bool editing_text);
+
 EscapeResult handle_escape(editor::EditorState& input,
                            const Layout& layout,
                            int& history_scroll,

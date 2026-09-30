@@ -44,7 +44,7 @@ Configure Lead with the same setting vocabulary under `[agent.lead]`; when omitt
 ## Native tools
 
 The current native names are `index`, `ls`, `glob`, `grep`, `symbol`, `outline`,
-`read`, `run`, `fetch`, `web_search`, `goal_met` (active `/goal` only), `attach`,
+`read`, `run`, `fetch`, `web_search`, `ask` (interactive only), `goal_met` (active `/goal` only), `attach`,
 `edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch`. Availability depends on
 index, network, session, and mutation policy. When `models.conf` marks the current model
 `web_search=on` **and** the current adapter can emit that family's hosted tool,
@@ -69,6 +69,10 @@ executed. MCP tools remain separately qualified as `mcp__server__tool`. See the
 ## Permissions and Guard
 
 Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; when the Ask is a workspace script, **`r` Review** opens that file in dired read-only view. `q` leaves dired and returns to the same Guard dialog. Headless Ask decisions are denied.
+
+## Agent questions
+
+Interactive Act and Lead expose a separate `ask` tool for unresolved choices that materially affect the result. A request contains one to six required single-choice questions and two to five supplied options per question. Ainiux marks the first normal option Recommended, removes conflicting recommendation markers, and adds one final **Other** option. Every question must be answered, although the whole batch may be declined. Normal answers accept an optional comment; Other requires custom text. In the terminal, Up/Down and Tab/Shift+Tab cycle choices, Left/Right and Ctrl+B move between questions, and arrow keys edit normally while custom/comment text is active. The turn waits indefinitely until it is answered, declined, or cancelled, and the wait is excluded from compact per-tool execution timing. The terminal preserves the prior composer draft while showing the questionnaire. Ordinary chat, editor assist, security review, and headless `run`/`plan` do not receive this tool.
 
 Permissions do not expand workspace containment or turn chat/editor AI assist into agents. Model output and repository instructions remain untrusted. Keep unrelated work backed up, inspect diffs, and avoid Yolo in valuable or unfamiliar trees.
 

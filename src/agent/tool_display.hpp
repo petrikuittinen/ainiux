@@ -23,10 +23,10 @@ std::string clip_to_cells(const std::string& text, std::size_t max_cells);
 // Tool execution timing: "2270 ms" (whole milliseconds, clamps negative to 0).
 std::string format_elapsed_ms(long long elapsed_ms);
 
-// Subtract the Guard-wait counter delta from a tool's steady-clock wall time.
+// Subtract interactive user-wait counter delta from tool steady-clock wall time.
 long long execution_only_elapsed_ms(long long wall_elapsed_ms,
-                                    long long approval_wait_before_ms,
-                                    long long approval_wait_after_ms);
+                                    long long interactive_wait_before_ms,
+                                    long long interactive_wait_after_ms);
 
 // Final turn completion: "Task complete in 21.34 seconds." (2 decimal places).
 std::string format_task_complete(long long elapsed_ms);

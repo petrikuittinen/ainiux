@@ -185,7 +185,7 @@ Writable file buffers hold an advisory `FILE.LOCK` session and check for externa
 
 ### Local agent
 
-Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act and Lead can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval (including while you are reviewing in the editor after a mid-turn hop). Script Asks also offer **Review**, which opens that file in dired; `q` returns to the dialog. During a long interactive turn, `Ctrl+G` or `F4` opens the editor/dired so you can review dirty files and history-tinted change lines without cancelling tools or finishing the project session.
+Interactive `-a` and one-shot `run` use project-local `.ainiux-pr/` state and native workspace tools. Act and Lead can read and modify the contained workspace subject to Confirm, Smart, or Yolo permissions and Guard classification. Interactive Guard “Ask” actions require `y`/`n` approval (including while you are reviewing in the editor after a mid-turn hop). Script Asks also offer **Review**, which opens that file in dired; `q` returns to the dialog. The interactive-only `ask` tool can pause a turn for one to six required single-choice questions, with optional comments and a built-in Other answer; headless run/plan never receive it. During a long interactive turn, `Ctrl+G` or `F4` opens the editor/dired so you can review dirty files and history-tinted change lines without cancelling tools or finishing the project session.
 
 ```sh
 ainiux lmstudio -m MODEL -r "add focused tests for the parser"
@@ -207,7 +207,7 @@ In a measured audit on the current 20-core ARM64 system, 437 files and 11,631 de
 See [Agent workflows](docs/agent.md), [MCP servers](docs/mcp.md), [code-index internals](docs/code_index_and_tool_calls_explained.md), and [Security](docs/security.md).
 
 The native tool API is deliberately compact: `index`, `ls`, `glob`, `grep`,
-`symbol`, `outline`, `read`, `run`, `fetch`, `web_search`, `goal_met` (active `/goal` only), `attach`,
+`symbol`, `outline`, `read`, `run`, `fetch`, `web_search`, `ask` (interactive only), `goal_met` (active `/goal` only), `attach`,
 `edit`, `write`, `mkdir`, `mv`, `rm`, and `apply_patch` as applicable to the
 session. Removed long names and aliases are not silently accepted. See the
 [native tool inventory](docs/tool_calls.md) for availability and policy details.
@@ -337,7 +337,7 @@ The authoritative layout and coding constraints are in [AGENTS.md](AGENTS.md). D
 The control server exposes authenticated discovery and asynchronous one-shot
 chat, run, image, and video jobs, plus a stateless MCP 2026-07-28 endpoint for
 MCP-only clients. It also exposes bounded interactive agent sessions with
-replayable events, cancellation, remote Guard approvals, workspace review,
+replayable events, cancellation, remote Guard approvals and questionnaires, workspace review,
 revision-safe dired/file mutations and editor assist, and revision-safe access
 to the existing personal chat-thread library. Its embedded responsive browser
 controller uses only vanilla HTML, CSS, and JavaScript. The WebUI is a major

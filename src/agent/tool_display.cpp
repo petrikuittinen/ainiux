@@ -89,11 +89,11 @@ std::string format_elapsed_ms(long long elapsed_ms) {
 }
 
 long long execution_only_elapsed_ms(long long wall_elapsed_ms,
-                                    long long approval_wait_before_ms,
-                                    long long approval_wait_after_ms) {
-    const long long approval_delta =
-        std::max(0LL, approval_wait_after_ms - approval_wait_before_ms);
-    return std::max(0LL, wall_elapsed_ms - approval_delta);
+                                    long long interactive_wait_before_ms,
+                                    long long interactive_wait_after_ms) {
+    const long long wait_delta =
+        std::max(0LL, interactive_wait_after_ms - interactive_wait_before_ms);
+    return std::max(0LL, wall_elapsed_ms - wait_delta);
 }
 
 std::string format_task_complete(long long elapsed_ms) {

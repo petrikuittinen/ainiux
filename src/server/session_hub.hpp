@@ -34,6 +34,8 @@ class InteractiveSession {
     Error history(long long before, std::string& output) const;
     Error resolve_approval(const std::string& approval_id,
                            const std::string& decision);
+    Error resolve_questionnaire(const std::string& questionnaire_id,
+                                const std::string& body);
     Error review_file(const std::string& approval_id, std::string& body) const;
     void close();
 
@@ -79,6 +81,8 @@ class InteractiveSession {
     std::string pending_command_preview_;
     std::string pending_rule_id_;
     std::string pending_message_;
+    agent::QuestionnaireRequest pending_questionnaire_;
+    std::string pending_questionnaire_turn_id_;
     std::size_t next_turn_ = 1;
     std::size_t next_approval_ = 1;
     long long turn_history_before_ = 0;

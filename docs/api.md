@@ -622,6 +622,7 @@ POST   /ainiux/v1/sessions/:session_id/turns
 POST   /ainiux/v1/sessions/:session_id/turns/:turn_id/cancel
 POST   /ainiux/v1/sessions/:session_id/approvals/:approval_id
 GET    /ainiux/v1/sessions/:session_id/approvals/:approval_id/review-file
+POST   /ainiux/v1/sessions/:session_id/questionnaires/:questionnaire_id
 DELETE /ainiux/v1/sessions/:session_id
 ```
 
@@ -672,6 +673,20 @@ closes its event stream, and releases retained state. Sessions are bounded by
 restored after a server restart. A newly created controller does restore the
 workspace's persisted `.ainiux-pr` provider, model, API, reasoning, and
 permission settings before applying explicit creation fields.
+
+Interactive `ask` calls set session status to `waiting_user`, emit
+`questionnaire_required`, and place the pending request in the nullable
+snapshot field `questionnaire`. Questions and options have opaque server IDs;
+clients must return those IDs rather than labels. Submit either
+`{"outcome":"answered","answers":[{"question_id":"…","option_id":"…","comment":"…"}]}`
+with exactly one unique answer per question, or `{"outcome":"declined"}`.
+Other requires a non-empty comment. Malformed, partial, duplicate, unknown,
+stale, and double responses are rejected without resolving a still-pending
+request. A successful response emits `questionnaire_resolved` correlated by
+`questionnaire_id`. IDs are
+single-use and tied to the active turn; cancellation or session close wakes the
+blocked tool worker. SSE replay and the snapshot allow a reconnecting client to
+recover the pending questionnaire.
 
 ## MCP 2026-07-28 endpoint
 

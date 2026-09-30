@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <title>Ainiux controller</title>
-  <link rel="stylesheet" href="/ui/assets/app-v27.css">
-  <script type="module" src="/ui/assets/app-v37.js"></script>
+  <link rel="stylesheet" href="/ui/assets/app-v28.css">
+  <script type="module" src="/ui/assets/app-v38.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -229,6 +229,22 @@
 
   <dialog id="guard-dialog" aria-labelledby="guard-title">
     <div class="dialog-card"><h2 id="guard-title">Review agent action</h2><dl id="guard-details" class="details-list"></dl><pre id="guard-review" class="review-box" hidden></pre><div class="dialog-actions three"><button id="guard-review-button" class="ghost" type="button">Review file</button><button id="guard-deny-button" class="danger" type="button">Deny</button><button id="guard-allow-button" type="button">Allow</button></div></div>
+  </dialog>
+
+  <dialog id="questionnaire-dialog" aria-labelledby="questionnaire-title">
+    <form id="questionnaire-form" class="dialog-card questionnaire-card">
+      <h2 id="questionnaire-title">Agent question</h2>
+      <p id="questionnaire-progress" class="field-hint" aria-live="polite"></p>
+      <div id="questionnaire-content"></div>
+      <p id="questionnaire-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions questionnaire-actions">
+        <button id="questionnaire-decline" class="danger" type="button">Decline all</button>
+        <span class="dialog-spacer"></span>
+        <button id="questionnaire-previous" class="ghost" type="button">Previous</button>
+        <button id="questionnaire-next" type="button">Next</button>
+        <button id="questionnaire-submit" type="submit">Submit</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="mutation-dialog" aria-labelledby="mutation-title">

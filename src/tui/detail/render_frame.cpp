@@ -107,6 +107,7 @@ void render(const chat::Session& session,
     const bool picker_top_aligned = mode == TuiMode::ThreadList || mode == TuiMode::ProviderList ||
                                     mode == TuiMode::ModelList || mode == TuiMode::ReasoningList ||
                                     mode == TuiMode::GuardApprovalConfirm ||
+                                    mode == TuiMode::Questionnaire ||
                                     mode == TuiMode::Settings;
     const int max_history_scroll = std::max(0, static_cast<int>(history.size()) - layout.history_rows);
     history_scroll = std::min(std::max(0, history_scroll), max_history_scroll);

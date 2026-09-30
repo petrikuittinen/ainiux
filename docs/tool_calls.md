@@ -27,6 +27,7 @@ methodology.
 | `run` | `command` | Shell-free argv exec. Smart auto-allows classified in-project `mkdir`/`rmdir`/`rm`/`mv`; asks for non-empty `rm -r`. |
 | `fetch` | `url` | HTTP(S) → Markdown/text. Network sessions only. |
 | `web_search` | `term` | At most 3 search hits. Network sessions only. |
+| `ask` | `questions` | Pause an interactive Agent turn for 1–6 required single-choice questions. Hidden from headless and non-agent surfaces. |
 | `goal_met` | `evidence` | Complete an active `/goal`. Advertised only while a session goal is Active (chrome shows `goal`). Hidden in ordinary Act/Lead turns. |
 | `attach` | `path` | Queue one local PNG/JPEG/GIF for this turn. |
 | `edit` | `path`, `ops` | Preferred in-file edit. |

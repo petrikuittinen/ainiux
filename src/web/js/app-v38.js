@@ -85,6 +85,7 @@ const state = {
   videoInputs: [],
   videoObjectUrl: "",
   guard: null,
+  questionnaire: null,
   directory: { path: ".", revision: "", entries: [] },
   file: null,
   mutation: null,
@@ -110,6 +111,7 @@ let chatRenderFrame = null;
 let pendingChatStream = null;
 let agentRenderFrame = null;
 let editorInsertController = null;
+let questionnaireReturnFocus = null;
 
 class ApiError extends Error {
   constructor(status, code, message, details = {}) {
@@ -2048,6 +2050,7 @@ function forgetAuthentication(message = "") {
   state.modelCatalogs.clear();
   state.file = null;
   state.guard = null;
+  state.questionnaire = null;
   clearTransientNotices();
   storageSet(TOKEN_STORAGE_KEY, "");
   byId("token-input").value = "";
@@ -2061,6 +2064,7 @@ function forgetAuthentication(message = "") {
   byId("chat-input").disabled = true;
   byId("agent-turn-input").disabled = true;
   closeDialog(byId("guard-dialog"));
+  closeDialog(byId("questionnaire-dialog"));
   byId("auth-error").textContent = message;
   openDialog(byId("auth-dialog"));
   renderImageOptions();
@@ -3352,10 +3356,12 @@ function agentEventDisplay(entry, live) {
   else if (type === "turn_failed") { label = "error"; kind = "error"; }
   else if (type === "session_error") { label = "error"; kind = "error"; }
   else if (type === "approval_required") { label = "guard"; kind = "notice"; }
+  else if (type === "questionnaire_required") { label = "question"; kind = "notice"; }
   else if (type === "thinking") label = "thinking";
   else if (type === "tool") label = "tool";
   else if (type === "assistant" || type === "response") kind = "assistant";
   const text = type === "approval_required" ? (data.message || "Approval required") :
+    type === "questionnaire_required" ? "Agent is waiting for your answer." :
     typeof data.content === "string" ? data.content :
     typeof data.message === "string" ? data.message :
       typeof data.text === "string" ? data.text : JSON.stringify(data, null, 2);
@@ -3409,7 +3415,7 @@ function appendAgentEvent(container, entry, live = false) {
 
 function agentEventVisible(event) {
   return event && ["turn_started", "turn_completed", "turn_failed",
-    "approval_required", "session_error"].includes(event.type);
+    "approval_required", "questionnaire_required", "session_error"].includes(event.type);
 }
 
 function applyAgentActivity(sessionId, event, logs) {
@@ -3626,11 +3632,210 @@ function showGuard(sessionId, approval, turnId = null) {
   openDialog(byId("guard-dialog"));
 }
 
+function questionnaireAnswer(questionId) {
+  if (!state.questionnaire) return null;
+  let answer = state.questionnaire.answers.get(questionId);
+  if (!answer) {
+    answer = { option_id: "", comment: "" };
+    state.questionnaire.answers.set(questionId, answer);
+  }
+  return answer;
+}
+
+function renderQuestionnaire(focus = false) {
+  const pending = state.questionnaire;
+  if (!pending) return;
+  const questions = Array.isArray(pending.questionnaire.questions)
+    ? pending.questionnaire.questions : [];
+  const question = questions[pending.step];
+  if (!question) return;
+  byId("questionnaire-progress").textContent =
+    `${pending.step + 1} of ${questions.length}`;
+  const content = byId("questionnaire-content");
+  clear(content);
+  const fieldset = element("fieldset", "questionnaire-fieldset");
+  fieldset.append(element("legend", "", question.question || "Choose an option"));
+  const answer = questionnaireAnswer(question.id);
+  for (const option of question.options || []) {
+    const row = element("label", "questionnaire-option");
+    const radio = element("input");
+    radio.type = "radio";
+    radio.name = `questionnaire-${question.id}`;
+    radio.value = option.id;
+    radio.checked = answer.option_id === option.id;
+    radio.addEventListener("change", () => {
+      answer.option_id = option.id;
+      comment.required = option.other === true;
+      commentLabel.firstElementChild.textContent = option.other
+        ? "Custom answer (required)" : "Comment (optional)";
+    });
+    const copy = element("span", "questionnaire-option-copy");
+    copy.append(element("strong", "", option.label || "Option"));
+    copy.append(element("span", "field-hint", option.description || ""));
+    row.append(radio, copy);
+    fieldset.append(row);
+  }
+  const commentLabel = element("label", "questionnaire-comment");
+  const selected = (question.options || []).find((option) => option.id === answer.option_id);
+  commentLabel.append(element("span", "",
+    selected?.other ? "Custom answer (required)" : "Comment (optional)"));
+  const comment = element("textarea");
+  comment.rows = 3;
+  comment.maxLength = 4096;
+  comment.value = answer.comment;
+  comment.required = selected?.other === true;
+  comment.addEventListener("input", () => { answer.comment = comment.value; });
+  commentLabel.append(comment);
+  fieldset.append(commentLabel);
+  content.append(fieldset);
+  byId("questionnaire-previous").disabled = pending.step === 0;
+  byId("questionnaire-next").hidden = pending.step + 1 >= questions.length;
+  byId("questionnaire-submit").hidden = pending.step + 1 < questions.length;
+  if (focus) {
+    const target = fieldset.querySelector("input:checked") ||
+      fieldset.querySelector("input") || comment;
+    target.focus();
+  }
+}
+
+function showQuestionnaire(sessionId, questionnaire, turnId = null) {
+  if (!questionnaire || !questionnaire.id) return;
+  const existing = state.questionnaire;
+  if (!existing || existing.questionnaire.id !== questionnaire.id) {
+    questionnaireReturnFocus = document.activeElement;
+    state.questionnaire = {
+      sessionId, questionnaire, turnId, step: 0, answers: new Map(),
+    };
+  } else {
+    existing.sessionId = sessionId;
+    existing.questionnaire = questionnaire;
+    existing.turnId = turnId;
+  }
+  byId("questionnaire-error").textContent = "";
+  openDialog(byId("questionnaire-dialog"));
+  renderQuestionnaire(true);
+}
+
+function closeQuestionnaire() {
+  state.questionnaire = null;
+  closeDialog(byId("questionnaire-dialog"));
+  const target = questionnaireReturnFocus;
+  questionnaireReturnFocus = null;
+  if (target && target.isConnected && typeof target.focus === "function") target.focus();
+}
+
+function validateQuestionnaireStep() {
+  const pending = state.questionnaire;
+  if (!pending) return false;
+  const question = pending.questionnaire.questions[pending.step];
+  const answer = questionnaireAnswer(question.id);
+  const option = (question.options || []).find((item) => item.id === answer.option_id);
+  if (!option) {
+    byId("questionnaire-error").textContent = "Choose one option to continue.";
+    return false;
+  }
+  if (option.other && !answer.comment.trim()) {
+    byId("questionnaire-error").textContent = "Enter a custom answer for Other.";
+    return false;
+  }
+  byId("questionnaire-error").textContent = "";
+  return true;
+}
+
+function cycleQuestionnaireChoice(delta) {
+  const pending = state.questionnaire;
+  if (!pending) return;
+  const question = pending.questionnaire.questions[pending.step];
+  const options = Array.isArray(question?.options) ? question.options : [];
+  if (!options.length) return;
+  const answer = questionnaireAnswer(question.id);
+  const current = options.findIndex((option) => option.id === answer.option_id);
+  const next = current < 0
+    ? (delta < 0 ? options.length - 1 : 0)
+    : (current + delta + options.length) % options.length;
+  answer.option_id = options[next].id;
+  byId("questionnaire-error").textContent = "";
+  renderQuestionnaire(true);
+}
+
+function moveQuestionnaireStep(delta) {
+  const pending = state.questionnaire;
+  if (!pending) return;
+  const questions = pending.questionnaire.questions || [];
+  if (delta < 0) {
+    if (pending.step === 0) {
+      byId("questionnaire-error").textContent = "Already at the first question.";
+      return;
+    }
+    pending.step -= 1;
+  } else {
+    if (!validateQuestionnaireStep()) return;
+    if (pending.step + 1 >= questions.length) {
+      byId("questionnaire-error").textContent = "Already at the last question.";
+      return;
+    }
+    pending.step += 1;
+  }
+  byId("questionnaire-error").textContent = "";
+  renderQuestionnaire(true);
+}
+
+function handleQuestionnaireKeydown(event) {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey ||
+      event.target instanceof HTMLTextAreaElement) return;
+  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    cycleQuestionnaireChoice(event.key === "ArrowUp" ? -1 : 1);
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    moveQuestionnaireStep(event.key === "ArrowLeft" ? -1 : 1);
+  }
+}
+
+async function resolveQuestionnaire(outcome) {
+  const pending = state.questionnaire;
+  if (!pending || !state.connected) return;
+  const body = { outcome };
+  if (outcome === "answered") {
+    const questions = pending.questionnaire.questions || [];
+    for (let index = 0; index < questions.length; index += 1) {
+      pending.step = index;
+      if (!validateQuestionnaireStep()) {
+        renderQuestionnaire(true);
+        return;
+      }
+    }
+    body.answers = questions.map((question) => {
+      const answer = questionnaireAnswer(question.id);
+      return { question_id: question.id, option_id: answer.option_id,
+        comment: answer.comment || "" };
+    });
+  }
+  try {
+    await api(`${API_ROOT}/sessions/${encodeURIComponent(pending.sessionId)}/questionnaires/${encodeURIComponent(pending.questionnaire.id)}`, {
+      method: "POST", body,
+    });
+    closeQuestionnaire();
+    await refreshSelectedSession();
+  } catch (error) {
+    if (error instanceof ApiError && [404, 409].includes(error.status)) {
+      closeQuestionnaire();
+      agentNotice("That questionnaire is no longer pending; session state was refreshed.",
+        "error", pending.sessionId);
+      await refreshSelectedSession();
+    } else {
+      byId("questionnaire-error").textContent = errorMessage(error);
+    }
+  }
+}
+
 async function selectSession(sessionId) {
   try {
     if (state.session && state.session.id !== sessionId) {
       stopStream(`session:${state.session.id}`);
       stopAgentClock();
+      if (state.questionnaire?.sessionId === state.session.id)
+        closeQuestionnaire();
     }
     state.session = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}`);
     if (!state.agentLogs.has(sessionId)) state.agentLogs.set(sessionId, []);
@@ -3642,6 +3847,9 @@ async function selectSession(sessionId) {
       ...state.session.approval,
       review_file: state.session.approval.review_file,
     }, state.session.turn_id);
+    if (state.session.questionnaire)
+      showQuestionnaire(sessionId, state.session.questionnaire,
+        state.session.turn_id);
     watchSession(sessionId);
   } catch (error) {
     agentNotice(errorMessage(error), "error", sessionId);
@@ -3673,6 +3881,8 @@ function watchSession(sessionId) {
         id: event.data.approval_id,
         ...event.data,
       }, event.turn_id);
+      if (event.type === "questionnaire_required")
+        showQuestionnaire(sessionId, event.data, event.turn_id);
       if (state.session && state.session.id === sessionId) {
         if (event.type === "turn_started") {
           state.agentActivities.set(sessionId, new Map());
@@ -3681,6 +3891,7 @@ function watchSession(sessionId) {
           state.session.active_elapsed_ms = 0;
         }
         if (event.type === "approval_required") state.session.status = "waiting_guard";
+        if (event.type === "questionnaire_required") state.session.status = "waiting_user";
         if (event.type === "session_error") state.session.status = "error";
         if (event.type === "ready" || event.type === "session_created" ||
             event.type === "session_closed" || event.type === "reasoning_changed" ||
@@ -3692,7 +3903,8 @@ function watchSession(sessionId) {
               agentNotice(errorMessage(error), "error", sessionId));
           }
         }
-        if (["turn_completed", "turn_failed", "approval_resolved"].includes(event.type)) {
+        if (["turn_completed", "turn_failed", "approval_resolved",
+          "questionnaire_resolved"].includes(event.type)) {
           if (["turn_completed", "turn_failed"].includes(event.type)) {
             state.agentActivities.set(sessionId, new Map());
             state.session.turn_id = null;
@@ -3700,6 +3912,12 @@ function watchSession(sessionId) {
             state.session.active_elapsed_ms = null;
             if (event.data && event.data.metrics) state.session.last_turn_metrics = event.data.metrics;
           }
+          if (event.type === "questionnaire_resolved" &&
+              state.questionnaire?.sessionId === sessionId &&
+              state.questionnaire.questionnaire.id === event.data?.questionnaire_id)
+            closeQuestionnaire();
+          if (["turn_completed", "turn_failed"].includes(event.type) &&
+              state.questionnaire?.sessionId === sessionId) closeQuestionnaire();
           void refreshSelectedSession();
         }
         if (event.type === "activity" && event.data && event.data.kind === "response" &&
@@ -3723,6 +3941,9 @@ async function refreshSelectedSession() {
   try {
     const refreshed = await api(`${API_ROOT}/sessions/${encodeURIComponent(sessionId)}`);
     if (state.session?.id === sessionId) state.session = refreshed;
+    if (refreshed.questionnaire)
+      showQuestionnaire(sessionId, refreshed.questionnaire, refreshed.turn_id);
+    else if (state.questionnaire?.sessionId === sessionId) closeQuestionnaire();
     await loadSessions();
     await loadAgentHistory(sessionId);
     renderAgent();
@@ -3850,6 +4071,7 @@ async function cancelActiveAgentTurn() {
       state.guard = null;
       closeDialog(byId("guard-dialog"));
     }
+    if (state.questionnaire?.sessionId === sessionId) closeQuestionnaire();
     return true;
   } catch (error) {
     agentNotice(errorMessage(error), "error", sessionId);
@@ -4626,6 +4848,10 @@ function bindEvents() {
     if (!state.connected) event.preventDefault();
   });
   byId("guard-dialog").addEventListener("cancel", (event) => event.preventDefault());
+  byId("questionnaire-dialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    if (state.connected) void resolveQuestionnaire("declined");
+  });
   byId("auth-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     byId("auth-error").textContent = "";
@@ -4978,6 +5204,25 @@ function bindEvents() {
   byId("guard-review-button").addEventListener("click", () => void reviewGuardFile());
   byId("guard-allow-button").addEventListener("click", () => void resolveGuard("allow"));
   byId("guard-deny-button").addEventListener("click", () => void resolveGuard("deny"));
+  byId("questionnaire-previous").addEventListener("click", () => {
+    if (!state.questionnaire || state.questionnaire.step === 0) return;
+    state.questionnaire.step -= 1;
+    byId("questionnaire-error").textContent = "";
+    renderQuestionnaire(true);
+  });
+  byId("questionnaire-next").addEventListener("click", () => {
+    if (!state.questionnaire || !validateQuestionnaireStep()) return;
+    state.questionnaire.step += 1;
+    renderQuestionnaire(true);
+  });
+  byId("questionnaire-content").addEventListener(
+    "keydown", handleQuestionnaireKeydown);
+  byId("questionnaire-decline").addEventListener("click", () =>
+    void resolveQuestionnaire("declined"));
+  byId("questionnaire-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    void resolveQuestionnaire("answered");
+  });
 
   byId("workspace-review-button").addEventListener("click", () => void loadWorkspaceReview());
   byId("refresh-directory-button").addEventListener("click", () => void loadDirectory(state.directory.path));

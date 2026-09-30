@@ -135,6 +135,14 @@ Provider account-credit display is likewise registry-driven and optional. A prof
 
 - Headless `run` maps Ask → Deny (no self-approval).
 - Interactive agent blocks the tool worker on an `ApprovalGate`; the TUI shows a **y/n** panel (not Enter). Decisions are one-shot. Outcomes are written to `.ainiux-pr/agent.sqlite` `approvals` and a short transcript `notice`.
+
+Model-requested user questions use a distinct `QuestionnaireGate`, not Guard.
+The native `ask` descriptor exists only when an interactive callback is
+installed, so headless and non-agent surfaces cannot accidentally wait for UI.
+The gate owns copied request/response data and opaque IDs, validates every
+answer before waking the tool worker, and remains pending after malformed or
+stale client input. Accepted answers flow through the ordinary tool result and
+conversation transcript; no second persistence schema is introduced.
 - Agent git policy is broader than security-review so a user-approved Ask can actually run (still no shell, still common path/safety checks).
 
 ## Workspace path containment for agent writes

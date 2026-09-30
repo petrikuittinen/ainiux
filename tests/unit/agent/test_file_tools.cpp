@@ -1895,6 +1895,12 @@ void test_git_and_network_tools_policy() {
     net_options.goal_hooks.has_active_goal = [] { return true; };
     net_options.goal_hooks.mark_complete =
         [](const std::string&) { return ok_error(); };
+    net_options.on_questionnaire =
+        [](const agent::QuestionnaireRequest&, runtime::CancellationToken) {
+            agent::QuestionnaireResponse response;
+            response.outcome = agent::QuestionnaireOutcome::Declined;
+            return response;
+        };
     {
         agent::index::Options options;
         options.workspace = workspace;
@@ -1908,7 +1914,7 @@ void test_git_and_network_tools_policy() {
                                               net_tools, net_options)
                   .ok(),
               "create network-enabled registry");
-        check_native_descriptor_invariants(net_tools, 18);
+        check_native_descriptor_invariants(net_tools, 19);
 
         const std::string status =
             net_tools.execute("run", R"JSON({"command":"git status --short --branch"})JSON");
@@ -2784,6 +2790,81 @@ void test_in_project_absolute_and_tilde_paths() {
     fs::remove_all(workspace, ec);
 }
 
+void test_ask_tool_exposure_normalization_and_decline() {
+    const std::string workspace = write_temp_workspace("ask-tool");
+    agent::ReadToolRegistry headless;
+    agent::ToolRegistryOptions headless_options;
+    headless_options.mutation_policy = agent::MutationPolicy::Full;
+    check(agent::ReadToolRegistry::create_without_index(
+              workspace, {}, headless, headless_options).ok(),
+          "create headless registry for ask exposure");
+    const auto headless_definitions = headless.definitions();
+    check(std::none_of(headless_definitions.begin(), headless_definitions.end(),
+                       [](const provider::FunctionDefinition& definition) {
+                           return definition.name == "ask";
+                       }),
+          "headless registry does not expose ask");
+
+    agent::QuestionnaireRequest captured;
+    agent::ReadToolRegistry interactive;
+    agent::ToolRegistryOptions interactive_options;
+    interactive_options.mutation_policy = agent::MutationPolicy::Full;
+    interactive_options.on_questionnaire =
+        [&](const agent::QuestionnaireRequest& request,
+            runtime::CancellationToken) {
+            captured = request;
+            agent::QuestionnaireResponse response;
+            response.outcome = agent::QuestionnaireOutcome::Declined;
+            return response;
+        };
+    check(agent::ReadToolRegistry::create_without_index(
+              workspace, {}, interactive, interactive_options).ok(),
+          "create interactive registry for ask");
+    const auto definitions = interactive.definitions();
+    check(std::any_of(definitions.begin(), definitions.end(),
+                      [](const provider::FunctionDefinition& definition) {
+                          return definition.name == "ask";
+                      }),
+          "interactive registry exposes ask");
+    const auto ask_definition = std::find_if(
+        definitions.begin(), definitions.end(),
+        [](const provider::FunctionDefinition& definition) {
+            return definition.name == "ask";
+        });
+    check(ask_definition != definitions.end() &&
+              json::parse(ask_definition->parameters_json).error.ok(),
+          "interactive ask schema is valid JSON");
+    provider::RequestContext deepseek_context;
+    deepseek_context.profile.name = "deepseek";
+    deepseek_context.options.model = "deepseek-flash";
+    deepseek_context.api_kind = provider::ApiKind::ChatCompletions;
+    provider::ToolConversation conversation;
+    conversation.messages = {{"user", "Ask me how it should be."}};
+    const std::string serialized = provider::serialize_tool_request(
+        deepseek_context, conversation, definitions);
+    check(serialized != "{}" && json::parse(serialized).error.ok(),
+          "DeepSeek Chat Completions serializes the interactive ask tool schema");
+    const std::string result = interactive.execute(
+        "ask",
+        R"JSON({"questions":[{"question":"Choose π","options":[{"label":"Fast","description":"Quick"},{"label":"Other (Recommended)","description":"Custom"},{"label":"Careful (Recommended)","description":"Thorough"}]}]})JSON");
+    check(json_ok(result) && json_data_string(result, "outcome") == "declined",
+          "questionnaire decline is a successful tool outcome: " + result);
+    check(captured.questions.size() == 1 &&
+              captured.questions.front().options.size() == 3 &&
+              captured.questions.front().options[0].label ==
+                  "Fast (Recommended)" &&
+              captured.questions.front().options[1].label == "Careful" &&
+              captured.questions.front().options[2].other,
+          "ask normalizes recommendation suffixes and one built-in Other");
+    const std::string invalid = interactive.execute(
+        "ask",
+        R"JSON({"questions":[{"question":"No normal","options":[{"label":"Other","description":"A"},{"label":"Other (Recommended)","description":"B"}]}]})JSON");
+    check(!json_ok(invalid) && json_error_code(invalid) == "invalid_arguments",
+          "ask rejects normalization with no normal options");
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void run_all() {
     test_permission_modes_and_native_path_tools();
     test_tool_schemas_gemini_compatible();
@@ -2812,6 +2893,7 @@ void run_all() {
     test_workspace_script_review_path();
     test_project_scripts_trust_and_execution();
     test_in_project_absolute_and_tilde_paths();
+    test_ask_tool_exposure_normalization_and_decline();
 }
 
 }  // namespace ainiux::test::agent_file_tools

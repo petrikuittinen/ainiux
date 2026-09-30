@@ -111,6 +111,31 @@ const char* progress_kind_name(agent::AgentProgressKind kind) {
     return "notice";
 }
 
+std::string questionnaire_json(const agent::QuestionnaireRequest& request) {
+    std::string result = "{\"id\":" + json::quote(request.id) +
+                         ",\"questions\":[";
+    for (std::size_t i = 0; i < request.questions.size(); ++i) {
+        if (i != 0) result.push_back(',');
+        const agent::QuestionnaireQuestion& question = request.questions[i];
+        result += "{\"id\":" + json::quote(question.id) +
+                  ",\"question\":" + json::quote(question.question) +
+                  ",\"options\":[";
+        for (std::size_t j = 0; j < question.options.size(); ++j) {
+            if (j != 0) result.push_back(',');
+            const agent::QuestionnaireOption& option = question.options[j];
+            result += "{\"id\":" + json::quote(option.id) +
+                      ",\"label\":" + json::quote(option.label) +
+                      ",\"description\":" +
+                      json::quote(option.description) +
+                      ",\"other\":" +
+                      (option.other ? std::string("true") :
+                                      std::string("false")) + "}";
+        }
+        result += "]}";
+    }
+    return result + "]}";
+}
+
 }  // namespace
 
 InteractiveSession::InteractiveSession(std::string id,
@@ -194,6 +219,13 @@ void InteractiveSession::start_preparation() {
                                           runtime::CancellationToken cancellation) {
                 return gate->request(request, cancellation);
             };
+            const std::shared_ptr<agent::QuestionnaireGate> questionnaire_gate =
+                controller_->questionnaire_gate();
+            options.on_questionnaire =
+                [questionnaire_gate](const agent::QuestionnaireRequest& request,
+                                     runtime::CancellationToken cancellation) {
+                    return questionnaire_gate->request(request, cancellation);
+                };
             options.restore_lane = false;
             error = controller_->runtime()->prepare(context, token, {}, std::move(options));
             if (error.ok()) {
@@ -250,6 +282,18 @@ void InteractiveSession::consume_event(const agent::AgentSurfaceEvent& event) {
                 turn_id);
         return;
     }
+    if (event.type == agent::AgentSurfaceEvent::Type::QuestionnaireRequired) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pending_questionnaire_ = event.questionnaire;
+            pending_questionnaire_turn_id_ = turn_id;
+            status_ = "waiting_user";
+            updated_at_ = server_timestamp();
+        }
+        publish("questionnaire_required",
+                questionnaire_json(event.questionnaire), turn_id);
+        return;
+    }
     if (event.type == agent::AgentSurfaceEvent::Type::TurnDone ||
         event.type == agent::AgentSurfaceEvent::Type::TurnError) {
         const bool cancelled = event.error.code == ErrorCode::Cancelled;
@@ -266,6 +310,8 @@ void InteractiveSession::consume_event(const agent::AgentSurfaceEvent& event) {
             last_turn_metrics_json_ = metrics_json;
             pending_approval_id_.clear();
             pending_review_path_.clear();
+            pending_questionnaire_ = {};
+            pending_questionnaire_turn_id_.clear();
             status_ = closed_ ? "closed" : "ready";
             updated_at_ = server_timestamp();
         }
@@ -349,6 +395,12 @@ std::string InteractiveSession::snapshot_json() const {
                                                 : json::quote(pending_review_path_)) + "}";
     } else {
         result += ",\"approval\":null";
+    }
+    if (!pending_questionnaire_.id.empty()) {
+        result += ",\"questionnaire\":" +
+                  questionnaire_json(pending_questionnaire_);
+    } else {
+        result += ",\"questionnaire\":null";
     }
     return result + "}";
 }
@@ -736,6 +788,88 @@ Error InteractiveSession::resolve_approval(const std::string& approval_id,
     }
     controller_->approval_gate()->resolve(parsed);
     publish("approval_resolved", "{\"decision\":" + json::quote(decision) + "}", turn_id);
+    return ok_error();
+}
+
+Error InteractiveSession::resolve_questionnaire(
+    const std::string& questionnaire_id,
+    const std::string& body) {
+    const json::ParseResult parsed = json::parse(body);
+    if (!parsed.error.ok() || !parsed.value.is_object())
+        return {ErrorCode::BadArgs,
+                "questionnaire body must be a JSON object"};
+    Error error = reject_unknown(parsed.value, {"outcome", "answers"});
+    if (!error.ok()) return error;
+    std::string outcome;
+    error = required_string(parsed.value, "outcome", outcome, 32);
+    if (!error.ok()) return error;
+    if (outcome != "answered" && outcome != "declined")
+        return {ErrorCode::BadArgs,
+                "questionnaire outcome must be answered or declined"};
+
+    std::vector<agent::QuestionnaireAnswer> answers;
+    const json::Value* answer_values = parsed.value.get("answers");
+    if (outcome == "declined") {
+        if (answer_values != nullptr)
+            return {ErrorCode::BadArgs,
+                    "declined questionnaire must not include answers"};
+    } else {
+        if (answer_values == nullptr || !answer_values->is_array())
+            return {ErrorCode::BadArgs,
+                    "answered questionnaire requires an answers array"};
+        answers.reserve(answer_values->array.size());
+        for (const json::Value& item : answer_values->array) {
+            if (!item.is_object())
+                return {ErrorCode::BadArgs,
+                        "each questionnaire answer must be an object"};
+            error = reject_unknown(item,
+                                   {"question_id", "option_id", "comment"});
+            if (!error.ok()) return error;
+            agent::QuestionnaireAnswer answer;
+            error = required_string(item, "question_id", answer.question_id,
+                                    128);
+            if (!error.ok()) return error;
+            error = required_string(item, "option_id", answer.option_id, 128);
+            if (!error.ok()) return error;
+            error = optional_string(item, "comment", answer.comment, 4096);
+            if (!error.ok()) return error;
+            answers.push_back(std::move(answer));
+        }
+    }
+
+    std::string turn_id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (questionnaire_id.empty() ||
+            pending_questionnaire_.id != questionnaire_id ||
+            pending_questionnaire_turn_id_.empty() ||
+            pending_questionnaire_turn_id_ != active_turn_id_)
+            return {ErrorCode::FileRead,
+                    "questionnaire was not found or is no longer pending"};
+        turn_id = active_turn_id_;
+    }
+    error = outcome == "declined"
+                ? controller_->decline_questionnaire(questionnaire_id)
+                : controller_->answer_questionnaire(questionnaire_id, answers);
+    if (!error.ok()) return error;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Resolving the gate wakes the Agent worker before this lock is
+        // reacquired. It may already have published another questionnaire for
+        // the same turn, so clear only the request resolved by this response.
+        if (pending_questionnaire_.id == questionnaire_id) {
+            pending_questionnaire_ = {};
+            pending_questionnaire_turn_id_.clear();
+            if (!closed_ && !active_turn_id_.empty() &&
+                active_turn_id_ == turn_id)
+                status_ = "running";
+        }
+        updated_at_ = server_timestamp();
+    }
+    publish("questionnaire_resolved",
+            "{\"questionnaire_id\":" + json::quote(questionnaire_id) +
+                ",\"outcome\":" + json::quote(outcome) + "}",
+            turn_id);
     return ok_error();
 }
 

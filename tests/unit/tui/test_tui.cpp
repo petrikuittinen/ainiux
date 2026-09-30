@@ -56,6 +56,26 @@ void test_tui_history_jump_helpers() {
           "TUI End jump returns to the live chat bottom");
 }
 
+void test_questionnaire_arrow_key_actions() {
+    using Action = ainiux::tui::QuestionnaireMovementAction;
+    using Key = ainiux::editor::MovementKey;
+    check(ainiux::tui::questionnaire_movement_action(Key::Up, false) ==
+              Action::PreviousChoice &&
+              ainiux::tui::questionnaire_movement_action(Key::Down, false) ==
+                  Action::NextChoice,
+          "questionnaire Up/Down select choices");
+    check(ainiux::tui::questionnaire_movement_action(Key::Left, false) ==
+              Action::PreviousQuestion &&
+              ainiux::tui::questionnaire_movement_action(Key::Right, false) ==
+                  Action::NextQuestion,
+          "questionnaire Left/Right navigate questions");
+    check(ainiux::tui::questionnaire_movement_action(Key::Up, true) ==
+              Action::EditText &&
+              ainiux::tui::questionnaire_movement_action(Key::Left, true) ==
+                  Action::EditText,
+          "questionnaire arrows edit text while a custom response is active");
+}
+
 void test_terminal_frame_renderer_updates_only_changed_rows() {
     ainiux::tui::detail::TerminalFrameRenderer renderer;
     ainiux::tui::detail::TerminalFrame first(3, 20);
@@ -2866,6 +2886,7 @@ void run_all() {
     test_terminal_frame_renderer_updates_only_changed_rows();
     test_shared_tui_render_skips_identical_frame();
     test_tui_history_jump_helpers();
+    test_questionnaire_arrow_key_actions();
     test_tui_provider_change_resets_only_on_actual_change();
     test_tui_provider_change_openai_responses_to_gemini();
     test_agent_model_picker_slash_search();
