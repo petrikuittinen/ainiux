@@ -255,8 +255,6 @@ void test_prompts_and_report() {
               prompts.agent.find("## Trust") != std::string::npos &&
               prompts.agent.find("Use the code index as a hint, not truth") !=
                   std::string::npos &&
-              prompts.agent.find("Start with symbol or outline") !=
-                  std::string::npos &&
               prompts.agent.find("Use glob or grep for search") !=
                   std::string::npos &&
               prompts.agent.find("ls for the real filesystem") !=
@@ -281,15 +279,14 @@ void test_prompts_and_report() {
               prompts.agent.find("directoroes") == std::string::npos &&
               prompts.agent.find("edit") != std::string::npos &&
               prompts.agent.find("tests") != std::string::npos &&
-              prompts.agent.find("refactoring") != std::string::npos &&
+              prompts.agent.find("YAGNI, DRY and KISS") != std::string::npos &&
+              prompts.agent.find("Separate concerns") != std::string::npos &&
+              prompts.agent.find("composing small pieces") != std::string::npos &&
               prompts.agent.find("appropriate input/error checking") !=
                   std::string::npos &&
-              prompts.agent.find("examine algorithms and data structures") !=
-                  std::string::npos &&
-              prompts.agent.find(
-                  "measured, bounded precomputation or RAM/SSD caching") !=
-                  std::string::npos &&
-              prompts.agent.find("4.5:1") != std::string::npos,
+              prompts.agent.find("Arabic RTL") != std::string::npos &&
+              prompts.agent.find("network failures") != std::string::npos &&
+              prompts.agent.find("WCAG 2.1") != std::string::npos,
           "merged agent prompt is bounded and security prompt bytes remain unchanged");
     const std::string agent_native =
         prompts.agent_system_prompt(ainiux::agent::ToolProtocol::Native);
@@ -298,7 +295,7 @@ void test_prompts_and_report() {
     check(agent_native.find("AGENTS.md project instructions") != std::string::npos &&
               agent_native.find("Act:") != std::string::npos &&
               agent_native.find("Lead:") != std::string::npos &&
-              agent_native.find("4.5:1") != std::string::npos &&
+              agent_native.find("WCAG 2.1") != std::string::npos &&
               agent_native.find("Active channel: native tools") != std::string::npos &&
               agent_native.find("submit_security_review") == std::string::npos &&
               agent_native.find("not serial or parallel single-path") !=
