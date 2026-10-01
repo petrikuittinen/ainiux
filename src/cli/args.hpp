@@ -236,7 +236,7 @@ struct Options {
     long max_input_bytes = 10485760;
     size_t max_source_code_file_size = 10U * 1024U * 1024U;
     int max_parallel_agents = 4;
-    int agent_max_turns = 250;
+    int agent_max_turns = 500;
     size_t security_review_batch_size = 200U * 1024U;
     int security_review_log_keep_runs = 3;
     // Agent project policy (interactive + --run).

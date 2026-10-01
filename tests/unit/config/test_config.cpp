@@ -1309,7 +1309,7 @@ void test_config_reads_common_template() {
                   ainiux::editor::kDefaultAiContinueProsePostfixMaxChars &&
               options.editor_ai_continue_max_tokens == ainiux::editor::kDefaultAiContinueMaxTokens &&
               options.max_parallel_agents == 4 &&
-              options.agent_max_turns == 250 &&
+              options.agent_max_turns == 500 &&
               options.security_review_batch_size == 200U * 1024U &&
               options.security_review_log_enabled &&
               options.security_review_log_keep_runs == 3 &&

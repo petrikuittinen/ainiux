@@ -3977,7 +3977,8 @@ Error send_tool_round(const RequestContext& context,
                       const ToolRoundContext& observation_context,
                       ReasoningDeltaCallback on_reasoning_delta,
                       WorkingCallback on_working,
-                      DeltaCallback on_content_delta) {
+                      DeltaCallback on_content_delta,
+                      WaitingCallback on_waiting) {
     Error precondition_error;
     if (context.profile.offline)
         precondition_error = {ErrorCode::UnsupportedFeature, "provider none disables native tool requests"};
@@ -4032,10 +4033,16 @@ Error send_tool_round(const RequestContext& context,
     std::string reasoning_stream_buffer;
     output::ThinkingTraceSplitter thinking_splitter;
     bool working_notified = false;
+    bool waiting_notified = false;
     auto maybe_notify_working = [&]() -> Error {
         if (working_notified || !on_working) return ok_error();
         working_notified = true;
         return on_working();
+    };
+    auto maybe_notify_waiting = [&]() -> Error {
+        if (waiting_notified || working_notified || !on_waiting) return ok_error();
+        waiting_notified = true;
+        return on_waiting();
     };
     auto responses_event_starts_work = [](const json::Value& root) -> bool {
         const json::Value* type = root.get("type");
@@ -4056,7 +4063,8 @@ Error send_tool_round(const RequestContext& context,
                (item_type->string == "function_call" || item_type->string == "message" ||
                 item_type->string == "web_search_call");
     };
-    if (context.options.stream && (on_reasoning_delta || on_working || on_content_delta)) {
+    if (context.options.stream &&
+        (on_reasoning_delta || on_working || on_content_delta || on_waiting)) {
         request.on_body = [&](const std::string& chunk) -> Error {
             reasoning_stream_buffer += chunk;
             std::size_t position = 0;
@@ -4069,7 +4077,14 @@ Error send_tool_round(const RequestContext& context,
                     collect_sse_data_lines(reasoning_stream_buffer.substr(position,
                                                                           end - position));
                 position = next;
-                if (lines.empty()) continue;
+                if (lines.empty()) {
+                    Error waiting_error = maybe_notify_waiting();
+                    if (!waiting_error.ok()) return waiting_error;
+                    continue;
+                }
+                // Any data: event means the provider started producing output.
+                // Later comment-only keep-alives must not show Waiting again.
+                waiting_notified = true;
                 const std::string data = join_sse_data_lines(lines);
                 if (data.empty()) continue;
                 if (data == "[DONE]") {

@@ -226,6 +226,9 @@ using ReasoningDeltaCallback = std::function<Error(const std::string&)>;
 // Fired once when a streamed tool round leaves reasoning and starts a tool
 // call or answer body. Display-only; not part of provider context.
 using WorkingCallback = std::function<Error()>;
+// Fired once when a streamed tool round receives an SSE comment/keep-alive
+// before any data event. Display-only; never persisted.
+using WaitingCallback = std::function<Error()>;
 
 struct ContextResult {
     RequestContext context;
@@ -300,7 +303,8 @@ Error send_tool_round(const RequestContext& context,
                       const ToolRoundContext& observation_context = ToolRoundContext{},
                       ReasoningDeltaCallback on_reasoning_delta = {},
                       WorkingCallback on_working = {},
-                      DeltaCallback on_content_delta = {});
+                      DeltaCallback on_content_delta = {},
+                      WaitingCallback on_waiting = {});
 Error list_models(const RequestContext& context,
                   ModelsResult& result,
                   runtime::CancellationToken cancellation = runtime::CancellationToken());

@@ -1519,7 +1519,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     limits_.interactive = options_.interactive;
     limits_.max_scripted_turns = options_.max_agent_turns > 0
                                      ? static_cast<std::size_t>(options_.max_agent_turns)
-                                     : 250U;
+                                     : 500U;
     known_tools_ = known_tool_names(tools_);
     publish_preparation(PreparationPhase::ToolSetup, true, phase_started);
 
@@ -2681,15 +2681,19 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         std::numeric_limits<std::size_t>::max() - 1;
     constexpr std::size_t kResponseId =
         std::numeric_limits<std::size_t>::max() - 2;
+    bool waiting_row_started = false;
     bool working_row_started = false;
+    auto hide_live_notice = [&]() {
+        if (!waiting_row_started && !working_row_started) return;
+        structured_progress({AgentProgressAction::Discard, AgentProgressKind::Notice,
+                             active_round_id, kWorkingNoticeId, {}, 0});
+        waiting_row_started = false;
+        working_row_started = false;
+    };
     auto executor = [&](const std::string& name, const std::string& arguments_json,
                         runtime::CancellationToken token) {
         ++turn_tool_index;
-        if (working_row_started) {
-            structured_progress({AgentProgressAction::Discard, AgentProgressKind::Notice,
-                                 active_round_id, kWorkingNoticeId, {}, 0});
-            working_row_started = false;
-        }
+        hide_live_notice();
         const auto execution_started = std::chrono::steady_clock::now();
         const long long wait_before =
             interactive_wait_ms_.load(std::memory_order_relaxed);
@@ -2846,11 +2850,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 estimate_tokens_from_text(reasoning_so_far));
             last_thinking_token_publish = now;
         };
-        if (working_row_started) {
-            structured_progress({AgentProgressAction::Discard, AgentProgressKind::Notice,
-                                 active_round_id, kWorkingNoticeId, {}, 0});
-            working_row_started = false;
-        }
+        hide_live_notice();
         publish_phase(AgentActivityPhase::Thinking);
         ReviewLogContext log_context("agent");
         log_context.round = state_.turn + 1;
@@ -2890,12 +2890,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 last_thinking_token_publish =
                     std::chrono::steady_clock::time_point::min();
                 clear_in_flight_generation_tokens();
-                if (working_row_started) {
-                    structured_progress({AgentProgressAction::Discard,
-                                         AgentProgressKind::Notice, active_round_id,
-                                         kWorkingNoticeId, {}, 0});
-                    working_row_started = false;
-                }
+                hide_live_notice();
                 retry_notice_active = true;
                 std::string retry_notice =
                     "Waiting for provider · retry " +
@@ -2946,12 +2941,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         auto discard_thinking_line = [&](std::size_t tool_id) {
             publish_thinking(AgentProgressAction::Discard, tool_id, {});
         };
-        auto hide_working_row = [&]() {
-            if (!working_row_started) return;
-            structured_progress({AgentProgressAction::Discard, AgentProgressKind::Notice,
-                                 active_round_id, kWorkingNoticeId, {}, 0});
-            working_row_started = false;
-        };
+        auto hide_working_row = [&]() { hide_live_notice(); };
         auto finalize_thinking_previews = [&]() {
             if (thinking_previews_finalized) return;
             thinking_previews_finalized = true;
@@ -2984,6 +2974,21 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                 discard_thinking_line(kFinishedThinkingId);
             }
         };
+        auto on_waiting = [&]() -> Error {
+            if (!options_.interactive) return ok_error();
+            if (working_row_started || reasoning_row_started ||
+                !round_reasoning.empty())
+                return ok_error();
+            if (!waiting_row_started) {
+                structured_progress({AgentProgressAction::Upsert,
+                                     AgentProgressKind::Notice, active_round_id,
+                                     kWorkingNoticeId, "Waiting for provider: ", 0});
+                waiting_row_started = true;
+            }
+            return cancellation.cancelled()
+                       ? Error{ErrorCode::Cancelled, "agent waiting preview cancelled"}
+                       : ok_error();
+        };
         auto on_working = [&]() -> Error {
             if (!options_.interactive) return ok_error();
             finalize_thinking_previews();
@@ -2993,6 +2998,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                                      AgentProgressKind::Notice, active_round_id,
                                      kWorkingNoticeId, "Working: ", 0});
                 working_row_started = true;
+                waiting_row_started = false;
             }
             return cancellation.cancelled()
                        ? Error{ErrorCode::Cancelled, "agent working preview cancelled"}
@@ -3021,6 +3027,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         };
         auto on_reasoning = [&](const std::string& delta) -> Error {
                 if (!options_.interactive) return ok_error();
+                if (waiting_row_started) hide_live_notice();
                 round_reasoning += delta;
                 // Throttled chrome meter: request size + local in-flight
                 // reasoning estimate. Display-only; not compaction input.
@@ -3089,7 +3096,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         Error error = send_tool_round_with_transport_retries(
             context, conversation_, definitions, round, cancellation,
             limits_.transport_attempts, observer_pointer, observation_context,
-            on_retry, on_reasoning, on_working, on_content);
+            on_retry, on_reasoning, on_working, on_content, on_waiting);
         clear_retry_notice();
         if (!error.ok() && options_.auto_compact &&
             options_.compact_strategy != CompactionStrategy::Fast &&
@@ -3124,7 +3131,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
                     context, conversation_, definitions, round, cancellation,
                     limits_.transport_attempts, observer_pointer,
                     observation_context, on_retry, on_reasoning, on_working,
-                    on_content);
+                    on_content, on_waiting);
                 clear_retry_notice();
             } else if (!recovered.error.ok()) {
                 error = recovered.error;

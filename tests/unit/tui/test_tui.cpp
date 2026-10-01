@@ -1937,6 +1937,47 @@ void test_agent_working_notice_animates() {
     check(text0 != text1, "Working: animation advances across frames");
 }
 
+void test_agent_waiting_notice_animates() {
+    ainiux::chat::Session session;
+    session.messages.push_back({"notice", "Waiting for provider: "});
+    const std::vector<ainiux::tui::StyledLine> frame0 =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 80, false, ainiux::tui::ActivityKind::None, 0, false, true);
+    const std::vector<ainiux::tui::StyledLine> frame1 =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 80, false, ainiux::tui::ActivityKind::None, 1, false, true);
+    bool saw_waiting = false;
+    bool saw_animation = false;
+    for (const auto& line : frame0) {
+        for (const auto& segment : line.segments) {
+            if (segment.text.find("Waiting for provider:") != std::string::npos)
+                saw_waiting = true;
+            if (segment.role == ainiux::tui::StyleRole::StreamingActivity)
+                saw_animation = true;
+        }
+    }
+    check(saw_waiting && saw_animation,
+          "live Waiting for provider: notice uses the streaming activity animation");
+    const std::string text0 = joined_history_text(frame0);
+    const std::string text1 = joined_history_text(frame1);
+    check(text0 != text1, "Waiting for provider: animation advances across frames");
+
+    session.messages.clear();
+    session.messages.push_back({"notice", "Waiting for provider · retry 1 in 1s"});
+    const std::vector<ainiux::tui::StyledLine> retry_lines =
+        ainiux::tui::detail::history_lines_for_session(
+            session, 80, false, ainiux::tui::ActivityKind::None, 0, false, true);
+    bool retry_animated = false;
+    for (const auto& line : retry_lines) {
+        for (const auto& segment : line.segments) {
+            if (segment.role == ainiux::tui::StyleRole::StreamingActivity)
+                retry_animated = true;
+        }
+    }
+    check(!retry_animated,
+          "transport retry notices keep their static text instead of the keep-alive spinner");
+}
+
 void test_agent_shell_notice_preserves_listing_newlines() {
     // Chat/agent history does not apply prose reflow. Shell notices must keep
     // physical newlines so `ls -la` stays readable.
@@ -2820,6 +2861,22 @@ void test_agent_progress_replaces_rows_in_place() {
 
     ainiux::tui::apply_agent_progress_update(
         session, rows,
+        {agent::AgentProgressAction::Upsert, agent::AgentProgressKind::Notice,
+         1, 98, "Waiting for provider: ", 0});
+    check(session.messages.back().role == "notice" &&
+              session.messages.back().content == "Waiting for provider: " &&
+              app::provider_chat_messages(session.messages).empty(),
+          "live waiting notice is display-only and excluded from provider context");
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
+        {agent::AgentProgressAction::Discard, agent::AgentProgressKind::Notice,
+         1, 98, {}, 0});
+    check(session.messages.back().role != "notice" ||
+              session.messages.back().content != "Waiting for provider: ",
+          "discarded waiting notice leaves the transcript");
+
+    ainiux::tui::apply_agent_progress_update(
+        session, rows,
         {agent::AgentProgressAction::Discard, agent::AgentProgressKind::Thinking,
          1, 0, {}, 0});
     check(session.messages.size() == 2 && session.messages[0].role == "tool",
@@ -2936,6 +2993,7 @@ void run_all() {
     test_tui_agent_history_chrome();
     test_history_word_wraps_prose_but_not_fenced_code();
     test_agent_working_notice_animates();
+    test_agent_waiting_notice_animates();
     test_agent_shell_notice_preserves_listing_newlines();
     test_agent_project_slash_command_parsing();
     test_prompt_recall_is_mode_isolated();

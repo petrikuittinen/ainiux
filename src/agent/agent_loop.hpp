@@ -24,7 +24,7 @@ struct AgentLoopLimits {
     std::size_t soft_identical_repeats = 3;
     std::size_t hard_identical_repeats = 5;
     std::size_t consecutive_failure_turns = 3;
-    std::size_t max_scripted_turns = 250;
+    std::size_t max_scripted_turns = 500;
     int transport_attempts = 3;  // total attempts per request, not "extra" retries
     bool interactive = false;    // interactive: ask to continue at turn cap
 };
@@ -109,7 +109,8 @@ Error send_tool_round_with_transport_retries(
         {},
     provider::ReasoningDeltaCallback on_reasoning_delta = {},
     provider::WorkingCallback on_working = {},
-    provider::DeltaCallback on_content_delta = {});
+    provider::DeltaCallback on_content_delta = {},
+    provider::WaitingCallback on_waiting = {});
 
 // Normalize arguments and tool names; mark invalid args for history hygiene.
 std::vector<PreparedToolCall> prepare_tool_calls(

@@ -125,13 +125,21 @@ bool starts_with(const std::string& text, const std::string& prefix) {
     return text.rfind(prefix, 0) == 0;
 }
 
-bool is_agent_working_notice(const std::string& content) {
-    if (!starts_with(content, "Working:")) return false;
-    for (size_t i = std::string("Working:").size(); i < content.size(); ++i) {
+bool is_colon_only_notice(const std::string& content, const std::string& prefix) {
+    if (!starts_with(content, prefix)) return false;
+    for (size_t i = prefix.size(); i < content.size(); ++i) {
         const unsigned char ch = static_cast<unsigned char>(content[i]);
         if (ch != ' ' && ch != '\t') return false;
     }
     return true;
+}
+
+bool is_agent_working_notice(const std::string& content) {
+    return is_colon_only_notice(content, "Working:");
+}
+
+bool is_agent_waiting_notice(const std::string& content) {
+    return is_colon_only_notice(content, "Waiting for provider:");
 }
 
 char lower_ascii(char ch) {
@@ -665,6 +673,10 @@ std::vector<StyledLine> history_lines_for_session(const chat::Session& session,
         if (agent_mode && message.role == "notice" && is_agent_working_notice(content)) {
             content_segments = activity_placeholder_segments(
                 "Working:", ActivityKind::Streaming, activity_frame, "");
+        } else if (agent_mode && message.role == "notice" &&
+                   is_agent_waiting_notice(content)) {
+            content_segments = activity_placeholder_segments(
+                "Waiting for provider:", ActivityKind::Streaming, activity_frame, "");
         } else if (show_thinking_placeholder) {
             content_segments =
                 activity_placeholder_segments("", ActivityKind::Thinking,

@@ -550,7 +550,8 @@ Error send_tool_round_with_transport_retries(
     std::function<void(const Error& error, int attempt, int backoff_seconds)> on_retry,
     provider::ReasoningDeltaCallback on_reasoning_delta,
     provider::WorkingCallback on_working,
-    provider::DeltaCallback on_content_delta) {
+    provider::DeltaCallback on_content_delta,
+    provider::WaitingCallback on_waiting) {
     if (transport_attempts < 1) transport_attempts = 1;
     Error error;
     for (int attempt = 0; attempt < transport_attempts; ++attempt) {
@@ -559,7 +560,7 @@ Error send_tool_round_with_transport_retries(
         attempt_context.retry_attempt = static_cast<std::size_t>(attempt + 1);
         error = provider::send_tool_round(context, conversation, tools, result, cancellation,
                                           observer, attempt_context, on_reasoning_delta,
-                                          on_working, on_content_delta);
+                                          on_working, on_content_delta, on_waiting);
         if (error.ok()) return error;
         if (is_immediate_fail_transport_error(error)) return error;
         if (!is_retryable_transport_error(error)) return error;

@@ -281,6 +281,127 @@ ainiux::Error run_responses_stream_from_body(const std::string& body,
     return run_stream_from_body(body, ainiux::provider::ApiKind::Responses, result, streamed);
 }
 
+struct ToolStreamCallbacks {
+    int waiting = 0;
+    int working = 0;
+    int request_events = 0;
+    int response_events = 0;
+    std::string content;
+    std::string reasoning;
+};
+
+ainiux::Error run_tool_stream_from_body(const std::string& body,
+                                        ainiux::provider::ToolRoundResult& result,
+                                        ToolStreamCallbacks& callbacks) {
+#if defined(_WIN32)
+    WinsockGuard winsock;
+    if (!winsock.ready())
+        return {ainiux::ErrorCode::Internal, "could not initialize Winsock"};
+#endif
+    UniqueFd listen_fd(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+    if (listen_fd.get() == kInvalidTestSocket) {
+        return {ainiux::ErrorCode::Internal, "could not create test server socket"};
+    }
+    const int yes = 1;
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&yes), sizeof(yes)) != 0) {
+        return {ainiux::ErrorCode::Internal, "could not configure test server socket reuse"};
+    }
+#if defined(_WIN32)
+    const DWORD timeout = 5000;
+#else
+    timeval timeout{};
+    timeout.tv_sec = 5;
+#endif
+    if (setsockopt(listen_fd.get(), SOL_SOCKET, SO_RCVTIMEO,
+                   reinterpret_cast<const char*>(&timeout), sizeof(timeout)) != 0) {
+        return {ainiux::ErrorCode::Internal, "could not configure test server socket timeout"};
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        return {ainiux::ErrorCode::Internal, "could not bind test server socket"};
+    }
+    if (listen(listen_fd.get(), 1) != 0) {
+        return {ainiux::ErrorCode::Internal, "could not listen on test server socket"};
+    }
+#if defined(_WIN32)
+    int length = sizeof(address);
+#else
+    socklen_t length = sizeof(address);
+#endif
+    if (getsockname(listen_fd.get(), reinterpret_cast<sockaddr*>(&address), &length) != 0) {
+        return {ainiux::ErrorCode::Internal, "could not inspect test server socket"};
+    }
+    const int port = ntohs(address.sin_port);
+    const TestSocket server_fd = listen_fd.release();
+    std::thread server([server_fd, body]() {
+        UniqueFd scoped_listen(server_fd);
+        UniqueFd client(accept(scoped_listen.get(), nullptr, nullptr));
+        if (client.get() == kInvalidTestSocket) {
+            return;
+        }
+        char request_buffer[1024] = {};
+        if (recv(client.get(), request_buffer, sizeof(request_buffer), 0) < 0) {
+            return;
+        }
+        const std::string response =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/event-stream\r\n"
+            "Connection: close\r\n"
+            "\r\n" +
+            body;
+        (void)send_all(client.get(), response);
+    });
+
+    ainiux::provider::RequestContext context;
+    context.profile.name = "custom_openai_chat";
+    context.profile.capabilities.chat_completions = true;
+    context.profile.capabilities.tool_calls = true;
+    context.options.model = "mock-model";
+    context.options.stream = true;
+    context.options.connect_timeout_seconds = 2;
+    context.options.timeout_seconds = 5;
+    context.chat_url = "http://127.0.0.1:" + std::to_string(port) + "/v1/chat/completions";
+    context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+
+    ainiux::provider::ToolConversation conversation;
+    conversation.messages = {{"user", "hello"}};
+    const std::vector<ainiux::provider::FunctionDefinition> tools = {
+        {"read_file", "Read a file", R"({"type":"object","properties":{}})"}};
+    ainiux::provider::ToolRoundObserver observer;
+    observer.on_request = [&](const ainiux::provider::ToolRoundContext&, const std::string&,
+                              const std::vector<std::string>&, const std::string&,
+                              const ainiux::Error&) { ++callbacks.request_events; };
+    observer.on_response = [&](const ainiux::provider::ToolRoundContext&,
+                               const ainiux::http::Response&,
+                               const ainiux::provider::ToolRoundResult&,
+                               const ainiux::Error&) { ++callbacks.response_events; };
+    ainiux::Error err = ainiux::provider::send_tool_round(
+        context, conversation, tools, result, {}, &observer, {},
+        [&](const std::string& delta) {
+            callbacks.reasoning += delta;
+            return ainiux::ok_error();
+        },
+        [&]() {
+            ++callbacks.working;
+            return ainiux::ok_error();
+        },
+        [&](const std::string& delta) {
+            callbacks.content += delta;
+            return ainiux::ok_error();
+        },
+        [&]() {
+            ++callbacks.waiting;
+            return ainiux::ok_error();
+        });
+    server.join();
+    return err;
+}
+
 ainiux::Error run_chat_http_status_response(long status,
                                             const std::string& reason,
                                             const std::string& content_type,
@@ -3909,6 +4030,42 @@ void test_video_catalog_settings_and_request() {
           "Omni REST steps expose inline video data");
 }
 
+void test_native_tool_keep_alive_waiting_callback() {
+    const std::string keep_alive_then_content =
+        ": keep-alive\n\n"
+        ": keep-alive\n\n"
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
+        ": keep-alive\n\n"
+        "data: [DONE]\n\n";
+    ainiux::provider::ToolRoundResult result;
+    ToolStreamCallbacks callbacks;
+    ainiux::Error error = run_tool_stream_from_body(keep_alive_then_content, result, callbacks);
+    check(error.ok(), "comment-only keep-alives then content complete a tool round");
+    check(callbacks.waiting == 1,
+          "waiting callback fires once for keep-alive comments before data");
+    check(callbacks.working == 1, "working callback still fires when visible content starts");
+    check(callbacks.content == "hello", "content callback receives the later data event");
+    check(callbacks.reasoning.empty(), "keep-alive comments are not reasoning text");
+    check(callbacks.request_events == 1 && callbacks.response_events == 1,
+          "keep-alives do not emit extra tool-round observer events");
+
+    const std::string reasoning_then_keep_alive =
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"inspect\"}}]}\n\n"
+        ": keep-alive\n\n"
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\","
+        "\"function\":{\"name\":\"read_file\",\"arguments\":\"{}\"}}]}}]}\n\n"
+        "data: [DONE]\n\n";
+    result = {};
+    callbacks = {};
+    error = run_tool_stream_from_body(reasoning_then_keep_alive, result, callbacks);
+    check(error.ok() && result.tool_calls.size() == 1,
+          "reasoning then keep-alive then a tool call completes");
+    check(callbacks.waiting == 0,
+          "keep-alives after a data event do not fire the waiting callback");
+    check(callbacks.reasoning == "inspect" && callbacks.working == 1,
+          "reasoning and working callbacks still run after later keep-alives");
+}
+
 }  // namespace
 
 void run_all() {
@@ -3970,6 +4127,7 @@ void run_all() {
     test_provider_responses_unsupported_and_override();
     test_provider_reasoning_request_compatibility();
     test_native_tool_protocols();
+    test_native_tool_keep_alive_waiting_callback();
     test_credit_balance_parsing_and_formatting();
 }
 
