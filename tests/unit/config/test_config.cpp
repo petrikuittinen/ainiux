@@ -908,6 +908,73 @@ void test_config_reads_models_template() {
               claude_opus_5_5->reasoning_options.back() ==
                   ainiux::ReasoningSelection::named("max"),
           "Claude Opus 5.5 overrides the family default with medium effort");
+    const ainiux::ModelCapability* claude_sonnet_5 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "anthropic", "chat", "claude-sonnet-5");
+    const ainiux::ModelCapability* claude_sonnet_5_5 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "anthropic", "chat", "claude-sonnet-5-5");
+    const ainiux::ModelCapability* claude_sonnet_5_5_dot =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "anthropic/claude-sonnet-5.5");
+    check(claude_sonnet_5 != nullptr && claude_sonnet_5->id == "anthropic-claude" &&
+              claude_sonnet_5->reasoning_protocol ==
+                  ainiux::ReasoningProtocol::AnthropicBudget,
+          "Claude Sonnet 5 stays on the token-budget family");
+    check(claude_sonnet_5_5 != nullptr &&
+              claude_sonnet_5_5->id == "anthropic-claude-sonnet-5.5" &&
+              claude_sonnet_5_5_dot != nullptr &&
+              claude_sonnet_5_5_dot->id == "anthropic-claude-sonnet-5.5" &&
+              claude_sonnet_5_5->reasoning_default ==
+                  ainiux::ReasoningSelection::named("high") &&
+              claude_sonnet_5_5->reasoning_protocol ==
+                  ainiux::ReasoningProtocol::AnthropicEffort &&
+              claude_sonnet_5_5->context_window_tokens == 1000000 &&
+              claude_sonnet_5_5->max_output_tokens == 128000 &&
+              claude_sonnet_5_5->images.has_value() && *claude_sonnet_5_5->images &&
+              claude_sonnet_5_5->reasoning_options.size() == 5 &&
+              claude_sonnet_5_5->reasoning_options.back() ==
+                  ainiux::ReasoningSelection::named("max"),
+          "Claude Sonnet 5.5 uses the effort ladder with default high");
+    const ainiux::ModelCapability* claude_haiku_5_5 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "anthropic", "chat", "claude-haiku-5-5");
+    const ainiux::ModelCapability* claude_haiku_5_5_routed =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "anthropic/claude-haiku-5.5");
+    check(claude_haiku_5_5 != nullptr &&
+              claude_haiku_5_5->id == "anthropic-claude-haiku-5.5" &&
+              claude_haiku_5_5_routed != nullptr &&
+              claude_haiku_5_5_routed->id == "anthropic-claude-haiku-5.5" &&
+              claude_haiku_5_5->reasoning_default ==
+                  ainiux::ReasoningSelection::named("medium") &&
+              claude_haiku_5_5->reasoning_protocol ==
+                  ainiux::ReasoningProtocol::AnthropicEffort &&
+              claude_haiku_5_5->context_window_tokens == 1000000 &&
+              claude_haiku_5_5->max_output_tokens == 128000 &&
+              claude_haiku_5_5->images.has_value() && *claude_haiku_5_5->images,
+          "Claude Haiku 5.5 uses the effort ladder with default medium");
+    const ainiux::ModelCapability* mistral_large_4 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "mistral", "chat", "mistral-large-4");
+    const ainiux::ModelCapability* mistral_large_4_0 =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "mistralai/mistral-large-4-0");
+    check(mistral_large_4 != nullptr && mistral_large_4->id == "mistral-large-4" &&
+              mistral_large_4_0 != nullptr &&
+              mistral_large_4_0->id == "mistral-large-4" &&
+              mistral_large_4->reasoning_protocol ==
+                  ainiux::ReasoningProtocol::OpenAiEffort &&
+              mistral_large_4->reasoning_default ==
+                  ainiux::ReasoningSelection::named("none") &&
+              mistral_large_4->context_window_tokens == 1000000 &&
+              mistral_large_4->images.has_value() && *mistral_large_4->images &&
+              mistral_large_4->reasoning_options.size() == 2 &&
+              mistral_large_4->reasoning_options[0] ==
+                  ainiux::ReasoningSelection::named("none") &&
+              mistral_large_4->reasoning_options[1] ==
+                  ainiux::ReasoningSelection::named("high"),
+          "Mistral Large 4 is multimodal with none|high reasoning_effort");
     const ainiux::ModelCapability* deepseek_v4 =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "deepseek", "chat", "deepseek-v4-pro");
