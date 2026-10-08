@@ -1891,6 +1891,40 @@ void test_provider_reasoning_request_compatibility() {
     check_number_field(task_budget, "total", 64000.0,
                        "Anthropic task budget preserves the exact token total");
 
+    ainiux::cli::Options catalog_options;
+    ainiux::config::ParseResult models = ainiux::config::read_file("config/models.conf");
+    check(models.error.ok() &&
+              ainiux::config::apply_models_document(models.document, catalog_options).ok(),
+          "bundled models.conf loads for Anthropic reasoning wire checks");
+    const auto catalog_chat = [&](const std::string& model,
+                                  const ainiux::ReasoningSelection& selection) {
+        ainiux::provider::RequestContext catalog_context;
+        catalog_context.profile.name = "anthropic";
+        catalog_context.api_kind = ainiux::provider::ApiKind::ChatCompletions;
+        catalog_context.options.model = model;
+        catalog_context.options.model_catalog = catalog_options.model_catalog;
+        catalog_context.options.reasoning = selection;
+        catalog_context.options.reasoning_explicit = true;
+        return catalog_context;
+    };
+    request = serialized_request_json(
+        catalog_chat("claude-opus-5-5", ainiux::ReasoningSelection::named("medium")));
+    check_string_field(field(request, "output_config"), "effort", "medium",
+                       "Opus 5.5 named effort is output_config.effort");
+    check(field(request, "thinking") == nullptr,
+          "Opus 5.5 does not send a legacy thinking.budget_tokens field");
+    request = serialized_request_json(
+        catalog_chat("anthropic/claude-opus-5.5",
+                     ainiux::ReasoningSelection::named("high")));
+    check_string_field(field(request, "output_config"), "effort", "high",
+                       "dotted Opus 5.5 ids keep the effort protocol");
+    request = serialized_request_json(
+        catalog_chat("claude-opus-4.8", ainiux::ReasoningSelection::token_budget(8192)));
+    check_number_field(field(request, "thinking"), "budget_tokens", 8192.0,
+                       "older Claude families still send thinking.budget_tokens");
+    check(field(request, "output_config") == nullptr,
+          "older Claude token-budget models omit output_config.effort");
+
     context = chat_context(ainiux::ReasoningProtocol::ThinkingToggle,
                            ainiux::ReasoningSelection::named("ultra"));
     request = serialized_request_json(context);

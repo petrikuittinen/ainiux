@@ -889,6 +889,9 @@ void test_config_reads_models_template() {
     const ainiux::ModelCapability* claude_opus_5_5 =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "anthropic", "chat", "claude-opus-5-5");
+    const ainiux::ModelCapability* claude_opus_5_5_dot =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "openrouter", "chat", "anthropic/claude-opus-5.5");
     check(claude_opus_5 != nullptr &&
               claude_opus_5->id == "anthropic-claude-opus-5" &&
               claude_opus_5_3 != nullptr &&
@@ -902,12 +905,21 @@ void test_config_reads_models_template() {
           "Claude Opus 5 family regex covers base and minor versions");
     check(claude_opus_5_5 != nullptr &&
               claude_opus_5_5->id == "anthropic-claude-opus-5.5" &&
+              claude_opus_5_5_dot != nullptr &&
+              claude_opus_5_5_dot->id == "anthropic-claude-opus-5.5" &&
+              claude_opus_5_5->reasoning_protocol ==
+                  ainiux::ReasoningProtocol::AnthropicEffort &&
               claude_opus_5_5->reasoning_default ==
                   ainiux::ReasoningSelection::named("medium") &&
+              claude_opus_5_5->context_window_tokens == 1000000 &&
+              claude_opus_5_5->max_output_tokens == 128000 &&
+              claude_opus_5_5->images.has_value() && *claude_opus_5_5->images &&
               claude_opus_5_5->reasoning_options.size() == 5 &&
+              claude_opus_5_5->reasoning_options.front() ==
+                  ainiux::ReasoningSelection::named("low") &&
               claude_opus_5_5->reasoning_options.back() ==
                   ainiux::ReasoningSelection::named("max"),
-          "Claude Opus 5.5 overrides the family default with medium effort");
+          "Claude Opus 5.5 uses the effort ladder, not token budgets");
     const ainiux::ModelCapability* claude_sonnet_5 =
         ainiux::config::resolve_model_capability(
             options.model_catalog, "anthropic", "chat", "claude-sonnet-5");
