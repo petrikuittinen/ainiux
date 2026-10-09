@@ -95,6 +95,13 @@ struct DiscoveredFile {
     std::uintmax_t size = 0;
 };
 
+// Regular files from a workspace walk that honors ignore rules, hidden/excluded
+// directories, and symlink skips, without requiring a known source language.
+struct WorkspaceFile {
+    std::string path;
+    std::uintmax_t size = 0;
+};
+
 enum class ProbeState { MissingOrIncomplete, Completed, Corrupt };
 
 struct ProbeResult {
@@ -204,6 +211,10 @@ std::size_t worker_count_for(std::size_t online_cores,
 // opening, creating, or mutating the project index database.
 Error discover_source_files(const Options& options,
                             std::vector<DiscoveredFile>& files);
+// Same walk as discover_source_files(), including unknown extensions and other
+// regular files. glob and grep use this; the code index does not.
+Error discover_workspace_files(const Options& options,
+                               std::vector<WorkspaceFile>& files);
 Error clear_database(const Options& options, ClearStats& stats);
 Error probe(const Options& options, ProbeResult& result);
 Error refresh(const Options& options, RefreshStats& stats);

@@ -3385,16 +3385,17 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
                 ",\"max_entries\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":500}")});
     add(NativeToolHandler::Glob, ToolSafetyCategory::ReadOnly,
         {"glob",
-         "Match eligible workspace source paths (*, ?, **, braces).",
+         "Match live workspace file paths of any type (*, ?, **, braces). Honors "
+         "gitignore/ignore and skips hidden/excluded directories. Not the code index.",
          schema("\"pattern\":{\"type\":\"string\"},"
                 "\"max_results\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":1000}",
                 "\"pattern\"")});
     add(NativeToolHandler::Grep, ToolSafetyCategory::ReadOnly,
         {"grep",
-         "Search workspace UTF-8 sources (rg when available, else index/live scan). "
+         "Search live workspace UTF-8 files of any type (rg when available, else scan). "
          "query is literal unless regex=true; unescaped | infers regex only when regex is "
          "omitted. path=one file or directory root; glob=name/type filter (*.ts, "
-         "**/*.{cpp,hpp}); combine them to search a subtree. pattern aliases query.",
+         "**/*.{cpp,hpp,ax}); combine them to search a subtree. pattern aliases query.",
          schema(search_fields, "\"query\"")});
     add(NativeToolHandler::Symbol, ToolSafetyCategory::ReadOnly,
         {"symbol",
@@ -3968,14 +3969,11 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
     }
 
     std::string validation_error;
-    bool lazy_live_fallback = false;
     const auto is_handler = [&](NativeToolHandler handler) {
         return descriptor != nullptr && descriptor->handler == handler;
     };
     const bool snapshot_tool =
         is_handler(NativeToolHandler::Index) ||
-        is_handler(NativeToolHandler::Glob) ||
-        is_handler(NativeToolHandler::Grep) ||
         is_handler(NativeToolHandler::Symbol) ||
         is_handler(NativeToolHandler::Outline) ||
         is_handler(NativeToolHandler::Edit);
@@ -4013,8 +4011,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         snapshot_.updated_at = 0;
         const bool need_files =
             is_handler(NativeToolHandler::Index) ||
-            is_handler(NativeToolHandler::Glob) ||
-            is_handler(NativeToolHandler::Grep) ||
             is_handler(NativeToolHandler::Outline) ||
             is_handler(NativeToolHandler::Edit);
         Error query_error = ok_error();
@@ -4073,30 +4069,6 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         snapshot_.symbols.push_back(std::move(symbol));
                 }
             }
-        }
-        if (!query_error.ok() &&
-            (is_handler(NativeToolHandler::Glob) ||
-             is_handler(NativeToolHandler::Grep))) {
-            index::Options discovery_options = query_options;
-            discovery_options.on_progress = {};
-            std::vector<index::DiscoveredFile> discovered;
-            const Error discovery_error = index::discover_source_files(
-                discovery_options, discovered);
-            if (!discovery_error.ok())
-                return tool_error_result(
-                    error_code_string(discovery_error.code),
-                    discovery_error.message);
-            snapshot_.files.clear();
-            for (const index::DiscoveredFile& file : discovered) {
-                index::IndexedFile item;
-                item.path = file.path;
-                item.language = file.language;
-                item.size = file.size;
-                item.status = "indexed";
-                snapshot_.files.push_back(std::move(item));
-            }
-            lazy_live_fallback = true;
-            query_error = ok_error();
         }
         if (!query_error.ok())
             return tool_error_result(error_code_string(query_error.code),
@@ -4345,34 +4317,24 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             return tool_error_result("policy_denied", unsafe_path_message(pattern, "search"));
         json::Value data = array_value(); bool truncated = false;
         try {
-            std::vector<std::string> paths;
-            if (indexing_enabled_ && !lazy_live_fallback) {
-                paths.reserve(snapshot_.files.size());
-                for (const index::IndexedFile& file : snapshot_.files)
-                    paths.push_back(file.path);
-            } else {
-                index::Options discovery_options = index_options_;
-                discovery_options.cancellation = cancellation;
-                discovery_options.interrupted = {};
-                discovery_options.on_progress = {};
-                std::vector<index::DiscoveredFile> discovered;
-                const Error discovery_error =
-                    index::discover_source_files(discovery_options, discovered);
-                if (!discovery_error.ok())
-                    return tool_error_result(
-                        error_code_string(discovery_error.code),
-                        discovery_error.message);
-                paths.reserve(discovered.size());
-                for (const index::DiscoveredFile& file : discovered)
-                    paths.push_back(file.path);
-            }
-            for (const std::string& path : paths) {
+            index::Options discovery_options = index_options_;
+            discovery_options.cancellation = cancellation;
+            discovery_options.interrupted = {};
+            discovery_options.on_progress = {};
+            std::vector<index::WorkspaceFile> discovered;
+            const Error discovery_error =
+                index::discover_workspace_files(discovery_options, discovered);
+            if (!discovery_error.ok())
+                return tool_error_result(
+                    error_code_string(discovery_error.code),
+                    discovery_error.message);
+            for (const index::WorkspaceFile& file : discovered) {
                 if (cancellation.cancelled())
                     return tool_error_result("cancelled",
                                              "glob search cancelled");
-                if (!glob_matches(path, pattern)) continue;
+                if (!glob_matches(file.path, pattern)) continue;
                 if (data.array.size() >= maximum) { truncated = true; break; }
-                data.array.push_back(string_value(path));
+                data.array.push_back(string_value(file.path));
             }
         } catch (const std::regex_error& exception) {
             return tool_error_result("invalid_glob", exception.what());
@@ -4690,31 +4652,23 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             std::string path;
             std::uintmax_t size = 0;
         };
-        // Candidate universe: indexed files when available, else live discovery.
+        // Candidate universe: live workspace regular files of any type.
         // Order: rg (if present) → this candidate list with built-in scan.
         std::vector<SearchFile> candidates;
-        const bool use_index_candidates =
-            indexing_enabled_ && !lazy_live_fallback;
-        if (use_index_candidates) {
-            candidates.reserve(snapshot_.files.size());
-            for (const index::IndexedFile& file : snapshot_.files) {
-                if (file.status == "indexed")
-                    candidates.push_back({file.path, file.size});
-            }
-        } else {
+        {
             index::Options discovery_options = index_options_;
             discovery_options.cancellation = cancellation;
             discovery_options.interrupted = {};
             discovery_options.on_progress = {};
-            std::vector<index::DiscoveredFile> discovered;
+            std::vector<index::WorkspaceFile> discovered;
             const Error discovery_error =
-                index::discover_source_files(discovery_options, discovered);
+                index::discover_workspace_files(discovery_options, discovered);
             if (!discovery_error.ok())
                 return tool_error_result(
                     error_code_string(discovery_error.code),
                     discovery_error.message);
             candidates.reserve(discovered.size());
-            for (const index::DiscoveredFile& file : discovered) {
+            for (const index::WorkspaceFile& file : discovered) {
                 if (file.size <= index_options_.max_source_code_file_size)
                     candidates.push_back({file.path, file.size});
             }
@@ -4755,7 +4709,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 }
                 if (!any_in_root)
                     warnings.push_back(
-                        "path is not an eligible source file or directory: " +
+                        "path is not an eligible workspace file or directory: " +
                         search_root);
             }
             return envelope(true, std::move(data), "", "", warnings, truncated,
@@ -4781,6 +4735,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             argv.push_back("--max-count");
             argv.push_back(std::to_string(std::min<std::size_t>(
                 100000001, offset + maximum + 1)));
+            argv.push_back("--max-filesize");
+            argv.push_back(std::to_string(index_options_.max_source_code_file_size));
             if (!glob.empty()) {
                 std::vector<std::string> alternatives;
                 expand_braces(normalize_glob_path(glob), alternatives);
@@ -4844,8 +4800,8 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                         continue;
                     if (!path_in_search_root(hit_path, search_root)) continue;
                     if (!glob.empty() && !glob_matches(hit_path, glob)) continue;
-                    // Keep results inside the eligible index/discovery universe so
-                    // security-review and agent semantics match the built-in path.
+                    // Keep results inside the live workspace discovery universe so
+                    // ignore/hidden-directory rules match the built-in path.
                     if (eligible_paths.find(hit_path) == eligible_paths.end())
                         continue;
                     if (!is_match) {
@@ -4997,7 +4953,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             truncated = false;
         }
 
-        // --- Built-in portable scanner (index candidates, else live discovery). ---
+        // --- Built-in portable scanner over live workspace files. ---
         for (const SearchFile& file : candidates) {
             if (cancellation.cancelled())
                 return tool_error_result("cancelled", "text search cancelled");
@@ -5007,11 +4963,14 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             const std::size_t read_cap = std::max<std::size_t>(
                 1, index_options_.max_source_code_file_size);
             const Error read_error =
-                use_index_candidates
-                    ? read_source(file.path, 1, 0, read_cap, source)
-                    : read_workspace_source(file.path, 1, 0, read_cap, source);
+                read_workspace_source(file.path, 1, 0, read_cap, source);
             if (!read_error.ok()) {
-                warnings.push_back(read_error.message);
+                // Skip binary/non-UTF-8 files the way rg does; keep other
+                // read failures visible.
+                if (read_error.message.find("UTF-8") == std::string::npos &&
+                    read_error.message.find("NUL") == std::string::npos &&
+                    read_error.message.find("image") == std::string::npos)
+                    warnings.push_back(read_error.message);
                 continue;
             }
             const std::vector<std::string> lines = split_lines(source.content);
@@ -5060,8 +5019,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             }
             if (truncated) break;
         }
-        return finish_search(use_index_candidates ? "builtin_index"
-                                                  : "builtin_live");
+        return finish_search("builtin_live");
     }
 
     if (is_handler(NativeToolHandler::Run)) {

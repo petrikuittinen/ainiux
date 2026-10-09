@@ -61,9 +61,10 @@ compiled `openai_images`, `replicate_predictions`, `fal_queue`, and
   to planning documents. `/goal` and `goal_met` are implemented.
 - Project agent state stays under `.ainiux-pr/`; user chat data and installed MCP
   configuration stay under `~/.ainiux/`.
-- The code index is an optional definitions-only navigation hint. Agent queries
-  use short-lived lazy read-only SQLite access; security review deliberately uses
-  an immutable loaded snapshot. Current source must still be verified before edits.
+- The code index is an optional definitions-only navigation hint. `index`,
+  `symbol`, and `outline` use short-lived lazy read-only SQLite access (security
+  review uses an immutable snapshot). `glob` and `grep` search live workspace
+  files of any type. Current source must still be verified before edits.
 - OpenAI Chat Completions and text Responses output are supported. Image-capable
   Responses requests can carry user images. Provider capabilities still vary.
 - The control API is Ainiux-native under `/ainiux/v1/`; `/v1/` remains reserved
@@ -271,6 +272,8 @@ agent loops, approval decisions, or filesystem mutation logic in a UI.
 - Extend indexing only under `src/agent/index/`. Keep lightweight lexical scanners,
   deterministic ranking, and definitions-only storage; do not add compiler/LSP
   dependencies, reference graphs, or automatic request-context injection.
+  `glob` and `grep` stay live filesystem tools and must not be re-bound to the
+  indexed language set.
 - Exact/full-component lexical relevance precedes static importance. Mutations keep
   live touched-file results coherent and coalesce persistent refresh. Cancellation
   or failure preserves the previous completed database.

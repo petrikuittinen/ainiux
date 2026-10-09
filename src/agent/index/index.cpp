@@ -511,11 +511,14 @@ Error workspace_root(const std::string& requested, fs::path& root) {
     return ok_error();
 }
 
+enum class FileDiscovery { SourceLanguages, AllRegularFiles };
+
 Error discover(const fs::path& root,
                const IgnoreRules& ignores,
                const Options& options,
                std::vector<Candidate>& candidates,
-               const std::chrono::steady_clock::time_point& started) {
+               const std::chrono::steady_clock::time_point& started,
+               FileDiscovery discovery = FileDiscovery::SourceLanguages) {
     std::deque<fs::path> directories{root};
     std::mutex mutex;
     std::condition_variable ready;
@@ -549,7 +552,10 @@ Error discover(const fs::path& root,
                 directories.pop_front();
             }
             if (cancelled(options)) {
-                fail({ErrorCode::Cancelled, "code indexing cancelled"});
+                fail({ErrorCode::Cancelled,
+                      discovery == FileDiscovery::AllRegularFiles
+                          ? "workspace discovery cancelled"
+                          : "code indexing cancelled"});
                 return;
             }
             std::error_code filesystem_error;
@@ -563,7 +569,10 @@ Error discover(const fs::path& root,
             }
             while (iterator != end) {
                 if (cancelled(options)) {
-                    fail({ErrorCode::Cancelled, "code indexing cancelled"});
+                    fail({ErrorCode::Cancelled,
+                          discovery == FileDiscovery::AllRegularFiles
+                              ? "workspace discovery cancelled"
+                              : "code indexing cancelled"});
                     return;
                 }
                 const fs::directory_entry entry = *iterator;
@@ -585,8 +594,11 @@ Error discover(const fs::path& root,
                     }
                 } else if (!fs::is_symlink(status) && fs::is_regular_file(status) &&
                            !ignores.ignored(relative)) {
-                    Language language;
-                    if (language_for_path(relative, language)) {
+                    Language language = Language::Python;
+                    const bool include =
+                        discovery == FileDiscovery::AllRegularFiles ||
+                        language_for_path(relative, language);
+                    if (include) {
                         Candidate candidate;
                         candidate.absolute_path = entry.path();
                         candidate.path = relative;
@@ -594,18 +606,21 @@ Error discover(const fs::path& root,
                         candidate.size = entry.file_size(filesystem_error);
                         if (filesystem_error) {
                             fail({ErrorCode::FileRead,
-                                  "could not inspect source file size " + relative + ": " +
+                                  "could not inspect file size " + relative + ": " +
                                       filesystem_error.message()});
                             return;
                         }
-                        const fs::file_time_type mtime = entry.last_write_time(filesystem_error);
-                        if (filesystem_error) {
-                            fail({ErrorCode::FileRead,
-                                  "could not inspect source file time " + relative + ": " +
-                                      filesystem_error.message()});
-                            return;
+                        if (discovery == FileDiscovery::SourceLanguages) {
+                            const fs::file_time_type mtime =
+                                entry.last_write_time(filesystem_error);
+                            if (filesystem_error) {
+                                fail({ErrorCode::FileRead,
+                                      "could not inspect source file time " + relative +
+                                          ": " + filesystem_error.message()});
+                                return;
+                            }
+                            candidate.mtime_ns = file_mtime_ns(mtime);
                         }
-                        candidate.mtime_ns = file_mtime_ns(mtime);
                         std::lock_guard<std::mutex> lock(mutex);
                         candidates.push_back(std::move(candidate));
                         if (options.on_progress) {
@@ -861,6 +876,26 @@ Error discover_source_files(const Options& options,
         files.push_back(
             {candidate.path, candidate.language, candidate.size});
     }
+    return ok_error();
+}
+
+Error discover_workspace_files(const Options& options,
+                               std::vector<WorkspaceFile>& files) {
+    files.clear();
+    const auto started = std::chrono::steady_clock::now();
+    fs::path root;
+    Error error = workspace_root(options.workspace, root);
+    if (!error.ok()) return error;
+    IgnoreRules ignores;
+    if (!(error = load_ignore_rules(root, ignores)).ok()) return error;
+    std::vector<Candidate> candidates;
+    if (!(error = discover(root, ignores, options, candidates, started,
+                           FileDiscovery::AllRegularFiles))
+             .ok())
+        return error;
+    files.reserve(candidates.size());
+    for (const Candidate& candidate : candidates)
+        files.push_back({candidate.path, candidate.size});
     return ok_error();
 }
 

@@ -19,8 +19,8 @@ methodology.
 | --- | --- | --- |
 | `index` | — | Index summary (languages, counts, freshness). Hidden without an index. |
 | `ls` | — | Real directory listing. Prefer before `rm`. |
-| `glob` | `pattern` | Eligible source path match. |
-| `grep` | `query` | Content search; `path` + `glob` combine; use `offset` with returned `next_offset` for pagination. |
+| `glob` | `pattern` | Live workspace path match for any file type. |
+| `grep` | `query` | Live UTF-8 content search of any file type; `path` + `glob` combine; use `offset` with returned `next_offset` for pagination. |
 | `symbol` | `query` | Ranked indexed definitions. Hidden without an index. |
 | `outline` | `path` | Declarations in one file. Hidden without an index. |
 | `read` | `path` **or** `items` | One file, or batch 1–100 ranges (`items`); defaults to 128 KiB and returns `next_start_line` when truncated. Images: `attach`. |

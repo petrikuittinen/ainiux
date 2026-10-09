@@ -591,6 +591,59 @@ void test_glob_recursive_root_and_nested() {
     fs::remove_all(workspace, ec);
 }
 
+void test_glob_grep_find_any_file_type() {
+    const std::string workspace = write_temp_workspace("glob-any-type");
+    write_text(fs::path(workspace) / ".gitignore", "ignored.ax\n");
+    write_text(fs::path(workspace) / "notes.ax", "print(\"ax-live-needle\")\n");
+    write_text(fs::path(workspace) / "ignored.ax", "print(\"ax-ignored-needle\")\n");
+    fs::create_directories(fs::path(workspace) / "build");
+    write_text(fs::path(workspace) / "build" / "skip.ax", "print(\"ax-build-needle\")\n");
+    fs::create_directories(fs::path(workspace) / "tests" / "golden" / "pr1");
+    write_text(fs::path(workspace) / "tests" / "golden" / "pr1" / "hello.ax",
+               "print(\"ax-golden-needle\")\n");
+    write_text(fs::path(workspace) / "notes.txt", "txt-live-needle\n");
+    agent::ReadToolRegistry tools = make_registry(workspace, true);
+
+    const std::string ax_glob =
+        tools.execute("glob", R"JSON({"pattern":"**/*.ax","max_results":50})JSON");
+    check(json_ok(ax_glob) && json_array_contains_string(ax_glob, "notes.ax") &&
+              json_array_contains_string(ax_glob, "tests/golden/pr1/hello.ax") &&
+              !json_array_contains_string(ax_glob, "ignored.ax") &&
+              !json_array_contains_string(ax_glob, "build/skip.ax"),
+          "glob finds unknown extensions on the live tree and honors ignores: " +
+              ax_glob);
+    const std::string txt_glob =
+        tools.execute("glob", R"JSON({"pattern":"*.txt"})JSON");
+    check(json_ok(txt_glob) && json_array_contains_string(txt_glob, "notes.txt"),
+          "basename glob finds non-source types: " + txt_glob);
+
+    const std::string ax_grep = tools.execute(
+        "grep",
+        R"JSON({"query":"ax-live-needle","glob":"*.ax","max_results":20})JSON");
+    check(json_ok(ax_grep) && ax_grep.find("notes.ax") != std::string::npos &&
+              ax_grep.find("ax-live-needle") != std::string::npos &&
+              ax_grep.find("ignored.ax") == std::string::npos &&
+              ax_grep.find("build/skip.ax") == std::string::npos,
+          "grep searches unknown extensions without using the code index: " +
+              ax_grep);
+    const std::string golden_grep = tools.execute(
+        "grep",
+        R"JSON({"query":"ax-golden-needle","path":"tests/golden","glob":"*.ax"})JSON");
+    check(json_ok(golden_grep) &&
+              golden_grep.find("tests/golden/pr1/hello.ax") != std::string::npos,
+          "grep path+glob finds nested unknown-type files: " + golden_grep);
+
+    const std::string overview = tools.execute("index", "{}");
+    check(json_ok(overview) && overview.find("notes.ax") == std::string::npos,
+          "index overview stays language-index based: " + overview);
+    check(!json_ok(tools.execute(
+              "outline", R"JSON({"path":"notes.ax"})JSON")),
+          "outline stays index-only and rejects unknown types");
+
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_read_only_registry_hides_writes() {
     const std::string workspace = write_temp_workspace("readonly");
     agent::ReadToolRegistry tools = make_registry(workspace, false);
@@ -2899,6 +2952,7 @@ void run_all() {
     test_tool_schemas_gemini_compatible();
     test_external_file_access_requires_one_shot_approval();
     test_glob_recursive_root_and_nested();
+    test_glob_grep_find_any_file_type();
     test_read_only_registry_hides_writes();
     test_write_file_create_and_readback();
     test_str_replace_exact();

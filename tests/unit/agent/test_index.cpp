@@ -1212,6 +1212,51 @@ void test_clear_database() {
     check(!cleanup_error, "clear index symlink target workspace is removed");
 }
 
+void test_workspace_discovery_includes_unknown_types() {
+    const fs::path root = temporary_workspace("workspace-files");
+    write_file(root / ".gitignore", "ignored.ax\n");
+    write_file(root / "keep.py", "def keep():\n    return 1\n");
+    write_file(root / "notes.ax", "print(1)\n");
+    write_file(root / "ignored.ax", "print(2)\n");
+    write_file(root / "build" / "skip.ax", "print(3)\n");
+    write_file(root / ".hidden" / "secret.ax", "print(4)\n");
+    ainiux::agent::index::Options options;
+    options.workspace = root.string();
+    std::vector<ainiux::agent::index::DiscoveredFile> source_files;
+    check(ainiux::agent::index::discover_source_files(options, source_files).ok(),
+          "source discovery succeeds");
+    bool source_has_ax = false;
+    bool source_has_py = false;
+    for (const auto& file : source_files) {
+        source_has_ax =
+            source_has_ax ||
+            (file.path.size() >= 3 &&
+             file.path.compare(file.path.size() - 3, 3, ".ax") == 0);
+        source_has_py = source_has_py || file.path == "keep.py";
+    }
+    check(source_has_py && !source_has_ax,
+          "source discovery still requires a known language");
+
+    std::vector<ainiux::agent::index::WorkspaceFile> workspace_files;
+    check(ainiux::agent::index::discover_workspace_files(options, workspace_files)
+              .ok(),
+          "workspace discovery succeeds");
+    bool found_ax = false;
+    bool found_ignored = false;
+    bool found_py = false;
+    for (const auto& file : workspace_files) {
+        found_ax = found_ax || file.path == "notes.ax";
+        found_py = found_py || file.path == "keep.py";
+        found_ignored = found_ignored || file.path == "ignored.ax" ||
+                        file.path == "build/skip.ax" ||
+                        file.path == ".hidden/secret.ax";
+    }
+    check(found_ax && found_py && !found_ignored,
+          "workspace discovery includes unknown types and honors ignores");
+    std::error_code cleanup;
+    fs::remove_all(root, cleanup);
+}
+
 }  // namespace
 
 void run_all() {
@@ -1230,6 +1275,7 @@ void run_all() {
     test_systems_language_scanners();
     test_sql_and_configuration_scanners();
     test_refresh_incremental_report_and_skips();
+    test_workspace_discovery_includes_unknown_types();
     test_static_importance_and_lexical_ranking();
     test_lazy_queries_match_snapshot_ranking_and_worker_policy();
     test_corrupt_index_errors();

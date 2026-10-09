@@ -59,8 +59,10 @@ non-OpenAI provider, including xAI and DeepSeek, and a live `/provider` or
 `web_search = on` does not auto-select Responses. Live provider/model changes
 re-resolve hosted vs client search for the next round; they do not auto-promote
 the session to Responses. `fetch` stays. `read` accepts either one `path` or an `items` batch
-of 1–100 ranges. `grep` can combine a file/directory `path` with a name/type
-`glob` filter.
+of 1–100 ranges. `glob` and `grep` search live workspace files of any type
+(including extensions the code index does not know). `index`, `symbol`, and
+`outline` stay on the code index. `grep` can combine a file/directory `path`
+with a name/type `glob` filter.
 
 Old long names and aliases such as `read_file`, `run_command`, `edit_file`,
 `write_file`, `list_dir`, `search_text`, and `str_replace` are not advertised or
@@ -147,7 +149,7 @@ ainiux --clear-index
 
 It stores metadata, files, definitions, and static 0–100 declaration importance. Exact lexical relevance and multi-token coverage rank ahead of importance. It intentionally stores no reference graph, caller counts, evidence edges, or automatic request-context hints.
 
-The index is a navigation hint, never compiler-grade ground truth. Agents must verify current files before editing and retain `glob`, text search, file reads, compiler, and test fallbacks. Native mutations update the live touched-file view and coalesce persistent refresh work. Cancellation keeps the previous completed database generation.
+The index is a navigation hint, never compiler-grade ground truth. Agents must verify current files before editing. `glob` and `grep` search the live workspace independently of the index; `index` / `symbol` / `outline` do not. Native mutations update the live touched-file view and coalesce persistent refresh work. Cancellation keeps the previous completed database generation.
 
 A point-in-time measurement on the current 20-core ARM64 system indexed 437 files and 11,631 definitions in 110–149 ms across three cold runs. Repositories, storage, builds, and hardware differ. See [Code index and tool calls explained](code_index_and_tool_calls_explained.md) for internals.
 

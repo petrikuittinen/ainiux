@@ -112,10 +112,9 @@ In-memory `Symbol` / `IndexedSymbol` types in `index.hpp` match this payload.
 
 | Mode | Index behavior |
 | --- | --- |
-| **Agent / Run, indexing on** (`IndexAccessMode::LazyHints`) | Short-lived read-only SQLite queries per tool; mutation overlay merges recent writes until a refresh generation completes. |
-| **Agent with `--disable-indexing` / create_without_index** | Index-only tools are **hidden** (or return `indexing_disabled`). `glob` uses live discovery; `grep` prefers `rg` then live built-in scan. Project reads use the live filesystem. |
-| **Security review** (`MutationPolicy::Disabled`, snapshot authorization) | Eager completed snapshot; many path tools are **authorization-bound** to indexed files. Mutations off. `grep` still prefers `rg` but post-filters to indexed paths. |
-| **Lazy query failure for `glob` / `grep` only** | Falls back to `index::discover_source_files()` for the eligible set (same rules as indexing, no SQLite). `grep` may still use `rg` against that live set. |
+| **Agent / Run, indexing on** (`IndexAccessMode::LazyHints`) | Short-lived read-only SQLite queries for `index` / `symbol` / `outline` / `replace_symbol`; mutation overlay merges recent writes until a refresh generation completes. `glob` and `grep` walk the live workspace. |
+| **Agent with `--disable-indexing` / create_without_index** | Index-only tools are **hidden** (or return `indexing_disabled`). `glob` and `grep` use the same live workspace walk. Project reads use the live filesystem. |
+| **Security review** (`MutationPolicy::Disabled`, snapshot authorization) | Eager completed snapshot; `read` and several path tools are **authorization-bound** to indexed files. Mutations off. `glob` and `grep` still search live workspace files of any type. |
 
 Security-review and Agent share tool *names* but not always the same path authorization model for reads and `run`.
 
@@ -186,15 +185,14 @@ Hidden when indexing is disabled. **No live fallback** for the symbol/meta featu
 
 ### 5.B Path search: `glob` and `grep`
 
-Same discovery eligibility as the indexer (editor language set, ignore rules, size caps). These tools do **not** use the symbol table for matching.
+Live workspace walk (`index::discover_workspace_files()`): ignore rules, hidden/excluded directories, symlink skips. **Any regular file type**, including extensions the code index does not know yet. These tools do **not** use the symbol table or the indexed language set for matching.
 
 #### `glob`
 
 | | |
 | --- | --- |
 | **Params** | `pattern` (required), `max_results` (def 200, max 1000) |
-| **With index** | Match against indexed file paths in the snapshot |
-| **Without / lazy fail** | `index::discover_source_files()` then same glob match |
+| **Discovery** | Always `index::discover_workspace_files()`, then glob-match those paths |
 | **Returns** | Array of path strings |
 
 #### `grep`
@@ -202,13 +200,13 @@ Same discovery eligibility as the indexer (editor language set, ignore rules, si
 | | |
 | --- | --- |
 | **Params** | `query` (required; `pattern` is a compatibility alias), `regex`, `case_sensitive`, `word`, `path` (one file or directory root), `glob` (name/type filter; combines with `path`), `context` (0–10), `max_results` (def 50, max 500) |
-| **Backend order** | **1)** system **`rg`** if present; **2)** built-in scan over **indexed** candidates when indexing is on; **3)** built-in scan over **live discovery** when indexing is off or the index is unavailable |
-| **Eligible set** | Index on → `status=indexed` paths from the snapshot/lazy query. Index off → live `discover_source_files()`. `path` further restricts to that file or its descendants; `glob` further restricts names/types. They combine. |
-| **`rg` details** | Soft dependency resolved only on the fixed process PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` (not the caller’s `PATH`). Invoked via `run_argv` / `fork`+`execve` (shell-free), with `--no-config`, line-oriented flags, optional `-F`/`-i`/`-w`/`-C`, and a per-file `--max-count`. Hits are **post-filtered** to the eligible set so security-review and agent semantics match the built-in path. Cancel/timeout apply to the child. |
-| **Fallback** | If `rg` is missing, fails, times out, or exits with status &gt; 1 → portable built-in scanner (open eligible files, `std::string::find` or ECMAScript `std::regex`). May add a short warning; never hard-fails solely because `rg` is absent. |
+| **Backend order** | **1)** system **`rg`** if present; **2)** built-in scan over live workspace files |
+| **Eligible set** | Live `discover_workspace_files()`, size-capped for content search. `path` further restricts to that file or its descendants; `glob` further restricts names/types. They combine. |
+| **`rg` details** | Soft dependency resolved only on the fixed process PATH: `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` (not the caller’s `PATH`). Invoked via `run_argv` / `fork`+`execve` (shell-free), with `--no-config`, line-oriented flags, optional `-F`/`-i`/`-w`/`-C`, `--max-filesize`, and a per-file `--max-count`. Hits are **post-filtered** to the live eligible set so ignore/hidden-directory rules match the built-in path. Cancel/timeout apply to the child. |
+| **Fallback** | If `rg` is missing, fails, times out, or exits with status &gt; 1 → portable built-in scanner (open eligible files, `std::string::find` or ECMAScript `std::regex`). Binary/non-UTF-8 files are skipped. May add a short warning; never hard-fails solely because `rg` is absent. |
 | **Portability** | No new library deps (still libcurl + sqlite3). Most Windows machines lack `rg`; they use builtin only. Invalid ECMAScript patterns still return `invalid_regex` before either backend runs. |
 | **Returns** | Array of `{ path, line, text, context?: [{ line, text }] }` |
-| **Metadata** | `search_backend`: `rg` \| `builtin_index` \| `builtin_live` |
+| **Metadata** | `search_backend`: `rg` \| `builtin_live` |
 
 ---
 
@@ -263,8 +261,8 @@ These operate on the live filesystem in Act/Lead. If indexing is enabled they re
 | `symbol` | Ranked definitions | **Unavailable** |
 | `outline` | Definitions for file | **Unavailable** |
 | `edit.replace_symbol` | Id → lines | **Op removed / error** |
-| `glob` | Indexed path list | **Live `discover_source_files`** |
-| `grep` | `rg` if present → else builtin over indexed candidates | `rg` if present → else builtin over live discovery |
+| `glob` | Live `discover_workspace_files` (any type) | **Same live walk** |
+| `grep` | `rg` if present → else builtin over live workspace files | **Same live walk** |
 | `ls` | Annotates `indexed` only | **Same readdir** |
 | `read` (`path` or `items`) | Security-review: index auth; Agent: live | **Agent: live FS** |
 | Writes / non-RO command | Refresh / overlay side effects | No index side effects |
@@ -274,10 +272,10 @@ These operate on the live filesystem in Act/Lead. If indexing is enabled they re
 ## 7. Optimization notes
 
 1. **Symbol search is not SQL-indexed ranking** — `symbol` scores definitions in process (lexical tiers + importance tie-break), not via FTS or pushed-down `WHERE name = ?` ranking.
-2. **`grep` never searches the symbol table** — eligible paths only; string matching is `rg` (preferred) or a built-in full-file scan of those candidates.
+2. **`grep` never searches the symbol table** — live workspace files only; string matching is `rg` (preferred) or a built-in full-file scan of those candidates. The code index language set does not filter hits.
 3. **`rg` is the big win for common agent loops** — multi-file rare needles drop from hundreds of ms (builtin open/scan) to tens of ms when `rg` is installed. Keep the builtin path first-class for hosts without `rg`.
 4. **Lazy agent path** loads only what each tool needs (e.g. `outline` symbols for one path; `symbol` a ranked slice), but ranking still walks many rows.
-5. **Dual discovery code paths** — indexed snapshot vs `discover_source_files()` share eligibility rules; changing one should keep the other consistent (including `grep` post-filters).
+5. **Discovery splits by tool** — `index` / `symbol` / `outline` use the language-filtered snapshot or `discover_source_files()`. `glob` / `grep` use `discover_workspace_files()` (any type, same ignore/hidden-directory rules). Keep those ignore rules consistent across both walks.
 6. **Security-review vs agent** is the sharp edge for `read` and `run` path scope — same tool name, different authorization model.
 7. **Static `importance` is cheap declaration metadata**, not a graph measure; graph tables were intentionally removed in the v1.1 lightweight schema.
 

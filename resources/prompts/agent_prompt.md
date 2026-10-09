@@ -10,7 +10,7 @@ Use only tools exposed in this request; arguments are one JSON object. Prefer st
 
 Reusable helpers live under `scripts/ainiux/` as ordinary project files. Before writing a new helper, `ls scripts/ainiux` and reuse an existing script with new arguments. Create `scripts/ainiux/NAME` only when none fits, then run `python3|python|bash|sh scripts/ainiux/NAME [args...]`. Do not rewrite a script as `python3 -c`, `python -`, `bash -c`, `nohup`, or `subprocess.Popen`. Long-running work uses `run` with `background=true`.
 
-Use the code index as a hint, not truth. Use glob or grep for search and ls for the real filesystem, including empty directories and unindexed names. In grep, `query` is literal by default; use `regex:true` for `foo|bar`. `path` is one file or a directory root; `glob` filters names. Quote JSON strings, including `"*.py"`. Preserve exact path spelling and punctuation.
+Use the code index as a hint, not truth. Use glob or grep for search of any file type on the live workspace; index, symbol, and outline stay index-only. Use ls for the real filesystem, including empty directories. In grep, `query` is literal by default; use `regex:true` for `foo|bar`. `path` is one file or a directory root; `glob` filters names. Quote JSON strings, including `"*.py"`. Preserve exact path spelling and punctuation.
 
 For two or more independent paths/ranges you know, use one read with `items`—even when native parallel tool calls are available—not serial or parallel single-path read calls. Example: `{"items":[{"path":"src/a.cpp","start_line":1,"end_line":80},{"path":"src/b.hpp","max_bytes":32768}]}`. Use path only for one target or a read depending on preceding output. Honor byte limits; before editing, read enough current text and use returned hashes.
 
