@@ -20,6 +20,10 @@ struct GuardResult {
     std::string message;
 };
 
+// Basename used by Guard and Smart classifiers (directory and Windows
+// executable suffix stripped, ASCII-lowercased).
+std::string normalized_command_basename(const std::string& text);
+
 // Evaluate argv after shell-tokenization (no shell metacharacters expected).
 GuardResult evaluate_command_guard(const std::vector<std::string>& arguments);
 

@@ -1,5 +1,7 @@
 #include "agent/command_guard.hpp"
 
+#include "agent/read_only_command.hpp"
+
 #include <algorithm>
 #include <cctype>
 
@@ -13,20 +15,30 @@ std::string lowercase(std::string text) {
     return text;
 }
 
-std::string normalized_command_name(std::string text) {
-    const std::size_t slash = text.find_last_of("/\\");
-    if (slash != std::string::npos) text.erase(0, slash + 1);
-    text = lowercase(std::move(text));
-    static const char* extensions[] = {".exe", ".com", ".cmd", ".bat"};
-    for (const char* extension : extensions) {
-        const std::size_t length = std::char_traits<char>::length(extension);
-        if (text.size() > length &&
-            text.compare(text.size() - length, length, extension) == 0) {
-            text.resize(text.size() - length);
-            break;
-        }
+bool versioned_interpreter(const std::string& command, const char* prefix) {
+    const std::size_t n = std::char_traits<char>::length(prefix);
+    if (command.size() <= n || command.compare(0, n, prefix) != 0 || command[n] != '.')
+        return false;
+    for (std::size_t i = n + 1; i < command.size(); ++i) {
+        if (command[i] != '.' && (command[i] < '0' || command[i] > '9')) return false;
     }
-    return text;
+    return true;
+}
+
+bool is_python_interpreter(const std::string& command) {
+    return command == "python" || command == "python3" || command == "py" ||
+           command == "pypy" || command == "pypy3" ||
+           versioned_interpreter(command, "python") ||
+           versioned_interpreter(command, "python3") ||
+           versioned_interpreter(command, "pypy") ||
+           versioned_interpreter(command, "pypy3");
+}
+
+bool is_python_env_mutation_module(const std::string& module) {
+    const std::string lower = lowercase(module);
+    return lower == "pip" || lower == "pip3" || lower == "ensurepip" ||
+           lower == "easy_install" || lower.rfind("pip.", 0) == 0 ||
+           lower.rfind("ensurepip.", 0) == 0;
 }
 
 bool has_flag(const std::vector<std::string>& args, const char* flag) {
@@ -73,9 +85,26 @@ GuardResult ask(const char* rule_id, const std::string& message) {
 
 }  // namespace
 
+std::string normalized_command_basename(const std::string& text) {
+    std::string command = text;
+    const std::size_t slash = command.find_last_of("/\\");
+    if (slash != std::string::npos) command.erase(0, slash + 1);
+    command = lowercase(std::move(command));
+    static const char* extensions[] = {".exe", ".com", ".cmd", ".bat"};
+    for (const char* extension : extensions) {
+        const std::size_t length = std::char_traits<char>::length(extension);
+        if (command.size() > length &&
+            command.compare(command.size() - length, length, extension) == 0) {
+            command.resize(command.size() - length);
+            break;
+        }
+    }
+    return command;
+}
+
 GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
     if (arguments.empty()) return {};
-    const std::string command = normalized_command_name(arguments.front());
+    const std::string command = normalized_command_basename(arguments.front());
 
     if (command == "del" || command == "erase") {
         return ask("ask_on_windows_delete",
@@ -149,7 +178,9 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
 
     if (command == "git") {
         if (arguments.size() < 2) return {};
-        const std::string sub = lowercase(arguments[1]);
+        const std::size_t sub_index = git_subcommand_index(arguments);
+        if (sub_index >= arguments.size()) return {};
+        const std::string sub = lowercase(arguments[sub_index]);
         if (sub == "reset") {
             for (const std::string& arg : arguments)
                 if (arg == "--hard" || arg == "--merge")
@@ -292,42 +323,87 @@ GuardResult evaluate_command_guard(const std::vector<std::string>& arguments) {
                             command + " " + sub + " is not allowed via run_command");
         }
     }
+    if (command == "dotnet" && arguments.size() >= 3) {
+        const std::string group = lowercase(arguments[1]);
+        const std::string action = lowercase(arguments[2]);
+        if (group == "nuget" && (action == "push" || action == "delete"))
+            return deny("forbid_package_env_mutation",
+                        "dotnet nuget " + action +
+                            " is not allowed via run_command (publish changes "
+                            "environment)");
+        if (group == "tool" &&
+            (action == "install" || action == "update" || action == "uninstall")) {
+            for (std::size_t i = 3; i < arguments.size(); ++i) {
+                if (arguments[i] == "-g" || arguments[i] == "--global")
+                    return deny("forbid_package_env_mutation",
+                                "dotnet tool " + action +
+                                    " --global is not allowed via run_command");
+            }
+        }
+    }
 
     if (command == "nohup" || command == "setsid" || command == "disown")
         return deny("forbid_detach",
                     "do not detach with nohup/setsid; use run background=true for "
                     "long-running project scripts");
 
-    if (command == "python" || command == "python3") {
+    if (is_python_interpreter(command)) {
         const char* inline_fix =
             "write scripts/ainiux/NAME and run python3 scripts/ainiux/NAME [args]";
+        bool seen_program = false;
         for (std::size_t i = 1; i < arguments.size(); ++i) {
             const std::string& arg = arguments[i];
+            if (seen_program) break;
             std::string payload;
-            if (arg == "-c" || arg == "--command") {
-                if (i + 1 >= arguments.size())
+            std::string module;
+            if (arg == "-c" || arg == "--command" || arg.rfind("--command=", 0) == 0) {
+                if (arg.rfind("--command=", 0) == 0) {
+                    payload = arg.substr(10);
+                } else if (i + 1 >= arguments.size()) {
                     return deny("forbid_inline_python",
                                 std::string("python -c requires a program; ") + inline_fix);
-                payload = arguments[i + 1];
-            } else if (arg.rfind("-c", 0) == 0 && arg.size() > 2) {
+                } else {
+                    payload = arguments[++i];
+                }
+                seen_program = true;
+            } else if (arg.size() > 2 && arg.compare(0, 2, "-c") == 0 && arg[1] == 'c') {
                 payload = arg.substr(2);
+                seen_program = true;
+            } else if (arg == "-m" || arg == "--module" || arg.rfind("--module=", 0) == 0) {
+                if (arg.rfind("--module=", 0) == 0) {
+                    module = arg.substr(9);
+                } else if (i + 1 >= arguments.size()) {
+                    return deny("forbid_package_env_mutation",
+                                "python -m requires a module name");
+                } else {
+                    module = arguments[++i];
+                }
+                seen_program = true;
+            } else if (arg.size() > 2 && arg.compare(0, 2, "-m") == 0 && arg[1] == 'm' &&
+                       arg[2] != '-') {
+                module = arg.substr(2);
+                seen_program = true;
             } else if (arg == "-") {
                 return deny("forbid_inline_python",
                             std::string("python stdin programs are not allowed; ") +
                                 inline_fix);
+            } else if (!arg.empty() && arg.front() != '-') {
+                seen_program = true;
+                continue;
             } else {
                 continue;
             }
-            if (payload.find("scripts/ainiux") != std::string::npos ||
-                payload.find(".ainiux-pr/scripts") != std::string::npos)
+            if (!module.empty() && is_python_env_mutation_module(module))
+                return deny("forbid_package_env_mutation",
+                            "python -m " + module +
+                                " is not allowed via run_command (install/publish changes "
+                                "environment)");
+            if (!payload.empty() &&
+                (payload.find("scripts/ainiux") != std::string::npos ||
+                 payload.find(".ainiux-pr/scripts") != std::string::npos))
                 return deny("forbid_inline_python",
                             std::string("do not wrap a project script in python -c; ") +
                                 inline_fix);
-            if (payload.find('\n') != std::string::npos || payload.size() > 120)
-                return deny("forbid_inline_python",
-                            std::string("multi-line or long python -c is not allowed; ") +
-                                inline_fix);
-            break;
         }
     }
 

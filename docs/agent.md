@@ -71,7 +71,7 @@ executed. MCP tools remain separately qualified as `mcp__server__tool`. See the
 
 ## Permissions and Guard
 
-Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations (including bounded `git` inspection and `node --test`) and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; when the Ask is a workspace script, **`r` Review** opens that file in dired read-only view. `q` leaves dired and returns to the same Guard dialog. Headless Ask decisions are denied.
+Interactive agent projects persist Confirm, Smart, or Yolo permission choices. Confirm asks for protected actions. Smart allows vetted low-risk operations (including bounded `git` inspection such as `status`/`diff`/`log`/`remote -v`, workspace `python`/`node`/`pytest` forms, `node --test`, and everyday C/C++/Java/C# toolchains) and asks for riskier ones. Yolo reduces prompts and accepts more risk. Guard classifies commands and mutations independently of model prose. Interactive “Ask” decisions require an explicit `y` or `n`; when the Ask is a workspace script, **`r` Review** opens that file in dired read-only view. `q` leaves dired and returns to the same Guard dialog. Headless Ask decisions are denied.
 
 ## Agent questions
 
@@ -87,7 +87,9 @@ Write a flat portable filename such as `scripts/ainiux/check.sh`. The
 `bash`, `sh`, `python3`, or `python` plus `scripts/ainiux/NAME [args...]`, or
 the script path itself (`scripts/ainiux/NAME [args...]`). List
 the directory before inventing a new helper. Long-running helpers (HTTP servers,
-watchers) use `run` with `background=true` instead of `nohup` or `python3 -c`.
+watchers) use `run` with `background=true` instead of `nohup`. One-shot
+`python3 -c`, `python3 -m`, `node`, `make`, `g++`, `javac`, and `dotnet` on
+workspace files are ordinary `run` forms in Smart.
 
 These files are indexed, greppable, and visible to Git like any other workspace
 source. Smart and Yolo run `bash|sh|python3|python scripts/ainiux/NAME` without
@@ -97,8 +99,9 @@ bytes change. The prompt shows path, interpreter, arguments, size, and a short
 hash — not the script body. Press **Review** (`r` / `3`) to open the script
 in dired read-only view; `q` returns to the Yes/No/Review dialog. Headless Confirm denies an untrusted first execution. Trust is stored
 in project-local `.ainiux-pr/agent.sqlite` and survives quitting Ainiux; it is
-cleared if you delete `.ainiux-pr` or change the file. Multi-line or wrapping
-`python3 -c` is hard-denied in Confirm/Smart. The Guard panel opens at the top
+cleared if you delete `.ainiux-pr` or change the file. Wrapping a project helper
+in `python3 -c`, `python -` stdin programs, and `python -m pip` stay hard-denied
+in Confirm/Smart. The Guard panel opens at the top
 of the request; arrows, Page Up/Down, Home/End, and the mouse wheel scroll it.
 
 On Windows, agent commands remain direct argv execution. Executable discovery

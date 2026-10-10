@@ -24,7 +24,7 @@ methodology.
 | `symbol` | `query` | Ranked indexed definitions. Hidden without an index. |
 | `outline` | `path` | Declarations in one file. Hidden without an index. |
 | `read` | `path` **or** `items` | One file, or batch 1–100 ranges (`items`); defaults to 128 KiB and returns `next_start_line` when truncated. Images: `attach`. |
-| `run` | `command` | Shell-free argv exec. Smart auto-allows classified in-project `mkdir`/`rmdir`/`rm`/`mv`, bounded `git` inspection (`status`/`diff`/`ls-files`/`rev-parse`), and `node --test`; asks for non-empty `rm -r`. |
+| `run` | `command` | Shell-free argv exec. Smart auto-allows classified in-project `mkdir`/`rmdir`/`rm`/`mv`, bounded `git` inspection (`status`/`diff`/`log`/`show`/`ls-files`/`rev-parse`/`rev-list`/`remote -v`, including copied `git -c pager` prefixes), workspace `python`/`node`/`pytest` forms, `node --test`, and everyday C/C++/Java/C# toolchains (`make`/`g++`/`javac`/`dotnet`); asks for non-empty `rm -r`. |
 | `fetch` | `url` | HTTP(S) → Markdown/text. Network sessions only. |
 | `web_search` | `term` | At most 3 search hits. Network sessions only. |
 | `ask` | `questions` | Pause an interactive Agent turn for 1–6 required single-choice questions. Hidden from headless and non-agent surfaces. |
@@ -55,8 +55,10 @@ Classified by `assess_workspace_fs_command`:
 - Headless Ask → Deny (non-empty tree delete stays blocked in `ainiux run`).
 - Windows `cmd` is still denied. POSIX `rmdir` is not treated as Windows `rd`.
 
-## Smart `run` git inspection and `node --test`
+## Smart `run` git inspection and workspace interpreters
 
-- Auto-allow bounded in-project `git status`, `git diff`, `git ls-files`, and `git rev-parse` using the same option set as security-review Git inspection (`--stat`/`--cached`/`--name-only` and pathspecs; reject `--output`/`--ext-diff`/`--textconv`).
-- Auto-allow `node --test` with optional in-project test paths. `node script.js`, `node -e`/`--eval`, `--watch`, loaders, and inspect stay prompts.
-- Confirm still asks for every `run`. Restricted read-only policy accepts the Git forms and still rejects `node --test`.
+- Auto-allow bounded in-project Git inspection: `status`, `diff`, `log`, `show`, `blame`, `ls-files`, `rev-parse`, `rev-list`, `remote -v`/`get-url`, `check-ignore`, listing `branch`/`tag`, `stash list`/`show`, and similar read-only queries. `git -c core.pager=cat …` copied from a prior hardened argv still classifies as the porcelain subcommand. Reject `--output`/`--ext-diff`/`--textconv`, `git add`/`commit`/`push`, `git stash` without `list`/`show`, and `git -c alias.*`.
+- Auto-allow workspace-scoped interpreters classified by `assess_workspace_interpreter_command`: `python`/`python3` file, `-m`, and `-c`; `node` file, `--test`, and `-e`/`--eval`; `pytest`. Cwd and recognized path operands must stay in-project. Inline `-c`/`-e` payloads with absolute, home, protected, or `..` path literals stay prompts, as do `python -m http.server`, `node --inspect`/`--watch`/`--loader`, and unknown python/node flags.
+- Auto-allow everyday C/C++/Java/C# toolchains in the same classifier: `gcc`/`g++`/`clang`/`make`/`cmake`/`ninja` (and `cc`/`ar`/`ld`/`clang-format`), `javac`/`java`/`jar`/`mvn`/`gradle`, and `dotnet`/`csc`/`msbuild`. Compiler plugin/wrapper flags, `make --eval`/`-f -`, `make install`, `cmake --install`, `jshell`, Maven `deploy`/`release:perform`, and Gradle remote `publish` stay prompts. `dotnet nuget push|delete` and `dotnet tool install --global` are hard Guard denials. Unknown compiler flags fail open so typical `-O2`/`-Wall`/`-j` builds do not prompt.
+- `python -m pip` / `ensurepip` is a hard Guard denial, matching `pip install`. Wrapping `scripts/ainiux` in `python -c` and `python -` stdin programs stay denied. `bash -c` stays denied.
+- Confirm still asks for every `run`. Restricted read-only policy accepts the Git forms and still rejects interpreter and toolchain execution.

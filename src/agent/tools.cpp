@@ -3424,10 +3424,12 @@ std::vector<ToolDescriptor> ReadToolRegistry::native_descriptors() const {
         {"run",
          agent_session
              ? "Run one workspace command without a real shell (argv exec). Bare PATH names "
-               "(`make`, `python3`) or project scripts (`./script.sh`, `bash script.sh`). "
+               "(`make`, `python3`, `node`) or project scripts (`./script.sh`, `bash script.sh`). "
                "Reusable helpers live at scripts/ainiux/NAME: ls that directory first, write "
                "a new file only when none fits, then run python3|python|bash|sh "
-               "scripts/ainiux/NAME [args]. Do not rewrite a script as python3 -c. "
+               "scripts/ainiux/NAME [args]. Do not wrap those helpers as python3 -c. "
+               "One-shot python3 -c, python3 -m, node, make, g++, javac, and dotnet "
+               "on workspace files are valid. "
                "Long-running servers use background=true (not nohup). "
                "No unquoted pipes/redirects/chaining. Prefer mkdir/mv/rm/ls over equivalents. "
                "Delete directories with rmdir (empty) or rm -r (non-empty asks in Smart). "
@@ -5216,15 +5218,15 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
                 return tool_error_result("policy_denied", policy_error.message);
             uses_external = uses_external || read_only_uses_external;
         }
-        const ReadOnlyCommandAssessment node_test =
-            assess_node_test_command(parsed_arguments);
-        if (node_test.vetted) {
-            bool node_test_uses_external = false;
+        const ReadOnlyCommandAssessment interpreter =
+            assess_workspace_interpreter_command(parsed_arguments);
+        if (interpreter.vetted) {
+            bool interpreter_uses_external = false;
             policy_error = validate_vetted_read_only_paths(
-                snapshot_, node_test, cwd, node_test_uses_external);
+                snapshot_, interpreter, cwd, interpreter_uses_external);
             if (!policy_error.ok())
                 return tool_error_result("policy_denied", policy_error.message);
-            uses_external = uses_external || node_test_uses_external;
+            uses_external = uses_external || interpreter_uses_external;
         }
         const WorkspaceFsCommandAssessment fs_cmd =
             assess_workspace_fs_command(parsed_arguments);
@@ -5235,9 +5237,9 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
         const bool smart_read_only_exemption =
             permission_controls_ && permission_mode_ == PermissionMode::Smart &&
             read_only.vetted && !uses_external && guard_rule_id.empty();
-        const bool smart_test_exemption =
+        const bool smart_interpreter_exemption =
             permission_controls_ && permission_mode_ == PermissionMode::Smart &&
-            node_test.vetted && !uses_external && guard_rule_id.empty();
+            interpreter.vetted && !uses_external && guard_rule_id.empty();
         const bool smart_fs_exemption =
             permission_controls_ && permission_mode_ == PermissionMode::Smart &&
             fs_cmd.classified && !uses_external && !nonempty_tree &&
@@ -5253,7 +5255,7 @@ std::string ReadToolRegistry::execute(const std::string& requested_name,
             ask.arguments = parsed_arguments;
             permission = request_guard_approval(ask, cancellation);
         } else if (project_script || smart_read_only_exemption || smart_fs_exemption ||
-                   smart_test_exemption) {
+                   smart_interpreter_exemption) {
             permission = GuardApprovalDecision::Allow;
         } else {
             permission = request_permission(

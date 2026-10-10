@@ -81,6 +81,7 @@ Continue small, test-backed improvements to the shipped product:
 - benchmark cutoff and judge calibration with auditable raw evidence;
 - terminal/editor responsiveness, resize behavior, Unicode, and interaction polish;
 - cancellation, permission, fault, sanitizer, and leak hardening;
+- Smart auto-allows workspace-scoped `python`/`node`/`pytest` interpreter forms and everyday C/C++/Java/C# toolchains after Guard and path checks; OS sandbox remains later;
 - refactors that remove duplication without destabilizing surface behavior;
 - syntax-theme contrast warnings and remaining editor reformat/PTY stress coverage.
 

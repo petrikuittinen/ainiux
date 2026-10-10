@@ -576,14 +576,31 @@ Error enforce_restricted_read_only_policy(std::vector<std::string>& args,
     return ok_error();
 }
 
-// Inject git -c pager/external-diff hardening and return subcommand name.
+// Inject git -c pager/external-diff hardening immediately before the porcelain
+// subcommand so it overrides earlier -c pager/external-diff settings.
 Error harden_git_argv(std::vector<std::string>& args, std::string& subcommand) {
-    if (args.size() < 2) return {ErrorCode::BadArgs, "git requires a subcommand"};
-    subcommand = args[1];
-    args.erase(args.begin() + 1);
-    args.insert(args.begin() + 1,
-                {"-c", "core.pager=cat", "-c", "pager.show=false", "-c", "pager.diff=false",
-                 "-c", "diff.external=", subcommand});
+    const std::size_t sub_index = git_subcommand_index(args);
+    if (sub_index >= args.size())
+        return {ErrorCode::BadArgs, "git requires a subcommand"};
+    subcommand = args[sub_index];
+    static const char* kHardening[] = {
+        "-c", "core.pager=cat", "-c", "pager.show=false", "-c", "pager.diff=false",
+        "-c", "diff.external="};
+    constexpr std::size_t n = sizeof(kHardening) / sizeof(kHardening[0]);
+    bool already = sub_index >= n;
+    if (already) {
+        for (std::size_t i = 0; i < n; ++i) {
+            if (args[sub_index - n + i] != kHardening[i]) {
+                already = false;
+                break;
+            }
+        }
+    }
+    if (!already) {
+        args.insert(args.begin() + sub_index,
+                    {"-c", "core.pager=cat", "-c", "pager.show=false",
+                     "-c", "pager.diff=false", "-c", "diff.external="});
+    }
     return ok_error();
 }
 
@@ -591,15 +608,36 @@ Error harden_git_argv(std::vector<std::string>& args, std::string& subcommand) {
 // Block only path/config overrides that escape the workspace runner model.
 Error enforce_agent_git_policy(std::vector<std::string>& args) {
     if (args.size() < 2) return {ErrorCode::BadArgs, "git requires a subcommand"};
-    const std::string& sub = args[1];
+    const std::size_t sub_index = git_subcommand_index(args);
+    if (sub_index >= args.size())
+        return {ErrorCode::BadArgs, "git requires a subcommand"};
+    const std::string& sub = args[sub_index];
     if (sub == "config" || sub == "filter-branch" || sub == "update-ref" || sub == "replace")
         return {ErrorCode::BadArgs, "git " + sub + " is not allowed via run_command"};
 
-    for (std::size_t i = 2; i < args.size(); ++i) {
+    for (std::size_t i = 1; i < args.size(); ++i) {
         const std::string& arg = args[i];
+        if (arg == "-c") {
+            if (i + 1 >= args.size())
+                return {ErrorCode::BadArgs, "git -c requires a name=value assignment"};
+            if (git_config_assignment_is_dangerous(args[i + 1]))
+                return {ErrorCode::BadArgs,
+                        "git -c " + args[i + 1] + " is not allowed via run_command"};
+            ++i;
+            continue;
+        }
+        if (arg.size() > 2 && arg[0] == '-' && arg[1] == 'c' && arg[2] != '-') {
+            const std::string assignment = arg.substr(2);
+            if (git_config_assignment_is_dangerous(assignment))
+                return {ErrorCode::BadArgs,
+                        "git -c " + assignment + " is not allowed via run_command"};
+            continue;
+        }
         if (arg == "--exec-path" || arg.rfind("--exec-path=", 0) == 0 ||
             arg == "--git-dir" || arg.rfind("--git-dir=", 0) == 0 ||
-            arg == "--work-tree" || arg.rfind("--work-tree=", 0) == 0)
+            arg == "--work-tree" || arg.rfind("--work-tree=", 0) == 0 ||
+            arg == "--namespace" || arg.rfind("--namespace=", 0) == 0 ||
+            arg == "--config-env" || arg.rfind("--config-env=", 0) == 0)
             return {ErrorCode::BadArgs, "git rejected a path-override option"};
     }
     std::string ignored;

@@ -48,6 +48,8 @@ void test_guard_patterns() {
               {"rm", "app.sqlite"})).decision == agent::GuardDecision::Deny,
           "rm of a database-looking file still Asks/denies headless");
     check(deny({"git", "reset", "--hard"}), "git reset --hard denied");
+    check(deny({"git", "-c", "core.pager=cat", "reset", "--hard"}),
+          "git -c pager prefix does not hide git reset --hard from Guard");
     check(deny({"git", "clean", "-fdx"}), "git clean -fdx denied");
     check(deny({"git", "push", "--force"}), "git push --force denied");
     check(deny({"find", ".", "-delete"}), "find -delete denied");
@@ -55,10 +57,17 @@ void test_guard_patterns() {
     check(deny({"bash", "-c", "echo hi"}), "bash -c free-form denied");
     check(deny({"nohup", "python3", "scripts/ainiux/serve_dir.py"}),
           "nohup detach denied");
-    check(deny({"python3", "-c", "import subprocess\nprint(1)"}),
-          "multi-line python -c denied");
+    check(agent::evaluate_command_guard(
+              {"python3", "-c", "import os\nprint(1)"}).decision ==
+              agent::GuardDecision::Allow,
+          "multi-line python -c is allowed by guard");
     check(deny({"python3", "-c", "subprocess.Popen(['scripts/ainiux/x.py'])"}),
           "python -c wrapping a project script denied");
+    check(deny({"python3", "-"}), "python stdin program denied");
+    check(deny({"python3", "-m", "pip", "install", "requests"}),
+          "python -m pip install denied");
+    check(deny({"python3.12", "-m", "ensurepip"}),
+          "versioned python -m ensurepip denied");
     check(agent::evaluate_command_guard(
               {"python3", "-c", "print(1)"}).decision == agent::GuardDecision::Allow,
           "short one-line python -c still allowed by guard");
@@ -82,6 +91,21 @@ void test_guard_patterns() {
     check(deny({"apt-get", "install", "curl"}), "system package manager denied");
     check(deny({"ssh", "host"}), "remote shell denied");
     check(deny({"reboot"}), "host control denied");
+    check(deny({"dotnet", "nuget", "push", "pkg.nupkg"}),
+          "dotnet nuget push denied");
+    check(deny({"dotnet", "nuget", "delete", "pkg"}),
+          "dotnet nuget delete denied");
+    check(deny({"dotnet", "tool", "install", "-g", "foo"}),
+          "dotnet tool install -g denied");
+    check(deny({"dotnet", "tool", "install", "--global", "foo"}),
+          "dotnet tool install --global denied");
+    check(agent::evaluate_command_guard({"dotnet", "build"}).decision ==
+              agent::GuardDecision::Allow,
+          "dotnet build allowed by guard");
+    check(agent::evaluate_command_guard(
+              {"dotnet", "tool", "install", "foo"}).decision ==
+              agent::GuardDecision::Allow,
+          "local dotnet tool install is not a hard Guard deny");
 
     const agent::GuardResult allow =
         agent::evaluate_command_guard({"python3", "hello.py"});
@@ -161,8 +185,12 @@ void test_parse_policies() {
 import sys
 print(1)")CMD",
         args, agent::CommandPolicy::Agent, rule);
-    check(!error.ok() && error.message.find("scripts/ainiux") != std::string::npos,
-          "agent denylists multi-line python -c: " + error.message);
+    check(error.ok() && args.size() == 3 && args[2].find("import os") != std::string::npos,
+          "agent accepts quoted multi-line python -c: " + error.message);
+    error = agent::parse_command("python3 -m pip install requests", args,
+                                 agent::CommandPolicy::Agent, rule);
+    check(!error.ok() && error.message.find("environment") != std::string::npos,
+          "agent denylists python -m pip: " + error.message);
 
     error = agent::parse_command("echo hi | wc -l", args, agent::CommandPolicy::Agent, rule);
     check(!error.ok() && error.message.find("shell-free") != std::string::npos,
@@ -215,6 +243,29 @@ print(1)")CMD",
                                  agent::CommandPolicy::RestrictedReadOnly, rule);
     check(error.ok() && args.size() > 9 && args[9] == "diff",
           "restricted policy accepts bounded git diff and injects pager hardening");
+    error = agent::parse_command("git -c core.pager=cat status --short", args,
+                                 agent::CommandPolicy::RestrictedReadOnly, rule);
+    check(error.ok() && agent::git_subcommand_index(args) < args.size() &&
+              args[agent::git_subcommand_index(args)] == "status",
+          "restricted policy accepts git status after a copied pager -c: " + error.message);
+    error = agent::parse_command("git -c core.pager=cat log --oneline -3", args,
+                                 agent::CommandPolicy::RestrictedReadOnly, rule);
+    check(error.ok(),
+          "restricted policy accepts git log inspection: " + error.message);
+    error = agent::parse_command("git -c core.pager=cat config --get user.name", args,
+                                 agent::CommandPolicy::Agent, rule);
+    check(!error.ok() && error.message.find("config") != std::string::npos,
+          "agent still blocks git config after a pager -c prefix: " + error.message);
+    error = agent::parse_command("git -c alias.status=!id status --short", args,
+                                 agent::CommandPolicy::Agent, rule);
+    check(!error.ok() && error.message.find("alias") != std::string::npos,
+          "agent blocks git -c alias overrides: " + error.message);
+    error = agent::parse_command("git -c core.pager=cat status --short", args,
+                                 agent::CommandPolicy::Agent, rule);
+    check(error.ok() && agent::git_subcommand_index(args) < args.size() &&
+              args[agent::git_subcommand_index(args)] == "status",
+          "agent git hardening keeps status as the subcommand after -c pager: " +
+              error.message);
     error = agent::parse_command("node --test", args, agent::CommandPolicy::RestrictedReadOnly,
                                  rule);
     check(!error.ok(), "restricted policy does not treat node --test as read-only");
@@ -279,9 +330,30 @@ void test_read_only_command_classifier() {
     check(vetted({"git", "-c", "core.pager=cat", "-c", "pager.show=false",
                   "-c", "pager.diff=false", "-c", "diff.external=", "diff"}),
           "classifier: git diff after runner pager hardening");
+    check(vetted({"git", "-c", "core.pager=cat", "status", "--short"}) &&
+              vetted({"git", "-c", "core.pager=cat", "-c", "pager.show=false",
+                      "-c", "pager.diff=false", "-c", "diff.external=",
+                      "-c", "core.pager=cat", "status", "--short", "--branch"}) &&
+              vetted({"git", "-c", "core.pager=cat", "diff", "--cached", "--stat"}),
+          "classifier: copied git -c pager prefix still classifies status/diff");
+    check(vetted({"git", "log", "--oneline", "-3"}) &&
+              vetted({"git", "-c", "core.pager=cat", "log", "--oneline", "-15"}) &&
+              vetted({"git", "log", "--oneline", "-3", "--", "src/ainiux/isa.py"}) &&
+              vetted({"git", "rev-list", "--left-right", "--count",
+                      "origin/main...main"}) &&
+              vetted({"git", "remote", "-v"}) &&
+              vetted({"git", "show", "HEAD"}) &&
+              vetted({"git", "branch", "--show-current"}) &&
+              vetted({"git", "stash", "list"}),
+          "classifier: common git inspection forms");
     check(!vetted({"git", "diff", "--output=owned"}) &&
               !vetted({"git", "commit", "-am", "x"}) &&
-              !vetted({"git", "push"}),
+              !vetted({"git", "push"}) &&
+              !vetted({"git", "add", "-A"}) &&
+              !vetted({"git", "stash"}) &&
+              !vetted({"git", "branch", "topic"}) &&
+              !vetted({"git", "remote", "add", "origin", "git@example.com:x.git"}) &&
+              !vetted({"git", "-c", "alias.status=!id", "status"}),
           "classifier: mutating git stays unvetted");
 
     auto node_test = [](std::initializer_list<const char*> words) {
@@ -298,7 +370,89 @@ void test_read_only_command_classifier() {
               !node_test({"node", "--test", "-e", "console.log(1)"}) &&
               !node_test({"node", "--test", "--watch"}) &&
               !node_test({"node", "--eval", "1"}),
-          "classifier: node eval/script/watch stay unvetted");
+          "classifier: node eval/script/watch stay outside node --test");
+
+    auto interpreter = [](std::initializer_list<const char*> words) {
+        std::vector<std::string> args;
+        for (const char* word : words) args.emplace_back(word);
+        return agent::assess_workspace_interpreter_command(args).vetted;
+    };
+    check(interpreter({"python3", "-c", "print(1)"}) &&
+              interpreter({"python3", "-c", "import os\nprint(1)"}) &&
+              interpreter({"python3", "-m", "pytest"}) &&
+              interpreter({"python3", "-m", "py_compile", "src/a.py"}) &&
+              interpreter({"python3", "tests/test_foo.py"}) &&
+              interpreter({"python3.12", "-u", "-c", "print(1)"}),
+          "interpreter classifier: python file, -m, and -c");
+    check(!interpreter({"python3", "-c", "print(open('/etc/passwd').read())"}) &&
+              !interpreter({"python3", "-c", "open('~/secret')"}) &&
+              !interpreter({"python3", "-m", "http.server"}) &&
+              !interpreter({"python3", "-m", "pip"}) &&
+              !interpreter({"python3", "--foo", "x.py"}) &&
+              !interpreter({"python3", "-"}),
+          "interpreter classifier: escaping/listener/unknown python stays unvetted");
+    check(interpreter({"node", "--test"}) &&
+              interpreter({"node", "script.js"}) &&
+              interpreter({"node", "-e", "console.log(1)"}) &&
+              interpreter({"node", "--no-warnings", "app.mjs"}),
+          "interpreter classifier: node file, --test, and -e");
+    check(!interpreter({"node", "--inspect", "script.js"}) &&
+              !interpreter({"node", "--watch"}) &&
+              !interpreter({"node", "-e", "require('/etc/passwd')"}),
+          "interpreter classifier: node inspect/watch/absolute stay unvetted");
+    check(interpreter({"pytest"}) && interpreter({"pytest", "tests/"}) &&
+              !interpreter({"pytest", "--pdb"}),
+          "interpreter classifier: pytest without debugger flags");
+    check(interpreter({"g++", "-c", "src/hello.cpp", "-o", "hello.o"}) &&
+              interpreter({"gcc-13", "-O2", "main.c"}) &&
+              interpreter({"clang++", "src/a.cpp"}) &&
+              interpreter({"/usr/bin/clang-18", "-Wall", "a.c"}) &&
+              interpreter({"aarch64-linux-gnu-gcc", "-c", "a.c"}) &&
+              interpreter({"clang-format", "src/a.cpp"}) &&
+              interpreter({"make", "test"}) && interpreter({"make", "-j8"}) &&
+              interpreter({"cmake", "-S", ".", "-B", "build"}) &&
+              interpreter({"cmake", "--build", "build"}) &&
+              interpreter({"ctest", "--test-dir", "build"}) &&
+              interpreter({"ninja", "all"}),
+          "interpreter classifier: C/C++ compilers and build tools");
+    check(!interpreter({"g++", "-fplugin=evil.so", "a.cpp"}) &&
+              !interpreter({"clang", "-load", "plugin.so", "a.c"}) &&
+              !interpreter({"make", "--eval", "evil"}) &&
+              !interpreter({"make", "-f", "-"}) &&
+              !interpreter({"make", "install"}) &&
+              !interpreter({"cmake", "--install", "build"}) &&
+              !interpreter({"ninja", "install"}),
+          "interpreter classifier: compiler plugins and install stay unvetted");
+    check(interpreter({"javac", "Main.java"}) &&
+              interpreter({"java", "-cp", "out", "Main"}) &&
+              interpreter({"jar", "cf", "app.jar", "Main.class"}) &&
+              interpreter({"mvn", "-q", "test"}) &&
+              interpreter({"mvn", "package"}) &&
+              interpreter({"./mvnw", "verify"}) &&
+              interpreter({"gradle", "build"}) &&
+              interpreter({"./gradlew", "test"}) &&
+              interpreter({"gradle", "publishToMavenLocal"}),
+          "interpreter classifier: Java compilers and build tools");
+    check(!interpreter({"jshell"}) &&
+              !interpreter({"java", "-javaagent:agent.jar", "Main"}) &&
+              !interpreter({"mvn", "deploy"}) &&
+              !interpreter({"mvn", "package", "deploy"}) &&
+              !interpreter({"mvn", "release:perform"}) &&
+              !interpreter({"gradle", "publish"}) &&
+              !interpreter({"./gradlew", ":app:publish"}),
+          "interpreter classifier: Java publish/repl stay unvetted");
+    check(interpreter({"dotnet", "build"}) &&
+              interpreter({"dotnet", "test"}) &&
+              interpreter({"dotnet", "run"}) &&
+              interpreter({"dotnet", "publish"}) &&
+              interpreter({"dotnet", "App.csproj"}) &&
+              interpreter({"csc", "Program.cs"}) &&
+              interpreter({"msbuild", "App.sln"}),
+          "interpreter classifier: C# compilers and dotnet build/test");
+    check(!interpreter({"dotnet", "nuget", "push", "pkg.nupkg"}) &&
+              !interpreter({"dotnet", "tool", "install", "foo"}) &&
+              !interpreter({"dotnet", "ef", "database", "update"}),
+          "interpreter classifier: dotnet nuget/tool/ef stay unvetted");
 
     check(!vetted({"ls", "--definitely-unknown"}), "classifier: unknown option fallback");
     check(!vetted({"date", "--set", "tomorrow"}), "classifier: date --set trap");
@@ -376,6 +530,11 @@ void test_tool_agent_python_and_security_deny() {
     const std::string py =
         agent_tools.execute("run", R"JSON({"command":"python3 hello.py"})JSON");
     check(json_ok(py), "agent run_command python3 hello.py: " + py);
+    const std::string inline_py = agent_tools.execute(
+        "run",
+        R"JSON({"command":"python3 -c \"import os\nprint('ok')\""})JSON");
+    check(json_ok(inline_py),
+          "headless agent run accepts multi-line python -c: " + inline_py);
     check(py.find("ok") != std::string::npos || py.find("\"exit_status\":0") != std::string::npos,
           "python output/status: " + py);
 

@@ -307,9 +307,13 @@ void test_permission_modes_and_native_path_tools() {
           "smart mode still requires approval for nonempty rm -r");
     const std::string smart_build =
         smart.execute("run", R"({"command":"make test"})");
-    check(!json_ok(smart_build) &&
-              json_error_code(smart_build) == "policy_denied",
-          "smart mode still requires approval for builds and tests");
+    check(json_error_code(smart_build) != "policy_denied",
+          "smart mode auto-approves workspace make test");
+    const std::string smart_cargo =
+        smart.execute("run", R"({"command":"cargo test"})");
+    check(!json_ok(smart_cargo) &&
+              json_error_code(smart_cargo) == "policy_denied",
+          "smart mode still requires approval for cargo test");
     const std::string smart_external = smart.execute(
         "run",
         "{\"command\":\"pwd\",\"cwd\":" +
@@ -335,18 +339,91 @@ void test_permission_modes_and_native_path_tools() {
               smart_asks.load() == 0,
           "smart mode does not prompt for git diff");
     check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"git -c core.pager=cat status --short"})")) !=
+                  "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for git status after a copied pager -c");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"git -c core.pager=cat log --oneline -3"})")) !=
+                  "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for git log --oneline");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"git remote -v"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for git remote -v");
+    check(json_error_code(smart_prompting.execute(
+              "run",
+              R"({"command":"git rev-list --left-right --count origin/main...main"})")) !=
+                  "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for git rev-list inspection");
+    check(json_error_code(smart_prompting.execute(
               "run", R"({"command":"node --test src/hello.cpp"})")) != "policy_denied" &&
               smart_asks.load() == 0,
           "smart mode does not prompt for node --test");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"python3 -c \"print(1)\""})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for short python -c");
+    check(json_error_code(smart_prompting.execute(
+              "run",
+              R"({"command":"python3 -c \"import os\nprint(1)\""})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for multi-line python -c");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"python3 -m py_compile src/hello.cpp"})")) !=
+                  "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for python -m on a project file");
+    write_text(fs::path(workspace) / "src" / "hello.py", "print(1)\n");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"python3 src/hello.py"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for python on a workspace file");
+    write_text(fs::path(workspace) / "src" / "hello.js", "console.log(1);\n");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"node src/hello.js"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for node on a workspace file");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"node -e \"console.log(1)\""})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for node -e");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"make test"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for make test");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"g++ -c src/hello.cpp"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for g++");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"javac Main.java"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for javac");
+    check(json_error_code(smart_prompting.execute(
+              "run", R"({"command":"dotnet test"})")) != "policy_denied" &&
+              smart_asks.load() == 0,
+          "smart mode does not prompt for dotnet test");
     check(!json_ok(smart_prompting.execute(
-              "run", R"({"command":"make test"})")) &&
+              "run", R"({"command":"cargo test"})")) &&
               smart_asks.load() == 1,
-          "smart mode prompts for a non-vetted command");
+          "smart mode prompts for cargo test");
+    check(!json_ok(smart_prompting.execute(
+              "run",
+              R"({"command":"python3 -c \"print(open('/etc/passwd').read())\""})")) &&
+              smart_asks.load() == 2,
+          "smart mode prompts for python -c with an absolute path literal");
+    check(!json_ok(smart_prompting.execute(
+              "run", R"({"command":"node --inspect src/hello.js"})")) &&
+              smart_asks.load() == 3,
+          "smart mode prompts for node --inspect");
     check(!json_ok(smart_prompting.execute(
               "run",
               "{\"command\":\"pwd\",\"cwd\":" +
                   json_string((temp_parent / "nested").string()) + "}")) &&
-              smart_asks.load() == 2,
+              smart_asks.load() == 4,
           "smart mode prompts for an external-path read-only command");
     const std::string absolute_project_file = smart.execute(
         "run",
