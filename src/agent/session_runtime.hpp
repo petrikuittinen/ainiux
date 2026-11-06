@@ -147,7 +147,7 @@ struct SessionRuntimeOptions {
     int max_agent_turns = 500;
     // Foreground agent `run` default and advertised timeout_ms maximum (seconds).
     // 0 disables the timeout. There is no compiled-in product ceiling.
-    long run_timeout_seconds = 300;
+    long run_timeout_seconds = 600;
     // Concurrent independent tools in one model round (1..32). Shared with
     // security-review workers via agent.max_parallel_agents.
     int max_parallel_tools = 4;

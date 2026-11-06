@@ -13,6 +13,7 @@
 #include "agent/project_root.hpp"
 #include "agent/reasoning_preview.hpp"
 #include "agent/tool_display.hpp"
+#include "json/json.hpp"
 #include "platform/environment.hpp"
 #include "support/test_support.hpp"
 
@@ -579,6 +580,51 @@ void test_tool_display_format() {
           "read_many compact activity shows one batch with its paths: " + many);
 }
 
+void test_tool_display_run_command_preview() {
+    const std::string home = platform::home_directory();
+    std::string current_command = "bash -c ";
+    if (!home.empty()) {
+        current_command += home;
+        if (home.back() != '/' && home.back() != '\\') current_command += '/';
+    } else {
+        current_command += "/home/eye/";
+    }
+    current_command += "ainiux/ainiux parameter1 extra-flag";
+    const std::string current_args = "{\"command\":" + json::quote(current_command) + "}";
+    const std::string current_preview = agent::compact_tool_args_preview(current_args, 160);
+    check(current_preview.find("command=") == std::string::npos,
+          "run preview drops command=: " + current_preview);
+    check(current_preview.find("parameter1") != std::string::npos,
+          "run preview keeps arguments past the old 24-character clip: " + current_preview);
+    if (!home.empty()) {
+        check(current_preview.find("~/ainiux/ainiux") != std::string::npos,
+              "current home becomes ~: " + current_preview);
+        check(current_preview.find(home) == std::string::npos,
+              "raw current home is not shown: " + current_preview);
+    }
+
+    const std::string other_args =
+        R"({"command":"bash -c /home/ainiux-preview-user/ainiux/ainiux parameter1 extra-flag"})";
+    const std::string other_preview = agent::compact_tool_args_preview(other_args, 160);
+    check(other_preview.find("command=") == std::string::npos,
+          "other-user preview drops command=: " + other_preview);
+    check(other_preview.find("~ainiux-preview-user/ainiux/ainiux") != std::string::npos,
+          "other POSIX home becomes ~user: " + other_preview);
+    check(other_preview.find("/home/ainiux-preview-user") == std::string::npos,
+          "raw other home is not shown: " + other_preview);
+    check(other_preview.find("parameter1") != std::string::npos,
+          "other-user preview keeps arguments: " + other_preview);
+
+    const std::string line = agent::format_compact_tool_line(
+        1, "run", other_args, R"({"ok":true})", 12, 120);
+    check(line.find("1: run(") != std::string::npos, "run compact line name: " + line);
+    check(line.find("command=") == std::string::npos, "compact line drops command=: " + line);
+    check(line.find("~ainiux-preview-user/") != std::string::npos,
+          "compact line shortens other home: " + line);
+    check(line.find("parameter1") != std::string::npos,
+          "compact line keeps parameter1: " + line);
+}
+
 void test_tool_display_clips_to_width() {
     const std::string long_path(200, 'x');
     const std::string args = std::string(R"({"path":")") + long_path + R"("})";
@@ -1029,6 +1075,7 @@ void run_all() {
     test_compact_threshold_defaults();
     test_compaction_strategies_timeline_and_partition();
     test_tool_display_format();
+    test_tool_display_run_command_preview();
     test_tool_display_clips_to_width();
     test_elapsed_seconds_format();
     test_prior_session_context_includes_recent_work();

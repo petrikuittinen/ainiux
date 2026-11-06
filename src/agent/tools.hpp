@@ -112,7 +112,7 @@ struct ToolRegistryOptions {
     // seconds. 0 disables the timeout (the command runs until it exits or is
     // cancelled). Security-review inspection `run` ignores this and stays at
     // 10 seconds. There is no smaller compiled-in product cap.
-    long run_timeout_seconds = 300;
+    long run_timeout_seconds = 600;
     // Optional project-local persistence for Smart managed-script trust.
     AgentSessionStore* session_store = nullptr;
     bool indexing_enabled = true;
@@ -345,7 +345,7 @@ class ReadToolRegistry {
     VisionAttachHooks vision_hooks_;
     PermissionMode permission_mode_ = PermissionMode::Smart;
     bool permission_controls_ = false;
-    long run_timeout_seconds_ = 300;
+    long run_timeout_seconds_ = 600;
     AgentSessionStore* session_store_ = nullptr;
     bool indexing_enabled_ = true;
     IndexAccessMode index_access_mode_ =

@@ -7,6 +7,7 @@
 #include <sstream>
 
 #include "json/json.hpp"
+#include "platform/environment.hpp"
 #include "tui/terminal.hpp"
 
 namespace ainiux::agent {
@@ -37,9 +38,86 @@ std::string escape_preview(std::string text) {
     return out;
 }
 
+bool is_path_separator(char ch) {
+    return ch == '/' || ch == '\\';
+}
+
+bool home_token_before(const std::string& text, std::size_t pos) {
+    if (pos == 0) return true;
+    const unsigned char prev = static_cast<unsigned char>(text[pos - 1]);
+    return prev <= 0x20 || prev == '"' || prev == '\'' || prev == '=' || prev == ':' ||
+           prev == ',' || prev == '(' || prev == '[' || prev == '{';
+}
+
+bool home_token_after(const std::string& text, std::size_t end) {
+    if (end >= text.size()) return true;
+    const unsigned char next = static_cast<unsigned char>(text[end]);
+    return is_path_separator(static_cast<char>(next)) || next <= 0x20 || next == '"' ||
+           next == '\'' || next == ')' || next == ']' || next == '}' || next == ',';
+}
+
+bool username_char(unsigned char ch) {
+    return std::isalnum(ch) != 0 || ch == '_' || ch == '-' || ch == '.';
+}
+
+void replace_home_prefix(std::string& text, const std::string& prefix, const std::string& with) {
+    if (prefix.empty() || with.empty()) return;
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        const std::size_t found = text.find(prefix, pos);
+        if (found == std::string::npos) return;
+        const std::size_t end = found + prefix.size();
+        if (home_token_before(text, found) && home_token_after(text, end)) {
+            text.replace(found, prefix.size(), with);
+            pos = found + with.size();
+        } else {
+            pos = found + 1;
+        }
+    }
+}
+
+void shorten_other_posix_homes(std::string& text) {
+    const std::string marker = "/home/";
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        const std::size_t found = text.find(marker, pos);
+        if (found == std::string::npos) return;
+        if (!home_token_before(text, found)) {
+            pos = found + 1;
+            continue;
+        }
+        const std::size_t user_begin = found + marker.size();
+        std::size_t user_end = user_begin;
+        while (user_end < text.size() &&
+               username_char(static_cast<unsigned char>(text[user_end]))) {
+            ++user_end;
+        }
+        if (user_end == user_begin || !home_token_after(text, user_end)) {
+            pos = found + 1;
+            continue;
+        }
+        const std::string username = text.substr(user_begin, user_end - user_begin);
+        if (username == "." || username == "..") {
+            pos = found + 1;
+            continue;
+        }
+        const std::string replacement = "~" + username;
+        text.replace(found, user_end - found, replacement);
+        pos = found + replacement.size();
+    }
+}
+
+std::string shorten_home_paths(std::string text) {
+    std::string home = platform::home_directory();
+    while (!home.empty() && is_path_separator(home.back())) home.pop_back();
+    if (!home.empty()) replace_home_prefix(text, home, "~");
+    shorten_other_posix_homes(text);
+    return text;
+}
+
 void append_quoted(std::ostringstream& out, const std::string& value, std::size_t budget) {
     out << '"';
-    out << truncate_cells(escape_preview(value), budget);
+    out << truncate_cells(escape_preview(shorten_home_paths(value)), budget);
     out << '"';
 }
 
@@ -131,7 +209,7 @@ std::string compact_tool_args_preview(const std::string& arguments_json, std::si
     if (arguments_json.empty() || arguments_json == "{}") return "";
     json::ParseResult parsed = json::parse(arguments_json);
     if (!parsed.error.ok() || parsed.value.type != json::Value::Type::Object) {
-        return truncate_cells(escape_preview(arguments_json), max_cells);
+        return truncate_cells(escape_preview(shorten_home_paths(arguments_json)), max_cells);
     }
 
     std::ostringstream out;
@@ -158,6 +236,12 @@ std::string compact_tool_args_preview(const std::string& arguments_json, std::si
         }
     };
 
+    auto emit_quoted_value = [&](const std::string& value) {
+        std::ostringstream piece;
+        append_quoted(piece, value, remaining > 4 ? remaining - 2 : remaining);
+        emit(piece.str());
+    };
+
     // read_many carries paths inside an items array rather than at the top
     // level. Show the batch size and first two paths so one batched call is
     // obvious in compact agent activity without dumping the full JSON.
@@ -179,19 +263,21 @@ std::string compact_tool_args_preview(const std::string& arguments_json, std::si
         emit(piece.str());
     }
 
-    // Prefer path-like keys first.
+    // run's command is the call: show the quoted string, not command="...".
+    const json::Value* command = parsed.value.get("command");
+    if (command != nullptr && command->is_string()) emit_quoted_value(command->string);
+
+    // Prefer path-like keys next.
     for (const auto& entry : parsed.value.object) {
         if (!looks_like_path_key(entry.first)) continue;
         if (entry.second.type != json::Value::Type::String) continue;
-        std::ostringstream piece;
-        append_quoted(piece, entry.second.string, remaining > 4 ? remaining - 2 : remaining);
-        emit(piece.str());
+        emit_quoted_value(entry.second.string);
         if (remaining == 0) break;
     }
     // Then a few other short string/number fields.
     for (const auto& entry : parsed.value.object) {
         if (remaining == 0) break;
-        if (looks_like_path_key(entry.first)) continue;
+        if (entry.first == "command" || looks_like_path_key(entry.first)) continue;
         if (entry.second.type == json::Value::Type::String) {
             std::ostringstream piece;
             // Skip huge bodies (content/new_string/etc.) — show short marker.
@@ -199,7 +285,9 @@ std::string compact_tool_args_preview(const std::string& arguments_json, std::si
                 entry.first == "new_string" || entry.first == "old_string" ||
                 entry.first == "patch" || entry.first == "diff" || entry.first == "text") {
                 piece << entry.first << "=\""
-                      << truncate_cells(escape_preview(entry.second.string), 24) << '"';
+                      << truncate_cells(escape_preview(shorten_home_paths(entry.second.string)),
+                                        24)
+                      << '"';
             } else {
                 piece << entry.first << '=';
                 append_quoted(piece, entry.second.string, 32);

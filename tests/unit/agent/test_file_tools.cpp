@@ -2856,12 +2856,12 @@ void test_agent_run_timeout_config() {
     bool has_maximum = false;
     double maximum = 0;
     check(run_timeout_ms_maximum(tools, has_maximum, maximum) && has_maximum &&
-              maximum == 300000,
-          "agent run schema defaults to a 300-second maximum");
+              maximum == 600000,
+          "agent run schema defaults to a 600-second maximum");
     check(json_ok(tools.execute("run", R"JSON({"command":"pwd","timeout_ms":180000})JSON")),
           "agent run accepts a timeout above the former 120-second cap");
     const std::string over_default =
-        tools.execute("run", R"JSON({"command":"pwd","timeout_ms":300001})JSON");
+        tools.execute("run", R"JSON({"command":"pwd","timeout_ms":600001})JSON");
     check(!json_ok(over_default) && json_error_code(over_default) == "invalid_arguments",
           "agent run still rejects timeout_ms above the configured maximum");
 
@@ -2875,12 +2875,12 @@ void test_agent_run_timeout_config() {
           "snapshot for custom run timeout");
     agent::ToolRegistryOptions raised;
     raised.mutation_policy = agent::MutationPolicy::Full;
-    raised.run_timeout_seconds = 600;
+    raised.run_timeout_seconds = 900;
     agent::ReadToolRegistry raised_tools;
     check(agent::ReadToolRegistry::create(options, snapshot, {}, raised_tools, raised).ok(),
-          "create registry with a 10-minute run timeout");
+          "create registry with a 15-minute run timeout");
     check(run_timeout_ms_maximum(raised_tools, has_maximum, maximum) && has_maximum &&
-              maximum == 600000,
+              maximum == 900000,
           "raised run_timeout_seconds is advertised as the schema maximum");
     check(json_ok(raised_tools.execute(
               "run", R"JSON({"command":"pwd","timeout_ms":480000})JSON")),

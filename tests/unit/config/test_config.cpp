@@ -1389,7 +1389,7 @@ void test_config_reads_common_template() {
               options.editor_ai_continue_max_tokens == ainiux::editor::kDefaultAiContinueMaxTokens &&
               options.max_parallel_agents == 4 &&
               options.agent_max_turns == 500 &&
-              options.agent_run_timeout_seconds == 300 &&
+              options.agent_run_timeout_seconds == 600 &&
               options.security_review_batch_size == 200U * 1024U &&
               options.security_review_log_enabled &&
               options.security_review_log_keep_runs == 3 &&
@@ -1792,14 +1792,14 @@ void test_config_security_review_settings() {
 }
 
 void test_config_agent_run_timeout() {
-    check(ainiux::cli::Options{}.agent_run_timeout_seconds == 300,
-          "agent run timeout defaults to 300 seconds");
+    check(ainiux::cli::Options{}.agent_run_timeout_seconds == 600,
+          "agent run timeout defaults to 600 seconds");
 
     ainiux::config::ParseResult parsed =
-        ainiux::config::parse("[agent]\nrun_timeout_seconds = 600\n", "agent-run-timeout.conf");
+        ainiux::config::parse("[agent]\nrun_timeout_seconds = 900\n", "agent-run-timeout.conf");
     ainiux::cli::Options options;
     ainiux::Error error = ainiux::config::apply_document(parsed.document, options);
-    check(parsed.error.ok() && error.ok() && options.agent_run_timeout_seconds == 600,
+    check(parsed.error.ok() && error.ok() && options.agent_run_timeout_seconds == 900,
           "agent.run_timeout_seconds accepts a raised timeout");
 
     parsed = ainiux::config::parse("[agent]\nrun_timeout_seconds = 0\n", "agent-run-timeout-zero.conf");

@@ -353,8 +353,8 @@ void test_cli_web_search_parse() {
 }
 
 void test_cli_run_timeout_parse() {
-    check(ainiux::cli::Options{}.agent_run_timeout_seconds == 300,
-          "agent run timeout defaults to 300 seconds");
+    check(ainiux::cli::Options{}.agent_run_timeout_seconds == 600,
+          "agent run timeout defaults to 600 seconds");
 
     const char* argv[] = {"ainiux", "--run-timeout", "600", "-p", "hi"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(5, const_cast<char**>(argv));

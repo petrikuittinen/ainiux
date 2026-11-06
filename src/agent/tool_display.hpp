@@ -14,7 +14,9 @@ struct CompactToolLine {
 };
 
 // Best-effort terminal width (ioctl / COLUMNS), never below 20.
-std::size_t terminal_column_count(std::size_t fallback = 80);
+// Non-tty callers (WebUI / ainiux -w) use fallback 160 so run previews keep
+// more of the command; a live TUI still reports the real column count.
+std::size_t terminal_column_count(std::size_t fallback = 160);
 
 // Clip text to at most max_cells code units (ASCII-heavy agent logs).
 // Appends "..." when truncated. Empty max_cells yields empty string.
@@ -41,9 +43,9 @@ long long normalize_timestamp_ms(long long stored_created_at);
 // Current wall-clock time in Unix milliseconds.
 long long now_unix_ms();
 
-// Build a truncated preview of JSON tool arguments (paths preferred).
+// Build a truncated preview of JSON tool arguments (command and paths preferred).
 std::string compact_tool_args_preview(const std::string& arguments_json,
-                                      std::size_t max_cells = 72);
+                                      std::size_t max_cells = 160);
 
 // Map tool result JSON body to "ok" / "error".
 std::string compact_tool_status(const std::string& result_json);

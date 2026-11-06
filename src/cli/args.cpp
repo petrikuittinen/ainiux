@@ -1612,7 +1612,7 @@ Options:
       --max-agent-response-bytes N
                                 Agent LLM HTTP body cap (SSE included); default 32M.
                                 0 disables the cap. Config: agent.max_response_bytes.
-      --run-timeout SECONDS     Agent `run` default and advertised timeout; default 300.
+      --run-timeout SECONDS     Agent `run` default and advertised timeout; default 600.
                                 0 disables the timeout. Config: agent.run_timeout_seconds.
       --allow-private-url-fetch Allow loopback/private URL fetches.
 

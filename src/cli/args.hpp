@@ -245,7 +245,7 @@ struct Options {
     int max_parallel_agents = 4;
     int agent_max_turns = 500;
     // Agent `run` default and advertised timeout_ms maximum (seconds). 0 = none.
-    long agent_run_timeout_seconds = 300;
+    long agent_run_timeout_seconds = 600;
     size_t security_review_batch_size = 200U * 1024U;
     int security_review_log_keep_runs = 3;
     // Agent project policy (interactive + --run).
