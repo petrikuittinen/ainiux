@@ -2,6 +2,7 @@
 #include "support/test_support.hpp"
 #include "html/html.hpp"
 #include <string>
+#include <thread>
 
 namespace ainiux::test::html {
 
@@ -68,6 +69,38 @@ void test_comprehensive_html_to_markdown_fixture() {
           "comprehensive HTML preserves multilingual UTF-8 and emoji");
     check(output.find("fixtureGreeting") == std::string::npos && output.find("color-scheme") == std::string::npos,
           "comprehensive HTML excludes script and style contents");
+}
+
+void test_html_large_data_uri_image() {
+    std::string html = "<h1>Before</h1><p>Intro</p><img alt=\"chart\" src=\"data:image/png;base64,";
+    html += std::string(256000, 'A');
+    html += "\"><p>After <a href=\"https://example.com\">link</a></p>";
+    const std::string out = ainiux::html::convert(html, ainiux::html::OutputFormat::Markdown);
+    check(out.find("# Before") != std::string::npos,
+          "HTML large data-URI image keeps preceding heading");
+    check(out.find("Intro") != std::string::npos, "HTML large data-URI image keeps preceding text");
+    check(out.find("After [link](https://example.com)") != std::string::npos,
+          "HTML large data-URI image keeps following text");
+    check(out.find("![chart](data:image/png;base64,") != std::string::npos,
+          "HTML large data-URI image converts to a Markdown image");
+}
+
+void test_html_parallel_large_tags() {
+    std::string html = "<p>Hello</p><img alt=\"plot\" src=\"data:image/png;base64,";
+    html += std::string(120000, 'B');
+    html += "\"><p>Done</p>";
+    std::string first;
+    std::string second;
+    std::thread worker([&] {
+        first = ainiux::html::convert(html, ainiux::html::OutputFormat::Markdown);
+    });
+    second = ainiux::html::convert(html, ainiux::html::OutputFormat::Markdown);
+    worker.join();
+    check(first == second, "parallel HTML conversion of large tags is deterministic");
+    check(first.find("Hello") != std::string::npos && first.find("Done") != std::string::npos,
+          "parallel HTML conversion keeps surrounding text");
+    check(first.find("![plot](data:image/png;base64,") != std::string::npos,
+          "parallel HTML conversion still emits the image");
 }
 
 void test_html_large_ignored_blocks() {
@@ -187,6 +220,8 @@ void run_all() {
     test_llm_typical_html_to_markdown_fixture();
     test_comprehensive_html_to_markdown_fixture();
     test_html_empty_unicode_and_format_parsing();
+    test_html_large_data_uri_image();
+    test_html_parallel_large_tags();
     test_html_large_ignored_blocks();
     test_html_malformed_documents();
     test_html_markdown_conversion();

@@ -4,7 +4,7 @@ This compact timeline moves release material out of the landing page. It describ
 
 | Version | Main result |
 | --- | --- |
-| Next | Code index skips JSON/JSONL/GeoJSON/JSON5 data files; Smart default allowance for project commands and hidden-directory access, with ordinary Git commits/fetch; Native Windows x64 release pending the UCRT64 parity gate; REPL/TUI image and video generation; OpenAI-compatible `/v1` adapter |
+| Next | HTML conversion scans tags linearly so large data-URI pages no longer SIGSEGV; Code index skips JSON/JSONL/GeoJSON/JSON5 data files; Smart default allowance for project commands and hidden-directory access, with ordinary Git commits/fetch; Native Windows x64 release pending the UCRT64 parity gate; REPL/TUI image and video generation; OpenAI-compatible `/v1` adapter |
 | v0.0 | Repository, C++17/Makefile build, tests, sanitizer, and leak-check foundation |
 | v0.1 | Script-friendly OpenAI-compatible CLI, streaming, and LM Studio profile; its early browser-mode note was planning only and is superseded by the shipped [browser controller](web-mode.md) |
 | v0.2 | Line-oriented REPL and JSON chat persistence foundations |

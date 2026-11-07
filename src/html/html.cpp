@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
-#include <regex>
 #include <string>
 #include <vector>
 
@@ -206,37 +205,122 @@ std::string markdown_escape_url(const std::string& input) {
     return out;
 }
 
+void skip_ascii_space(const std::string& text, size_t& pos) {
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) {
+        ++pos;
+    }
+}
+
+bool ascii_is_alpha(char ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+}
+
+bool ascii_is_tag_name_char(char ch) {
+    return ascii_is_alpha(ch) || (ch >= '0' && ch <= '9') || ch == ':' || ch == '-';
+}
+
+bool ascii_is_attr_name_char(char ch) {
+    return ascii_is_tag_name_char(ch) || ch == '_';
+}
+
 std::string tag_name(const std::string& tag) {
-    std::smatch match;
-    static const std::regex name_re(R"(^<\s*/?\s*([A-Za-z][A-Za-z0-9:-]*))");
-    if (!std::regex_search(tag, match, name_re)) {
+    if (tag.empty() || tag[0] != '<') {
         return "";
     }
-    return ascii_lower(match[1].str());
+    size_t pos = 1;
+    skip_ascii_space(tag, pos);
+    if (pos < tag.size() && tag[pos] == '/') {
+        ++pos;
+        skip_ascii_space(tag, pos);
+    }
+    if (pos >= tag.size() || !ascii_is_alpha(tag[pos])) {
+        return "";
+    }
+    const size_t start = pos++;
+    while (pos < tag.size() && ascii_is_tag_name_char(tag[pos])) {
+        ++pos;
+    }
+    return ascii_lower(tag.substr(start, pos - start));
 }
 
 bool is_closing_tag(const std::string& tag) {
-    return std::regex_search(tag, std::regex(R"(^<\s*/)", std::regex::icase));
+    if (tag.empty() || tag[0] != '<') {
+        return false;
+    }
+    size_t pos = 1;
+    skip_ascii_space(tag, pos);
+    return pos < tag.size() && tag[pos] == '/';
 }
 
 bool is_self_closing_tag(const std::string& tag) {
-    return std::regex_search(tag, std::regex(R"(/\s*>$)", std::regex::icase));
+    if (tag.size() < 2 || tag.back() != '>') {
+        return false;
+    }
+    size_t pos = tag.size() - 1;
+    while (pos > 0 && std::isspace(static_cast<unsigned char>(tag[pos - 1]))) {
+        --pos;
+    }
+    return pos > 0 && tag[pos - 1] == '/';
 }
 
 std::string attribute_value(const std::string& tag, const std::string& name) {
-    std::smatch match;
-    const std::regex attribute_re("\\b" + name + R"PK(\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+)))PK",
-                                  std::regex::icase);
-    if (!std::regex_search(tag, match, attribute_re)) {
+    if (tag.empty() || tag[0] != '<' || name.empty()) {
         return "";
     }
-    if (match[2].matched) {
-        return decode_entities(match[2].str());
+    size_t pos = 1;
+    skip_ascii_space(tag, pos);
+    if (pos < tag.size() && tag[pos] == '/') {
+        ++pos;
+        skip_ascii_space(tag, pos);
     }
-    if (match[3].matched) {
-        return decode_entities(match[3].str());
+    while (pos < tag.size() && ascii_is_tag_name_char(tag[pos])) {
+        ++pos;
     }
-    return decode_entities(match[4].str());
+    const std::string want = ascii_lower(name);
+    while (pos < tag.size() && tag[pos] != '>') {
+        skip_ascii_space(tag, pos);
+        if (pos >= tag.size() || tag[pos] == '>' || tag[pos] == '/') {
+            break;
+        }
+        if (!ascii_is_alpha(tag[pos]) && tag[pos] != '_') {
+            ++pos;
+            continue;
+        }
+        const size_t name_start = pos++;
+        while (pos < tag.size() && ascii_is_attr_name_char(tag[pos])) {
+            ++pos;
+        }
+        const std::string attr = ascii_lower(tag.substr(name_start, pos - name_start));
+        skip_ascii_space(tag, pos);
+        if (pos >= tag.size() || tag[pos] != '=') {
+            continue;
+        }
+        ++pos;
+        skip_ascii_space(tag, pos);
+        std::string value;
+        if (pos < tag.size() && (tag[pos] == '"' || tag[pos] == '\'')) {
+            const char quote = tag[pos++];
+            const size_t value_start = pos;
+            while (pos < tag.size() && tag[pos] != quote) {
+                ++pos;
+            }
+            value = tag.substr(value_start, pos - value_start);
+            if (pos < tag.size() && tag[pos] == quote) {
+                ++pos;
+            }
+        } else {
+            const size_t value_start = pos;
+            while (pos < tag.size() &&
+                   !std::isspace(static_cast<unsigned char>(tag[pos])) && tag[pos] != '>') {
+                ++pos;
+            }
+            value = tag.substr(value_start, pos - value_start);
+        }
+        if (attr == want) {
+            return decode_entities(std::move(value));
+        }
+    }
+    return "";
 }
 
 int heading_level(const std::string& name) {
@@ -623,9 +707,6 @@ const char* output_format_name(OutputFormat format) {
 std::string convert(const std::string& input, OutputFormat format) {
     const std::string cleaned = remove_ignored_blocks(input);
     Writer writer(format);
-    static const std::regex tag_re(R"(<[^>]+>)");
-    std::sregex_iterator it(cleaned.begin(), cleaned.end(), tag_re);
-    const std::sregex_iterator end;
     struct ListState {
         bool ordered = false;
         size_t next_number = 1;
@@ -633,23 +714,42 @@ std::string convert(const std::string& input, OutputFormat format) {
     std::vector<ListState> lists;
     std::vector<TableState> tables;
     size_t pre_depth = 0;
+    auto append_segment = [&](const std::string& text) {
+        if (text.empty()) {
+            return;
+        }
+        if (pre_depth > 0) {
+            writer.append_raw(text);
+        } else {
+            writer.append_text(text);
+        }
+    };
     std::string pre_language;
     size_t blockquote_depth = 0;
     size_t code_depth = 0;
     size_t cell_depth = 0;
     size_t pos = 0;
-    for (; it != end; ++it) {
-        const std::smatch& match = *it;
-        const size_t tag_pos = static_cast<size_t>(match.position());
-        if (tag_pos > pos) {
-            const std::string text = cleaned.substr(pos, tag_pos - pos);
-            if (pre_depth > 0) {
-                writer.append_raw(text);
-            } else {
-                writer.append_text(text);
-            }
+    // Scan tags with find(), not std::regex: libstdc++ recurses on large data-URI tags.
+    while (pos < cleaned.size()) {
+        const size_t tag_pos = cleaned.find('<', pos);
+        if (tag_pos == std::string::npos) {
+            append_segment(cleaned.substr(pos));
+            break;
         }
-        const std::string tag = match.str();
+        if (tag_pos > pos) {
+            append_segment(cleaned.substr(pos, tag_pos - pos));
+        }
+        const size_t tag_end = cleaned.find('>', tag_pos + 1);
+        if (tag_end == std::string::npos) {
+            append_segment(cleaned.substr(tag_pos));
+            break;
+        }
+        if (tag_end == tag_pos + 1) {
+            append_segment("<");
+            pos = tag_pos + 1;
+            continue;
+        }
+        const std::string tag = cleaned.substr(tag_pos, tag_end - tag_pos + 1);
         const std::string name = tag_name(tag);
         const bool closing = is_closing_tag(tag);
         const bool self_closing = is_self_closing_tag(tag);
@@ -811,15 +911,7 @@ std::string convert(const std::string& input, OutputFormat format) {
                 writer.blank_line();
             }
         }
-        pos = tag_pos + tag.size();
-    }
-    if (pos < cleaned.size()) {
-        const std::string text = cleaned.substr(pos);
-        if (pre_depth > 0) {
-            writer.append_raw(text);
-        } else {
-            writer.append_text(text);
-        }
+        pos = tag_end + 1;
     }
     if (pre_depth > 0) {
         pre_depth = 0;
