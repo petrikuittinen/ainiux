@@ -459,35 +459,36 @@ Assume **W = 8_000**, same defaults:
 | Surface | What is counted |
 | --- | --- |
 | Live chrome / post-seed metrics | Live `conversation_.messages` (+ continuation JSON items) + native tool schemas via `publish_request_token_estimate` |
-| Idle chrome after `prepare` (not yet seeded) | Next-request seed only: system prompt (`agent_prompt.md` + protocol appendix), optional `AGENTS.md`, Act/Lead mode control, interactive `build_prior_session_context` block, native tool schemas. **Does not** sum the full durable SQLite transcript. |
-| Compaction `tokens_before` | Live estimate when conversation is seeded; otherwise seed overhead + full durable model-projection transcript (`estimate_compact_tokens_before`). Intentionally **not** the smaller idle reopen seed, so reduction checks stay meaningful. |
+| Idle chrome after `prepare` | Restored live conversation when interactive reopen seeded it; otherwise seed overhead (system prompt, optional `AGENTS.md`, Act/Lead control, native tool schemas). Headless `--run` is always seed-only. |
+| Compaction `tokens_before` | Live estimate when conversation is seeded; otherwise seed overhead + full durable model-projection transcript (`estimate_compact_tokens_before`). |
 | Timeline / partition | Logical items: role + content + tool_name (+4) |
 | Transcript helper | `estimate_transcript_tokens` over stored messages with model-projection roles (compaction math / unseeded compact baseline; not idle chrome) |
 
-Idle chrome and live chrome can still disagree slightly because the first
-user turn also appends the new goal text, and mid-session compact rebuilds
-`conversation_` from the checkpoint + retained head/tail rather than the
-prior-session reopen block.
+Idle chrome after a restored session matches the live request size. The first
+user turn after reopen appends the new goal onto that restored prefix.
 
 ---
 
-`/compact all` writes `context_reset_after_seq` into project `settings_json`.
-Later prior-session injection, display history, and `fast|smart|summary`
-timelines ignore rows at or before that cut. The full sqlite transcript remains.
+`/compact all` writes `context_reset_after_seq` into project `settings_json`
+and stores an unseeded conversation snapshot for both lanes. Later restore,
+display history, and `fast|smart|summary` timelines ignore rows at or before
+that cut. The full sqlite transcript remains.
 
 ## 8. Related but not `/compact`
 
-`build_prior_session_context` (session reopen seed + idle chrome prior term):
-
-| Cap | Value |
-| --- | --- |
-| Messages scanned from end | last **80** |
-| Per-message content | **1500** chars (truncated with `...`) |
-| Total body | **24_000** chars default `max_chars` |
-| Roles included | model-projection only (`user` / `assistant` / `tool` / `summary` / lane `handoff`); skips `notice`, `thinking`, `index` |
-
-Interactive agent reopen injects this block as one user message. Headless
-`run` does not. Not part of the three-strategy compact path.
+Interactive reopen restores the last live `ToolConversation` (seed messages plus
+`continuation_items_json`) from `.ainiux-pr/agent.sqlite` `conversation_snapshots`.
+Those strings are used unchanged: the system prompt, `AGENTS.md` block, lane
+control, and continuation items stay byte-identical so provider prefix cache
+can hit. Changing even the first token would miss the entire cached prefix.
+A snapshot whose estimated tokens exceed the current context window (or 1M
+tokens when the window is still unknown) cannot be sent. Projects without a
+usable snapshot reconstruct from `messages` + `tool_events`: latest `summary`
+is the checkpoint, then only the last live session (full tool bodies after the
+previous `quit agent mode` / `left agent mode` notice). That reconstruction
+cache-misses once, then persists a snapshot for later exact restore. Headless
+`run` does not restore. Display `history_max_lines` and `log_keep_sessions` do
+not cut model context.
 
 ---
 

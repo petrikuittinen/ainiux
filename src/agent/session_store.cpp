@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <utility>
 
 #include "agent/project_paths.hpp"
@@ -246,6 +247,8 @@ Error AgentSessionStore::ensure_schema() {
         if (!error.ok()) return error;
         error = ensure_script_trust_table();
         if (!error.ok()) return error;
+        error = ensure_conversation_snapshots_table();
+        if (!error.ok()) return error;
         return ensure_project_settings_columns();
     }
 
@@ -321,6 +324,8 @@ Error AgentSessionStore::ensure_schema() {
     error = insert.bind_int64(db_, path_, 2, now_unix_seconds());
     if (!error.ok()) return error;
     if (insert.step() != SQLITE_DONE) return sqlite_error(db_, "could not record schema version", path_);
+    error = ensure_conversation_snapshots_table();
+    if (!error.ok()) return error;
     return ensure_project_settings_columns();
 }
 
@@ -363,6 +368,25 @@ Error AgentSessionStore::ensure_script_trust_table() {
     const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
     sqlite3_free(message);
     return {ErrorCode::FileWrite, "agent script trust schema: " + detail};
+}
+
+Error AgentSessionStore::ensure_conversation_snapshots_table() {
+    char* message = nullptr;
+    const int rc = sqlite3_exec(
+        db_,
+        "CREATE TABLE IF NOT EXISTS conversation_snapshots("
+        "  lane TEXT PRIMARY KEY CHECK (lane IN ('act','lead')),"
+        "  seeded INTEGER NOT NULL,"
+        "  protocol TEXT,"
+        "  messages_json TEXT NOT NULL,"
+        "  continuation_json TEXT NOT NULL,"
+        "  updated_at INTEGER NOT NULL"
+        ");",
+        nullptr, nullptr, &message);
+    if (rc == SQLITE_OK) return ok_error();
+    const std::string detail = message == nullptr ? sqlite3_errmsg(db_) : message;
+    sqlite3_free(message);
+    return {ErrorCode::FileWrite, "agent conversation snapshot schema: " + detail};
 }
 
 Error AgentSessionStore::ensure_project_settings_columns() {
@@ -908,6 +932,77 @@ Error AgentSessionStore::load_session(long long /*session_id*/,
         row.ok = tools.column_int(9) != 0;
         tool_events.push_back(std::move(row));
     }
+    return ok_error();
+}
+
+Error AgentSessionStore::save_conversation_snapshot(const ConversationSnapshotRecord& record) {
+    if (!is_open()) return {ErrorCode::Internal, "agent session store is not open"};
+    const std::string lane = record.lane == "lead" ? "lead" : "act";
+    if (record.messages_json.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
+        record.continuation_json.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return {ErrorCode::FileWrite, "agent conversation snapshot exceeds SQLite bind size"};
+    }
+    Error error = ensure_conversation_snapshots_table();
+    if (!error.ok()) return error;
+    Statement statement;
+    error = statement.prepare(
+        db_, path_,
+        "INSERT INTO conversation_snapshots(lane, seeded, protocol, messages_json, "
+        "continuation_json, updated_at) VALUES(?,?,?,?,?,?) "
+        "ON CONFLICT(lane) DO UPDATE SET "
+        "seeded=excluded.seeded, protocol=excluded.protocol, "
+        "messages_json=excluded.messages_json, continuation_json=excluded.continuation_json, "
+        "updated_at=excluded.updated_at");
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 1, lane);
+    if (!error.ok()) return error;
+    error = statement.bind_int(db_, path_, 2, record.seeded ? 1 : 0);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 3, record.protocol);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 4,
+                                record.messages_json.empty() ? "[]" : record.messages_json);
+    if (!error.ok()) return error;
+    error = statement.bind_text(db_, path_, 5,
+                                record.continuation_json.empty() ? "[]" : record.continuation_json);
+    if (!error.ok()) return error;
+    error = statement.bind_int64(db_, path_, 6, now_unix_ms());
+    if (!error.ok()) return error;
+    if (statement.step() != SQLITE_DONE)
+        return sqlite_error(db_, "could not save conversation snapshot", path_);
+    return ok_error();
+}
+
+Error AgentSessionStore::load_conversation_snapshot(const std::string& lane,
+                                                    ConversationSnapshotRecord& record,
+                                                    bool& found) const {
+    record = {};
+    found = false;
+    if (!is_open()) return {ErrorCode::Internal, "agent session store is not open"};
+    const std::string wanted = lane == "lead" ? "lead" : "act";
+    Statement statement;
+    Error error = statement.prepare(
+        db_, path_,
+        "SELECT lane, seeded, protocol, messages_json, continuation_json "
+        "FROM conversation_snapshots WHERE lane=?1");
+    if (!error.ok()) {
+        // Soft table may be missing on a read of a very old handle; treat as absent.
+        if (error.message.find("no such table") != std::string::npos) return ok_error();
+        return error;
+    }
+    error = statement.bind_text(db_, path_, 1, wanted);
+    if (!error.ok()) return error;
+    const int rc = statement.step();
+    if (rc == SQLITE_DONE) return ok_error();
+    if (rc != SQLITE_ROW) return sqlite_error(db_, "could not load conversation snapshot", path_);
+    record.lane = statement.column_text(0);
+    record.seeded = statement.column_int(1) != 0;
+    record.protocol = statement.column_text(2);
+    record.messages_json = statement.column_text(3);
+    record.continuation_json = statement.column_text(4);
+    if (record.messages_json.empty()) record.messages_json = "[]";
+    if (record.continuation_json.empty()) record.continuation_json = "[]";
+    found = true;
     return ok_error();
 }
 

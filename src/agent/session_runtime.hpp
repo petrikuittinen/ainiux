@@ -203,6 +203,8 @@ class AgentSessionRuntime {
     AgentSessionRuntime& operator=(AgentSessionRuntime&&) = delete;
 
     bool prepared() const { return prepared_; }
+    bool conversation_seeded() const { return conversation_seeded_; }
+    const provider::ToolConversation& model_conversation() const { return conversation_; }
     long long session_id() const { return session_id_; }
     const std::string& workspace() const { return options_.workspace; }
     const std::string& session_db_path() const { return session_store_.path(); }
@@ -391,6 +393,19 @@ class AgentSessionRuntime {
     void apply_context_reset_filter(std::vector<AgentMessageRecord>& messages) const;
     void apply_context_reset_filter(std::vector<AgentMessageRecord>& messages,
                                     std::vector<AgentToolEventRecord>& events) const;
+    void persist_conversation_snapshot(const std::string& lane,
+                                       bool seeded,
+                                       const provider::ToolConversation& conversation);
+    void persist_live_conversation_snapshot();
+    void persist_cleared_conversation_snapshots();
+    bool decode_conversation_snapshot(const ConversationSnapshotRecord& record,
+                                      provider::ToolConversation& conversation) const;
+    Error restore_lane_conversation(const std::string& lane,
+                                    provider::ToolConversation& conversation,
+                                    bool& seeded,
+                                    long long context_window_tokens);
+    void restore_interactive_model_context(long long context_window_tokens);
+    Error ensure_project_session(const provider::RequestContext& context);
 
     SessionRuntimeOptions options_;
     AgentLane active_lane_ = AgentLane::Act;

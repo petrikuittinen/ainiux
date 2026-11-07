@@ -16,6 +16,14 @@ namespace ainiux::agent {
 
 inline constexpr int kAgentSessionSchemaVersion = 3;
 
+struct ConversationSnapshotRecord {
+    std::string lane = "act";
+    bool seeded = false;
+    std::string protocol;
+    std::string messages_json = "[]";
+    std::string continuation_json = "[]";
+};
+
 struct AgentProjectRecord {
     long long id = 1;
     long long created_at = 0;
@@ -151,6 +159,14 @@ class AgentSessionStore {
                        std::vector<AgentMessageRecord>& messages,
                        std::vector<struct AgentToolEventRecord>& tool_events) const;
 
+    // Live model-conversation snapshot (seed messages + continuation items).
+    // Soft table: missing row means "never saved" (reconstruct from transcript);
+    // seeded=0 means an explicit context reset and must not reconstruct.
+    Error save_conversation_snapshot(const ConversationSnapshotRecord& record);
+    Error load_conversation_snapshot(const std::string& lane,
+                                     ConversationSnapshotRecord& record,
+                                     bool& found) const;
+
     // Persist one Guard Ask resolution (interactive y/n or headless Deny).
     Error record_approval(const AgentApprovalRecord& record);
     Error load_approvals(std::vector<AgentApprovalRecord>& approvals, int limit = 100) const;
@@ -167,6 +183,7 @@ class AgentSessionStore {
     Error ensure_schema();
     Error ensure_approvals_table();
     Error ensure_script_trust_table();
+    Error ensure_conversation_snapshots_table();
     Error ensure_project_settings_columns();
     Error next_seq(long long& seq);
     Error touch();

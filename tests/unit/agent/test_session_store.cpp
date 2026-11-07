@@ -415,6 +415,56 @@ void test_context_reset_after_seq_settings_json() {
     check(error.ok() && seq == 42, "reset seq settings JSON round trip");
 }
 
+void test_conversation_snapshot_round_trip_and_unseeded_reset() {
+    const std::string workspace = temp_workspace("conversation-snapshot");
+    agent::AgentSessionStore store;
+    check(store.open(workspace).ok(), "open snapshot store");
+    agent::AgentProjectRecord project;
+    project.workspace = workspace;
+    project.status = "idle";
+    check(store.open_project(project).ok(), "open snapshot project");
+
+    agent::ConversationSnapshotRecord missing;
+    bool found = true;
+    check(store.load_conversation_snapshot("act", missing, found).ok() && !found,
+          "missing snapshot is not found");
+
+    agent::ConversationSnapshotRecord saved;
+    saved.lane = "act";
+    saved.seeded = true;
+    saved.protocol = "native";
+    saved.messages_json = R"([{"role":"system","content":"sys"},{"role":"user","content":"goal"}])";
+    saved.continuation_json = R"(["{\"role\":\"assistant\",\"content\":\"working on it\"}"])";
+    check(store.save_conversation_snapshot(saved).ok(), "save seeded snapshot");
+
+    agent::ConversationSnapshotRecord loaded;
+    found = false;
+    check(store.load_conversation_snapshot("act", loaded, found).ok() && found &&
+              loaded.seeded && loaded.protocol == "native" &&
+              loaded.messages_json.find("goal") != std::string::npos &&
+              loaded.continuation_json.find("working on it") != std::string::npos,
+          "seeded snapshot round-trips");
+
+    agent::ConversationSnapshotRecord lead;
+    found = true;
+    check(store.load_conversation_snapshot("lead", lead, found).ok() && !found,
+          "act snapshot does not appear as lead");
+
+    saved.seeded = false;
+    saved.messages_json = "[]";
+    saved.continuation_json = "[]";
+    check(store.save_conversation_snapshot(saved).ok(), "save unseeded reset snapshot");
+    loaded = {};
+    found = false;
+    check(store.load_conversation_snapshot("act", loaded, found).ok() && found &&
+              !loaded.seeded,
+          "explicit unseeded snapshot is found so restore will not reconstruct");
+
+    store.close();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_incompatible_schema_is_rejected_without_mutation() {
     const std::string workspace = temp_workspace("schema-reject");
     const std::string database = agent::AgentSessionStore::database_path(workspace);
@@ -489,6 +539,7 @@ void run_all() {
     test_lane_settings_are_independent();
     test_goal_settings_json_and_control();
     test_context_reset_after_seq_settings_json();
+    test_conversation_snapshot_round_trip_and_unseeded_reset();
     test_incompatible_schema_is_rejected_without_mutation();
 }
 

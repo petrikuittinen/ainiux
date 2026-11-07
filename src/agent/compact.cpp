@@ -1348,30 +1348,183 @@ std::string render_compaction_source(const CompactionPartition& partition) {
     return out.str();
 }
 
-std::string build_prior_session_context(
-    const std::vector<AgentMessageRecord>& messages, std::size_t max_chars) {
-    if (messages.empty() || max_chars == 0) return {};
-    std::size_t start = messages.size() > 80 ? messages.size() - 80 : 0;
-    std::ostringstream body;
-    for (std::size_t i = start; i < messages.size(); ++i) {
+namespace {
+
+json::Value json_string(const std::string& text) {
+    json::Value value;
+    value.type = json::Value::Type::String;
+    value.string = text;
+    return value;
+}
+
+json::Value json_object() {
+    json::Value value;
+    value.type = json::Value::Type::Object;
+    return value;
+}
+
+json::Value json_array() {
+    json::Value value;
+    value.type = json::Value::Type::Array;
+    return value;
+}
+
+std::string reconstruction_call_id(const AgentToolEventRecord& event) {
+    return event.call_id.empty() ? event.tool_name : event.call_id;
+}
+
+std::string chat_assistant_tool_calls(const std::vector<AgentToolEventRecord>& group) {
+    json::Value assistant = json_object();
+    assistant.object["role"] = json_string("assistant");
+    json::Value calls = json_array();
+    for (const AgentToolEventRecord& event : group) {
+        json::Value item = json_object();
+        item.object["id"] = json_string(reconstruction_call_id(event));
+        item.object["type"] = json_string("function");
+        json::Value function = json_object();
+        function.object["name"] = json_string(event.tool_name);
+        function.object["arguments"] = json_string(event.arguments);
+        item.object["function"] = std::move(function);
+        calls.array.push_back(std::move(item));
+    }
+    assistant.object["tool_calls"] = std::move(calls);
+    return json::stringify(assistant);
+}
+
+std::string chat_tool_result(const AgentToolEventRecord& event) {
+    json::Value item = json_object();
+    item.object["role"] = json_string("tool");
+    item.object["tool_call_id"] = json_string(reconstruction_call_id(event));
+    item.object["content"] = json_string(event.result);
+    return json::stringify(item);
+}
+
+std::string responses_function_call(const AgentToolEventRecord& event) {
+    json::Value item = json_object();
+    item.object["type"] = json_string("function_call");
+    item.object["call_id"] = json_string(reconstruction_call_id(event));
+    item.object["name"] = json_string(event.tool_name);
+    item.object["arguments"] = json_string(event.arguments);
+    return json::stringify(item);
+}
+
+std::string responses_function_output(const AgentToolEventRecord& event) {
+    json::Value item = json_object();
+    item.object["type"] = json_string("function_call_output");
+    item.object["call_id"] = json_string(reconstruction_call_id(event));
+    item.object["output"] = json_string(event.result);
+    return json::stringify(item);
+}
+
+std::string reconstruction_text_item(const std::string& role, const std::string& content) {
+    json::Value item = json_object();
+    item.object["role"] = json_string(role);
+    item.object["content"] = json_string(content);
+    return json::stringify(item);
+}
+
+bool is_session_end_notice(const AgentMessageRecord& message) {
+    if (message.role != "notice") return false;
+    const std::string text = ascii_trim(message.content);
+    return text == "quit agent mode" || text == "left agent mode";
+}
+
+bool is_live_model_row(const AgentMessageRecord& message) {
+    return message.role == "user" || message.role == "assistant" ||
+           message.role == "handoff";
+}
+
+}  // namespace
+
+ReconstructedModelHistory reconstruct_model_history(
+    const std::vector<AgentMessageRecord>& messages,
+    const std::vector<AgentToolEventRecord>& tool_events,
+    bool responses_api) {
+    ReconstructedModelHistory out;
+    long long after = 0;
+    for (const AgentMessageRecord& message : messages) {
+        if (message.role != "summary") continue;
+        after = message.seq;
+        out.latest_summary = message.content;
+    }
+
+    // Durable transcripts span every restart. Each interactive session used to
+    // start from a recap, so replaying every post-summary tool body overflows
+    // the model window. Resume from the last live session instead: after the
+    // previous quit/leave when the newest model row is a clean shutdown, or
+    // after the latest quit when the session crashed mid-turn.
+    std::vector<long long> session_ends;
+    long long newest_model = 0;
+    for (const AgentMessageRecord& message : messages) {
+        if (is_session_end_notice(message) && message.seq > after)
+            session_ends.push_back(message.seq);
+        if (is_live_model_row(message) && message.seq > newest_model)
+            newest_model = message.seq;
+    }
+    for (const AgentToolEventRecord& event : tool_events) {
+        if (event.seq > newest_model) newest_model = event.seq;
+    }
+    if (!session_ends.empty()) {
+        const long long last_end = session_ends.back();
+        if (last_end >= newest_model) {
+            if (session_ends.size() >= 2)
+                after = std::max(after, session_ends[session_ends.size() - 2]);
+        } else {
+            after = std::max(after, last_end);
+        }
+    }
+
+    struct Event {
+        long long seq = 0;
+        bool is_tool = false;
+        std::size_t index = 0;
+    };
+    std::vector<Event> events;
+    for (std::size_t i = 0; i < messages.size(); ++i) {
         const AgentMessageRecord& message = messages[i];
-        if (!model_projection_role(message.role)) continue;
-        std::string content = message.content;
-        if (content.size() > 1500) content = content.substr(0, 1497) + "...";
-        body << "[" << (message.role.empty() ? "message" : message.role) << "] "
-             << content << "\n";
+        if (message.seq <= after) continue;
+        if (message.role == "handoff") {
+            out.handoffs.push_back(message.content);
+            continue;
+        }
+        if (message.role == "user" || message.role == "assistant")
+            events.push_back({message.seq, false, i});
     }
-    std::string text = body.str();
-    if (text.empty()) return {};
-    if (text.size() > max_chars) {
-        text = text.substr(text.size() - max_chars);
-        const std::size_t nl = text.find('\n');
-        if (nl != std::string::npos && nl + 1 < text.size())
-            text = text.substr(nl + 1);
+    for (std::size_t i = 0; i < tool_events.size(); ++i) {
+        if (tool_events[i].seq <= after) continue;
+        events.push_back({tool_events[i].seq, true, i});
     }
-    return "Prior agent work on this project (read-only context from earlier turns; "
-           "use tools for the current request; do not restate this block unless asked):\n" +
-           text;
+    std::sort(events.begin(), events.end(),
+              [](const Event& left, const Event& right) { return left.seq < right.seq; });
+
+    std::vector<AgentToolEventRecord> group;
+    auto flush_group = [&]() {
+        if (group.empty()) return;
+        if (responses_api) {
+            for (const AgentToolEventRecord& event : group)
+                out.continuation_items_json.push_back(responses_function_call(event));
+            for (const AgentToolEventRecord& event : group)
+                out.continuation_items_json.push_back(responses_function_output(event));
+        } else {
+            out.continuation_items_json.push_back(chat_assistant_tool_calls(group));
+            for (const AgentToolEventRecord& event : group)
+                out.continuation_items_json.push_back(chat_tool_result(event));
+        }
+        group.clear();
+    };
+
+    for (const Event& event : events) {
+        if (event.is_tool) {
+            group.push_back(tool_events[event.index]);
+            continue;
+        }
+        flush_group();
+        const AgentMessageRecord& message = messages[event.index];
+        out.continuation_items_json.push_back(
+            reconstruction_text_item(message.role, message.content));
+    }
+    flush_group();
+    return out;
 }
 
 std::vector<AgentMessageRecord> messages_after_seq(

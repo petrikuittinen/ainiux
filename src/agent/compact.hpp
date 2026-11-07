@@ -145,10 +145,21 @@ std::string compaction_summary_schema_prompt(const std::string& user_preamble);
 std::string compaction_summary_user_guidance(const CompactionKeepList& keep_list);
 std::string render_compaction_source(const CompactionPartition& partition);
 
-// Build a bounded prior-session context block for model reseed after reopen.
-// Returns empty when there is nothing useful to inject.
-std::string build_prior_session_context(const std::vector<AgentMessageRecord>& messages,
-                                        std::size_t max_chars = 24000);
+// Rebuild continuation items from durable transcript rows when no live
+// conversation snapshot exists (upgrade path). Uses the latest summary as a
+// compact checkpoint, then only the last live session after that checkpoint
+// (rows after the previous quit/leave notice). Display-only roles and compact
+// tool one-liners are omitted; tool_events supply full result bodies.
+struct ReconstructedModelHistory {
+    std::string latest_summary;
+    std::vector<std::string> continuation_items_json;
+    std::vector<std::string> handoffs;
+};
+
+ReconstructedModelHistory reconstruct_model_history(
+    const std::vector<AgentMessageRecord>& messages,
+    const std::vector<AgentToolEventRecord>& tool_events,
+    bool responses_api = false);
 
 // Drop rows at or before a /compact all cut. seq 0 means no cut.
 std::vector<AgentMessageRecord> messages_after_seq(

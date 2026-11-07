@@ -2,6 +2,30 @@
 
 These records explain implementation rationale. For current usage, start at the [documentation index](README.md).
 
+## Restore live agent conversation across restart (2026-11-07)
+
+Display `history_max_lines` and diagnostic `log_keep_sessions` bound the TUI
+and JSONL logs. They must not cut the model request. Interactive reopen used to
+inject a 24k-character recap of recent display rows and dropped
+`continuation_items_json`, which destroyed prefix cache and amnesia'd the last
+steps after quit or crash.
+
+The live `ToolConversation` is now snapshotted per Act/Lead lane in a soft
+`conversation_snapshots` table (schema version stays 3). Restart restores those
+exact seed messages and continuation strings with no system-prompt rewrite or
+`AGENTS.md` injection, so provider prefix cache can hit. Cached input is far
+cheaper than fresh input (DeepSeek Flash on the order of 60×); changing the
+first token misses the whole prefix. Existing projects without a usable
+snapshot reconstruct from `tool_events` plus user/assistant rows after the
+latest compact checkpoint, and only the last live session after a quit/leave
+notice. A snapshot larger than the model window (or 1M tokens when prepare has
+not resolved a window) is discarded and reconstructed the same way, so a first
+upgrade restore cannot load every historical tool body into a 1M-class model.
+That reconstruct path cache-misses once, then persists the new prefix.
+`/compact all` writes an unseeded snapshot so reconstruction cannot resurrect
+the cut. Headless `run` stays fresh. Auto-compact still runs only at 75% of a
+known window, never on quit.
+
 ## Recover oversize or inverted agent tool arguments (2026-10-21)
 
 DeepSeek Flash sessions send a small share of native tool arguments that look

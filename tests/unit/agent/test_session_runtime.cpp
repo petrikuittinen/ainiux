@@ -1178,60 +1178,32 @@ void test_display_notices_dedupe_consecutive_duplicates() {
     fs::remove_all(workspace, ec);
 }
 
-void test_prepare_idle_chrome_matches_next_request_not_full_history() {
-    // Idle chrome after prepare must estimate the *next* model request (system
-    // prompt, mode control, bounded prior-session seed, tool schemas) — not the
-    // full durable transcript of every tool/assistant row.
-    const std::string workspace = temp_workspace("idle-chrome-tokens");
+void test_prepare_restores_live_conversation_instead_of_recap() {
+    const std::string workspace = temp_workspace("restore-live-conversation");
+    const std::string marker = "UNIQUE_RESTORED_TOOL_BODY_" + std::string(2000, 'Q');
     {
         agent::AgentSessionStore store;
-        check(store.open(workspace).ok(), "chrome seed open");
+        check(store.open(workspace).ok(), "restore seed open");
         agent::AgentProjectRecord project;
         project.workspace = workspace;
         project.status = "idle";
-        check(store.open_project(project).ok(), "chrome seed project");
-        // Large history: many fat assistant rows that must not all enter chrome.
-        for (int index = 0; index < 120; ++index) {
-            const std::string role = index % 3 == 0 ? "user"
-                                    : index % 3 == 1 ? "assistant"
-                                                     : "tool";
-            const std::string content =
-                "history bulk " + std::to_string(index) + " " + std::string(800, 'z');
-            check(store.append_message(role, content, role == "tool" ? "read_file" : "",
-                                       true)
-                      .ok(),
-                  "chrome seed bulk message");
-        }
-        // Display-only rows must never affect the estimate.
-        check(store.append_message("thinking", "Thinking: " + std::string(2000, 't')).ok(),
-              "chrome seed thinking");
-        check(store.append_message("notice", "display only " + std::string(2000, 'n')).ok(),
-              "chrome seed notice");
-        check(store.append_message("summary",
-                                   "## Active Task\ncompact checkpoint " +
-                                       std::string(500, 's'))
+        project.api = "chat";
+        project.protocol = "native";
+        check(store.open_project(project).ok(), "restore seed project");
+        check(store.append_message("user", "implement the parser").ok(), "restore user");
+        check(store.append_tool_event(1, 1, "call-restore", "read",
+                                      R"({"path":"src/parser.cpp"})", marker, true)
                   .ok(),
-              "chrome seed summary");
+              "restore tool event with a large body");
+        check(store.append_message("tool", "1: read(\"src/parser.cpp\") → ok", "read", true)
+                  .ok(),
+              "restore compact tool display row");
+        check(store.append_message("assistant", "updated src/parser.cpp").ok(),
+              "restore assistant");
+        check(store.append_message("thinking", "Thinking: " + std::string(2000, 't')).ok(),
+              "restore thinking");
+        check(store.append_message("notice", "display only").ok(), "restore notice");
     }
-
-    std::vector<agent::AgentMessageRecord> rows;
-    {
-        agent::AgentSessionStore store;
-        check(store.open(workspace).ok() && store.load_messages(rows).ok(),
-              "reload chrome seed rows");
-    }
-    const long long full_transcript =
-        agent::estimate_transcript_tokens(rows);
-    const std::string prior = agent::build_prior_session_context(rows);
-    check(!prior.empty(), "prior-session seed is non-empty for bulky history");
-    const long long prior_tokens =
-        agent::estimate_tokens_from_text("user") +
-        agent::estimate_tokens_from_text(prior) + 4;
-    // Prior seed is capped (~24k body chars); full transcript of 120×800+ rows is much larger.
-    check(full_transcript > prior_tokens * 2,
-          "fixture full transcript is materially larger than prior seed");
-    check(full_transcript > 20000,
-          "fixture full transcript is large enough to expose the old chrome bug");
 
     agent::AgentSessionRuntime runtime;
     agent::SessionRuntimeOptions options;
@@ -1243,31 +1215,263 @@ void test_prepare_idle_chrome_matches_next_request_not_full_history() {
     options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
     provider::RequestContext context = offline_context(workspace);
     Error error = runtime.prepare(context, {}, {}, options);
-    check(error.ok() && runtime.prepared(),
-          "prepare idle chrome runtime: " + error.message);
+    check(error.ok() && runtime.prepared() && runtime.conversation_seeded(),
+          "interactive prepare restores model conversation: " + error.message);
+
+    const provider::ToolConversation& conversation = runtime.model_conversation();
+    std::string blob;
+    for (const provider::Message& message : conversation.messages)
+        blob += message.content;
+    for (const std::string& item : conversation.continuation_items_json) blob += item;
+    check(blob.find("implement the parser") != std::string::npos,
+          "restored conversation includes the user goal");
+    check(blob.find("updated src/parser.cpp") != std::string::npos,
+          "restored conversation includes the assistant reply");
+    check(blob.find(marker) != std::string::npos,
+          "restored conversation includes the full tool result body");
+    check(blob.find("Prior agent work on this project") == std::string::npos,
+          "restored conversation is not the 24k recap wrapper");
+    check(blob.find("display only") == std::string::npos, "skips display notices");
 
     const long long chrome = runtime.estimated_request_tokens();
-    check(chrome > 0, "idle chrome is non-zero (system prompt at minimum)");
-    // Must not claim the full durable history as request context.
-    check(chrome < full_transcript,
-          "idle chrome is below full durable transcript estimate");
-    // Must still account for the prior-session block that the first turn injects.
-    check(chrome >= prior_tokens,
-          "idle chrome includes the bounded prior-session seed");
-    // Headroom for system prompt + mode control + optional tool schemas, not history.
-    check(chrome < prior_tokens + 20000,
-          "idle chrome stays near next-request seed overhead, not full history");
+    check(chrome > agent::estimate_tokens_from_text(marker) / 2,
+          "idle chrome after restore counts the live restored conversation");
 
-    // Headless --run does not inject prior context; chrome must drop that term.
+    std::vector<provider::Message> display;
+    check(runtime.load_display_messages(display).ok() && !display.empty(),
+          "display tail still loads");
+    bool saw_summary_role = false;
+    for (const provider::Message& message : display)
+        saw_summary_role = saw_summary_role || message.role == "summary";
+    check(!saw_summary_role, "display still omits summary rows");
+
+    // Snapshot persist makes the second prepare an exact restore.
+    runtime.reset();
+    check(runtime.prepare(context, {}, {}, options).ok() && runtime.conversation_seeded(),
+          "second prepare restores the persisted snapshot");
+    const provider::ToolConversation& again = runtime.model_conversation();
+    check(again.continuation_items_json == conversation.continuation_items_json,
+          "snapshot restore is byte-identical for continuation items");
+    check(again.messages.size() == conversation.messages.size(),
+          "snapshot restore keeps the same seed message count");
+    for (std::size_t i = 0; i < conversation.messages.size(); ++i) {
+        check(again.messages[i].role == conversation.messages[i].role &&
+                  again.messages[i].content == conversation.messages[i].content,
+              "snapshot restore is byte-identical for seed messages");
+    }
+
     runtime.reset();
     options.interactive = false;
-    check(runtime.prepare(context, {}, {}, options).ok(),
-          "prepare headless chrome runtime");
-    const long long headless = runtime.estimated_request_tokens();
-    check(headless > 0 && headless < chrome,
-          "headless idle chrome omits prior-session injection");
-    check(headless < prior_tokens,
-          "headless chrome is system/tools only, not prior seed");
+    check(runtime.prepare(context, {}, {}, options).ok(), "prepare headless");
+    check(!runtime.conversation_seeded(),
+          "headless --run does not restore the live conversation");
+    check(runtime.estimated_request_tokens() < chrome,
+          "headless idle chrome is seed/tools only");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_snapshot_round_trip_and_compact_all_clears_restore() {
+    const std::string workspace = temp_workspace("snapshot-round-trip");
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "snapshot fixture open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        project.status = "idle";
+        check(store.open_project(project).ok(), "snapshot fixture project");
+        agent::ConversationSnapshotRecord record;
+        record.lane = "act";
+        record.seeded = true;
+        record.protocol = "native";
+        record.messages_json =
+            R"([{"role":"system","content":"placeholder-system"},)"
+            R"({"role":"user","content":"saved goal"}])";
+        record.continuation_json =
+            R"(["{\"role\":\"assistant\",\"content\":\"mid-turn progress CALL_ID_99\"}"])";
+        check(store.save_conversation_snapshot(record).ok(), "save act snapshot");
+        record.lane = "lead";
+        record.messages_json =
+            R"([{"role":"system","content":"placeholder-system"},)"
+            R"({"role":"user","content":"lead only goal"}])";
+        record.continuation_json = R"(["{\"role\":\"assistant\",\"content\":\"lead only\"}"])";
+        check(store.save_conversation_snapshot(record).ok(), "save lead snapshot");
+    }
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    check(runtime.prepare(context, {}, {}, options).ok() && runtime.conversation_seeded(),
+          "prepare restores act snapshot");
+    std::string blob;
+    for (const provider::Message& message : runtime.model_conversation().messages)
+        blob += message.content;
+    for (const std::string& item : runtime.model_conversation().continuation_items_json)
+        blob += item;
+    check(blob.find("saved goal") != std::string::npos, "act snapshot user is restored");
+    check(blob.find("CALL_ID_99") != std::string::npos,
+          "act snapshot continuation (crash mid-turn) is restored");
+    check(blob.find("lead only") == std::string::npos, "act restore does not leak lead");
+    check(runtime.model_conversation().messages.front().content == "placeholder-system",
+          "restored system prompt stays byte-identical so prefix cache can hit");
+
+    check(runtime.reset_model_context().ok(), "compact all clears live context");
+    check(!runtime.conversation_seeded(), "compact all unseeds the live conversation");
+    runtime.reset();
+    check(runtime.prepare(context, {}, {}, options).ok(), "re-prepare after compact all");
+    check(!runtime.conversation_seeded(),
+          "explicit unseeded snapshot prevents transcript reconstruction");
+    blob.clear();
+    for (const std::string& item : runtime.model_conversation().continuation_items_json)
+        blob += item;
+    check(blob.find("CALL_ID_99") == std::string::npos,
+          "compact all restore does not resurrect pre-cut continuation");
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_in_window_snapshot_is_not_rewritten_from_transcript() {
+    const std::string workspace = temp_workspace("exact-snapshot");
+    const std::string cached = "UNIQUE_PREFIX_CACHE_BODY_" + std::string(500, 'C');
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "exact snapshot fixture open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        project.status = "idle";
+        project.api = "chat";
+        project.protocol = "native";
+        check(store.open_project(project).ok(), "exact snapshot fixture project");
+        check(store.append_message("user", "LAST_SESSION_GOAL").ok(), "transcript user");
+        check(store.append_tool_event(1, 1, "call-last", "read", "{}",
+                                      "LAST_SESSION_TOOL_BODY", true)
+                  .ok(),
+              "transcript tool");
+        check(store.append_message("notice", "quit agent mode").ok(), "transcript quit");
+        agent::ConversationSnapshotRecord record;
+        record.lane = "act";
+        record.seeded = true;
+        record.protocol = "native";
+        record.messages_json =
+            R"([{"role":"system","content":"cached-system-prompt"},)"
+            R"({"role":"user","content":"cached goal"}])";
+        record.continuation_json = std::string("[\"") + cached + "\"]";
+        check(store.save_conversation_snapshot(record).ok(), "save in-window snapshot");
+    }
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    context.options.context_tokens = 100000;
+    check(runtime.prepare(context, {}, {}, options).ok() && runtime.conversation_seeded(),
+          "prepare restores the in-window snapshot");
+    const provider::ToolConversation first = runtime.model_conversation();
+    std::string blob;
+    for (const provider::Message& message : first.messages) blob += message.content;
+    for (const std::string& item : first.continuation_items_json) blob += item;
+    check(first.messages.front().content == "cached-system-prompt",
+          "in-window restore does not replace the cached system prompt");
+    check(blob.find(cached) != std::string::npos, "in-window restore keeps snapshot continuation");
+    check(blob.find("LAST_SESSION_GOAL") == std::string::npos,
+          "in-window restore does not reconstruct a different last session");
+
+    runtime.reset();
+    check(runtime.prepare(context, {}, {}, options).ok() && runtime.conversation_seeded(),
+          "second prepare restores the same snapshot");
+    const provider::ToolConversation second = runtime.model_conversation();
+    check(second.messages.size() == first.messages.size() &&
+              second.continuation_items_json == first.continuation_items_json,
+          "reopen keeps the restored prefix byte-identical");
+    for (std::size_t i = 0; i < first.messages.size(); ++i) {
+        check(second.messages[i].role == first.messages[i].role &&
+                  second.messages[i].content == first.messages[i].content,
+              "reopen keeps restored seed messages byte-identical");
+    }
+
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
+void test_oversized_snapshot_reconstructs_last_session() {
+    const std::string workspace = temp_workspace("oversized-snapshot");
+    const std::string last_body = "LAST_LIVE_TOOL_BODY_" + std::string(200, 'L');
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "oversized fixture open");
+        agent::AgentProjectRecord project;
+        project.workspace = workspace;
+        project.status = "idle";
+        project.api = "chat";
+        project.protocol = "native";
+        check(store.open_project(project).ok(), "oversized fixture project");
+        check(store.append_message("summary", "checkpoint body").ok(), "summary");
+        check(store.append_message("user", "OLD_SESSION_GOAL").ok(), "old user");
+        check(store.append_tool_event(1, 1, "call-old", "read", "{}",
+                                      "OLD_SESSION_TOOL_BODY", true)
+                  .ok(),
+              "old tool");
+        check(store.append_message("notice", "quit agent mode").ok(), "old quit");
+        check(store.append_message("user", "LAST_SESSION_GOAL").ok(), "last user");
+        check(store.append_tool_event(1, 2, "call-last", "read", "{}", last_body, true)
+                  .ok(),
+              "last tool");
+        check(store.append_message("assistant", "LAST_SESSION_REPLY").ok(),
+              "last assistant");
+        check(store.append_message("notice", "quit agent mode").ok(), "last quit");
+        agent::ConversationSnapshotRecord record;
+        record.lane = "act";
+        record.seeded = true;
+        record.protocol = "native";
+        record.messages_json = R"([{"role":"system","content":"placeholder-system"}])";
+        record.continuation_json =
+            std::string("[\"") + std::string(20000, 'X') + "\"]";
+        check(store.save_conversation_snapshot(record).ok(), "save oversized snapshot");
+    }
+
+    agent::AgentSessionRuntime runtime;
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.interactive = true;
+    options.enable_session_db = true;
+    options.enable_agent_log = false;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    provider::RequestContext context = offline_context(workspace);
+    context.options.context_tokens = 1000;
+    check(runtime.prepare(context, {}, {}, options).ok() && runtime.conversation_seeded(),
+          "prepare rejects an over-window snapshot and reconstructs");
+    std::string blob;
+    for (const provider::Message& message : runtime.model_conversation().messages)
+        blob += message.content;
+    for (const std::string& item : runtime.model_conversation().continuation_items_json)
+        blob += item;
+    check(blob.find("checkpoint body") != std::string::npos,
+          "oversized snapshot fallback keeps the compact checkpoint");
+    check(blob.find("LAST_SESSION_GOAL") != std::string::npos,
+          "oversized snapshot fallback keeps the last session");
+    check(blob.find(last_body) != std::string::npos,
+          "oversized snapshot fallback keeps the last session tool body");
+    check(blob.find("OLD_SESSION_GOAL") == std::string::npos,
+          "oversized snapshot fallback drops earlier sessions");
+    check(blob.find(std::string(20000, 'X')) == std::string::npos,
+          "over-window snapshot contents are not restored");
+    check(runtime.estimated_request_tokens() <
+              agent::estimate_tokens_from_text(std::string(20000, 'X')),
+          "idle chrome after bounded reconstruct is smaller than the rejected snapshot");
 
     runtime.reset();
     std::error_code ec;
@@ -1664,7 +1868,10 @@ void run_all() {
     test_project_replacement_resets_exact_state_and_switches_workspace();
     test_project_replacement_failure_reopens_prior_project();
     test_display_notices_dedupe_consecutive_duplicates();
-    test_prepare_idle_chrome_matches_next_request_not_full_history();
+    test_prepare_restores_live_conversation_instead_of_recap();
+    test_snapshot_round_trip_and_compact_all_clears_restore();
+    test_in_window_snapshot_is_not_rewritten_from_transcript();
+    test_oversized_snapshot_reconstructs_last_session();
     test_session_goal_set_pause_resume_complete_and_persist();
     test_agent_session_statistics_format_and_persist();
     test_switch_permission_mode_persists_and_reloads();

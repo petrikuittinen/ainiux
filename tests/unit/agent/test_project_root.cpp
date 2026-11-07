@@ -685,40 +685,53 @@ void test_elapsed_seconds_format() {
               agent::compact_tool_error_brief(parent_err));
 }
 
-void test_prior_session_context_includes_recent_work() {
+void test_reconstruct_model_history_keeps_full_tool_bodies() {
     std::vector<agent::AgentMessageRecord> messages(4);
+    messages[0].seq = 1;
     messages[0].role = "user";
     messages[0].content = "write a game";
+    messages[1].seq = 2;
     messages[1].role = "tool";
-    messages[1].content = "1: write_file(\"game.py\") → ok";
+    messages[1].content = "1: write(\"game.py\") → ok";
     messages[1].tool_name = "write";
+    messages[2].seq = 4;
     messages[2].role = "assistant";
     messages[2].content = "created game.py";
+    messages[3].seq = 5;
     messages[3].role = "notice";
     messages[3].content = "left agent mode";
     agent::AgentMessageRecord thinking;
+    thinking.seq = 6;
     thinking.role = "thinking";
     thinking.content = "Thinking: secret analysis";
     messages.push_back(thinking);
-    agent::AgentMessageRecord notice;
-    notice.role = "notice";
-    notice.content = "display only";
-    messages.push_back(notice);
     agent::AgentMessageRecord index_report;
+    index_report.seq = 7;
     index_report.role = "index";
     index_report.content = "| Language | Files |\n| --- | ---: |";
     messages.push_back(index_report);
-    const std::string context = agent::build_prior_session_context(messages, 4000);
-    check(!context.empty(), "prior context non-empty");
-    check(context.find("write a game") != std::string::npos, "includes prior user goal");
-    check(context.find("write_file") != std::string::npos, "includes tool activity");
-    check(context.find("left agent mode") == std::string::npos, "skips leave notices");
-    check(context.find("secret analysis") == std::string::npos,
-          "skips thinking previews");
-    check(context.find("display only") == std::string::npos,
-          "skips every display notice");
-    check(context.find("Language") == std::string::npos,
-          "skips display-only index reports");
+
+    std::vector<agent::AgentToolEventRecord> events(1);
+    events[0].seq = 3;
+    events[0].call_id = "call-1";
+    events[0].tool_name = "write";
+    events[0].arguments = R"({"path":"game.py"})";
+    events[0].result = std::string(4000, 'R') + "full-body";
+    events[0].ok = true;
+
+    const agent::ReconstructedModelHistory history =
+        agent::reconstruct_model_history(messages, events, false);
+    std::string joined;
+    for (const std::string& item : history.continuation_items_json) joined += item;
+    check(joined.find("write a game") != std::string::npos, "reconstruct includes user goal");
+    check(joined.find("created game.py") != std::string::npos, "reconstruct includes assistant");
+    check(joined.find("full-body") != std::string::npos &&
+              joined.find(std::string(4000, 'R')) != std::string::npos,
+          "reconstruct keeps the full tool result, not a 1500-char clip");
+    check(joined.find("left agent mode") == std::string::npos, "skips leave notices");
+    check(joined.find("secret analysis") == std::string::npos, "skips thinking previews");
+    check(joined.find("Language") == std::string::npos, "skips display-only index reports");
+    check(joined.find("1: write") == std::string::npos, "skips compact tool one-liners");
     check(agent::estimate_transcript_tokens(messages) <
               agent::estimate_transcript_tokens(
                   {messages[0], messages[1], messages[2]}) + 8,
@@ -727,9 +740,104 @@ void test_prior_session_context_includes_recent_work() {
     messages[1].seq = 2;
     messages[2].seq = 3;
     const auto after = agent::messages_after_seq(messages, 2);
-    check(after.size() == 1 && after.front().seq == 3 &&
-              after.front().content == "created game.py",
+    check(after.size() >= 1 && after.front().seq == 3,
           "messages_after_seq drops the compact-all cut and earlier rows");
+
+    agent::AgentMessageRecord summary;
+    summary.seq = 8;
+    summary.role = "summary";
+    summary.content = "checkpoint body";
+    messages.push_back(summary);
+    agent::AgentMessageRecord later;
+    later.seq = 9;
+    later.role = "user";
+    later.content = "continue from checkpoint";
+    messages.push_back(later);
+    const agent::ReconstructedModelHistory after_summary =
+        agent::reconstruct_model_history(messages, events, false);
+    check(after_summary.latest_summary == "checkpoint body", "latest summary is retained");
+    std::string after_joined;
+    for (const std::string& item : after_summary.continuation_items_json)
+        after_joined += item;
+    check(after_joined.find("continue from checkpoint") != std::string::npos,
+          "rows after the latest summary remain");
+    check(after_joined.find("write a game") == std::string::npos,
+          "rows before the latest summary are omitted");
+    check(after_joined.find("full-body") == std::string::npos,
+          "pre-summary tool bodies are omitted");
+
+    agent::AgentMessageRecord old_user;
+    old_user.seq = 10;
+    old_user.role = "user";
+    old_user.content = "OLD_SESSION_GOAL";
+    messages.push_back(old_user);
+    agent::AgentToolEventRecord old_event;
+    old_event.seq = 11;
+    old_event.call_id = "call-old";
+    old_event.tool_name = "read";
+    old_event.arguments = "{}";
+    old_event.result = "OLD_SESSION_TOOL_BODY";
+    old_event.ok = true;
+    events.push_back(old_event);
+    agent::AgentMessageRecord old_quit;
+    old_quit.seq = 12;
+    old_quit.role = "notice";
+    old_quit.content = "quit agent mode";
+    messages.push_back(old_quit);
+    agent::AgentMessageRecord last_user;
+    last_user.seq = 13;
+    last_user.role = "user";
+    last_user.content = "LAST_SESSION_GOAL";
+    messages.push_back(last_user);
+    agent::AgentToolEventRecord last_event;
+    last_event.seq = 14;
+    last_event.call_id = "call-last";
+    last_event.tool_name = "read";
+    last_event.arguments = "{}";
+    last_event.result = "LAST_SESSION_TOOL_BODY";
+    last_event.ok = true;
+    events.push_back(last_event);
+    agent::AgentMessageRecord last_assistant;
+    last_assistant.seq = 15;
+    last_assistant.role = "assistant";
+    last_assistant.content = "LAST_SESSION_REPLY";
+    messages.push_back(last_assistant);
+    agent::AgentMessageRecord last_quit;
+    last_quit.seq = 16;
+    last_quit.role = "notice";
+    last_quit.content = "quit agent mode";
+    messages.push_back(last_quit);
+
+    const agent::ReconstructedModelHistory last_session =
+        agent::reconstruct_model_history(messages, events, false);
+    std::string last_joined;
+    for (const std::string& item : last_session.continuation_items_json)
+        last_joined += item;
+    check(last_session.latest_summary == "checkpoint body",
+          "multi-session reconstruct keeps the compact checkpoint");
+    check(last_joined.find("LAST_SESSION_GOAL") != std::string::npos,
+          "reconstruct keeps the last live session user turn");
+    check(last_joined.find("LAST_SESSION_TOOL_BODY") != std::string::npos,
+          "reconstruct keeps the last live session tool body");
+    check(last_joined.find("LAST_SESSION_REPLY") != std::string::npos,
+          "reconstruct keeps the last live session assistant reply");
+    check(last_joined.find("OLD_SESSION_GOAL") == std::string::npos,
+          "reconstruct drops earlier sessions after the compact checkpoint");
+    check(last_joined.find("OLD_SESSION_TOOL_BODY") == std::string::npos,
+          "reconstruct drops earlier-session tool bodies");
+    check(last_joined.find("continue from checkpoint") == std::string::npos,
+          "reconstruct drops work from earlier post-summary sessions");
+
+    messages.pop_back();
+    const agent::ReconstructedModelHistory crashed =
+        agent::reconstruct_model_history(messages, events, false);
+    std::string crashed_joined;
+    for (const std::string& item : crashed.continuation_items_json)
+        crashed_joined += item;
+    check(crashed_joined.find("LAST_SESSION_TOOL_BODY") != std::string::npos,
+          "crash reconstruct keeps work after the previous quit");
+    check(crashed_joined.find("OLD_SESSION_TOOL_BODY") == std::string::npos,
+          "crash reconstruct still drops earlier sessions");
 }
 
 void test_reasoning_preview_unicode_redaction_and_limits() {
@@ -1078,7 +1186,7 @@ void run_all() {
     test_tool_display_run_command_preview();
     test_tool_display_clips_to_width();
     test_elapsed_seconds_format();
-    test_prior_session_context_includes_recent_work();
+    test_reconstruct_model_history_keeps_full_tool_bodies();
     test_reasoning_preview_unicode_redaction_and_limits();
     test_reasoning_idle_slice_advances_sentences_and_partials();
     test_reasoning_sticky_slice_prefers_first_thought_and_backtracks();

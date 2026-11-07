@@ -513,8 +513,7 @@ long long AgentSessionRuntime::estimate_compact_tokens_before(
     if (conversation_seeded_)
         return estimated_request_tokens();
     // Unseeded: compare compact projection against seed overhead plus the full
-    // durable model-projection transcript. Idle chrome uses a smaller bounded
-    // prior-session seed and must not drive this reduction check.
+    // durable model-projection transcript.
     return estimate_seed_overhead_tokens() +
            estimate_transcript_tokens(messages_after_seq(stored, context_reset_after_seq_));
 }
@@ -599,6 +598,240 @@ void AgentSessionRuntime::apply_context_reset_filter(
                  events.end());
 }
 
+namespace {
+
+json::Value snapshot_json_string(const std::string& text) {
+    json::Value value;
+    value.type = json::Value::Type::String;
+    value.string = text;
+    return value;
+}
+
+std::string encode_snapshot_messages(const std::vector<provider::Message>& messages) {
+    json::Value array;
+    array.type = json::Value::Type::Array;
+    for (const provider::Message& message : messages) {
+        json::Value item;
+        item.type = json::Value::Type::Object;
+        item.object["role"] = snapshot_json_string(message.role);
+        item.object["content"] = snapshot_json_string(message.content);
+        array.array.push_back(std::move(item));
+    }
+    return json::stringify(array);
+}
+
+std::string encode_snapshot_continuation(const std::vector<std::string>& items) {
+    json::Value array;
+    array.type = json::Value::Type::Array;
+    for (const std::string& item : items)
+        array.array.push_back(snapshot_json_string(item));
+    return json::stringify(array);
+}
+
+long long estimate_restored_conversation_tokens(
+    const provider::ToolConversation& conversation) {
+    long long total = 0;
+    for (const provider::Message& message : conversation.messages) {
+        total += estimate_tokens_from_text(message.role);
+        total += estimate_tokens_from_text(message.content);
+        total += 4;
+    }
+    for (const std::string& item : conversation.continuation_items_json) {
+        total += estimate_tokens_from_text(item);
+        total += 2;
+    }
+    return total;
+}
+
+}  // namespace
+
+void AgentSessionRuntime::persist_conversation_snapshot(
+    const std::string& lane,
+    bool seeded,
+    const provider::ToolConversation& conversation) {
+    if (!session_store_.is_open()) return;
+    ConversationSnapshotRecord record;
+    record.lane = lane == "lead" ? "lead" : "act";
+    record.seeded = seeded;
+    record.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+    record.messages_json = encode_snapshot_messages(conversation.messages);
+    record.continuation_json = encode_snapshot_continuation(conversation.continuation_items_json);
+    Error error = session_store_.save_conversation_snapshot(record);
+    if (!error.ok() && !options_.interactive) {
+        // Headless already prints other store warnings through quiet flags.
+    }
+    if (!error.ok() && logger_) {
+        json::Value fields = log_object();
+        fields.object["error_code"] = log_string(error_code_name(error.code));
+        fields.object["error_message"] = log_string(error.message);
+        logger_->event("conversation_snapshot", {"session"}, std::move(fields), "failure");
+    }
+}
+
+void AgentSessionRuntime::persist_live_conversation_snapshot() {
+    persist_conversation_snapshot(agent_lane_name(active_lane_), conversation_seeded_,
+                                  conversation_);
+}
+
+void AgentSessionRuntime::persist_cleared_conversation_snapshots() {
+    persist_conversation_snapshot("act", false, {});
+    persist_conversation_snapshot("lead", false, {});
+}
+
+bool AgentSessionRuntime::decode_conversation_snapshot(
+    const ConversationSnapshotRecord& record,
+    provider::ToolConversation& conversation) const {
+    conversation = {};
+    const json::ParseResult messages = json::parse(record.messages_json);
+    if (!messages.error.ok() || !messages.value.is_array()) return false;
+    for (const json::Value& item : messages.value.array) {
+        if (!item.is_object()) return false;
+        const json::Value* role = item.get("role");
+        const json::Value* content = item.get("content");
+        if (role == nullptr || !role->is_string() || content == nullptr ||
+            !content->is_string())
+            return false;
+        conversation.messages.push_back({role->string, content->string});
+    }
+    const json::ParseResult continuation = json::parse(record.continuation_json);
+    if (!continuation.error.ok() || !continuation.value.is_array()) return false;
+    for (const json::Value& item : continuation.value.array) {
+        if (!item.is_string()) return false;
+        conversation.continuation_items_json.push_back(item.string);
+    }
+    return true;
+}
+
+Error AgentSessionRuntime::restore_lane_conversation(
+    const std::string& lane,
+    provider::ToolConversation& conversation,
+    bool& seeded,
+    long long context_window_tokens) {
+    conversation = {};
+    seeded = false;
+    if (!session_store_.is_open()) return ok_error();
+    ConversationSnapshotRecord record;
+    bool found = false;
+    Error error = session_store_.load_conversation_snapshot(lane, record, found);
+    if (!error.ok()) return error;
+    if (found && !record.seeded) return ok_error();
+    if (found && decode_conversation_snapshot(record, conversation)) {
+        // Prepare can run before the TUI has resolved a catalog window. A 1M
+        // cap still rejects the upgrade-path dump of every historical tool body.
+        const long long cap =
+            context_window_tokens > 0 ? context_window_tokens : 1000000LL;
+        const bool fits =
+            estimate_restored_conversation_tokens(conversation) <= cap;
+        if (fits) {
+            if (lane == agent_lane_name(active_lane_)) {
+                if (record.protocol == "xml") state_.protocol = ToolProtocol::Xml;
+                else if (record.protocol == "native") state_.protocol = ToolProtocol::Native;
+            }
+            seeded = true;
+            return ok_error();
+        }
+        conversation = {};
+    }
+
+    AgentProjectRecord project;
+    std::vector<AgentMessageRecord> messages;
+    std::vector<AgentToolEventRecord> tool_events;
+    error = session_store_.load_session(1, project, messages, tool_events);
+    if (!error.ok()) return error;
+    apply_context_reset_filter(messages, tool_events);
+    messages.erase(std::remove_if(messages.begin(), messages.end(),
+                                  [&](const AgentMessageRecord& row) {
+                                      return row.lane != lane;
+                                  }),
+                   messages.end());
+    tool_events.erase(std::remove_if(tool_events.begin(), tool_events.end(),
+                                     [&](const AgentToolEventRecord& row) {
+                                         return row.lane != lane;
+                                     }),
+                      tool_events.end());
+    const bool responses_api = project.api == "responses";
+    const ReconstructedModelHistory history =
+        reconstruct_model_history(messages, tool_events, responses_api);
+    const bool has_history =
+        !history.latest_summary.empty() || !history.continuation_items_json.empty() ||
+        !history.handoffs.empty();
+    if (!has_history) return ok_error();
+
+    std::vector<std::string> script_names;
+    (void)list_project_scripts(options_.workspace, script_names);
+    seed_agent_conversation(conversation, prompts_,
+                            lane == "lead" ? AgentLane::Lead : AgentLane::Act,
+                            state_.protocol, "", agents_md_.injection_text, script_names,
+                            skills_injection_);
+    if (!history.latest_summary.empty()) {
+        conversation.messages.push_back(
+            {"user", compaction_checkpoint_wrapper(history.latest_summary)});
+    }
+    conversation.continuation_items_json = history.continuation_items_json;
+    for (const std::string& handoff : history.handoffs)
+        append_conversation_text(conversation, "user", handoff);
+    seeded = true;
+    persist_conversation_snapshot(lane, true, conversation);
+    return ok_error();
+}
+
+void AgentSessionRuntime::restore_interactive_model_context(
+    long long context_window_tokens) {
+    if (!options_.interactive || !session_store_.is_open()) return;
+    (void)restore_lane_conversation("act", act_lane_.conversation, act_lane_.seeded,
+                                    context_window_tokens);
+    (void)restore_lane_conversation("lead", lead_lane_.conversation, lead_lane_.seeded,
+                                    context_window_tokens);
+    LaneSnapshot& active = active_lane_ == AgentLane::Lead ? lead_lane_ : act_lane_;
+    // Keep restored seed messages and continuation strings byte-identical.
+    // Replacing the system prompt or injecting AGENTS.md here would change the
+    // first tokens and miss the entire provider prefix cache.
+    conversation_ = active.conversation;
+    conversation_seeded_ = active.seeded;
+}
+
+Error AgentSessionRuntime::ensure_project_session(const provider::RequestContext& context) {
+    if (!session_store_.is_open() || session_id_ > 0) return ok_error();
+    AgentProjectRecord project;
+    project.status = "running";
+    project.provider = context.profile.name;
+    project.model = context.options.model;
+    project.api =
+        context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
+    project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+    project.base_url = context.base_url;
+    project.workspace = options_.workspace;
+    Error error = session_store_.open_project(project);
+    if (!error.ok()) return error;
+    project.status = "running";
+    project.provider = context.profile.name;
+    project.model = context.options.model;
+    project.api =
+        context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
+    project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
+    project.base_url = context.base_url;
+    error = merge_project_lane_settings(project.settings_json, active_lane_,
+                                        context.options, project.settings_json);
+    if (!error.ok()) return error;
+    error = settings_json_with_permission_mode(project.settings_json, permission_mode_,
+                                               project.settings_json);
+    if (!error.ok()) return error;
+    error = write_session_settings(project);
+    if (!error.ok()) return error;
+    project.workspace = options_.workspace;
+    (void)session_store_.update_project_meta(project);
+    session_id_ = 1;
+    if (!context.options.quiet)
+        std::cerr << "Agent project thread · " << session_store_.path() << "\n";
+    if (logger_) {
+        json::Value fields = log_object();
+        fields.object["session_id"] = log_number(session_id_);
+        fields.object["path"] = log_string(session_store_.path());
+        logger_->event("agent_session", {"session"}, std::move(fields), "success");
+    }
+    return ok_error();
+}
+
 Error AgentSessionRuntime::write_session_settings(AgentProjectRecord& project) const {
     Error error = options_.interactive ? settings_with_agent_lane(project.settings_json,
         active_lane_, project.settings_json) : ok_error();
@@ -672,6 +905,7 @@ Error AgentSessionRuntime::reset_model_context() {
     act_lane_ = LaneSnapshot{};
     lead_lane_ = LaneSnapshot{};
     pending_handoff_.clear();
+    persist_cleared_conversation_snapshots();
     const long long baseline = estimate_seed_overhead_tokens();
     cached_request_tokens_.store(baseline, std::memory_order_relaxed);
     if (baseline > 0)
@@ -1153,6 +1387,7 @@ SessionCompactionResult AgentSessionRuntime::compact_impl(
     if (!result.error.ok()) return result;
 
     rebuild_compacted_conversation(partition, checkpoint);
+    persist_live_conversation_snapshot();
     result.tokens_after = estimated_request_tokens();
     result.error = ok_error();
     result.compacted = true;
@@ -1742,8 +1977,9 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     phase_started = std::chrono::steady_clock::now();
     publish_preparation(PreparationPhase::History, false, phase_started);
     if (options_.interactive && session_store_.is_open()) {
-        std::vector<AgentMessageRecord> history;
-        error = session_store_.load_messages(history);
+        AgentMessageRecord last;
+        bool found = false;
+        error = session_store_.peek_last_message(last, found);
         if (!error.ok()) {
             reset();
             return error;
@@ -1778,48 +2014,11 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
                         phase_started);
 
     prepared_ = true;
-    // Do not seed conversation_ here: the first user turn still owns full seed
-    // (including prior-transcript injection). Idle chrome must estimate what the
-    // *next* model request will carry — not the full durable SQLite history.
-    // Match seed_agent_conversation + interactive build_prior_session_context +
-    // native tool schemas so the status line is not inflated by old tool rows.
-    {
-        long long baseline = estimate_seed_overhead_tokens();
-        // Interactive reopen injects a bounded prior-session block, not the full
-        // transcript. Headless --run starts with a fresh model conversation.
-        if (options_.interactive && session_store_.is_open()) {
-            std::vector<AgentMessageRecord> rows;
-            if (session_store_.load_messages(rows).ok()) {
-                apply_context_reset_filter(rows);
-                const std::string lane_name = agent_lane_name(active_lane_);
-                rows.erase(std::remove_if(rows.begin(), rows.end(),
-                                          [&](const AgentMessageRecord& row) {
-                                              return row.lane != lane_name;
-                                          }),
-                           rows.end());
-                std::vector<std::string> persisted_handoffs;
-                for (const AgentMessageRecord& row : rows) {
-                    if (row.role == "handoff")
-                        persisted_handoffs.push_back(row.content);
-                }
-                rows.erase(std::remove_if(rows.begin(), rows.end(),
-                                          [](const AgentMessageRecord& row) {
-                                              return row.role == "handoff";
-                                          }),
-                           rows.end());
-                const std::string prior = build_prior_session_context(rows);
-                if (!prior.empty()) {
-                    baseline += estimate_tokens_from_text("user");
-                    baseline += estimate_tokens_from_text(prior);
-                    baseline += 4;
-                }
-                for (const std::string& persisted_handoff : persisted_handoffs) {
-                    baseline += estimate_tokens_from_text("user");
-                    baseline += estimate_tokens_from_text(persisted_handoff);
-                    baseline += 4;
-                }
-            }
-        }
+    restore_interactive_model_context(context.options.context_tokens);
+    if (conversation_seeded_) {
+        publish_request_token_estimate();
+    } else {
+        const long long baseline = estimate_seed_overhead_tokens();
         cached_request_tokens_.store(baseline, std::memory_order_relaxed);
         if (baseline > 0)
             last_nonzero_request_tokens_.store(baseline, std::memory_order_relaxed);
@@ -2095,6 +2294,7 @@ Error AgentSessionRuntime::switch_lane(
         state_.turn = turns;
         conversation_seeded_ = false;
         pending_handoff_.clear();
+        persist_live_conversation_snapshot();
         publish_request_token_estimate();
         return ok_error();
     }
@@ -2213,6 +2413,8 @@ Error AgentSessionRuntime::switch_lane(
     source.seeded = conversation_seeded_;
     source.pending_handoff = std::move(pending_handoff_);
     source.context_after_seq = lane_context_after_seq_;
+    persist_conversation_snapshot(agent_lane_name(active_lane_), source.seeded,
+                                  source.conversation);
     if (handoff.scope == LaneHandoff::Scope::Clean) target = LaneSnapshot{};
     target.imported_through_seq = newest_source_seq;
     target.context_after_seq = target_context_cut;
@@ -2249,6 +2451,7 @@ Error AgentSessionRuntime::switch_lane(
     tools_.set_mutation_policy(MutationPolicy::Full);
     session_store_.set_active_lane(agent_lane_name(active_lane_));
     known_tools_ = known_tool_names(tools_);
+    persist_live_conversation_snapshot();
     publish_request_token_estimate();
     return ok_error();
 }
@@ -2464,6 +2667,7 @@ Error AgentSessionRuntime::finish_session(const std::string& status,
                                           const std::string& error_code,
                                           const std::string& error_message) {
     runtime::kill_all_background_processes();
+    persist_live_conversation_snapshot();
     Error error;
     if (session_store_.is_open() && session_id_ > 0) error = session_store_.finish_session(
         session_id_, status, redact_secrets(final_text, secrets_), error_code,
@@ -2675,95 +2879,22 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         logger_->event("agent_turn_usage", {"agent"}, std::move(fields), "success");
     };
 
-    // First turn: open singleton project row and seed provider conversation.
+    {
+        Error session_error = ensure_project_session(context);
+        if (!session_error.ok()) {
+            result.error = session_error;
+            return result;
+        }
+    }
+
+    // First seed: system + AGENTS.md + lane control + this user goal.
+    // Interactive reopen restores the live conversation during prepare, so the
+    // first turn after restart is a follow-up (prefix-cache preserving).
     if (!conversation_seeded_) {
-        if (session_store_.is_open()) {
-            AgentProjectRecord project;
-            project.status = "running";
-            project.provider = context.profile.name;
-            project.model = context.options.model;
-            project.api =
-                context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
-            project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
-            project.base_url = context.base_url;
-            project.workspace = options_.workspace;
-            Error error = session_store_.open_project(project);
-            if (!error.ok()) {
-                result.error = error;
-                return result;
-            }
-            project.status = "running";
-            project.provider = context.profile.name;
-            project.model = context.options.model;
-            project.api =
-                context.api_kind == provider::ApiKind::Responses ? "responses" : "chat";
-            project.protocol = state_.protocol == ToolProtocol::Xml ? "xml" : "native";
-            project.base_url = context.base_url;
-            Error settings_error = merge_project_lane_settings(
-                project.settings_json, active_lane_, context.options,
-                project.settings_json);
-            if (!settings_error.ok()) { result.error = settings_error; return result; }
-            settings_error = settings_json_with_permission_mode(
-                project.settings_json, permission_mode_,
-                project.settings_json);
-            if (!settings_error.ok()) {
-                result.error = settings_error;
-                return result;
-            }
-            settings_error = write_session_settings(project);
-            if (!settings_error.ok()) {
-                result.error = settings_error;
-                return result;
-            }
-            project.workspace = options_.workspace;
-            (void)session_store_.update_project_meta(project);
-            session_id_ = 1;
-            if (!context.options.quiet)
-                std::cerr << "Agent project thread · " << session_store_.path() << "\n";
-            if (logger_) {
-                json::Value fields = log_object();
-                fields.object["session_id"] = log_number(session_id_);
-                fields.object["path"] = log_string(session_store_.path());
-                logger_->event("agent_session", {"session"}, std::move(fields), "success");
-            }
-        }
-        // Seed system (+ optional AGENTS.md). Interactive agent sessions resume
-        // the project transcript as model context. Headless --run always
-        // start with a fresh model conversation, while still using the durable
-        // project DB for logging/display and the persistent code index.
-        std::vector<AgentMessageRecord> prior;
-        std::vector<std::string> persisted_handoffs;
-        if (options_.interactive && session_store_.is_open()) {
-            (void)session_store_.load_messages(prior);
-            apply_context_reset_filter(prior);
-            const std::string lane_name = agent_lane_name(active_lane_);
-            for (const AgentMessageRecord& row : prior) {
-                if (row.lane == lane_name && row.role == "handoff")
-                    persisted_handoffs.push_back(row.content);
-            }
-            prior.erase(std::remove_if(prior.begin(), prior.end(),
-                                       [&](const AgentMessageRecord& row) {
-                                           return row.lane != lane_name ||
-                                                  row.role == "handoff";
-                                       }),
-                        prior.end());
-        }
-        const std::string prior_context = build_prior_session_context(prior);
         std::vector<std::string> script_names;
         (void)list_project_scripts(options_.workspace, script_names);
-        if (prior_context.empty()) {
-            seed_agent_conversation(conversation_, prompts_, active_lane_, state_.protocol, text,
-                                    agents_md_.injection_text, script_names, skills_injection_);
-        } else {
-            seed_agent_conversation(conversation_, prompts_, active_lane_, state_.protocol, "",
-                                    agents_md_.injection_text, script_names, skills_injection_);
-            conversation_.messages.push_back({"user", prior_context});
-            if (!context.options.quiet)
-                std::cerr << "Injected prior agent transcript (" << prior.size()
-                          << " stored messages) into model context.\n";
-        }
-        for (const std::string& persisted_handoff : persisted_handoffs)
-            conversation_.messages.push_back({"user", persisted_handoff});
+        seed_agent_conversation(conversation_, prompts_, active_lane_, state_.protocol, text,
+                                agents_md_.injection_text, script_names, skills_injection_);
         if (!pending_handoff_.empty()) {
             conversation_.messages.push_back({"user", pending_handoff_});
             pending_handoff_.clear();
@@ -2775,6 +2906,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         conversation_seeded_ = true;
         if (goal_is_active(goal_)) inject_active_goal_control(false);
         publish_request_token_estimate();
+        persist_live_conversation_snapshot();
         if (session_store_.is_open() && session_id_ > 0) {
             // Durable transcript is text-only (image bytes never leave RAM).
             Error message_error =
@@ -2806,6 +2938,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         if (goal_is_active(goal_)) inject_active_goal_control(false);
         append_conversation_user_with_images(conversation_, text, model_images);
         publish_request_token_estimate();
+        persist_live_conversation_snapshot();
         if (session_store_.is_open() && session_id_ > 0) {
             Error message_error =
                 session_store_.append_message("user", redact_secrets(text, secrets_));
@@ -3323,6 +3456,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
             clear_in_flight_generation_tokens();
             pair_dangling_tool_calls(context, conversation_, state_);
             publish_request_token_estimate();
+            persist_live_conversation_snapshot();
             result.error = error;
             result.final_text = final_text;
             commit_turn_counts();
@@ -3389,6 +3523,7 @@ SessionTurnResult AgentSessionRuntime::run_user_turn(
         turn_failed_tool_calls += outcome.failed_tool_calls;
         // Conversation grew (assistant/tool items); publish for TUI chrome.
         publish_request_token_estimate();
+        persist_live_conversation_snapshot();
 
         if (logger_) {
             json::Value fields = log_object();

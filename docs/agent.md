@@ -39,6 +39,19 @@ or browser Settings. This limits display work only: complete transcripts, export
 and model context remain available. Oversized individual messages display their
 bounded tail; use export to retrieve the complete message.
 
+Restarting interactive agent (`ainiux -a`) restores the last live model
+conversation for Act and Lead, including tool results, so prefix cache can hit
+on the next request. Restore keeps the saved seed messages and continuation
+strings byte-identical: it does not replace the system prompt, inject
+`AGENTS.md`, or rebuild a different last session. A crash resumes from the last
+completed model round. The durable SQLite transcript keeps every session. A
+snapshot larger than the model window cannot be sent, so that upgrade/corrupt
+case reconstructs the latest compact checkpoint plus the last live session
+(one cache miss) and then persists that prefix. Display bounds and diagnostic
+log pruning do not cut that context. Headless `ainiux run` still starts a
+fresh model conversation. `/compact all` is the explicit context reset;
+quitting does not compact.
+
 Agent diagnostic JSONL logs under `.ainiux-pr/logs/agent/` retain one completed
 session by default (`[agent] log_keep_sessions = 1`, range 0–1000). During use,
 the active log and previous session remain available; `Ctrl+Q` or `/quit` finalizes
@@ -204,7 +217,7 @@ The full transcript remains on disk. Compaction reduces only the model-visible r
 
 Run `/compact`, optionally followed by a strategy. Automatic compaction is enabled by default and uses **75% of every known context window**, unless `compact_limit` is explicitly set. Cancellation or a failed summary preserves the previous completed context. The detailed implementation is in [Agent compaction strategies](compact_strategies.md).
 
-`/clear` only hides the scrollable transcript for this TUI session. It does not change model context, sqlite logs, or `/goal`. Restarting agent reloads post-`/compact all` history.
+`/clear` only hides the scrollable transcript for this TUI session. It does not change model context, sqlite logs, or `/goal`. Restarting agent restores the last live request conversation (or a reconstructed one from stored tool events if no snapshot exists yet). After `/compact all`, reopen stays at the system prompt.
 
 On startup the transcript shows display-only load lines with token estimates, for example `agent_prompt.md loaded ~700 tokens`, plus `AGENTS.md` when present and one aggregate `tools` line. These lines are not sent to the model.
 
