@@ -84,7 +84,8 @@ int run_image_mode(provider::RequestContext context);
 // One-shot video generation. Writes the saved path or raw MP4 bytes to stdout.
 int run_video_mode(provider::RequestContext context);
 
-// Shared agent goal runner used by one-shot --run and the interactive agent TUI.
+// Shared goal runner for CLI and control-server jobs. CLI selects memory storage;
+// the server retains its existing project persistence default.
 struct AgentGoalResult {
     Error error;
     std::string final_text;
@@ -102,7 +103,8 @@ AgentGoalResult run_agent_goal(
     std::function<bool()> interrupted = {},
     bool write_final_to_stdout = false,
     std::function<void(const std::string& status_line)> on_progress = {},
-    std::string workspace = ".");
+    std::string workspace = ".",
+    agent::SessionStorage storage = agent::SessionStorage::Project);
 
 void refresh_session_metadata(chat::Session& session, const provider::RequestContext& context);
 void apply_system_prompt(chat::Session& session, const std::string& system);

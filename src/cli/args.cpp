@@ -1496,7 +1496,7 @@ Options:
                                 the full-screen shell and provider/model/reasoning pickers,
                                 but runs the agent tool loop; also: ainiux agent ...).
   -r, --run TEXT                One-shot headless agent goal with read+write tools
-                                (also: ainiux run ...).
+                                (also: ainiux run ...); no interactive history is loaded or saved.
       --run-file PATH           One-shot agent goal from a file; use '-' for stdin.
       --benchmark               Run benchmark mode (also: ainiux benchmark ...).
       --grade                   Grade benchmark results with a judge model (also: ainiux grade ...).

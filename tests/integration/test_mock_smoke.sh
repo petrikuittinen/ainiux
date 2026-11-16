@@ -129,14 +129,14 @@ grep -E '^Agent metrics: tool calls [0-9]+ \([0-9]+ failed\), input [0-9]+ token
     cat "$agent_err" >&2
     exit 1
 }
-test -f "$agent_workspace/.ainiux-pr/agent.sqlite"
+test ! -e "$agent_workspace/.ainiux-pr/agent.sqlite"
 if grep -F 'agent-smoke-ok' "$agent_err" >/dev/null; then
     echo "agent final answer leaked to stderr" >&2
     exit 1
 fi
 
 # A second one-shot run in the same project must not inject the first run's
-# durable transcript into its model request.
+# transcript into its model request.
 agent_second_out="$WORK/agent-second.out"
 agent_second_err="$WORK/agent-second.err"
 (

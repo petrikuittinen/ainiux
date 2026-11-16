@@ -12,9 +12,13 @@ struct sqlite3;
 namespace ainiux::agent {
 
 // Project-local agent UI/session database at .ainiux-pr/agent.sqlite (never
-// ~/.ainiux/ainiux.db). One durable transcript thread per project.
+// ~/.ainiux/ainiux.db), or a private in-memory database for a headless task.
+// Durable storage has one transcript thread per project.
 
 inline constexpr int kAgentSessionSchemaVersion = 3;
+
+// Memory stores belong to one invocation and never inspect project databases.
+enum class SessionStorage { Project, Memory };
 
 struct ConversationSnapshotRecord {
     std::string lane = "act";
@@ -85,7 +89,8 @@ class AgentSessionStore {
     AgentSessionStore(AgentSessionStore&& other) noexcept;
     AgentSessionStore& operator=(AgentSessionStore&& other) noexcept;
 
-    Error open(const std::string& workspace);
+    Error open(const std::string& workspace,
+               SessionStorage storage = SessionStorage::Project);
     void close();
     bool is_open() const { return db_ != nullptr; }
     const std::string& path() const { return path_; }

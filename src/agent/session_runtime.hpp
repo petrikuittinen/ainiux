@@ -133,6 +133,8 @@ struct SessionRuntimeOptions {
     bool interactive = false;  // turn-cap can return needs_user_continue
     std::vector<std::string> load_skills;  // Explicit selections; run never auto-discovers.
     bool enable_session_db = true;
+    // Memory keeps in-task compaction without touching interactive project state.
+    SessionStorage session_storage = SessionStorage::Project;
     bool enable_agent_log = true;
     int agent_log_keep_sessions = 1;
     int history_max_lines = 500;

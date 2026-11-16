@@ -120,17 +120,20 @@ void AgentSessionStore::close() {
     workspace_.clear();
 }
 
-Error AgentSessionStore::open(const std::string& workspace) {
+Error AgentSessionStore::open(const std::string& workspace, SessionStorage storage) {
     close();
     if (workspace.empty()) return {ErrorCode::BadArgs, "workspace is required for agent.sqlite"};
     workspace_ = workspace;
-    path_ = database_path(workspace);
+    const bool memory = storage == SessionStorage::Memory;
+    path_ = memory ? ":memory:" : database_path(workspace);
 
-    Error security_error = platform::ensure_private_directory(
-        fs::u8path(path_).parent_path().u8string(), true, true);
-    if (!security_error.ok()) return security_error;
-    security_error = platform::create_private_file_if_missing(path_);
-    if (!security_error.ok()) return security_error;
+    if (!memory) {
+        Error security_error = platform::ensure_private_directory(
+            fs::u8path(path_).parent_path().u8string(), true, true);
+        if (!security_error.ok()) return security_error;
+        security_error = platform::create_private_file_if_missing(path_);
+        if (!security_error.ok()) return security_error;
+    }
 
     const int rc =
         sqlite3_open_v2(path_.c_str(), &db_,
@@ -183,7 +186,8 @@ Error AgentSessionStore::open(const std::string& workspace) {
         return {ErrorCode::FileWrite, "could not configure agent session DB " + path_ + ": " + detail};
     };
 
-    Error error = exec("PRAGMA journal_mode=WAL");
+    Error error = exec(memory ? "PRAGMA journal_mode=MEMORY; PRAGMA temp_store=MEMORY"
+                              : "PRAGMA journal_mode=WAL");
     if (!error.ok()) {
         close();
         return error;

@@ -1,180 +1,112 @@
 ---
 name: ainiux-cli
-description: >
-  Invoke the Ainiux CLI from a shell for one-shot chat and agent run,
-  image generation, document conversion, fetch, and search. Use when another
-  agent should call `ainiux` via bash instead of a TUI. Triggers: ainiux,
-  ainiux run, ainiux image, script-friendly OpenAI-compatible CLI.
+description: Invoke Ainiux as a headless subprocess for model prompts, independent agentic tasks, image/video generation, web retrieval, and document conversion. Use when a caller wants Ainiux CLI results or files without an interactive UI.
 ---
 
-# Call Ainiux from a shell
+# Ainiux headless CLI
 
-This skill is for **other agents** (and humans driving them) that need to run
-Ainiux as a subprocess. Full option lists live in `ainiux --help` and
-[CLI and scripting](../cli.md). Do not copy flags from memory; if a flag is
-uncertain, run `ainiux --help` or read that guide.
+Use the installed `ainiux` executable. Run `ainiux --help` to discover options;
+capabilities and model settings depend on the installed version and catalogs.
+The calling agent owns task orchestration and consumes subprocess results.
 
-Ainiux is a C++17 CLI/TUI client for OpenAI-compatible APIs. It is **not** an
-OpenAI-compatible server. There is no `ainiux server` in the current release.
+## Choose the operation
 
-## When to use this
-
-Use the one-shot CLI when the caller should own the conversation and only needs
-a result on stdout.
-
-Do **not** start interactive surfaces from a foreign agent:
-
-| Flag / verb | What it does | From a subprocess |
-| --- | --- | --- |
-| `-p` / default chat | One-shot model reply | Yes |
-| `run` / `-r` | One-shot Act agent (workspace tools) | Yes |
-| `image` / `--image` | One-shot image file | Yes |
-| `--input` / `--fetch-url` / `--search` without `-p` | Convert / fetch / search | Yes |
-| `--list-models` | Print provider models | Yes |
-| `-i` / `--repl` | Line-oriented REPL | No |
-| `-c` / `--chat` | Full-screen chat TUI | No |
-| `-e` / `--editor`, `-d` / `--dired` | Full-screen editor | No |
-| `-a` / `--agent` | Interactive agent TUI | No |
-
-Headless Guard **Ask is denied**. `run` will not pause for `y`/`n`.
-Do not expect a TTY approval dialog.
-
-## I/O contract
-
-- **stdout** — model text, conversion output, image path (or raw bytes with
-  `--output stdout`), JSON/NDJSON when requested.
-- **stderr** — status, warnings, progress, errors. Never parse stderr as the
-  answer.
-- **stdin** — only when you pass `--input stdin` / `--output stdout` for
-  conversion, or `--key-stdin` for a key.
-
-Prefer `--quiet` unless you need progress. Prefer `--no-stream` when the caller
-must wait for a complete reply (scripts, command substitution).
-
-Working directory is the workspace. Agent modes write project state under
-`.ainiux-pr/` in that tree. The user chat library `~/.ainiux/ainiux.db` is
-separate and is not used by `run`.
-
-## Credentials
-
-Never pass `-k` / `--key` (argv is visible to other local users).
-
-Set a provider env var, or `AINIUX_API_KEY`, or `--key-file PATH` /
-`--key-stdin` / `--key-env NAME`. Typical names: `OPENAI_API_KEY`,
-`OPENROUTER_API_KEY`, `OPENGATEWAY_API_KEY`, `LMSTUDIO_API_KEY`,
-`GEMINI_API_KEY`. Image-only hosts
-use `REPLICATE_API_KEY` / `REPLICATE_API_TOKEN` or `FAL_API_KEY` / `FAL_KEY`
-and **not** `AINIUX_API_KEY`.
-
-## Pick a mode
-
-1. **Need workspace tools** (read/edit/run in the current directory) → `ainiux run`. Lead is interactive-only and is not available to subprocess callers.
-2. **Need one image file** → `ainiux image`.
-3. **Need HTML/Markdown/text conversion, URL fetch, or search without a model** → `--input` / `--fetch-url` / `--search` and no `-p`.
-4. **Otherwise** → one-shot chat with `-p` or `--prompt-file`.
-
-Provider is a positional profile or URL (`lmstudio`, `openai`, `deepseek`,
-`http://127.0.0.1:1234/v1`, …) or `--provider NAME`. Pass `-m MODEL` when the
-profile has more than one model.
-
-## Recipes
-
-One-shot chat:
-
-```sh
-ainiux lmstudio -p "Explain RAII in three sentences." --no-stream --quiet
-ainiux openai -m MODEL --prompt-file prompt.txt --format json --no-stream
-```
-
-`--format text` (default) prints the reply. `--format json` prints one object.
-`--format ndjson` / `jsonl` prints events. `--output-format md|html|plaintext|pdf|docx|xlsx`
-renders assistant Markdown (PDF and DOCX are binary); that is not the same as `--format`.
-
-Agent Run (final answer on stdout; metrics on stderr unless `--quiet`):
-
-```sh
-ainiux lmstudio -m MODEL -r "add focused tests for the parser"
-```
-
-Image (stdout is the saved path unless `--output stdout`):
-
-```sh
-ainiux image -p "a quiet terminal at night" --size 1536x1024 --output night.png
-```
-
-Catalog, size, and `--attach` rules: [CLI image generation](../cli.md#image-generation).
-
-Conversion / fetch / search:
-
-```sh
-ainiux --input page.html --output-format md
-ainiux --input notes.md --output-format pdf --output notes.pdf
-ainiux --input report.pdf --output-format md --output report.md
-ainiux --input report.docx --output-format md --output report.md
-ainiux --input notes.md --output-format docx --output notes.docx
-ainiux --input sheet.xlsx --output-format md --output sheet.md
-ainiux --input notes.md --output-format xlsx --output notes.xlsx
-ainiux --input data.csv
-ainiux --input payload.json
-ainiux --fetch-url https://example.com --output-format md
-ainiux --fetch-url https://example.com/data.csv --output-format md
-ainiux --search "portable C++ terminal UI" --output-format json
-printf 'plain text' | ainiux --input stdin --output stdout
-```
-
-List models:
-
-```sh
-ainiux --provider lmstudio --list-models
-```
-
-## Exit codes
-
-| Code | Meaning |
+| Need | Invocation |
 | --- | --- |
-| 0 | Success |
-| 2 | Bad arguments or URL |
-| 3 | DNS, connect, TLS, or timeout |
-| 4 | HTTP/auth/rate-limit/parse/provider schema |
-| 5 | File or config |
-| 6 | Unsupported feature or internal |
-| 130 | Cancelled |
+| Model answer, no workspace tools | `ainiux --provider PROFILE -m MODEL -p "prompt" --no-stream` |
+| Prompt from file or stdin | `ainiux --prompt-file prompt.txt` or `ainiux --prompt-file -` |
+| Independent workspace task | `ainiux --provider PROFILE -m MODEL -r "task"` |
+| Task from file or stdin | `ainiux --run-file task.txt` or `ainiux --run-file -` |
+| One generated image | `ainiux image -p "description" --output image.png` |
+| One generated video | `ainiux video -p "description" --duration 5 --resolution 768P --output clip.mp4` |
+| Convert a local document | `ainiux --input source.docx --output-format md --output result.md` |
+| Fetch a URL as Markdown | `ainiux --fetch-url https://example.com --output-format md` |
+| Search the web | `ainiux --search "query" --output-format json` |
+| Discover text models | `ainiux --provider PROFILE --list-models` |
 
-Treat nonzero as failure. The error line on stderr includes an `ErrorCode` name
-and a next step when one exists.
+`PROFILE` and `MODEL` are placeholders; omit them to use configured defaults.
+A positional profile or API URL is also accepted. Do not start REPL, TUI,
+editor, or server modes for a finite subprocess task.
 
-## Attachments and safety
+## Independent agent tasks
 
-`--attach` is bounded text, Markdown, HTML, PDF/DOCX/XLSX (converted to Markdown),
-CSV/JSON (native text), or PNG/JPEG/GIF for capable Chat Completions models.
-`--input` on an image is the
-chat vision path, not `ainiux image`. `--input` on `.pdf`, `.docx`, or `.xlsx` converts to
-Markdown; `.csv` and `.json` stay native text. `--output-format pdf`, `docx`, or `xlsx` writes a new normalized document.
-DOCX images become visible omission placeholders and conversion warnings go to
-stderr unless `--quiet`; raw package bytes are never sent to the model.
+Run in the intended workspace: the current directory determines project scope.
+`-r`, `--run`, and `ainiux run -r "task"` perform one task, potentially using
+multiple tool/model rounds. They never load or save interactive conversation
+history or snapshots in `.ainiux-pr/agent.sqlite`. In-task context and compaction
+use private memory. Configuration, project instructions, optional index, file
+backups, and diagnostic logs retain their normal behavior. `--no-agent-log`
+disables the diagnostic log.
 
-`--fetch-url` and `--search` are explicit. A URL inside `-p` is not fetched.
-HTML, PDF, DOCX, XLSX, CSV, and JSON responses are accepted; PDF, DOCX, XLSX,
-CSV, and JSON are converted locally to canonical Markdown. REPL/TUI `/fetch`,
-`/attach URL`, `/insert URL`, and
-agent `fetch` use the same bounded conversion. Private/loopback fetch needs
-`--allow-private-url-fetch`. Raise `--max-fetch-bytes` for documents larger
-than the 10 MiB default.
+Workspace tools may edit files and execute commands. Headless runs use Smart
+permissions; decisions needing interactive approval are denied. Supply a complete
+task. Lead and interactive questionnaires require interactive mode.
 
-`run` may mutate the current workspace. It does not get a y/n prompt
-in this headless path; destructive Guard Ask is denied. Do not point `run` at a directory you do not
-intend to change.
+```sh
+ainiux --provider lmstudio -m MODEL -r "Fix the parser and run its focused tests" --quiet > result.md
+printf '%s' 'Review the parser and report findings' | ainiux --run-file - --quiet
+```
 
-## Windows
+Run emits final text only: redirect stdout instead of passing `--output`,
+`--format`, or `--output-format`. Do not combine its task with `-p` or a system
+prompt override. `--run-timeout` controls individual foreground tool commands;
+`--timeout` controls provider requests, not the whole task.
 
-Same stdout/stderr and exit codes. Full-screen modes need Windows Terminal or
-modern conhost, not mintty. Details: [Native Windows](../windows.md).
+## Prompts, web context, and media
 
-## Further reading
+```sh
+ainiux -p "Summarize this" --attach report.pdf --no-stream --quiet
+ainiux -p "Summarize the page" --fetch-url https://example.com --no-stream
+ainiux -p "Describe this image" --input photo.png --no-stream
+ainiux image -p "Make this scene snowy" --attach photo.jpg --output snowy.png
+ainiux video -m minimax/h3-max-turbo/image-to-video -p "Slow camera push-in" --attach snowy.png --duration 5 --resolution 480P --output scene.mp4
+```
 
-- [CLI and scripting](../cli.md) — flags, context policy, image catalog
-- [Agent workflows](../agent.md) — Act/Lead, Guard, `.ainiux-pr/`
-- [MCP servers](../mcp.md) — `--add-mcp` / `--list-mcp` (management is
-  CLI-only; tools load on the next `run` / `-a`)
-- [Security](../security.md) — keys, fetch, agent boundaries
-- [Documentation index](../README.md)
+Chat vision requires a compatible model. Image references are PNG/JPEG and need
+an edit-capable catalog record. Image/video providers, accepted settings, and
+reference types come from `images.conf` / `videos.conf`; use matching credentials.
+Media commands print the saved path, or raw bytes with `--output stdout`.
+Existing media output files require explicit `--force` to overwrite.
+
+URL text in a prompt is not automatically fetched. Fetch/search without `-p`
+needs no chat model. Private-address fetching requires `--allow-private-url-fetch`.
+Text/document input and fetched bodies default to a 10 MiB cap; raise
+`--max-input-bytes` or `--max-fetch-bytes` when needed.
+
+## Conversions
+
+No prompt is needed. Markdown is the canonical interchange for PDF, DOCX, XLSX,
+and PPTX; conversion creates normalized documents rather than lossless edits.
+
+```sh
+ainiux --input report.pdf --output-format docx --output report.docx
+ainiux --input notes.md --output-format pdf --output notes.pdf
+ainiux --input sheet.xlsx --output-format md --output sheet.md
+ainiux --input tables.md --output-format xlsx --output tables.xlsx
+ainiux --input deck.pptx --output-format md --output deck.md
+ainiux --input slides.md --output-format pptx --output slides.pptx
+ainiux --input data.csv --output-format xlsx --output data.xlsx
+printf '%s' '# Title' | ainiux --input stdin --output-format docx --output note.docx
+```
+
+Use `.xlsx` (not `.xslx`). XLSX output converts Markdown tables into worksheets;
+DOCX omits images and advanced Word layout. PPTX slides use top-level `---`
+delimiters; exact CLI PPTX-to-file Markdown conversion may create an image
+sidecar directory. Other conversation paths use image placeholders. PDF extraction
+and reflow do not preserve original layout or provide OCR. `--font PATH` supplies
+a TrueType font for supported non-Latin PDF output.
+
+Local CSV/JSON inputs default to native UTF-8 text; CSV converts to a table when
+rendering a document such as XLSX. Fetched CSV becomes a Markdown table.
+There is no headless `--output-format csv`; JSON output flags select response
+serialization, not document conversion to JSON.
+
+## Subprocess contract
+
+- Read intentional results from stdout; status, progress, and errors use stderr.
+- Use `--quiet` to suppress routine status and `--no-stream` for complete replies.
+- Chat supports `--format text|json|ndjson`; `--output-format` selects document rendering. In image mode, `--format` selects the image codec instead.
+- Binary PDF/Office/media stdout must be captured as bytes. Use explicit output paths for artifacts.
+- Read stdin explicitly with `--prompt-file -`, `--run-file -`, or `--input stdin`; use only one stdin consumer per invocation.
+- Use provider environment variables or `--key-env`, `--key-file`, or `--key-stdin`; keep keys out of argv. Examples: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `REPLICATE_API_TOKEN`, `FAL_KEY`. Replicate/fal do not use `AINIUX_API_KEY`.
+- Exit codes: `0` success; `2` arguments; `3` network/TLS/timeout; `4` HTTP/auth/provider/parse; `5` file/config; `6` unsupported/internal; `130` cancelled. Check the exit code before consuming the result.

@@ -26,6 +26,38 @@ std::string temp_workspace(const std::string& name) {
     return root.string();
 }
 
+void test_memory_store_is_private_and_discarded() {
+    const std::string workspace = temp_workspace("memory");
+    agent::AgentSessionStore memory;
+    check(memory.open(workspace, agent::SessionStorage::Memory).ok(), "open memory store");
+    check(memory.path() == ":memory:" && !fs::exists(agent::AgentSessionStore::database_path(workspace)),
+          "memory store creates no project database");
+    agent::AgentProjectRecord project;
+    check(memory.open_project(project).ok(), "create memory project");
+    check(memory.append_message("user", "private task").ok(), "append memory message");
+    check(memory.append_tool_event(1, 1, "call", "read", "{}", "result", true).ok(),
+          "append memory tool event");
+    check(memory.compact_with_summary("private summary").ok(), "compact memory transcript");
+    agent::ConversationSnapshotRecord snapshot;
+    snapshot.seeded = true;
+    check(memory.save_conversation_snapshot(snapshot).ok(), "save memory snapshot");
+    agent::AgentSessionStore independent;
+    check(independent.open(workspace, agent::SessionStorage::Memory).ok(), "open independent memory store");
+    std::vector<agent::AgentMessageRecord> rows;
+    check(independent.load_messages(rows).ok() && rows.empty(), "memory connections do not share history");
+    memory.close();
+    check(memory.open(workspace, agent::SessionStorage::Memory).ok() &&
+              memory.load_messages(rows).ok() && rows.empty(), "reopen discards memory history");
+    bool found = true;
+    check(memory.load_conversation_snapshot("act", snapshot, found).ok() && !found,
+          "reopen discards memory snapshots");
+    check(!fs::exists(fs::path(workspace) / ".ainiux-pr"), "memory store leaves no private-state directory");
+    memory.close();
+    independent.close();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_open_singleton_append_compact_load() {
     const std::string workspace = temp_workspace("basic");
     agent::AgentSessionStore store;
@@ -486,6 +518,10 @@ void test_incompatible_schema_is_rejected_without_mutation() {
     check(error.code == ErrorCode::UnsupportedFeature &&
               error.message.find("was not changed") != std::string::npos,
           "legacy agent schema is rejected with non-destructive guidance");
+    agent::AgentSessionStore memory;
+    check(memory.open(workspace, agent::SessionStorage::Memory).ok(),
+          "memory session ignores an incompatible project database");
+    memory.close();
     db = nullptr;
     int version = 0;
     if (sqlite3_open(database.c_str(), &db) == SQLITE_OK && db != nullptr) {
@@ -530,6 +566,7 @@ void test_display_tail_is_bounded_and_chronological() {
 }  // namespace
 
 void run_all() {
+    test_memory_store_is_private_and_discarded();
     test_display_tail_is_bounded_and_chronological();
     test_open_singleton_append_compact_load();
     test_restore_does_not_create_new_project_state();

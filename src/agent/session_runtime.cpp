@@ -1893,7 +1893,7 @@ Error AgentSessionRuntime::prepare(const provider::RequestContext& context,
     phase_started = std::chrono::steady_clock::now();
     publish_preparation(PreparationPhase::SessionDatabase, false, phase_started);
     if (options_.enable_session_db) {
-        error = session_store_.open(options_.workspace);
+        error = session_store_.open(options_.workspace, options_.session_storage);
         if (!error.ok()) {
             reset();
             return error;

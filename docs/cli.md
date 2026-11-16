@@ -23,6 +23,10 @@ Use `-s` for a system prompt, `-t` for temperature, `--reasoning` for provider-m
 
 `--save-chat PATH` writes a JSON transcript after a successful response. `--load-chat PATH` loads prior messages before the next prompt. These explicit files are separate from the SQLite thread library used by `-c`.
 
+## Independent agent tasks
+
+Use `ainiux -r "task"`, `ainiux --run "task"`, or `ainiux run -r "task"` from the intended workspace. `--run-file PATH` (or `-` for stdin) supplies a task from a file. Each invocation uses private in-memory conversation storage: it neither loads nor saves interactive agent history or snapshots in `.ainiux-pr/agent.sqlite`. Tool/model rounds and compaction remain available during the task. Normal configuration, instructions, logs, indexes, and file backups still apply. Headless approval requests are denied. Final text goes to stdout; redirect it instead of using `--output` or alternate output formats.
+
 ## Output formats
 
 - `--format text` emits response text.

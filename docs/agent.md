@@ -17,6 +17,8 @@ configuration, while ordinary chat threads retain their own settings. Native
 editor model selections also persist in the project database. Model changes are
 blocked during a running agent turn, including temporary editor visits.
 
+One-shot `-r` / `--run` (including `ainiux run -r` and `--run-file`) uses a private in-memory session. It never reads or writes interactive history, settings, or conversation snapshots in `agent.sqlite`. A task may use multiple model/tool rounds and compact its own context. Diagnostic logs, optional indexes, and file backups keep their normal behavior; use `--no-agent-log` to disable diagnostics.
+
 Agent state belongs to the current project under `.ainiux-pr/`, including `agent.sqlite`, the optional index, history backups, and diagnostic logs. It never uses the user chat database under `~/.ainiux/`. Interactive sessions are multi-turn. Temporary hops to the editor or dired keep the project session open; leaving for chat or quitting finishes the open session and disarms tools.
 
 Native tool-calling LLM rounds buffer the full HTTP response (including SSE framing) up to `agent.max_response_bytes` (default `32M`; CLI `--max-agent-response-bytes`). Long max-reasoning streams can hit this cap even when the useful text is much smaller. Set `0` to disable the cap.

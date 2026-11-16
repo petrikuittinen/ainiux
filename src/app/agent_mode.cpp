@@ -36,7 +36,8 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
                                std::function<bool()> interrupted,
                                bool write_final_to_stdout,
                                std::function<void(const std::string& status_line)> on_progress,
-                               std::string workspace) {
+                               std::string workspace,
+                               agent::SessionStorage storage) {
     const auto started = std::chrono::steady_clock::now();
     AgentGoalResult result;
     if (context.routing_session_id.empty())
@@ -54,6 +55,7 @@ AgentGoalResult run_agent_goal(provider::RequestContext context,
         context, std::move(workspace),
         agent::AgentLane::Act,
         false);
+    options.session_storage = storage;
     IndexProgressPrinter index_progress(
         !context.options.quiet &&
         options.index_mode !=
@@ -198,7 +200,8 @@ int run_agent_mode(provider::RequestContext context) {
     const bool quiet = context.options.quiet;
     AgentGoalResult result =
         run_agent_goal(std::move(context), goal, cancellation.token(),
-                       [&interrupt_guard] { return interrupt_guard.interrupted(); }, true, {});
+                       [&interrupt_guard] { return interrupt_guard.interrupted(); }, true, {},
+                       ".", agent::SessionStorage::Memory);
     if (!result.error.ok()) {
         print_error(result.error);
         if (!quiet) std::cerr << format_agent_run_metrics(result) << "\n";

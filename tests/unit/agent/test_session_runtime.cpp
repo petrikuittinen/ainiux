@@ -52,6 +52,55 @@ provider::RequestContext offline_context(const std::string& workspace) {
     return context;
 }
 
+void test_memory_runtime_preserves_project_history() {
+    const std::string workspace = temp_workspace("memory-isolation");
+    {
+        agent::AgentSessionStore store;
+        check(store.open(workspace).ok(), "open durable isolation fixture");
+        agent::AgentProjectRecord project;
+        project.settings_json = R"({"isolation_marker":"original"})";
+        check(store.open_project(project).ok() && store.append_message("user", "INTERACTIVE_ONLY").ok(),
+              "seed durable isolation fixture");
+        agent::ConversationSnapshotRecord snapshot;
+        snapshot.seeded = true;
+        snapshot.messages_json = R"([{"role":"system","content":"INTERACTIVE_ONLY"}])";
+        check(store.save_conversation_snapshot(snapshot).ok(), "seed durable snapshot");
+    }
+    auto read_database = [&]() {
+        std::ifstream input(agent::AgentSessionStore::database_path(workspace), std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(input), {});
+    };
+    const std::string original = read_database();
+    provider::RequestContext context = offline_context(workspace);
+    agent::SessionRuntimeOptions options;
+    options.workspace = workspace;
+    options.enable_agent_log = false;
+    options.session_storage = agent::SessionStorage::Memory;
+    options.index_mode = agent::SessionRuntimeOptions::IndexMode::Disabled;
+    agent::AgentSessionRuntime runtime;
+    check(runtime.prepare(context, {}, {}, options).ok(), "prepare isolated memory runtime");
+    std::vector<provider::Message> display;
+    check(!runtime.conversation_seeded() && runtime.load_display_messages(display).ok() && display.empty(),
+          "memory runtime never loads interactive conversation");
+    // An offline provider fails after recording this task in the invocation store.
+    const auto failed = runtime.run_user_turn(context, "PRIVATE_RUN");
+    check(!failed.error.ok(), "offline run fails normally");
+    const auto compacted = runtime.compact(context, agent::CompactionReason::Manual, {}, CompactionStrategy::Fast);
+    check(compacted.error.ok(), "memory runtime supports compaction after a failed turn");
+    runtime::CancellationSource cancelled;
+    cancelled.cancel();
+    const auto cancelled_turn = runtime.run_user_turn(context, "CANCELLED_RUN", cancelled.token());
+    check(cancelled_turn.error.code == ErrorCode::Cancelled, "memory runtime observes cancellation");
+    check(runtime.finish_session("cancelled").ok(), "finish memory runtime");
+    runtime.reset();
+    check(original == read_database(), "failure, compaction, cancellation and finish preserve project DB bytes");
+    check(runtime.prepare(context, {}, {}, options).ok() && !runtime.conversation_seeded(),
+          "second memory invocation starts fresh");
+    runtime.reset();
+    std::error_code ec;
+    fs::remove_all(workspace, ec);
+}
+
 void test_runtime_options_share_cli_projection() {
     provider::RequestContext context;
     context.options.agent_log_enabled = false;
@@ -1851,6 +1900,7 @@ void test_no_turn_session_log_finalization() {
 }  // namespace
 
 void run_all() {
+    test_memory_runtime_preserves_project_history();
     test_no_turn_session_log_finalization();
     test_runtime_options_share_cli_projection();
     test_prepare_opens_session_db_and_tools();
