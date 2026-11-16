@@ -81,6 +81,10 @@ bool hosted_search_unsupported_on_adapter(const ModelCapability& capability,
 HostedWebSearch resolve_hosted_web_search(const RequestContext& context) {
     HostedWebSearch search;
     if (!context.options.builtin_web_search) return search;
+    // OpenGateway Chat Completions accepts function tools only. Catalog families
+    // such as GLM still advertise a native hosted search shape that this
+    // gateway does not document, so keep the client web_search path.
+    if (normalize_provider_key(context.profile.name) == "opengateway") return search;
     const ModelCapability* capability = matched_model_capability(context);
     if (capability == nullptr || !capability->web_search) return search;
     search.catalog_id = capability->id;

@@ -1645,8 +1645,9 @@ Options:
                                 benchmark-*.jsonl from the relevant output directory.
 
   Provider and endpoint:
-      --provider NAME           none (offline), openrouter, openai, kimi, llama.cpp,
-                                lm_studio, ollama, vllm, sglang, zai, qwen, replicate, fal, etc.
+      --provider NAME           none (offline), openrouter, openai, opengateway, kimi,
+                                llama.cpp, lm_studio, ollama, vllm, sglang, zai, qwen,
+                                replicate, fal, etc.
       --profile NAME            Alias for --provider.
       --api chat|responses      Use Chat Completions or Responses API. Official OpenAI
                                 defaults to Responses; openai_chat and --api chat stay

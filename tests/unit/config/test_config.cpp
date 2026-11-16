@@ -1197,6 +1197,58 @@ void test_config_reads_models_template() {
           "GLM-5.3-Flash is cataloged as text-image-to-text with always-on thinking");
     check(glm53_flash_routed != nullptr && glm53_flash_routed->id == "zai-glm-5.3-flash",
           "GLM-5.3-Flash family rule covers routed OpenRouter-style ids");
+    const ainiux::ModelCapability* og_deepseek_flash_eco =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat",
+            "deepseek/deepseek-v4.1-flash-eco");
+    const ainiux::ModelCapability* og_deepseek_flash_ultrafast =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat",
+            "deepseek/deepseek-v4.1-flash-ultrafast");
+    const ainiux::ModelCapability* og_deepseek_hyphen =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat",
+            "deepseek/deepseek-v4-1-flash");
+    check(og_deepseek_flash_eco != nullptr &&
+              og_deepseek_flash_eco->id == "deepseek-v4.1-flash" &&
+              og_deepseek_flash_eco->images.has_value() &&
+              *og_deepseek_flash_eco->images &&
+              og_deepseek_flash_ultrafast != nullptr &&
+              og_deepseek_flash_ultrafast->id == "deepseek-v4.1-flash" &&
+              og_deepseek_hyphen != nullptr &&
+              og_deepseek_hyphen->id == "deepseek-v4.1-flash",
+          "OpenGateway DeepSeek V4.1 Flash eco/ultrafast and hyphenated ids stay multimodal");
+    const ainiux::ModelCapability* og_deepseek_pro =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat", "deepseek/deepseek-v4-pro");
+    check(og_deepseek_pro != nullptr && og_deepseek_pro->id == "deepseek-v4" &&
+              og_deepseek_pro->images.has_value() && !*og_deepseek_pro->images,
+          "OpenGateway DeepSeek V4 Pro stays text-to-text");
+    const ainiux::ModelCapability* og_glm53_flash_ultrafast =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat",
+            "z-ai/glm-5.3-flash-ultrafast");
+    const ainiux::ModelCapability* og_glm53_hyphen_flash =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat", "z-ai/glm-5-3-flash");
+    check(og_glm53_flash_ultrafast != nullptr &&
+              og_glm53_flash_ultrafast->id == "zai-glm-5.3-flash" &&
+              og_glm53_flash_ultrafast->images.has_value() &&
+              *og_glm53_flash_ultrafast->images &&
+              og_glm53_hyphen_flash != nullptr &&
+              og_glm53_hyphen_flash->id == "zai-glm-5.3-flash",
+          "OpenGateway GLM-5.3-Flash ultrafast and hyphenated ids stay multimodal");
+    const ainiux::ModelCapability* og_glm53_ultrafast =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat", "z-ai/glm-5.3-ultrafast");
+    const ainiux::ModelCapability* og_glm52_ultrafast =
+        ainiux::config::resolve_model_capability(
+            options.model_catalog, "opengateway", "chat", "z-ai/glm-5.2-ultrafast");
+    check(og_glm53_ultrafast != nullptr && og_glm53_ultrafast->id == "zai-glm-5.3" &&
+              og_glm53_ultrafast->images.has_value() && !*og_glm53_ultrafast->images,
+          "OpenGateway GLM-5.3-ultrafast stays on the text-only 5.3 record");
+    check(og_glm52_ultrafast != nullptr && og_glm52_ultrafast->id == "zai-glm-5",
+          "OpenGateway GLM-5.2-ultrafast stays on the GLM-5 family");
     const ainiux::ModelCapability* glm53_flashx = ainiux::config::resolve_model_capability(
         options.model_catalog, "zai", "chat", "glm-5.3-flashx");
     check(glm53_flashx != nullptr && glm53_flashx->id == "zai-glm-5.3-flash" &&

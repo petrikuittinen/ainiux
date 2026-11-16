@@ -61,7 +61,8 @@ Never pass `-k` / `--key` (argv is visible to other local users).
 
 Set a provider env var, or `AINIUX_API_KEY`, or `--key-file PATH` /
 `--key-stdin` / `--key-env NAME`. Typical names: `OPENAI_API_KEY`,
-`OPENROUTER_API_KEY`, `LMSTUDIO_API_KEY`, `GEMINI_API_KEY`. Image-only hosts
+`OPENROUTER_API_KEY`, `OPENGATEWAY_API_KEY`, `LMSTUDIO_API_KEY`,
+`GEMINI_API_KEY`. Image-only hosts
 use `REPLICATE_API_KEY` / `REPLICATE_API_TOKEN` or `FAL_API_KEY` / `FAL_KEY`
 and **not** `AINIUX_API_KEY`.
 

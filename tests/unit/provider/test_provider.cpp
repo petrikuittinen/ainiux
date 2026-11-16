@@ -765,6 +765,7 @@ void test_image_capability_detection() {
     const std::vector<ainiux::provider::Profile> profiles = ainiux::provider::built_in_profiles();
     bool deepseek_advertises_images = false;
     bool zai_advertises_images = false;
+    bool opengateway_advertises_images = false;
     for (const ainiux::provider::Profile& profile : profiles) {
         if (profile.name == "deepseek") {
             deepseek_advertises_images = profile.capabilities.images;
@@ -772,9 +773,13 @@ void test_image_capability_detection() {
         if (profile.name == "zai") {
             zai_advertises_images = profile.capabilities.images;
         }
+        if (profile.name == "opengateway") {
+            opengateway_advertises_images = profile.capabilities.images;
+        }
     }
     check(deepseek_advertises_images, "DeepSeek profile advertises image input");
     check(zai_advertises_images, "Z.AI profile advertises image input");
+    check(opengateway_advertises_images, "OpenGateway profile advertises image input");
 
     ainiux::cli::Options catalog_options;
     ainiux::config::ParseResult models = ainiux::config::read_file("config/models.conf");
@@ -815,6 +820,16 @@ void test_image_capability_detection() {
     routed_deepseek.options.image_capability = "allow";
     check(ainiux::provider::validate_image_input(routed_deepseek).ok(),
           "explicit allow still overrides DeepSeek text-only catalog records");
+    routed_deepseek.profile.name = "opengateway";
+    routed_deepseek.options.image_capability.clear();
+    routed_deepseek.options.model = "deepseek/deepseek-v4-pro";
+    check(!ainiux::provider::detected_capabilities_for(routed_deepseek).images &&
+              !ainiux::provider::validate_image_input(routed_deepseek).ok(),
+          "OpenGateway DeepSeek V4 Pro remains text-to-text in auto image mode");
+    routed_deepseek.options.model = "deepseek/deepseek-v4.1-flash-eco";
+    check(ainiux::provider::detected_capabilities_for(routed_deepseek).images &&
+              ainiux::provider::validate_image_input(routed_deepseek).ok(),
+          "OpenGateway DeepSeek V4.1 Flash eco is image-capable in auto mode");
 
     ainiux::provider::RequestContext zai;
     zai.api_kind = ainiux::provider::ApiKind::ChatCompletions;
@@ -1613,6 +1628,56 @@ void test_openrouter_shortcut_context() {
     check(ctx.context.base_url == "https://openrouter.ai/api/v1", "openrouter shortcut uses standard base URL");
 }
 
+void test_opengateway_shortcut_context() {
+    const char* argv[] = {"ainiux", "opengateway", "-m", "deepseek/deepseek-v4.1-flash-eco",
+                          "-p", "hello", "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(8, const_cast<char**>(argv));
+    check(parsed.error.ok(), "opengateway shortcut args parse");
+    ainiux::provider::ContextResult ctx = ainiux::provider::build_context(parsed.options);
+    check(ctx.error.ok(), "opengateway shortcut context builds with auth header");
+    check(ctx.context.profile.name == "opengateway", "opengateway shortcut selects profile");
+    check(ctx.context.base_url == "https://apis.opengateway.ai/v1",
+          "opengateway shortcut uses the documented base URL");
+    check(ctx.context.chat_url == "https://apis.opengateway.ai/v1/chat/completions",
+          "opengateway Chat Completions URL is selected by default");
+    check(ctx.context.models_url == "https://apis.opengateway.ai/v1/models",
+          "opengateway model-list URL is selected");
+    check(ctx.context.responses_url == "https://apis.opengateway.ai/v1/responses",
+          "opengateway advertises a Responses URL");
+    check(ctx.context.api_kind == ainiux::provider::ApiKind::ChatCompletions,
+          "opengateway defaults to Chat Completions");
+    check(ctx.context.profile.capabilities.images, "opengateway advertises image input");
+    check(ctx.context.profile.capabilities.responses_api, "opengateway advertises Responses");
+    check(ctx.context.profile.capabilities.credit_balance &&
+              ctx.context.profile.credit_url == "https://apis.opengateway.ai/v1/credits",
+          "opengateway exposes the credits endpoint");
+    check(!ctx.context.profile.key_envs.empty() &&
+              ctx.context.profile.key_envs.front() == "OPENGATEWAY_API_KEY",
+          "opengateway prefers OPENGATEWAY_API_KEY");
+
+    const char* alias_argv[] = {"ainiux", "open-gateway", "-m", "z-ai/glm-5.3-flash", "-p",
+                                "hello", "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult alias = ainiux::cli::parse_args(8, const_cast<char**>(alias_argv));
+    check(alias.error.ok(), "open-gateway alias args parse");
+    ainiux::provider::ContextResult alias_ctx = ainiux::provider::build_context(alias.options);
+    check(alias_ctx.error.ok() && alias_ctx.context.profile.name == "opengateway",
+          "open-gateway alias resolves to opengateway");
+
+    const char* responses_argv[] = {
+        "ainiux", "--provider", "opengateway", "--api", "responses", "-m", "openai/gpt-5.4",
+        "-p", "hello", "--header", "Authorization: Bearer test"};
+    ainiux::cli::ParseResult responses =
+        ainiux::cli::parse_args(11, const_cast<char**>(responses_argv));
+    check(responses.error.ok(), "opengateway Responses args parse");
+    ainiux::provider::ContextResult responses_ctx =
+        ainiux::provider::build_context(responses.options);
+    check(responses_ctx.error.ok() &&
+              responses_ctx.context.api_kind == ainiux::provider::ApiKind::Responses &&
+              ainiux::provider::active_request_url(responses_ctx.context) ==
+                  "https://apis.opengateway.ai/v1/responses",
+          "opengateway accepts --api responses");
+}
+
 void test_provider_capabilities_and_responses_context() {
     const char* argv[] = {"ainiux", "--provider", "openai", "--api", "responses", "-p", "hello", "--header", "Authorization: Bearer test"};
     ainiux::cli::ParseResult parsed = ainiux::cli::parse_args(9, const_cast<char**>(argv));
@@ -1743,6 +1808,17 @@ void test_provider_registry_resolves_added_profiles() {
           "Qwen model-list URL selected");
     check(qwen_ctx.context.profile.key_envs.front() == "DASHSCOPE_API_KEY",
           "Qwen uses the documented Model Studio key environment variable");
+
+    const auto opengateway = std::find_if(
+        profiles.begin(), profiles.end(),
+        [](const ainiux::provider::Profile& profile) { return profile.name == "opengateway"; });
+    check(opengateway != profiles.end() &&
+              opengateway->base_url == "https://apis.opengateway.ai/v1" &&
+              opengateway->capabilities.chat_completions &&
+              opengateway->capabilities.responses_api &&
+              opengateway->capabilities.images &&
+              !opengateway->aliases.empty() && opengateway->aliases.front() == "open-gateway",
+          "opengateway is registered with chat, Responses, images, and open-gateway alias");
 }
 
 void test_provider_responses_unsupported_and_override() {
@@ -1810,6 +1886,22 @@ void test_provider_reasoning_request_compatibility() {
     check(field(request, "thinking") == nullptr &&
               field(request, "reasoning_effort") == nullptr,
           "OpenRouter does not use the matched model's native reasoning fields");
+
+    context = chat_context(ainiux::ReasoningProtocol::DeepSeek,
+                           ainiux::ReasoningSelection::named("high"));
+    context.profile.name = "opengateway";
+    request = serialized_request_json(context);
+    check_string_field(request, "reasoning_effort", "high",
+                       "OpenGateway transport uses Chat Completions reasoning_effort");
+    check(field(request, "thinking") == nullptr && field(request, "reasoning") == nullptr,
+          "OpenGateway does not use the matched model's native reasoning fields");
+    context.api_kind = ainiux::provider::ApiKind::Responses;
+    request = serialized_request_json(context);
+    check_string_field(field(request, "reasoning"), "effort", "high",
+                       "OpenGateway Responses uses reasoning.effort");
+    check(field(request, "reasoning_effort") == nullptr &&
+              field(request, "thinking") == nullptr,
+          "OpenGateway Responses omits Chat Completions and native thinking fields");
 
     context = chat_context(ainiux::ReasoningProtocol::OpenAiEffort,
                            ainiux::ReasoningSelection::named("ultra"));
@@ -2624,6 +2716,20 @@ void test_hosted_web_search_serialization() {
               wrapper->get("enable")->boolean,
           "GLM hosted tool wraps enable=true");
 
+    context.profile.name = "opengateway";
+    request = serialized_request_json(context);
+    check(!has_hosted_web_search_type(field(request, "tools")),
+          "OpenGateway keeps client search instead of GLM hosted web_search");
+    context.options.model = "deepseek/deepseek-v4.1-flash-eco";
+    context.options.model_catalog.models.clear();
+    context.options.model_catalog.models.push_back(
+        with_capability("deepseek-v4.1-flash", "^deepseek-(?:flash|v4[.-]1-flash).*$",
+                        "web_search", true));
+    request = serialized_request_json(context);
+    check(!has_hosted_web_search_type(field(request, "tools")),
+          "OpenGateway keeps client search for DeepSeek catalog families");
+    context.profile.name = "openai";
+
     context.options.model = "kimi-k3";
     context.options.model_catalog.models.clear();
     context.options.model_catalog.models.push_back(
@@ -2804,6 +2910,23 @@ void test_credit_balance_parsing_and_formatting() {
     check(!error.ok() && error.code == ErrorCode::ProviderSchema,
           "DeepSeek rejects malformed balance decimals");
 
+    error = ainiux::provider::parse_credit_balance_response(
+        "opengateway",
+        R"({"object":"credits","currency":"USD","balance":12.34,"credit_limit":0.0,"available_balance":12.34,"model_credits":[],"key":{"status":"active"}})",
+        result);
+    check(error.ok() && result.balances.size() == 1 &&
+              result.balances.front().amount == 12.34 &&
+              result.balances.front().currency == "USD" &&
+              ainiux::provider::format_credit_balance(result) == "12.34 USD",
+          "OpenGateway available_balance formats as remaining USD credit");
+
+    error = ainiux::provider::parse_credit_balance_response(
+        "opengateway",
+        R"({"object":"credits","currency":"USD","balance":12.34})",
+        result);
+    check(!error.ok() && error.code == ErrorCode::ProviderSchema,
+          "OpenGateway rejects credit responses without available_balance");
+
     const std::vector<ainiux::provider::Profile> profiles =
         ainiux::provider::built_in_profiles();
     const auto openrouter =
@@ -2813,6 +2936,10 @@ void test_credit_balance_parsing_and_formatting() {
     const auto openai =
         std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
             return profile.name == "openai";
+        });
+    const auto opengateway =
+        std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
+            return profile.name == "opengateway";
         });
     const auto deepseek =
         std::find_if(profiles.begin(), profiles.end(), [](const auto& profile) {
@@ -2826,11 +2953,15 @@ void test_credit_balance_parsing_and_formatting() {
               openai->capabilities.credit_balance &&
               openai->credit_url ==
                   "https://api.openai.com/v1/dashboard/billing/credit_grants" &&
+              opengateway != profiles.end() &&
+              opengateway->capabilities.credit_balance &&
+              opengateway->credit_url ==
+                  "https://apis.opengateway.ai/v1/credits" &&
               deepseek != profiles.end() &&
               deepseek->capabilities.credit_balance &&
               deepseek->credit_url ==
                   "https://api.deepseek.com/user/balance",
-          "OpenRouter, OpenAI, and DeepSeek profiles expose credit endpoints");
+          "OpenRouter, OpenAI, OpenGateway, and DeepSeek profiles expose credit endpoints");
 
     ainiux::provider::RequestContext credit_context;
     credit_context.profile = *openrouter;
@@ -2851,6 +2982,14 @@ void test_credit_balance_parsing_and_formatting() {
     credit_context.base_url = "https://api.deepseek.com/v1";
     check(ainiux::provider::credit_balance_available(credit_context),
           "normalized official DeepSeek base URL enables credit lookup");
+
+    credit_context.profile = *opengateway;
+    credit_context.base_url = "https://apis.opengateway.ai/v1";
+    check(ainiux::provider::credit_balance_available(credit_context),
+          "official OpenGateway context enables credit lookup");
+    credit_context.base_url = "https://gateway.example/v1";
+    check(!ainiux::provider::credit_balance_available(credit_context),
+          "custom OpenGateway base URL disables official credit lookup");
 }
 
 const ainiux::ImageCapability* load_gpt_image_2() {
@@ -4164,6 +4303,7 @@ void run_all() {
     test_none_provider_allows_an_empty_endpoint();
     test_openai_context_allows_missing_model();
     test_openrouter_shortcut_context();
+    test_opengateway_shortcut_context();
     test_provider_unicode_request_serialization();
     test_openrouter_session_stickiness_serialization();
     test_provider_capabilities_and_responses_context();

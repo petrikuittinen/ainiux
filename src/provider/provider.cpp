@@ -103,7 +103,8 @@ Profile make_profile(const std::string& name,
     profile.dummy_api_key = dummy_api_key;
     profile.compatibility_warning = warning;
     profile.capabilities = profile_capabilities(requires_key, local, !chat_path.empty(), !responses_path.empty(), !models_path.empty());
-    profile.capabilities.images = local || name == names::kOpenAi || name == "openrouter" || name == "gemini" ||
+    profile.capabilities.images = local || name == names::kOpenAi || name == "openrouter" ||
+                                  name == "opengateway" || name == "gemini" ||
                                   name == "xai" || name == "mistral" || name == "qwen" ||
                                   name == "deepseek" || name == "zai" ||
                                   name == names::kCustomOpenAiChat;
@@ -148,6 +149,11 @@ const std::vector<Profile>& profile_registry() {
                          true,
                          false),
             "https://api.openai.com/v1/dashboard/billing/credit_grants"),
+        with_credit_endpoint(
+            make_profile("opengateway", {"open-gateway"}, "https://apis.opengateway.ai/v1",
+                         "/chat/completions", "/models", "/responses",
+                         {"OPENGATEWAY_API_KEY", "AINIUX_API_KEY"}, true, false),
+            "https://apis.opengateway.ai/v1/credits"),
         with_credit_endpoint(
             make_profile("deepseek", {}, "https://api.deepseek.com",
                          "/chat/completions", "/models", "/responses",
@@ -365,6 +371,7 @@ ReasoningProtocol fallback_reasoning_protocol(const RequestContext& context) {
     if (profile == names::kNone || context.profile.offline) return ReasoningProtocol::None;
     if (profile == names::kOpenAi) return ReasoningProtocol::OpenAiEffort;
     if (profile == "openrouter") return ReasoningProtocol::OpenRouter;
+    if (profile == "opengateway") return ReasoningProtocol::OpenAiEffort;
     if (profile == "anthropic") return ReasoningProtocol::AnthropicBudget;
     if (profile == "gemini") return ReasoningProtocol::GeminiEffort;
     if (profile == "moonshot") return ReasoningProtocol::KimiEffort;
@@ -392,8 +399,12 @@ const ModelCapability* matched_model_capability_impl(const RequestContext& conte
 ReasoningProtocol reasoning_protocol_for(const RequestContext& context) {
     // A router's wire format is determined by the transport even when the
     // matched catalog entry describes the model's native provider.
-    if (normalize_provider_key(context.profile.name) == "openrouter") {
+    const std::string profile = normalize_provider_key(context.profile.name);
+    if (profile == "openrouter") {
         return ReasoningProtocol::OpenRouter;
+    }
+    if (profile == "opengateway") {
+        return ReasoningProtocol::OpenAiEffort;
     }
     const ModelCapability* capability = matched_model_capability_impl(context);
     return capability == nullptr ? fallback_reasoning_protocol(context)
@@ -3206,6 +3217,23 @@ Error parse_credit_balance_response(const std::string& provider_name,
                     "OpenRouter credit response requires numeric "
                     "data.total_credits and data.total_usage"};
         result.balances.push_back({total->number - usage->number, "USD"});
+        return ok_error();
+    }
+    if (canonical == "opengateway") {
+        const json::Value* available = parsed.value.get("available_balance");
+        if (available == nullptr || available->type != json::Value::Type::Number ||
+            !std::isfinite(available->number))
+            return {ErrorCode::ProviderSchema,
+                    "OpenGateway credit response requires numeric available_balance"};
+        std::string currency = "USD";
+        if (const json::Value* currency_value = parsed.value.get("currency");
+            currency_value != nullptr && currency_value->is_string() &&
+            valid_currency_code(currency_value->string)) {
+            currency = currency_value->string;
+            for (char& ch : currency)
+                ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+        result.balances.push_back({available->number, currency});
         return ok_error();
     }
     if (canonical == names::kOpenAi) {

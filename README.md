@@ -266,6 +266,7 @@ Use a profile positionally (`ainiux lmstudio -c`) or with `--provider`. A raw ba
 | `none` | `offline` | None |
 | `openrouter` | — | `OPENROUTER_API_KEY` |
 | `openai` | `openai_chat`, `openai_responses` | `OPENAI_API_KEY` (defaults to Responses; `openai_chat` keeps Chat Completions) |
+| `opengateway` | `open-gateway` | `OPENGATEWAY_API_KEY` |
 | `deepseek` | — | `DEEPSEEK_API_KEY` |
 | `gemini` | — | `GEMINI_API_KEY` |
 | `anthropic` | — | `ANTHROPIC_API_KEY` |
