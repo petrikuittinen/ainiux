@@ -1,0 +1,6 @@
+interface:
+  display_name: "Ainiux Code"
+  short_description: "Write, check, run, and repair Ainiux programs"
+  default_prompt: "Use $ainiux-code to write an Ainiux program for this task, check it, and run it with representative inputs."
+policy:
+  allow_implicit_invocation: true
