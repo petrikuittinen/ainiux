@@ -651,8 +651,12 @@ void rehash_listed_files(DiredState& state) {
 }  // namespace
 
 bool is_dired_f4_sequence(const std::string& sequence) {
-    // xterm: ESC OS / ESC [14~ ; linux console often ESC [[D for F4.
-    return sequence == "OS" || sequence == "[14~" || sequence == "[[D";
+    // xterm SS3: ESC OS ; vt220: ESC [14~ ; linux console: ESC [[D.
+    // kitty / xterm CSI (including Windows Terminal with CSI > 1 u): ESC [S,
+    // ESC [1S, ESC [1;1S, and the explicit-unmodified [14;1~ form.
+    return sequence == "OS" || sequence == "[14~" || sequence == "[14;1~" ||
+           sequence == "[[D" || sequence == "[S" || sequence == "[1S" ||
+           sequence == "[1;1S" || sequence == "[57367u" || sequence == "[57367;1u";
 }
 
 bool dired_key_opens_for_edit(DiredFocus focus, unsigned char ch) {

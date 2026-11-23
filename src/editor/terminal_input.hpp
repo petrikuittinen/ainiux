@@ -63,8 +63,11 @@ class EscapeRepeatGuard {
 
 constexpr const char* bracketed_paste_enable_sequence() { return "\x1b[?2004h"; }
 constexpr const char* bracketed_paste_disable_sequence() { return "\x1b[?2004l"; }
-constexpr const char* keyboard_modifier_enable_sequence() { return "\x1b[>4;2m\x1b[>1u"; }
-constexpr const char* keyboard_modifier_disable_sequence() { return "\x1b[<1u\x1b[>4;0m"; }
+// Empty on WSL/ConPTY: Windows Terminal still emits kitty CSI-u, then ConPTY
+// drops those sequences, so Escape never reaches the editor.
+const char* keyboard_modifier_enable_sequence();
+const char* keyboard_modifier_disable_sequence();
+bool host_mangles_enhanced_keyboard_sequences();
 constexpr const char* mouse_reporting_enable_sequence() { return "\x1b[?1002h\x1b[?1006h"; }
 constexpr const char* mouse_reporting_disable_sequence() { return "\x1b[?1006l\x1b[?1002l"; }
 // DECAWM: disable autowrap so full-width row paints (status, agent borders, last

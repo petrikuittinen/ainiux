@@ -3903,8 +3903,13 @@ void test_editor_dired() {
 
     check(is_dired_f4_sequence("OS"), "F4 xterm OS sequence recognized");
     check(is_dired_f4_sequence("[14~"), "F4 [14~ sequence recognized");
+    check(is_dired_f4_sequence("[14;1~"), "F4 [14;1~ unmodified form recognized");
     check(is_dired_f4_sequence("[[D"), "F4 linux console sequence recognized");
+    check(is_dired_f4_sequence("[S"), "F4 kitty CSI S sequence recognized");
+    check(is_dired_f4_sequence("[1S"), "F4 CSI 1 S sequence recognized");
+    check(is_dired_f4_sequence("[1;1S"), "F4 CSI 1;1 S sequence recognized");
     check(!is_dired_f4_sequence("[13~"), "F3 is not F4");
+    check(!is_dired_f4_sequence("[1;1P"), "F1 CSI P is not F4");
 
     check(dired_key_opens_for_edit(DiredFocus::List, 'o') &&
               dired_key_opens_for_edit(DiredFocus::List, 'O'),
@@ -4949,8 +4954,18 @@ void test_editor_control_key_sequence_decode() {
           "editor decodes kitty-style Escape without a modifier field");
     check(ainiux::editor::decode_control_key_sequence("[27;1u", decoded) && decoded == 27,
           "editor decodes kitty-style Escape with an explicit base modifier");
+    check(ainiux::editor::decode_control_key_sequence("[27~", decoded) && decoded == 27,
+          "editor decodes CSI 27~ Escape");
+    check(ainiux::editor::decode_control_key_sequence("[27;1~", decoded) && decoded == 27,
+          "editor decodes CSI 27;1~ Escape");
     check(ainiux::editor::decode_control_key_sequence("[27;1;27~", decoded) && decoded == 27,
           "editor decodes xterm modifyOtherKeys Escape");
+    check(ainiux::editor::decode_control_key_sequence("[27;1;13~", decoded) && decoded == 13,
+          "editor decodes xterm modifyOtherKeys Enter");
+    check(ainiux::editor::decode_control_key_sequence("[27;1;9~", decoded) && decoded == 9,
+          "editor decodes xterm modifyOtherKeys Tab");
+    check(ainiux::editor::decode_control_key_sequence("[27;1;127~", decoded) && decoded == 127,
+          "editor decodes xterm modifyOtherKeys Backspace");
     check(ainiux::editor::decode_control_key_sequence("[120;3u", decoded) &&
               decoded == ainiux::editor::editor_key_command_minibuffer(),
           "editor decodes kitty-style Alt+X as the command-minibuffer key");
@@ -5038,9 +5053,79 @@ void test_editor_control_key_sequence_decode() {
 
     ainiux::editor::push_terminal_input_bytes("\x1b\x1b");
     check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 27 &&
-              !event.decoded_escape && ainiux::editor::read_escape_suffix().empty(),
+              event.decoded_escape && ainiux::editor::read_escape_suffix().empty(),
           "an immediate bare-Escape repeat remains a single minibuffer-open action");
     ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes(std::string("\x1b", 1) + "dired\r");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 27 && event.decoded_escape,
+          "Esc before a command word is a bare minibuffer-open Escape");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 'd',
+          "Esc then dired leaves d for the minibuffer");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 'i',
+          "Esc then dired leaves i for the minibuffer");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 'r',
+          "Esc then dired leaves r for the minibuffer");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 'e',
+          "Esc then dired leaves e for the minibuffer");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 'd',
+          "Esc then dired leaves the second d for the minibuffer");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == '\r',
+          "Esc then dired leaves Enter for the minibuffer");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("\x1bOS");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 27 && !event.decoded_escape &&
+              ainiux::editor::read_escape_suffix() == "OS",
+          "SS3 F4 keeps OS attached for dired");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("\x1b[S");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 27 && !event.decoded_escape &&
+              ainiux::editor::is_dired_f4_sequence(ainiux::editor::read_escape_suffix()),
+          "kitty CSI S F4 is recognized as dired");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("\x1b[1;1S");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 27 && !event.decoded_escape &&
+              ainiux::editor::is_dired_f4_sequence(ainiux::editor::read_escape_suffix()),
+          "CSI 1;1 S F4 is recognized as dired");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("\x1b[27;1;13~");
+    check(ainiux::editor::read_terminal_input(event, 0) &&
+              event.type == ainiux::editor::TerminalInputType::Byte && event.byte == 13,
+          "modifyOtherKeys Enter is delivered as CR, not as Escape");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("[27u/");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 27 && event.decoded_escape,
+          "ConPTY-stripped kitty Escape without a leading ESC still opens the minibuffer");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == '/',
+          "stripped kitty Escape decoding preserves adjacent command input");
+    ainiux::editor::clear_terminal_input_queue();
+
+    ainiux::editor::push_terminal_input_bytes("[hello");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == '[' &&
+              !event.decoded_escape,
+          "a typed bracket is not treated as a stripped CSI sequence");
+    check(ainiux::editor::read_terminal_input(event, 0) && event.byte == 'h',
+          "typed text after a bracket is preserved");
+    ainiux::editor::clear_terminal_input_queue();
+
+#if !defined(_WIN32)
+    {
+        const bool wsl = ainiux::editor::host_mangles_enhanced_keyboard_sequences();
+        const std::string enable = ainiux::editor::keyboard_modifier_enable_sequence();
+        if (wsl) {
+            check(enable.empty(),
+                  "WSL does not enable kitty/modifyOtherKeys because ConPTY drops CSI-u Escape");
+        } else {
+            check(enable == "\x1b[>4;2m\x1b[>1u",
+                  "non-WSL hosts enable kitty/modifyOtherKeys");
+        }
+    }
+#endif
 
     ainiux::editor::push_terminal_input_bytes("\x1bxZ");
     check(ainiux::editor::read_terminal_input(event, 0) &&

@@ -2,6 +2,7 @@
 
 #include "editor/editor.hpp"
 #include "html/html.hpp"
+#include "platform/environment.hpp"
 #include "tui/terminal.hpp"
 
 #include <cctype>
@@ -182,8 +183,32 @@ bool csi_sequence_complete(const std::string& sequence) {
     if (sequence.empty()) {
         return false;
     }
+    // SS3 is ESC O <final>. A lone 'O' is not complete; treating it as a CSI
+    // final dropped the following F4/arrow byte on slow WSL/ConPTY paths.
+    if (sequence[0] == 'O') {
+        return sequence.size() >= 2;
+    }
+    if (sequence[0] != '[') {
+        // Not CSI or SS3. Stop so Esc then "dired" is not swallowed as CSI.
+        return true;
+    }
+    if (sequence.size() == 1) {
+        return false;
+    }
     const char last = sequence.back();
     return last == 'u' || last == '~' || (last >= 'A' && last <= 'Z') || (last >= 'a' && last <= 'z');
+}
+
+bool sequence_is_only_escapes(const std::string& sequence) {
+    if (sequence.empty()) {
+        return false;
+    }
+    for (char byte : sequence) {
+        if (static_cast<unsigned char>(byte) != 27) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -289,7 +314,7 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
         out = editor_key_backtab();
         return true;
     }
-    if (sequence == "[27u") {
+    if (sequence == "[27u" || sequence == "[27~" || sequence == "[27;1~") {
         out = 27;
         return true;
     }
@@ -357,6 +382,24 @@ bool decode_control_key_sequence(const std::string& sequence, unsigned char& out
             if (modifier == 2 && key == 9) {
                 out = editor_key_backtab();
                 return true;
+            }
+            // xterm modifyOtherKeys=2 encodes unmodified Enter/Tab/Backspace as
+            // CSI 27 ; 1 ; key ~. Without this, Esc then a command cannot submit
+            // and those keys look dead in the minibuffer (common on WSL/WT).
+            if (modifier == 1) {
+                if (key == 13 || key == 10) {
+                    out = 13;
+                    return true;
+                }
+                if (key == 9) {
+                    out = 9;
+                    return true;
+                }
+                if (key == 127 || key == 8) {
+                    out = 127;
+                    return true;
+                }
+                return false;
             }
             if (!is_ctrl_modifier(modifier)) {
                 return false;
@@ -458,6 +501,27 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
     }
 
     if (ch != 27) {
+        // ConPTY may strip the leading ESC from kitty CSI-u, leaving "[27u"
+        // in the byte stream. Only consume already-queued bytes so typing '['
+        // is not delayed.
+        if (ch == '[') {
+            std::string seq(1, '[');
+            unsigned char next = 0;
+            while (seq.size() < 32 && read_terminal_byte(next, 0)) {
+                seq.push_back(static_cast<char>(next));
+                if (csi_sequence_complete(seq)) break;
+            }
+            unsigned char decoded = 0;
+            if (seq.size() > 1 && decode_control_key_sequence(seq, decoded)) {
+                out.type = TerminalInputType::Byte;
+                out.byte = decoded;
+                out.decoded_escape = decoded == 27;
+                return true;
+            }
+            if (seq.size() > 1) {
+                push_bytes_front(seq.substr(1));
+            }
+        }
         out.type = TerminalInputType::Byte;
         out.byte = ch;
         return true;
@@ -499,7 +563,12 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
         out.byte = editor_key_command_minibuffer();
         return true;
     }
-    while (read_terminal_byte(ch, terminal_escape_inter_byte_timeout_ms())) {
+    const bool collect_escape_sequence =
+        !after_esc.empty() &&
+        (after_esc[0] == '[' || after_esc[0] == 'O' ||
+         static_cast<unsigned char>(after_esc[0]) == 27);
+    while (collect_escape_sequence &&
+           read_terminal_byte(ch, terminal_escape_inter_byte_timeout_ms())) {
         after_esc.push_back(static_cast<char>(ch));
         if (after_esc == "[200~") {
             std::string pasted;
@@ -561,17 +630,34 @@ bool read_terminal_input(TerminalInputEvent& out, int timeout_ms) {
         return true;
     }
 
-    if (!after_esc.empty()) {
-        if (after_esc.size() >= 2 && static_cast<unsigned char>(after_esc[0]) == 27 &&
-            (after_esc[1] == '[' || after_esc[1] == 'O')) {
-            g_pending_escape_alt_meta = true;
-            push_bytes_front(after_esc.substr(1));
-        } else {
-            push_bytes_front(after_esc);
-        }
-    }
     out.type = TerminalInputType::Byte;
     out.byte = 27;
+    if (after_esc.empty()) {
+        // Bare Esc is fully consumed here. handle_key must not call
+        // read_escape_suffix, or the next command characters (and Enter) are eaten.
+        out.decoded_escape = true;
+        return true;
+    }
+    if (after_esc.size() >= 2 && static_cast<unsigned char>(after_esc[0]) == 27 &&
+        (after_esc[1] == '[' || after_esc[1] == 'O')) {
+        g_pending_escape_alt_meta = true;
+        push_bytes_front(after_esc.substr(1));
+        return true;
+    }
+    if (after_esc[0] == '[' || after_esc[0] == 'O') {
+        if (after_esc == "O") {
+            // Incomplete SS3 after the inter-byte timeout: Esc then the letter O.
+            push_bytes_front(after_esc);
+            out.decoded_escape = true;
+            return true;
+        }
+        push_bytes_front(after_esc);
+        return true;
+    }
+    if (!sequence_is_only_escapes(after_esc)) {
+        push_bytes_front(after_esc);
+    }
+    out.decoded_escape = true;
     return true;
 }
 
@@ -615,6 +701,26 @@ void request_terminal_clipboard() {
 
 void cancel_terminal_clipboard_request() {
     g_terminal_clipboard_query_pending = false;
+}
+
+bool host_mangles_enhanced_keyboard_sequences() {
+#if defined(_WIN32)
+    return false;
+#else
+    // WSL input is relayed through ConPTY. After CSI > 1 u, Windows Terminal
+    // encodes Escape as CSI 27 u and ConPTY consumes that sequence, so the
+    // Linux process never sees a key.
+    return !platform::environment_value("WSL_DISTRO_NAME").empty() ||
+           !platform::environment_value("WSL_INTEROP").empty();
+#endif
+}
+
+const char* keyboard_modifier_enable_sequence() {
+    return host_mangles_enhanced_keyboard_sequences() ? "" : "\x1b[>4;2m\x1b[>1u";
+}
+
+const char* keyboard_modifier_disable_sequence() {
+    return host_mangles_enhanced_keyboard_sequences() ? "" : "\x1b[<1u\x1b[>4;0m";
 }
 
 }  // namespace ainiux::editor

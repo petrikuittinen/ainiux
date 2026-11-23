@@ -2465,6 +2465,18 @@ void test_guard_approval_panel_scroll() {
     check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && reviewed &&
               !rejected && !accepted,
           "Guard F4 opens dired review instead of denying");
+    reviewed = false;
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes("[S");
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && reviewed &&
+              !rejected && !accepted,
+          "Guard kitty CSI S F4 opens dired review");
+    reviewed = false;
+    ainiux::editor::clear_terminal_input_queue();
+    ainiux::editor::push_terminal_input_bytes("[1;1S");
+    check(ainiux::tui::handle_tui_picker_input(27, state, callbacks) && reviewed &&
+              !rejected && !accepted,
+          "Guard CSI 1;1 S F4 opens dired review");
 }
 
 void test_tui_chat_history_scroll_keys() {

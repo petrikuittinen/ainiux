@@ -1781,20 +1781,34 @@ void render_terminal_panel(EditorState& state,
 }
 
 std::string read_escape_suffix() {
-    std::string sequence;
     unsigned char ch = 0;
-    while (sequence.size() < 16 && read_terminal_byte(ch, 25)) {
-        sequence.push_back(static_cast<char>(ch));
-        if (sequence.size() == 1 && ch == 'O') {
-            continue;
+    if (!read_terminal_byte(ch, 25)) {
+        return {};
+    }
+    if (ch == 27) {
+        while (read_terminal_byte(ch, 25) && ch == 27) {
         }
-        if ((ch >= 'A' && ch <= 'Z') || ch == '~') {
+        return {};
+    }
+    // Esc then a command letter must not be treated as CSI. Push the byte back
+    // so the minibuffer can receive "dired" and Enter.
+    if (ch != '[' && ch != 'O') {
+        push_terminal_input_bytes(std::string(1, static_cast<char>(ch)));
+        return {};
+    }
+    std::string sequence(1, static_cast<char>(ch));
+    const int timeout_ms = terminal_escape_inter_byte_timeout_ms();
+    if (ch == 'O') {
+        if (read_terminal_byte(ch, timeout_ms)) {
+            sequence.push_back(static_cast<char>(ch));
+        }
+        return sequence;
+    }
+    while (sequence.size() < 32 && read_terminal_byte(ch, timeout_ms)) {
+        sequence.push_back(static_cast<char>(ch));
+        if (ch == 'u' || ch == '~' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
             break;
         }
-    }
-    if (!sequence.empty() &&
-        std::all_of(sequence.begin(), sequence.end(), [](char byte) { return byte == '\x1b'; })) {
-        return {};
     }
     return sequence;
 }

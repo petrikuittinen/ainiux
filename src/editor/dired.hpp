@@ -68,6 +68,7 @@ struct DiredState {
 };
 
 // Physical F4 key escape sequences (not the internal Alt+X sentinel 0xF4).
+// Includes SS3 OS, CSI [14~, linux [[D, and kitty/xterm CSI [S / [1S / [1;1S.
 bool is_dired_f4_sequence(const std::string& sequence);
 
 // Open-for-edit shortcuts are focus-sensitive: o works everywhere while e is
